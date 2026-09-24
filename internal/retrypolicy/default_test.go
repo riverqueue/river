@@ -2,6 +2,7 @@ package retrypolicy
 
 import (
 	"fmt"
+	"math"
 	"sync"
 	"testing"
 	"time"
@@ -39,7 +40,10 @@ func TestDefault_NextRetry(t *testing.T) {
 		t.Parallel()
 
 		bundle := setup(t)
-		maxRetryDuration := timeutil.SecondsAsDuration(maxDurationSeconds)
+		// The cap is the exact maximum duration. Converting the capped
+		// float seconds directly would be implementation-specific and on
+		// some architectures would schedule the retry in the distant past.
+		maxRetryDuration := time.Duration(math.MaxInt64)
 
 		// First time the maximum will be hit.
 		require.Equal(t,

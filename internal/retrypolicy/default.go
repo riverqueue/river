@@ -36,7 +36,19 @@ func NextRetryAt(now time.Time, job *rivertype.JobRow) time.Time {
 	// and keep backward compatibility, the number of errors are used instead.
 	errorCount := len(job.Errors) + 1
 
-	return now.Add(timeutil.SecondsAsDuration(retrySeconds(errorCount)))
+	return now.Add(secondsAsCappedDuration(retrySeconds(errorCount)))
+}
+
+// secondsAsCappedDuration converts seconds to a duration, returning the
+// maximum duration for values at or above it. Converting an out-of-range
+// float to an integer is implementation-specific in Go and yields the minimum
+// int64 on some architectures, which would schedule a capped retry in the
+// distant past.
+func secondsAsCappedDuration(seconds float64) time.Duration {
+	if seconds >= maxDurationSeconds {
+		return maxDuration
+	}
+	return timeutil.SecondsAsDuration(seconds)
 }
 
 // The maximum value of a duration before it overflows. About 292 years.
