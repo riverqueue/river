@@ -22,6 +22,9 @@ use crate::{
 };
 use riverqueue_internal::DatabaseConnection;
 
+/// Queue name that addresses every persisted queue in pause and resume.
+const QUEUE_ALL: &str = "*";
+
 impl Client {
     /// Completes a running job inside a caller-managed transaction. If this is
     /// called from its worker, the normal completer observes that the row is no
@@ -539,6 +542,8 @@ impl Client {
     }
 
     /// Pauses one queue, or every known queue when passed `"*"`.
+    ///
+    /// Returns [`Error::NotFound`] when a named queue has no persisted record.
     pub async fn queue_pause(&self, name: &str) -> Result<(), Error> {
         #[cfg(feature = "postgres")]
         if let Some(pool) = self.inner.postgres_pool() {
@@ -566,6 +571,8 @@ impl Client {
     }
 
     /// Resumes one queue, or every known queue when passed `"*"`.
+    ///
+    /// Returns [`Error::NotFound`] when a named queue has no persisted record.
     pub async fn queue_resume(&self, name: &str) -> Result<(), Error> {
         #[cfg(feature = "postgres")]
         if let Some(pool) = self.inner.postgres_pool() {
@@ -1084,9 +1091,6 @@ async fn queue_set_paused_postgres(
     name: &str,
     paused: bool,
 ) -> Result<(), Error> {
-    if name != "*" {
-        super::client::validate_queue(name)?;
-    }
     let table = client.inner.schema.qualify("river_queue");
     let sql = if paused {
         format!(
@@ -1100,10 +1104,15 @@ async fn queue_set_paused_postgres(
              paused_at = NULL WHERE $1 = '*' OR name = $1"
         )
     };
-    sqlx::query(AssertSqlSafe(sql))
+    let result = sqlx::query(AssertSqlSafe(sql))
         .bind(name)
         .execute(&mut *connection)
         .await?;
+    // Like Go, naming a queue that has no persisted record is an error, while
+    // `*` succeeds even when no queues exist yet.
+    if result.rows_affected() == 0 && name != QUEUE_ALL {
+        return Err(Error::NotFound);
+    }
     notify_control(
         client,
         connection,
@@ -1118,18 +1127,18 @@ async fn queue_set_paused_sqlite(
     name: &str,
     paused: bool,
 ) -> Result<(), Error> {
-    if name != "*" {
-        super::client::validate_queue(name)?;
-    }
     let now = Utc::now();
-    if paused {
+    let updated = if paused {
         sqlite::queue_pause(connection, name, now)
             .await
-            .map_err(database_error)?;
+            .map_err(database_error)?
     } else {
         sqlite::queue_resume(connection, name, now)
             .await
-            .map_err(database_error)?;
+            .map_err(database_error)?
+    };
+    if updated.is_empty() && name != QUEUE_ALL {
+        return Err(Error::NotFound);
     }
     let payload = serde_json::json!({
         "action": if paused {"pause"} else {"resume"},
@@ -1184,7 +1193,6 @@ async fn queue_update_postgres(
     name: &str,
     metadata: Map<String, Value>,
 ) -> Result<Queue, Error> {
-    super::client::validate_queue(name)?;
     let table = client.inner.schema.qualify("river_queue");
     let sql =
         format!("UPDATE {table} SET metadata = $2, updated_at = now() WHERE name = $1 RETURNING *");
@@ -1210,7 +1218,6 @@ async fn queue_update_sqlite(
     name: &str,
     metadata: &Map<String, Value>,
 ) -> Result<Queue, Error> {
-    super::client::validate_queue(name)?;
     let queue = sqlite::queue_update(connection, name, metadata, Utc::now())
         .await
         .map_err(database_error)?

@@ -65,6 +65,14 @@ name = "postgres"
 required-features = ["postgres"]
 
 [[test]]
+name = "postgres_parity"
+required-features = ["postgres-tests"]
+
+[[test]]
+name = "sqlite_parity"
+required-features = ["sqlite"]
+
+[[test]]
 name = "sqlite_runtime"
 required-features = ["sqlite"]
 

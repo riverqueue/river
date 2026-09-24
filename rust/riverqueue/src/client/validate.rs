@@ -70,7 +70,7 @@ pub(crate) fn validate_queue(queue: &str) -> Result<(), Error> {
     }
     let mut previous_separator = false;
     for character in queue.chars() {
-        let separator = matches!(character, '_' | '-');
+        let separator = matches!(character, '_' | '|' | '-');
         if !(character.is_ascii_lowercase() || character.is_ascii_digit() || separator)
             || (separator && previous_separator)
         {
@@ -118,4 +118,46 @@ pub(super) fn validate_metadata_key(key: &str) -> Result<(), Error> {
         )));
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::validate_queue;
+
+    #[test]
+    fn queue_names_match_go_validation() {
+        // Mirrors Go's `^(?:[a-z0-9])+(?:[_|\-]?[a-z0-9]+)*$` plus its
+        // 64-byte limit.
+        for valid in [
+            "0",
+            "a",
+            "a-b",
+            "a_b",
+            "a|b",
+            "default",
+            "tenant|priority_emails-2",
+            &"a".repeat(64),
+        ] {
+            assert!(validate_queue(valid).is_ok(), "{valid:?} should be valid");
+        }
+        for invalid in [
+            "",
+            "-a",
+            "A",
+            "_a",
+            "a b",
+            "a-",
+            "a.b",
+            "a__b",
+            "a_|b",
+            "a|",
+            "|a",
+            &"a".repeat(65),
+        ] {
+            assert!(
+                validate_queue(invalid).is_err(),
+                "{invalid:?} should be invalid"
+            );
+        }
+    }
 }
