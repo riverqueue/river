@@ -6,6 +6,7 @@
 //! SQLite integers outside `i16`. Runtime paths decode each row on its own so
 //! one such row cannot fail a whole claimed or completed batch.
 
+#[cfg(feature = "postgres")]
 #[allow(clippy::wildcard_imports)]
 use super::*;
 
@@ -32,51 +33,6 @@ pub(crate) fn saturating_i16(value: i64) -> i16 {
     i16::try_from(value).unwrap_or(if value < 0 { i16::MIN } else { i16::MAX })
 }
 
-/// Decodes one persisted attempt error the way Go's `json.Unmarshal` does:
-/// missing, `null`, and unknown fields are accepted, while a non-object or a
-/// field of the wrong JSON type is an error.
-pub(crate) fn decode_attempt_error(value: &Value) -> Result<AttemptError, String> {
-    let Value::Object(fields) = value else {
-        return Err(format!("attempt error is not a JSON object: {value}"));
-    };
-    let field = |key| fields.get(key).filter(|value| !value.is_null());
-    let at = match field("at") {
-        None => go_zero_time(),
-        Some(Value::String(at)) => DateTime::parse_from_rfc3339(at)
-            .map_err(|error| format!("attempt error time {at:?} is invalid: {error}"))?
-            .with_timezone(&Utc),
-        Some(at) => return Err(format!("attempt error time is not a string: {at}")),
-    };
-    let attempt = match field("attempt") {
-        None => 0,
-        Some(attempt) => attempt
-            .as_i64()
-            .map(saturating_i16)
-            .ok_or_else(|| format!("attempt error attempt is not an integer: {attempt}"))?,
-    };
-    let text = |key| match field(key) {
-        None => Ok(String::new()),
-        Some(Value::String(text)) => Ok(text.clone()),
-        Some(text) => Err(format!("attempt error {key} is not a string: {text}")),
-    };
-    Ok(AttemptError {
-        at,
-        attempt,
-        error: text("error")?,
-        trace: text("trace")?,
-    })
-}
-
-/// Go's zero `time.Time`, which `encoding/json` leaves in a missing field.
-fn go_zero_time() -> DateTime<Utc> {
-    DateTime::<Utc>::from_naive_utc_and_offset(
-        chrono::NaiveDate::from_ymd_opt(1, 1, 1)
-            .and_then(|date| date.and_hms_opt(0, 0, 0))
-            .unwrap_or_default(),
-        Utc,
-    )
-}
-
 #[cfg(feature = "postgres")]
 pub(crate) struct JobRecord {
     attempt: i16,
@@ -84,7 +40,7 @@ pub(crate) struct JobRecord {
     attempted_by: Option<Vec<String>>,
     created_at: DateTime<Utc>,
     encoded_args: Json<Box<RawValue>>,
-    errors: Vec<Json<Value>>,
+    errors: Vec<Json<Box<RawValue>>>,
     finalized_at: Option<DateTime<Utc>>,
     id: i64,
     kind: String,
@@ -166,7 +122,7 @@ impl JobRecord {
             errors: self
                 .errors
                 .iter()
-                .map(|error| decode_attempt_error(&error.0))
+                .map(|error| AttemptError::from_json_lenient(error.0.get()))
                 .collect::<Result<_, _>>()
                 .map_err(|error| Error::invalid_job(format!("job {}: {error}", self.id)))?,
             finalized_at: self.finalized_at,
@@ -197,7 +153,7 @@ pub(crate) fn decode_job_row(row: &PgRow) -> Result<JobRow, UndecodableJob> {
         attempt: row.try_get::<i16, _>(1).map_or(0, i64::from),
         error: error.to_string(),
         error_count: row
-            .try_get::<Vec<Json<Value>>, _>(6)
+            .try_get::<Vec<Json<Box<RawValue>>>, _>(6)
             .map_or(0, |errors| errors.len()),
         id: row.try_get(0).ok(),
         max_attempts: row.try_get::<i16, _>(9).map_or(0, i64::from),
@@ -218,41 +174,7 @@ pub(crate) fn job_projection(alias: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use serde_json::json;
-
     use super::*;
-
-    #[test]
-    fn attempt_errors_decode_like_go_json() {
-        let full = decode_attempt_error(&json!({
-            "at": "2026-01-02T03:04:05.123456789Z",
-            "attempt": 3,
-            "error": "boom",
-            "extra": {"ignored": true},
-            "trace": "trace",
-        }))
-        .unwrap();
-        assert_eq!(full.attempt, 3);
-        assert_eq!(full.at.to_rfc3339(), "2026-01-02T03:04:05.123456789+00:00");
-        assert_eq!(full.error, "boom");
-        assert_eq!(full.trace, "trace");
-
-        let sparse = decode_attempt_error(&json!({"attempt": 40_000, "trace": null})).unwrap();
-        assert_eq!(sparse.at, go_zero_time());
-        assert_eq!(sparse.attempt, i16::MAX);
-        assert_eq!(sparse.error, "");
-        assert_eq!(sparse.trace, "");
-
-        for invalid in [
-            json!([]),
-            json!({"attempt": "1"}),
-            json!({"attempt": 1.5}),
-            json!({"at": "yesterday"}),
-            json!({"error": 7}),
-        ] {
-            assert!(decode_attempt_error(&invalid).is_err(), "{invalid}");
-        }
-    }
 
     #[test]
     fn integers_saturate_to_i16() {

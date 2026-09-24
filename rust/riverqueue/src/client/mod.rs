@@ -20,8 +20,6 @@ pub use self::extension::ExtensionClient;
 pub use self::insert::{
     InsertBatchRequest, InsertManyFastRequest, InsertManyItem, InsertManyRequest, InsertRequest,
 };
-#[cfg(feature = "sqlite")]
-pub(crate) use self::record::decode_attempt_error;
 #[cfg(feature = "postgres")]
 pub(crate) use self::record::{JobRecord, decode_job_row, job_projection};
 pub(crate) use self::record::{UndecodableJob, saturating_i16};

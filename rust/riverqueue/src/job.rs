@@ -8,6 +8,8 @@ use serde_json::{Map, Value, value::RawValue};
 
 use crate::{PRIORITY_DEFAULT, QUEUE_DEFAULT};
 
+mod attempt_error;
+
 /// Arguments for a typed River job.
 pub trait JobArgs: DeserializeOwned + Send + Serialize + Sync + 'static {
     /// Stable job kind stored with each job.
@@ -95,7 +97,12 @@ pub(crate) struct InsertBatchItem {
 }
 
 /// A failed job attempt persisted in `river_job.errors`.
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+///
+/// Attempt errors deserialize from JSON leniently, like River Go's: an
+/// element written by another tool or edited by hand decodes on a best effort
+/// basis instead of making its job row unreadable, and only invalid JSON is an
+/// error. Deserializing requires a JSON deserializer, such as `serde_json`'s.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 #[non_exhaustive]
 pub struct AttemptError {
     /// Time at which the error occurred.
