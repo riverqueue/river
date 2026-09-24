@@ -21,8 +21,17 @@ use tokio_util::sync::CancellationToken;
 /// PostgreSQL's maximum identifier length.
 pub const POSTGRES_IDENTIFIER_MAX: usize = 63;
 
+/// Notification topic for queue and job control messages.
+pub const NOTIFICATION_TOPIC_CONTROL: &str = "river_control";
+
+/// Notification topic for newly available jobs.
+pub const NOTIFICATION_TOPIC_INSERT: &str = "river_insert";
+
+/// Notification topic for leadership changes.
+pub const NOTIFICATION_TOPIC_LEADERSHIP: &str = "river_leadership";
+
 /// Longest River notification topic.
-pub const NOTIFICATION_TOPIC_LONGEST: &str = "river_leadership";
+pub const NOTIFICATION_TOPIC_LONGEST: &str = NOTIFICATION_TOPIC_LEADERSHIP;
 
 /// Maximum schema length after reserving `<schema>.river_leadership`.
 pub const SCHEMA_MAX_LEN: usize = POSTGRES_IDENTIFIER_MAX - NOTIFICATION_TOPIC_LONGEST.len() - 1;
@@ -115,6 +124,94 @@ impl Default for SchemaName {
 impl fmt::Display for SchemaName {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter.write_str(self.as_deref().unwrap_or("<current>"))
+    }
+}
+
+/// A River notification topic, mirroring Go's `notifier.NotificationTopic`.
+#[doc(hidden)]
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+pub enum NotificationTopic {
+    /// Queue and job control messages.
+    Control,
+    /// Newly available jobs.
+    Insert,
+    /// Leadership changes.
+    Leadership,
+}
+
+impl NotificationTopic {
+    /// Returns the unqualified topic name.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Control => NOTIFICATION_TOPIC_CONTROL,
+            Self::Insert => NOTIFICATION_TOPIC_INSERT,
+            Self::Leadership => NOTIFICATION_TOPIC_LEADERSHIP,
+        }
+    }
+}
+
+impl fmt::Display for NotificationTopic {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(self.as_str())
+    }
+}
+
+/// Sends notifications on a caller's transaction connection, like Go's
+/// `riverdriver.Executor.NotifyMany`.
+///
+/// PostgreSQL issues `pg_notify` on the schema-qualified channel
+/// (`<schema>.<topic>`, using `current_schema()` when no schema is
+/// configured), so delivery happens only when the transaction commits. SQLite
+/// appends rows to the durable `river_notification` outbox that River clients
+/// poll. An empty payload list does nothing.
+///
+/// # Errors
+///
+/// Returns an error when the connection and configuration name different
+/// backends or when the database rejects the statement.
+#[doc(hidden)]
+pub async fn notify_many(
+    connection: DatabaseConnection<'_>,
+    database: &DatabaseConfig,
+    topic: NotificationTopic,
+    payloads: &[String],
+) -> Result<(), PilotError> {
+    if payloads.is_empty() {
+        return Ok(());
+    }
+    match (connection, database) {
+        #[cfg(feature = "postgres")]
+        (DatabaseConnection::Postgres(connection), DatabaseConfig::Postgres { schema }) => {
+            sqlx::query(
+                "SELECT pg_notify(concat(coalesce($1::text, current_schema()), '.', $2::text), payload) \
+                 FROM unnest($3::text[]) AS payload",
+            )
+            .bind(schema.as_deref())
+            .bind(topic.as_str())
+            .bind(payloads)
+            .execute(connection)
+            .await?;
+            Ok(())
+        }
+        #[cfg(feature = "sqlite")]
+        (DatabaseConnection::Sqlite(connection), DatabaseConfig::Sqlite) => {
+            let mut query = sqlx::QueryBuilder::<sqlx::Sqlite>::new(
+                "INSERT INTO river_notification (payload, topic) ",
+            );
+            query.push_values(payloads, |mut row, payload| {
+                row.push_bind(payload).push_bind(topic.as_str());
+            });
+            query.build().execute(connection).await?;
+            Ok(())
+        }
+        #[allow(unreachable_patterns)]
+        (connection, database) => Err(format!(
+            "notification connection {:?} does not match database {:?}",
+            connection.kind(),
+            database.kind()
+        )
+        .into()),
     }
 }
 

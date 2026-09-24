@@ -192,3 +192,47 @@ async fn cancel_and_retry_post_hooks_share_the_transaction() {
 
     support::sqlite_cleanup(pool, path).await;
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn extension_notify_many_writes_the_outbox() {
+    use riverqueue::internal::{
+        DatabaseConfig, DatabaseConnection, NotificationTopic, notify_many,
+    };
+
+    let (pool, path) = support::sqlite_file_pool(2).await;
+    let mut rolled_back = pool.begin().await.unwrap();
+    notify_many(
+        DatabaseConnection::Sqlite(&mut rolled_back),
+        &DatabaseConfig::Sqlite,
+        NotificationTopic::Control,
+        &["rolled back".to_owned()],
+    )
+    .await
+    .unwrap();
+    rolled_back.rollback().await.unwrap();
+
+    let mut committed = pool.begin().await.unwrap();
+    notify_many(
+        DatabaseConnection::Sqlite(&mut committed),
+        &DatabaseConfig::Sqlite,
+        NotificationTopic::Control,
+        &["first".to_owned(), "second".to_owned()],
+    )
+    .await
+    .unwrap();
+    committed.commit().await.unwrap();
+
+    let rows: Vec<(String, String)> =
+        sqlx::query_as("SELECT topic, payload FROM river_notification ORDER BY id")
+            .fetch_all(&pool)
+            .await
+            .unwrap();
+    assert_eq!(
+        rows,
+        [
+            ("river_control".to_owned(), "first".to_owned()),
+            ("river_control".to_owned(), "second".to_owned())
+        ]
+    );
+    support::sqlite_cleanup(pool, path).await;
+}
