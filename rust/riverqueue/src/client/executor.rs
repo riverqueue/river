@@ -33,6 +33,7 @@ pub(super) async fn execute_job(
         let mut worker_row = row.clone();
         let worker_context = context.clone();
         let worker_inner = Arc::clone(&inner);
+        let (timeout_sender, timeout_receiver) = oneshot::channel();
         let mut worker_task = tokio::spawn(async move {
             worker_context.resumable_validate().await?;
             for hook in &worker_inner.hooks {
@@ -48,7 +49,7 @@ pub(super) async fn execute_job(
             }
             let result = worker_inner
                 .workers
-                .work(worker_context.clone(), &worker_row)
+                .work(worker_context.clone(), &worker_row, timeout_sender)
                 .await;
             let public_result = erased_work_result(&result);
             for middleware in worker_inner.work_middleware.iter().rev() {
@@ -65,47 +66,38 @@ pub(super) async fn execute_job(
             result
         });
 
-        let timeout = match inner.workers.timeout(&row) {
-            Ok(WorkerTimeout::After(timeout)) => Some(timeout),
-            Ok(WorkerTimeout::ClientDefault) => inner.job_timeout,
-            Ok(WorkerTimeout::Disabled) => None,
-            Err(timeout_error) => {
-                debug!(error = %timeout_error, "could not evaluate worker timeout; using client default");
-                inner.job_timeout
+        // The worker reports its timeout after decoding the job's arguments,
+        // following any hooks and middleware, so the timeout covers the work
+        // itself as in River Go.
+        let timeout_elapsed = async {
+            let timeout = match timeout_receiver.await {
+                Ok(WorkerTimeout::After(timeout)) => Some(timeout),
+                Ok(WorkerTimeout::ClientDefault) => inner.job_timeout,
+                // Disabled, or the attempt ended before work started.
+                Ok(WorkerTimeout::Disabled) | Err(_) => None,
+            };
+            match timeout {
+                Some(timeout) => tokio::time::sleep(timeout).await,
+                None => std::future::pending().await,
             }
         };
         let mut cancellation_cause = None;
         let work_started = std::time::Instant::now();
-        let result = if let Some(timeout) = timeout {
-            tokio::select! {
-                result = &mut worker_task => worker_join_result(result),
-                () = cancellation.cancelled() => {
-                    cancellation_cause = Some(if hard_cancel.is_cancelled() {
-                        CancellationCause::Shutdown
-                    } else {
-                        CancellationCause::Remote
-                    });
-                    cancellation.cancel();
-                    finish_cancelled_task(&mut worker_task, inner.job_stuck_threshold).await
-                }
-                () = tokio::time::sleep(timeout) => {
-                    cancellation_cause = Some(CancellationCause::Timeout);
-                    cancellation.cancel();
-                    finish_cancelled_task(&mut worker_task, inner.job_stuck_threshold).await
-                }
+        let result = tokio::select! {
+            result = &mut worker_task => worker_join_result(result),
+            () = cancellation.cancelled() => {
+                cancellation_cause = Some(if hard_cancel.is_cancelled() {
+                    CancellationCause::Shutdown
+                } else {
+                    CancellationCause::Remote
+                });
+                cancellation.cancel();
+                finish_cancelled_task(&mut worker_task, inner.job_stuck_threshold).await
             }
-        } else {
-            tokio::select! {
-                result = &mut worker_task => worker_join_result(result),
-                () = cancellation.cancelled() => {
-                    cancellation_cause = Some(if hard_cancel.is_cancelled() {
-                        CancellationCause::Shutdown
-                    } else {
-                        CancellationCause::Remote
-                    });
-                    cancellation.cancel();
-                    finish_cancelled_task(&mut worker_task, inner.job_stuck_threshold).await
-                }
+            () = timeout_elapsed => {
+                cancellation_cause = Some(CancellationCause::Timeout);
+                cancellation.cancel();
+                finish_cancelled_task(&mut worker_task, inner.job_stuck_threshold).await
             }
         };
 
@@ -126,7 +118,8 @@ pub(super) async fn execute_job(
             .as_ref()
             .is_err_and(|failure| matches!(failure.kind, WorkerFailureKind::Aborted));
         if let Some(resumable_failure) = context.resumable_finish(result.is_err()).await
-            && result.is_ok() {
+            && result.is_ok()
+        {
             result = Err(WorkerFailure {
                 error: resumable_failure.to_string(),
                 kind: WorkerFailureKind::Error,
@@ -201,11 +194,15 @@ pub(super) async fn execute_job(
                 let Event::Job(job_event) = *event else {
                     unreachable!("job persistence returns only job events")
                 };
-                let event = Event::job_with_statistics(job_event.kind, job_event.job, JobStatistics {
-                    complete_duration: completion.timing.completion_started.elapsed(),
-                    queue_wait_duration,
-                    run_duration,
-                });
+                let event = Event::job_with_statistics(
+                    job_event.kind,
+                    job_event.job,
+                    JobStatistics {
+                        complete_duration: completion.timing.completion_started.elapsed(),
+                        queue_wait_duration,
+                        run_duration,
+                    },
+                );
                 let _ = inner.events.send(event);
                 false
             }

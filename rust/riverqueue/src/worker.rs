@@ -13,7 +13,7 @@ use chrono::{DateTime, Utc};
 use serde::Serialize;
 use serde::de::DeserializeOwned;
 use serde_json::{Map, Value};
-use tokio::sync::Mutex;
+use tokio::sync::{Mutex, oneshot};
 use tokio_util::sync::CancellationToken;
 
 use crate::{
@@ -511,6 +511,7 @@ where
     ) -> impl Future<Output = Result<WorkOutcome, Self::Error>> + Send;
 }
 
+/// Type-erased adapter from persisted rows to a typed [`Worker`].
 #[async_trait]
 trait ErasedWorker: Send + Sync {
     fn next_retry(
@@ -522,7 +523,15 @@ trait ErasedWorker: Send + Sync {
 
     fn timeout(&self, row: &JobRow) -> Result<WorkerTimeout, Box<dyn StdError + Send + Sync>>;
 
-    async fn work(&self, context: WorkContext, row: &JobRow) -> Result<WorkOutcome, WorkError>;
+    /// Runs one attempt. Arguments are decoded once, and the worker's
+    /// timeout for the decoded job is reported through `timeout` before
+    /// work starts.
+    async fn work(
+        &self,
+        context: WorkContext,
+        row: &JobRow,
+        timeout: oneshot::Sender<WorkerTimeout>,
+    ) -> Result<WorkOutcome, WorkError>;
 }
 
 struct FunctionWorker<F> {
@@ -564,41 +573,45 @@ where
         error: &WorkError,
         now: DateTime<Utc>,
     ) -> Result<Option<Duration>, Box<dyn StdError + Send + Sync>> {
-        let args = row.decode_args()?;
-        Ok(Worker::<A>::next_retry(
-            &self.worker,
-            &Job {
-                args,
-                row: row.clone(),
-            },
-            error,
-            now,
-        ))
+        // `work` consumes its job, so a failed attempt decodes once more to
+        // consult the worker's retry override.
+        let job = Job {
+            args: row.decode_args()?,
+            row: row.clone(),
+        };
+        Ok(Worker::<A>::next_retry(&self.worker, &job, error, now))
     }
 
     fn timeout(&self, row: &JobRow) -> Result<WorkerTimeout, Box<dyn StdError + Send + Sync>> {
-        let args = row.decode_args()?;
-        Ok(Worker::<A>::timeout(
-            &self.worker,
-            &Job {
-                args,
-                row: row.clone(),
-            },
-        ))
+        let job = Job {
+            args: row.decode_args()?,
+            row: row.clone(),
+        };
+        Ok(Worker::<A>::timeout(&self.worker, &job))
     }
 
-    async fn work(&self, context: WorkContext, row: &JobRow) -> Result<WorkOutcome, WorkError> {
-        let args = row
-            .decode_args()
-            .map_err(|error| WorkError::new(Box::new(error)))?;
+    async fn work(
+        &self,
+        context: WorkContext,
+        row: &JobRow,
+        timeout: oneshot::Sender<WorkerTimeout>,
+    ) -> Result<WorkOutcome, WorkError> {
+        let job = Job {
+            args: row
+                .decode_args()
+                .map_err(|error| WorkError::new(Box::new(error)))?,
+            row: row.clone(),
+        };
+        // The supervisor may have stopped waiting for a timeout; that is not
+        // an error for the attempt.
+        let _ = timeout.send(Worker::<A>::timeout(&self.worker, &job));
+        // Sending wakes the supervisor on this worker thread, where Tokio
+        // may hold it in a slot other threads can't steal. Yield once so it
+        // starts the timeout before a worker that blocks the thread (which
+        // the supervisor exists to detect) can delay it.
+        tokio::task::yield_now().await;
         self.worker
-            .work(
-                context,
-                Job {
-                    args,
-                    row: row.clone(),
-                },
-            )
+            .work(context, job)
             .await
             .map_err(|error| WorkError::new(Box::new(error)))
     }
@@ -647,6 +660,8 @@ impl WorkerRegistry {
         self.worker_for(row)?.next_retry(row, error, now)
     }
 
+    /// Evaluates the worker timeout for a persisted row outside an attempt,
+    /// such as when rescuing stuck jobs.
     pub(crate) fn timeout(
         &self,
         row: &JobRow,
@@ -720,13 +735,17 @@ impl WorkerRegistry {
         self.register::<A, _>(FunctionWorker { function })
     }
 
+    /// Runs one attempt of `row`, decoding its arguments once. The worker's
+    /// timeout for the job is sent on `timeout` before work starts; the
+    /// sender is dropped without a value when the attempt fails first.
     pub(crate) async fn work(
         &self,
         context: WorkContext,
         row: &JobRow,
+        timeout: oneshot::Sender<WorkerTimeout>,
     ) -> Result<WorkOutcome, WorkError> {
         let worker = self.worker_for(row).map_err(WorkError::new)?;
-        worker.work(context, row).await
+        worker.work(context, row, timeout).await
     }
 
     fn worker_for(
@@ -925,10 +944,12 @@ mod tests {
             })
             .unwrap();
 
+        let (timeout_sender, _timeout_receiver) = oneshot::channel();
         let outcome = workers
             .work(
                 WorkContext::new(CancellationToken::new()),
                 &job_row(FunctionJobArgs::KIND, false),
+                timeout_sender,
             )
             .await
             .unwrap();
@@ -947,14 +968,106 @@ mod tests {
             [FunctionJobArgs::KIND, "function_worker_v1"]
         );
 
+        let (timeout_sender, _timeout_receiver) = oneshot::channel();
         let error = workers
             .work(
                 WorkContext::new(CancellationToken::new()),
                 &job_row("function_worker_v1", true),
+                timeout_sender,
             )
             .await
             .unwrap_err();
         assert!(error.source_ref().downcast_ref::<FunctionError>().is_some());
+    }
+
+    static COUNTED_DECODES: AtomicUsize = AtomicUsize::new(0);
+
+    #[derive(Serialize)]
+    struct CountedArgs {
+        timeout_ms: u64,
+    }
+
+    impl<'de> Deserialize<'de> for CountedArgs {
+        fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+            #[derive(Deserialize)]
+            struct Fields {
+                timeout_ms: u64,
+            }
+            COUNTED_DECODES.fetch_add(1, Ordering::SeqCst);
+            let fields = Fields::deserialize(deserializer)?;
+            Ok(Self {
+                timeout_ms: fields.timeout_ms,
+            })
+        }
+    }
+
+    impl JobArgs for CountedArgs {
+        const KIND: &'static str = "counted_args";
+    }
+
+    struct CountedWorker;
+
+    impl Worker<CountedArgs> for CountedWorker {
+        type Error = FunctionError;
+
+        fn timeout(&self, job: &Job<CountedArgs>) -> WorkerTimeout {
+            WorkerTimeout::After(Duration::from_millis(job.args.timeout_ms))
+        }
+
+        fn work(
+            &self,
+            _context: WorkContext,
+            job: Job<CountedArgs>,
+        ) -> impl Future<Output = Result<WorkOutcome, Self::Error>> + Send {
+            assert_eq!(job.row.kind, CountedArgs::KIND);
+            std::future::ready(Ok(WorkOutcome::Complete))
+        }
+    }
+
+    #[tokio::test]
+    async fn work_decodes_args_once_and_reports_timeout_first() {
+        let mut workers = WorkerRegistry::new();
+        workers.register(CountedWorker).unwrap();
+        let mut row = job_row(CountedArgs::KIND, false);
+        row.encoded_args = serde_json::value::to_raw_value(&json!({"timeout_ms": 1234})).unwrap();
+
+        let (timeout_sender, timeout_receiver) = oneshot::channel();
+        let outcome = workers
+            .work(
+                WorkContext::new(CancellationToken::new()),
+                &row,
+                timeout_sender,
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(outcome, WorkOutcome::Complete);
+        assert_eq!(
+            timeout_receiver.await.unwrap(),
+            WorkerTimeout::After(Duration::from_millis(1234))
+        );
+        assert_eq!(COUNTED_DECODES.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn work_with_undecodable_args_fails_without_reporting_timeout() {
+        let mut workers = WorkerRegistry::new();
+        workers.register_fn(function_worker).unwrap();
+        let mut row = job_row(FunctionJobArgs::KIND, false);
+        row.encoded_args = serde_json::value::to_raw_value(&json!({"fail": "no"})).unwrap();
+
+        let (timeout_sender, timeout_receiver) = oneshot::channel();
+        let error = workers
+            .work(
+                WorkContext::new(CancellationToken::new()),
+                &row,
+                timeout_sender,
+            )
+            .await
+            .unwrap_err();
+
+        assert!(error.source_ref().is::<serde_json::Error>());
+        assert!(timeout_receiver.await.is_err());
     }
 
     #[test]
