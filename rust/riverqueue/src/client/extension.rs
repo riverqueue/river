@@ -282,26 +282,8 @@ impl Client {
         opts: InsertParams,
     ) -> Result<RawInsertResult, Error> {
         self.validate_known_kind(kind)?;
-        let (mut job, unique_skipped_as_duplicate) = match self.inner.database.pool() {
-            #[cfg(feature = "postgres")]
-            DatabasePool::Postgres(pool) => {
-                self.insert_encoded_on(pool, kind, unique_fields, &encoded_args, opts)
-                    .await?
-            }
-            #[cfg(feature = "sqlite")]
-            DatabasePool::Sqlite(pool) => {
-                self.insert_encoded_on(pool, kind, unique_fields, &encoded_args, opts)
-                    .await?
-            }
-        };
-        for hook in self.inner.hooks.iter().rev() {
-            hook.decode_insert_result(&mut job).await?;
-        }
-        self.signal_insert(&job, unique_skipped_as_duplicate);
-        Ok(RawInsertResult {
-            job,
-            unique_skipped_as_duplicate,
-        })
+        let job = self.prepare_encoded(kind, unique_fields, encoded_args, opts, Utc::now())?;
+        self.insert_raw_job(None, job).await
     }
 
     /// Inserts an encoded job inside a caller-managed transaction.
@@ -337,17 +319,14 @@ impl Client {
     where
         E: DatabaseTransactionExecutor<'executor>,
     {
+        let executor = self
+            .inner
+            .erase_executor(connection)
+            .map_err(Error::from)?
+            .into_inner();
         self.validate_known_kind(kind)?;
-        let (mut job, unique_skipped_as_duplicate) = self
-            .insert_encoded_on(connection, kind, unique_fields, &encoded_args, opts)
-            .await?;
-        for hook in self.inner.hooks.iter().rev() {
-            hook.decode_insert_result(&mut job).await?;
-        }
-        Ok(RawInsertResult {
-            job,
-            unique_skipped_as_duplicate,
-        })
+        let job = self.prepare_encoded(kind, unique_fields, encoded_args, opts, Utc::now())?;
+        self.insert_raw_job(Some(executor), job).await
     }
 
     /// Reinserts persisted fields through River's canonical insertion
@@ -356,7 +335,7 @@ impl Client {
     /// This exact-version operation lets the backend allocate the ID rather
     /// than explicitly retaining a source ID, and resets execution state while
     /// retaining the supplied creation, schedule, and uniqueness wire values.
-    /// Begin hooks, insertion interception, middleware, end callbacks, and the
+    /// Insertion middleware, begin hooks, insertion interception, and the
     /// backend notification all run exactly once.
     #[doc(hidden)]
     pub async fn extension_insert_tx<'executor, E>(
@@ -367,6 +346,11 @@ impl Client {
     where
         E: DatabaseTransactionExecutor<'executor>,
     {
+        let executor = self
+            .inner
+            .erase_executor(transaction)
+            .map_err(Error::from)?
+            .into_inner();
         let mut source_row = JobRow {
             attempt: 0,
             attempted_at: None,
@@ -409,41 +393,41 @@ impl Client {
                 ));
             }
         };
-        let opts = InsertParams {
-            max_attempts: source_row.max_attempts,
-            metadata: source_row.metadata,
-            pending: false,
-            priority: source_row.priority,
-            queue: source_row.queue,
-            scheduled_at: Some(source_row.scheduled_at),
-            tags: source_row.tags,
-            unique: crate::UniqueOpts::default(),
+        let job = InsertContext {
+            encoded_args: source_row.encoded_args,
+            kind: source_row.kind,
+            opts: InsertParams {
+                max_attempts: source_row.max_attempts,
+                metadata: source_row.metadata,
+                pending: false,
+                priority: source_row.priority,
+                queue: source_row.queue,
+                scheduled_at: Some(source_row.scheduled_at),
+                tags: source_row.tags,
+                unique: crate::UniqueOpts::default(),
+            },
+            state: JobState::Available,
+            created_at: Some(source_row.created_at),
+            unique_key: source_row.unique_key,
+            unique_states,
         };
-        let executor = self
-            .inner
-            .erase_executor(transaction)
-            .map_err(Error::from)?
-            .into_inner();
-        let (mut job, unique_skipped_as_duplicate) = self
-            .insert_encoded_inner(
-                executor,
-                &source_row.kind,
-                &[],
-                &source_row.encoded_args,
-                opts,
-                Some(ExtensionInsertWire {
-                    created_at: source_row.created_at,
-                    unique_key: source_row.unique_key,
-                    unique_states,
-                }),
-            )
+        self.insert_raw_job(Some(executor), job).await
+    }
+
+    async fn insert_raw_job(
+        &self,
+        executor: Option<ExecutorInner<'_>>,
+        job: InsertContext,
+    ) -> Result<RawInsertResult, Error> {
+        let rows = self
+            .run_insert(executor, vec![job], InsertMode::Rows)
             .await?;
-        for hook in self.inner.hooks.iter().rev() {
-            hook.decode_insert_result(&mut job).await?;
-        }
+        let row = rows.into_iter().next().ok_or_else(|| {
+            Error::runtime_context("exact-version insertion", "insertion returned no row")
+        })?;
         Ok(RawInsertResult {
-            job,
-            unique_skipped_as_duplicate,
+            job: row.job,
+            unique_skipped_as_duplicate: row.unique_skipped_as_duplicate,
         })
     }
 }

@@ -14,13 +14,13 @@ use async_trait::async_trait;
 use chrono::{DateTime, SecondsFormat, Utc};
 use riverqueue::database::SchemaName;
 use riverqueue::{
-    AttemptError, Client, DefaultRetryPolicy, ErrorHandler, ErrorHandlerDecision, EventKind,
-    EventReceiver, Hook, InsertContext, InsertMiddleware, InsertOpts, InsertResult,
-    IntervalSchedule, Job, JobArgs, JobDeleteManyParams, JobListCursor, JobListParams, JobRow,
-    JobState, JobUpdateParams, MaintenanceConfig, PeriodicJob, PeriodicJobOpts, PeriodicJobs,
-    Plugin, Queue, QueueConfig, QueueListParams, RetryPolicy, RunHandle, SortDirection,
-    SubscribeConfig, UniqueOpts, WorkCancelled, WorkContext, WorkMiddleware, WorkOutcome,
-    WorkResult, Worker, WorkerRegistry,
+    AttemptError, BoxError, Client, DefaultRetryPolicy, ErrorHandler, ErrorHandlerDecision,
+    EventKind, EventReceiver, Extensions, Hook, InsertContext, InsertMiddleware, InsertNext,
+    InsertOpts, InsertResult, InsertedJobs, IntervalSchedule, Job, JobArgs, JobDeleteManyParams,
+    JobListCursor, JobListParams, JobRow, JobState, JobUpdateParams, MaintenanceConfig,
+    PeriodicJob, PeriodicJobOpts, PeriodicJobs, Plugin, Queue, QueueConfig, QueueListParams,
+    RetryPolicy, RunHandle, SortDirection, SubscribeConfig, UniqueOpts, WorkCancelled, WorkContext,
+    WorkMiddleware, WorkOutcome, WorkResult, Worker, WorkerRegistry,
     database::{PostgresDatabase, SqliteDatabase},
     encoding::encode_args,
     protocol::{UniqueKeyInput, unique_key, unique_states_bitmask},
@@ -676,48 +676,50 @@ impl RuntimeProbe {
 
 struct ConformanceErrorHandler(Arc<RuntimeProbe>);
 
-#[async_trait]
+#[allow(
+    clippy::unused_async_trait_impl,
+    reason = "these extensions only record state synchronously"
+)]
 impl ErrorHandler for ConformanceErrorHandler {
     async fn handle_error(
         &self,
         _context: &WorkContext,
         _job: &JobRow,
         _result: &WorkResult,
-    ) -> Result<ErrorHandlerDecision, riverqueue::Error> {
+    ) -> Result<ErrorHandlerDecision, BoxError> {
         self.0
             .increment_error_handler_calls()
-            .map_err(|error| riverqueue::Error::runtime(error.to_string()))?;
+            .map_err(|error| BoxError::from(error.to_string()))?;
         Ok(ErrorHandlerDecision::Cancel)
     }
 }
 
 struct ProbeHook(Arc<RuntimeProbe>);
 
-#[async_trait]
+#[allow(
+    clippy::unused_async_trait_impl,
+    reason = "these extensions only record state synchronously"
+)]
 impl Hook for ProbeHook {
-    async fn insert_begin(&self, _insert: &mut InsertContext) -> Result<(), riverqueue::Error> {
+    async fn insert_begin(&self, _insert: &mut InsertContext) -> Result<(), BoxError> {
         self.0
             .add_trace("hook:insert_begin")
-            .map_err(|error| riverqueue::Error::runtime(error.to_string()))
+            .map_err(|error| BoxError::from(error.to_string()))
     }
 
-    async fn periodic_jobs_start(&self, _jobs: &PeriodicJobs) -> Result<(), riverqueue::Error> {
+    async fn periodic_jobs_start(&self, _jobs: &PeriodicJobs) -> Result<(), BoxError> {
         self.0
             .increment_periodic_starts()
-            .map_err(|error| riverqueue::Error::runtime(error.to_string()))?;
+            .map_err(|error| BoxError::from(error.to_string()))?;
         self.0
             .add_trace("hook:periodic_start")
-            .map_err(|error| riverqueue::Error::runtime(error.to_string()))
+            .map_err(|error| BoxError::from(error.to_string()))
     }
 
-    async fn work_begin(
-        &self,
-        _context: &WorkContext,
-        _job: &mut JobRow,
-    ) -> Result<(), riverqueue::Error> {
+    async fn work_begin(&self, _context: &WorkContext, _job: &mut JobRow) -> Result<(), BoxError> {
         self.0
             .add_trace("hook:work_begin")
-            .map_err(|error| riverqueue::Error::runtime(error.to_string()))
+            .map_err(|error| BoxError::from(error.to_string()))
     }
 
     async fn work_end(
@@ -725,31 +727,29 @@ impl Hook for ProbeHook {
         _context: &WorkContext,
         _job: &JobRow,
         _result: &WorkResult,
-    ) -> Result<(), riverqueue::Error> {
+    ) -> Result<(), BoxError> {
         self.0
             .add_trace("hook:work_end")
-            .map_err(|error| riverqueue::Error::runtime(error.to_string()))
+            .map_err(|error| BoxError::from(error.to_string()))
     }
 }
 
 struct ProbeInsertMiddleware(Arc<RuntimeProbe>);
 
-#[async_trait]
 impl InsertMiddleware for ProbeInsertMiddleware {
-    async fn before_insert(&self, _insert: &mut InsertContext) -> Result<(), riverqueue::Error> {
+    async fn insert_many(
+        &self,
+        jobs: Vec<InsertContext>,
+        next: InsertNext<'_>,
+    ) -> Result<InsertedJobs, riverqueue::Error> {
         self.0
             .add_trace("middleware:insert_before")
-            .map_err(|error| riverqueue::Error::runtime(error.to_string()))
-    }
-
-    async fn after_insert(
-        &self,
-        _job: &JobRow,
-        _unique_skipped_as_duplicate: bool,
-    ) -> Result<(), riverqueue::Error> {
+            .map_err(|error| riverqueue::Error::runtime(error.to_string()))?;
+        let inserted = next.run(jobs).await;
         self.0
             .add_trace("middleware:insert_after")
-            .map_err(|error| riverqueue::Error::runtime(error.to_string()))
+            .map_err(|error| riverqueue::Error::runtime(error.to_string()))?;
+        inserted
     }
 }
 
@@ -782,16 +782,11 @@ impl WorkMiddleware for ProbeWorkMiddleware {
 struct ConformancePlugin(Arc<RuntimeProbe>);
 
 impl Plugin for ConformancePlugin {
-    fn hooks(&self) -> Vec<Arc<dyn Hook>> {
-        vec![Arc::new(ProbeHook(Arc::clone(&self.0)))]
-    }
-
-    fn insert_middleware(&self) -> Vec<Arc<dyn InsertMiddleware>> {
-        vec![Arc::new(ProbeInsertMiddleware(Arc::clone(&self.0)))]
-    }
-
-    fn work_middleware(&self) -> Vec<Arc<dyn WorkMiddleware>> {
-        vec![Arc::new(ProbeWorkMiddleware(Arc::clone(&self.0)))]
+    fn install(&self, extensions: &mut Extensions) {
+        extensions
+            .hook(ProbeHook(Arc::clone(&self.0)))
+            .insert_middleware(ProbeInsertMiddleware(Arc::clone(&self.0)))
+            .work_middleware(ProbeWorkMiddleware(Arc::clone(&self.0)));
     }
 }
 
@@ -1230,13 +1225,14 @@ impl Adapter {
                 let params: InsertParams = serde_json::from_value(params)?;
                 let client = self.client_for_schema(&params.schema)?;
                 let result = client
-                    .insert_with(params.args(), params.opts.into_opts())
+                    .insert(params.args())
+                    .opts(params.opts.into_opts())
                     .await?;
                 Ok(normalize_job(&result.job.row))
             }
             "insert_many" => {
                 let jobs = insert_many_params(&params)?;
-                let results = self.client()?.insert_many_with(jobs).await?;
+                let results = self.client()?.insert_many(jobs).await?;
                 Ok(normalize_insert_many_results(&results))
             }
             "benchmark_enqueue" => {
@@ -1250,14 +1246,12 @@ impl Adapter {
                 for index in 0..jobs {
                     let inserted_at = std::time::Instant::now();
                     client
-                        .insert_with(
-                            ConformanceArgs {
-                                behavior: String::new(),
-                                duration_ms: 0,
-                                message: format!("benchmark-enqueue-{index}"),
-                            },
-                            InsertOpts::default(),
-                        )
+                        .insert(ConformanceArgs {
+                            behavior: String::new(),
+                            duration_ms: 0,
+                            message: format!("benchmark-enqueue-{index}"),
+                        })
+                        .opts(InsertOpts::default())
                         .await?;
                     latencies.push(inserted_at.elapsed());
                 }
@@ -1276,7 +1270,7 @@ impl Adapter {
                     .into_iter()
                     .map(|params| (params.args(), params.opts.into_opts()))
                     .collect::<Vec<_>>();
-                let count = self.client()?.insert_many_fast_with(jobs).await?;
+                let count = self.client()?.insert_many(jobs).fast().await?;
                 Ok(json!({"count": count}))
             }
             "get" => {
@@ -1773,7 +1767,9 @@ impl Adapter {
                     .get_mut(&handle)
                     .ok_or_else(|| format!("transaction {handle:?} not found"))?;
                 let row = client
-                    .insert_tx_with(transaction, insert.args(), insert.opts.into_opts())
+                    .insert(insert.args())
+                    .opts(insert.opts.into_opts())
+                    .tx(transaction)
                     .await?;
                 Ok(normalize_job(&row.job.row))
             }
@@ -1786,10 +1782,10 @@ impl Adapter {
                     .get_mut(&handle)
                     .ok_or_else(|| format!("transaction {handle:?} not found"))?;
                 if method == "tx_insert_many_fast" {
-                    let count = client.insert_many_fast_tx_with(transaction, jobs).await?;
+                    let count = client.insert_many(jobs).fast().tx(transaction).await?;
                     Ok(json!({"count": count}))
                 } else {
-                    let results = client.insert_many_tx_with(transaction, jobs).await?;
+                    let results = client.insert_many(jobs).tx(transaction).await?;
                     Ok(normalize_insert_many_results(&results))
                 }
             }
@@ -2119,13 +2115,14 @@ impl SqliteAdapter {
                 }
                 let result = self
                     .client()?
-                    .insert_with(params.args(), params.opts.into_opts())
+                    .insert(params.args())
+                    .opts(params.opts.into_opts())
                     .await?;
                 Ok(normalize_job(&result.job.row))
             }
             "insert_many" => {
                 let jobs = insert_many_params(&params)?;
-                let results = self.client()?.insert_many_with(jobs).await?;
+                let results = self.client()?.insert_many(jobs).await?;
                 Ok(normalize_insert_many_results(&results))
             }
             "insert_many_fast" => {
@@ -2135,7 +2132,7 @@ impl SqliteAdapter {
                     .into_iter()
                     .map(|params| (params.args(), params.opts.into_opts()))
                     .collect::<Vec<_>>();
-                let count = self.client()?.insert_many_fast_with(jobs).await?;
+                let count = self.client()?.insert_many(jobs).fast().await?;
                 Ok(json!({"count": count}))
             }
             "raw_insert_no_notify" => {
@@ -2563,7 +2560,9 @@ impl SqliteAdapter {
                     .get_mut(&handle)
                     .ok_or_else(|| format!("transaction {handle:?} not found"))?;
                 let row = client
-                    .insert_tx_with(transaction, insert.args(), insert.opts.into_opts())
+                    .insert(insert.args())
+                    .opts(insert.opts.into_opts())
+                    .tx(transaction)
                     .await?;
                 Ok(normalize_job(&row.job.row))
             }
@@ -2576,10 +2575,10 @@ impl SqliteAdapter {
                     .get_mut(&handle)
                     .ok_or_else(|| format!("transaction {handle:?} not found"))?;
                 if method == "tx_insert_many_fast" {
-                    let count = client.insert_many_fast_tx_with(transaction, jobs).await?;
+                    let count = client.insert_many(jobs).fast().tx(transaction).await?;
                     Ok(json!({"count": count}))
                 } else {
-                    let results = client.insert_many_tx_with(transaction, jobs).await?;
+                    let results = client.insert_many(jobs).tx(transaction).await?;
                     Ok(normalize_insert_many_results(&results))
                 }
             }

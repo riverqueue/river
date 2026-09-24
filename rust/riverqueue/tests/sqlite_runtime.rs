@@ -60,14 +60,17 @@ struct CompletionHook(Arc<CompletionObserver>);
 
 struct WrapperTransformHook(&'static str);
 
-#[async_trait]
+#[allow(
+    clippy::unused_async_trait_impl,
+    reason = "these extensions only record state synchronously"
+)]
 impl ErrorHandler for CompletionErrorHandler {
     async fn handle_error(
         &self,
         _context: &WorkContext,
         job: &JobRow,
         result: &WorkResult,
-    ) -> Result<ErrorHandlerDecision, riverqueue::Error> {
+    ) -> Result<ErrorHandlerDecision, BoxError> {
         let WorkResult::Failed(error) = result else {
             panic!("expected a failed extension result")
         };
@@ -82,22 +85,28 @@ impl ErrorHandler for CompletionErrorHandler {
     }
 }
 
-#[async_trait]
+#[allow(
+    clippy::unused_async_trait_impl,
+    reason = "these extensions only record state synchronously"
+)]
 impl Hook for CompletionHook {
     async fn work_end(
         &self,
         _context: &WorkContext,
         _job: &JobRow,
         _result: &WorkResult,
-    ) -> Result<(), riverqueue::Error> {
+    ) -> Result<(), BoxError> {
         self.0.work_end_count.fetch_add(1, Ordering::SeqCst);
         Ok(())
     }
 }
 
-#[async_trait]
+#[allow(
+    clippy::unused_async_trait_impl,
+    reason = "these extensions only record state synchronously"
+)]
 impl Hook for WrapperTransformHook {
-    async fn decode_insert_result(&self, job: &mut JobRow) -> Result<(), riverqueue::Error> {
+    async fn decode_insert_result(&self, job: &mut JobRow) -> Result<(), BoxError> {
         // Unwrap without reparsing the inner arguments so their exact bytes
         // are preserved.
         let mut outer: std::collections::HashMap<String, Box<serde_json::value::RawValue>> =
@@ -108,10 +117,7 @@ impl Hook for WrapperTransformHook {
         Ok(())
     }
 
-    async fn insert_begin(
-        &self,
-        insert: &mut riverqueue::InsertContext,
-    ) -> Result<(), riverqueue::Error> {
+    async fn insert_begin(&self, insert: &mut riverqueue::InsertContext) -> Result<(), BoxError> {
         insert.encoded_args = serde_json::value::RawValue::from_string(format!(
             "{{{}:{}}}",
             serde_json::to_string(self.0)?,
@@ -451,10 +457,8 @@ async fn extension_claimed_outcomes_use_canonical_completion_pipeline() {
     let mut rows = Vec::new();
     for value in 1..=4 {
         let inserted = client
-            .insert_with(
-                RuntimeArgs { value },
-                InsertOpts::default().with_scheduled_at(scheduled_at),
-            )
+            .insert(RuntimeArgs { value })
+            .opts(InsertOpts::default().with_scheduled_at(scheduled_at))
             .await
             .unwrap();
         sqlx::query(
@@ -566,10 +570,8 @@ async fn extension_claimed_outcomes_retry_after_interception_error() {
     let mut rows = Vec::new();
     for value in 1..=2 {
         let inserted = client
-            .insert_with(
-                RuntimeArgs { value },
-                InsertOpts::default().with_scheduled_at(scheduled_at),
-            )
+            .insert(RuntimeArgs { value })
+            .opts(InsertOpts::default().with_scheduled_at(scheduled_at))
             .await
             .unwrap();
         sqlx::query(
@@ -883,10 +885,8 @@ async fn sqlite_extension_claim_returns_ordered_rows_and_rolls_back_decode_error
         ("mode".to_owned(), serde_json::json!("open")),
     ]);
     let leader = client
-        .insert_with(
-            RuntimeArgs { value: 50 },
-            InsertOpts::default().with_metadata(matches.clone()),
-        )
+        .insert(RuntimeArgs { value: 50 })
+        .opts(InsertOpts::default().with_metadata(matches.clone()))
         .await
         .unwrap();
     let mut expected = Vec::new();
@@ -896,8 +896,8 @@ async fn sqlite_extension_claim_returns_ordered_rows_and_rolls_back_decode_error
         (53, 1, now - chrono::Duration::minutes(2)),
     ] {
         let inserted = client
-            .insert_with(
-                RuntimeArgs { value },
+            .insert(RuntimeArgs { value })
+            .opts(
                 InsertOpts::default()
                     .with_metadata(matches.clone())
                     .with_priority(priority),
@@ -913,8 +913,8 @@ async fn sqlite_extension_claim_returns_ordered_rows_and_rolls_back_decode_error
         expected.push(inserted);
     }
     client
-        .insert_with(
-            RuntimeArgs { value: 54 },
+        .insert(RuntimeArgs { value: 54 })
+        .opts(
             InsertOpts::default().with_metadata(serde_json::Map::from_iter([
                 ("group".to_owned(), serde_json::json!("shared")),
                 ("mode".to_owned(), serde_json::json!("closed")),
@@ -923,10 +923,8 @@ async fn sqlite_extension_claim_returns_ordered_rows_and_rolls_back_decode_error
         .await
         .unwrap();
     let future = client
-        .insert_with(
-            RuntimeArgs { value: 55 },
-            InsertOpts::default().with_metadata(matches.clone()),
-        )
+        .insert(RuntimeArgs { value: 55 })
+        .opts(InsertOpts::default().with_metadata(matches.clone()))
         .await
         .unwrap();
     sqlx::query("UPDATE river_job SET scheduled_at = ? WHERE id = ?")
@@ -1084,7 +1082,8 @@ async fn sqlite_pilot_insert_uses_the_insertion_transaction() {
         .await
         .unwrap();
     let inserted = client
-        .insert_tx(&mut transaction, RuntimeArgs { value: 31 })
+        .insert(RuntimeArgs { value: 31 })
+        .tx(&mut transaction)
         .await
         .unwrap();
     assert_eq!(inserted.job.row.metadata["pilot_insert"], "uncommitted");
@@ -1172,8 +1171,8 @@ async fn sqlite_reinsert_preserves_wire_fields_and_runs_the_canonical_pipeline()
     let stored_raw_args: serde_json::Value = serde_json::from_str(&stored_raw_args).unwrap();
     assert_eq!(stored_raw_args["B"]["A"]["raw"], true);
     let original = producer
-        .insert_with(
-            RuntimeArgs { value: 41 },
+        .insert(RuntimeArgs { value: 41 })
+        .opts(
             InsertOpts::default()
                 .with_metadata(serde_json::Map::from_iter([(
                     "source".to_owned(),
@@ -1200,10 +1199,8 @@ async fn sqlite_reinsert_preserves_wire_fields_and_runs_the_canonical_pipeline()
         41
     );
     let sentinel = producer
-        .insert_with(
-            RuntimeArgs { value: 42 },
-            InsertOpts::default().with_scheduled_at(scheduled_at),
-        )
+        .insert(RuntimeArgs { value: 42 })
+        .opts(InsertOpts::default().with_scheduled_at(scheduled_at))
         .await
         .unwrap();
 
@@ -1504,7 +1501,8 @@ async fn sqlite_transaction_insert_respects_rollback() {
     let client = Client::builder(pool.clone()).build().unwrap();
     let mut transaction = pool.begin().await.unwrap();
     let inserted = client
-        .insert_tx(&mut transaction, RuntimeArgs { value: 1 })
+        .insert(RuntimeArgs { value: 1 })
+        .tx(&mut transaction)
         .await
         .unwrap();
     transaction.rollback().await.unwrap();
@@ -1539,23 +1537,22 @@ async fn sqlite_transaction_batches_roll_back_only_the_failed_batch() {
 
     let mut transaction = pool.begin().await.unwrap();
     client
-        .insert_tx(&mut transaction, RuntimeArgs { value: 100 })
+        .insert(RuntimeArgs { value: 100 })
+        .tx(&mut transaction)
         .await
         .unwrap();
     let result = client
-        .insert_many_tx_with(
-            &mut transaction,
-            [
-                (
-                    RuntimeArgs { value: 101 },
-                    InsertOpts::default().with_tags(["ordinary-failed-batch"]),
-                ),
-                (
-                    RuntimeArgs { value: 102 },
-                    InsertOpts::default().with_priority(0),
-                ),
-            ],
-        )
+        .insert_many([
+            (
+                RuntimeArgs { value: 101 },
+                InsertOpts::default().with_tags(["ordinary-failed-batch"]),
+            ),
+            (
+                RuntimeArgs { value: 102 },
+                InsertOpts::default().with_priority(0),
+            ),
+        ])
+        .tx(&mut transaction)
         .await;
     assert!(result.is_err());
     transaction.commit().await.unwrap();
@@ -1577,31 +1574,29 @@ async fn sqlite_transaction_batches_roll_back_only_the_failed_batch() {
 
     let unique = UniqueOpts::new().by_args();
     client
-        .insert_with(
-            RuntimeArgs { value: 200 },
-            InsertOpts::default().with_unique(unique.clone()),
-        )
+        .insert(RuntimeArgs { value: 200 })
+        .opts(InsertOpts::default().with_unique(unique.clone()))
         .await
         .unwrap();
     let mut transaction = pool.begin().await.unwrap();
     client
-        .insert_tx(&mut transaction, RuntimeArgs { value: 201 })
+        .insert(RuntimeArgs { value: 201 })
+        .tx(&mut transaction)
         .await
         .unwrap();
     let result = client
-        .insert_many_fast_tx_with(
-            &mut transaction,
-            [
-                (
-                    RuntimeArgs { value: 202 },
-                    InsertOpts::default().with_tags(["fast-failed-batch"]),
-                ),
-                (
-                    RuntimeArgs { value: 200 },
-                    InsertOpts::default().with_unique(unique),
-                ),
-            ],
-        )
+        .insert_many([
+            (
+                RuntimeArgs { value: 202 },
+                InsertOpts::default().with_tags(["fast-failed-batch"]),
+            ),
+            (
+                RuntimeArgs { value: 200 },
+                InsertOpts::default().with_unique(unique),
+            ),
+        ])
+        .fast()
+        .tx(&mut transaction)
         .await;
     assert!(result.is_err());
     transaction.commit().await.unwrap();
@@ -1749,7 +1744,8 @@ async fn sqlite_fetches_and_discards_unregistered_kinds() {
     let pool = setup().await;
     let producer = Client::builder(pool.clone()).build().unwrap();
     let inserted = producer
-        .insert_with(UnknownArgs {}, InsertOpts::default().with_max_attempts(1))
+        .insert(UnknownArgs {})
+        .opts(InsertOpts::default().with_max_attempts(1))
         .await
         .unwrap();
     let mut workers = WorkerRegistry::new();

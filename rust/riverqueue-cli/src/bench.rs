@@ -530,7 +530,7 @@ async fn insert_jobs(
                 )
             })
             .collect::<Vec<_>>();
-        let count = client.insert_many_fast_with(jobs).await?;
+        let count = client.insert_many(jobs).fast().await?;
         inserted.fetch_add(count, Ordering::Relaxed);
         remaining -= count;
     }

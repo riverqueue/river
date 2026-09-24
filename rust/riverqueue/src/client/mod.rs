@@ -16,6 +16,9 @@ mod tests;
 mod validate;
 
 pub use self::builder::{ClientBuilder, MaintenanceConfig, QueueConfig};
+pub use self::insert::{
+    InsertBatchRequest, InsertManyFastRequest, InsertManyItem, InsertManyRequest, InsertRequest,
+};
 #[cfg(feature = "sqlite")]
 pub(crate) use self::record::decode_attempt_error;
 #[cfg(feature = "postgres")]
@@ -104,15 +107,15 @@ pub(crate) struct ClientInner {
     completion_sender: Mutex<Option<mpsc::WeakSender<CompletionUpdate>>>,
     pub(crate) database: Database,
     default_max_attempts: i16,
-    error_handler: Option<Arc<dyn ErrorHandler>>,
+    error_handler: Option<Arc<dyn crate::extension::DynErrorHandler>>,
     pub(crate) events: broadcast::Sender<Event>,
     fetch_registration_windows: AtomicU64,
-    pub(crate) hooks: Vec<Arc<dyn Hook>>,
+    pub(crate) hooks: Vec<Arc<dyn crate::extension::DynHook>>,
     pub(crate) id: String,
     job_stuck_threshold: Duration,
     pub(crate) job_timeout: Option<Duration>,
     pub(crate) maintenance: MaintenanceConfig,
-    insert_middleware: Vec<Arc<dyn InsertMiddleware>>,
+    insert_middleware: Vec<Arc<dyn crate::extension::DynInsertMiddleware>>,
     pub(crate) periodic_jobs: PeriodicJobs,
     pending_cancellations: Mutex<HashMap<i64, std::time::Instant>>,
     pub(crate) pilot: Arc<dyn Pilot>,

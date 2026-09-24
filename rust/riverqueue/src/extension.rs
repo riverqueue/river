@@ -1,11 +1,11 @@
 //! Ordered hooks, middleware, and plugin registration.
 
-use std::{fmt, sync::Arc, time::Duration};
+use std::{fmt, future::Future, pin::Pin, sync::Arc, time::Duration};
 
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 
-use crate::{Error, InsertParams, JobRow, PeriodicJobs, WorkContext};
+use crate::{BoxError, Error, InsertParams, JobRow, PeriodicJobs, WorkContext};
 
 /// Cloneable worker error passed to hooks and error handlers.
 #[derive(Clone)]
@@ -133,18 +133,31 @@ impl Metric {
     }
 }
 
-/// Mutable type-erased insertion data visible to extensions.
+/// A job about to be inserted, as seen by hooks and insertion middleware.
+///
+/// This is the Rust counterpart of River Go's `rivertype.JobInsertParams`.
+/// River resolves options, validates them, and computes the unique key before
+/// any extension runs, so changing the arguments, queue, or schedule here
+/// doesn't change the job's uniqueness, just as in River Go.
 #[derive(Clone, Debug)]
 #[non_exhaustive]
 pub struct InsertContext {
-    /// Serialized arguments that will be persisted and hashed, as exact JSON
-    /// text. Replace them with [`encode_args`](crate::encoding::encode_args)
-    /// to keep Go-compatible unique keys.
+    /// Serialized arguments that will be persisted, as exact JSON text.
+    /// Replace them with [`encode_args`](crate::encoding::encode_args) to keep
+    /// the encoding River Go would produce.
     pub encoded_args: Box<serde_json::value::RawValue>,
     /// Stable job kind.
     pub kind: String,
-    /// Insertion options.
+    /// Resolved insertion options.
     pub opts: InsertParams,
+    /// State the job is inserted in: available, pending, or scheduled.
+    pub state: crate::JobState,
+    /// Creation time to persist instead of the database's current time.
+    pub(crate) created_at: Option<DateTime<Utc>>,
+    /// Unique key hash computed from the original insertion.
+    pub(crate) unique_key: Option<Vec<u8>>,
+    /// Bitmask of states in which the unique key is enforced.
+    pub(crate) unique_states: Option<u8>,
 }
 
 /// Public summary of a worker result passed to extensions.
@@ -169,82 +182,343 @@ pub enum WorkResult {
     Snoozed(Duration),
 }
 
-/// Lifecycle observations. Hooks run in registration order.
-#[async_trait]
+/// A thread-safe boxed future, used where River erases extension types.
+pub(crate) type BoxFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
+
+/// Lifecycle hooks. Hooks run in registration order and observe or adjust
+/// jobs without wrapping River's operations; use [`InsertMiddleware`] or
+/// [`WorkMiddleware`] to wrap them.
+///
+/// Every method has a default no-op implementation, so implement only the
+/// ones you need. Methods are ordinary `async fn`s:
+///
+/// ```
+/// use riverqueue::{BoxError, Hook, InsertContext};
+///
+/// struct TagEverything;
+///
+/// impl Hook for TagEverything {
+///     async fn insert_begin(&self, insert: &mut InsertContext) -> Result<(), BoxError> {
+///         insert.opts.tags.push("tagged".to_owned());
+///         Ok(())
+///     }
+/// }
+/// ```
+///
+/// An error returned from a hook fails the operation it observes and is
+/// reported as [`Error::Extension`] with the hook's error as its source.
 pub trait Hook: Send + Sync + 'static {
-    /// Decodes a persisted row before River constructs a typed insertion
-    /// result. This is the inverse of any storage transformation performed by
+    /// Decodes a persisted row before River returns it from an insertion.
+    ///
+    /// This is the inverse of any storage transformation performed by
     /// [`Hook::insert_begin`]. Decode hooks run in reverse registration order
-    /// so nested transformations compose correctly.
-    async fn decode_insert_result(&self, _job: &mut JobRow) -> Result<(), Error> {
-        Ok(())
-    }
-
-    /// Runs before insert middleware and SQL execution.
-    async fn insert_begin(&self, _insert: &mut InsertContext) -> Result<(), Error> {
-        Ok(())
-    }
-
-    /// Runs after successful insertion or unique lookup.
-    async fn insert_end(
+    /// so that nested transformations compose.
+    fn decode_insert_result(
         &self,
-        _job: &JobRow,
-        _unique_skipped_as_duplicate: bool,
-    ) -> Result<(), Error> {
-        Ok(())
+        job: &mut JobRow,
+    ) -> impl Future<Output = Result<(), BoxError>> + Send {
+        let _ = job;
+        std::future::ready(Ok(()))
     }
 
-    /// Runs after a successful no-returning `COPY` insertion.
-    async fn insert_many_fast_end(&self, _inserted_count: u64) -> Result<(), Error> {
-        Ok(())
+    /// Runs for each job inside insertion middleware, before the job is
+    /// written. It may change the job's arguments, options, or initial
+    /// state.
+    fn insert_begin(
+        &self,
+        insert: &mut InsertContext,
+    ) -> impl Future<Output = Result<(), BoxError>> + Send {
+        let _ = insert;
+        std::future::ready(Ok(()))
     }
 
-    /// Observes a runtime metric. Hook failures are logged and do not fail the
+    /// Observes a runtime metric. Failures are logged and don't affect the
     /// operation that produced the metric.
-    async fn metric_emit(&self, _metric: Metric) -> Result<(), Error> {
-        Ok(())
+    fn metric_emit(&self, metric: Metric) -> impl Future<Output = Result<(), BoxError>> + Send {
+        let _ = metric;
+        std::future::ready(Ok(()))
     }
 
-    /// Runs when the client's dynamic periodic-job service starts.
-    async fn periodic_jobs_start(&self, _jobs: &PeriodicJobs) -> Result<(), Error> {
-        Ok(())
-    }
-
-    /// Runs before work middleware and worker execution.
-    async fn work_begin(&self, _context: &WorkContext, _job: &mut JobRow) -> Result<(), Error> {
-        Ok(())
-    }
-
-    /// Runs after worker execution and before result persistence.
-    async fn work_end(
+    /// Runs when this client's periodic job enqueuer starts, which happens
+    /// each time the client is elected leader.
+    fn periodic_jobs_start(
         &self,
-        _context: &WorkContext,
-        _job: &JobRow,
-        _result: &WorkResult,
-    ) -> Result<(), Error> {
-        Ok(())
+        jobs: &PeriodicJobs,
+    ) -> impl Future<Output = Result<(), BoxError>> + Send {
+        let _ = jobs;
+        std::future::ready(Ok(()))
+    }
+
+    /// Runs before work middleware and the worker.
+    fn work_begin(
+        &self,
+        context: &WorkContext,
+        job: &mut JobRow,
+    ) -> impl Future<Output = Result<(), BoxError>> + Send {
+        let _ = (context, job);
+        std::future::ready(Ok(()))
+    }
+
+    /// Runs after the worker and work middleware, before the result is
+    /// persisted.
+    fn work_end(
+        &self,
+        context: &WorkContext,
+        job: &JobRow,
+        result: &WorkResult,
+    ) -> impl Future<Output = Result<(), BoxError>> + Send {
+        let _ = (context, job, result);
+        std::future::ready(Ok(()))
     }
 }
 
-/// Ordered insertion middleware.
-#[async_trait]
-pub trait InsertMiddleware: Send + Sync + 'static {
-    /// Mutates or validates an insertion before SQL execution.
-    async fn before_insert(&self, insert: &mut InsertContext) -> Result<(), Error>;
+/// Object-safe form of [`Hook`] that River stores after registration.
+pub(crate) trait DynHook: Send + Sync + 'static {
+    fn decode_insert_result<'a>(&'a self, job: &'a mut JobRow) -> BoxFuture<'a, Result<(), Error>>;
+    fn insert_begin<'a>(
+        &'a self,
+        insert: &'a mut InsertContext,
+    ) -> BoxFuture<'a, Result<(), Error>>;
+    fn metric_emit(&self, metric: Metric) -> BoxFuture<'_, Result<(), Error>>;
+    fn periodic_jobs_start<'a>(
+        &'a self,
+        jobs: &'a PeriodicJobs,
+    ) -> BoxFuture<'a, Result<(), Error>>;
+    fn work_begin<'a>(
+        &'a self,
+        context: &'a WorkContext,
+        job: &'a mut JobRow,
+    ) -> BoxFuture<'a, Result<(), Error>>;
+    fn work_end<'a>(
+        &'a self,
+        context: &'a WorkContext,
+        job: &'a JobRow,
+        result: &'a WorkResult,
+    ) -> BoxFuture<'a, Result<(), Error>>;
+}
 
-    /// Observes a successful insertion in reverse registration order.
-    async fn after_insert(
-        &self,
-        _job: &JobRow,
-        _unique_skipped_as_duplicate: bool,
-    ) -> Result<(), Error> {
-        Ok(())
+fn hook_error(phase: &'static str) -> impl FnOnce(BoxError) -> Error {
+    move |source| Error::Extension { phase, source }
+}
+
+impl<H: Hook> DynHook for H {
+    fn decode_insert_result<'a>(&'a self, job: &'a mut JobRow) -> BoxFuture<'a, Result<(), Error>> {
+        Box::pin(async move {
+            Hook::decode_insert_result(self, job)
+                .await
+                .map_err(hook_error("insert result decode hook"))
+        })
     }
 
-    /// Observes a successful no-returning `COPY` insertion in reverse
-    /// registration order.
-    async fn after_insert_many_fast(&self, _inserted_count: u64) -> Result<(), Error> {
-        Ok(())
+    fn insert_begin<'a>(
+        &'a self,
+        insert: &'a mut InsertContext,
+    ) -> BoxFuture<'a, Result<(), Error>> {
+        Box::pin(async move {
+            Hook::insert_begin(self, insert)
+                .await
+                .map_err(hook_error("insert begin hook"))
+        })
+    }
+
+    fn metric_emit(&self, metric: Metric) -> BoxFuture<'_, Result<(), Error>> {
+        Box::pin(async move {
+            Hook::metric_emit(self, metric)
+                .await
+                .map_err(hook_error("metric hook"))
+        })
+    }
+
+    fn periodic_jobs_start<'a>(
+        &'a self,
+        jobs: &'a PeriodicJobs,
+    ) -> BoxFuture<'a, Result<(), Error>> {
+        Box::pin(async move {
+            Hook::periodic_jobs_start(self, jobs)
+                .await
+                .map_err(hook_error("periodic jobs start hook"))
+        })
+    }
+
+    fn work_begin<'a>(
+        &'a self,
+        context: &'a WorkContext,
+        job: &'a mut JobRow,
+    ) -> BoxFuture<'a, Result<(), Error>> {
+        Box::pin(async move {
+            Hook::work_begin(self, context, job)
+                .await
+                .map_err(hook_error("work begin hook"))
+        })
+    }
+
+    fn work_end<'a>(
+        &'a self,
+        context: &'a WorkContext,
+        job: &'a JobRow,
+        result: &'a WorkResult,
+    ) -> BoxFuture<'a, Result<(), Error>> {
+        Box::pin(async move {
+            Hook::work_end(self, context, job, result)
+                .await
+                .map_err(hook_error("work end hook"))
+        })
+    }
+}
+
+/// Middleware wrapping each insertion, including batches.
+///
+/// Like River Go's `JobInsertMiddleware`, middleware sees every job in an
+/// insertion at once and decides whether and how to continue by calling
+/// [`InsertNext::run`]. Middleware registered first is outermost. It can
+/// change jobs before passing them on, observe or change the results, wrap
+/// the insertion in a span or timer, or return early without inserting.
+///
+/// ```
+/// use riverqueue::{Error, InsertContext, InsertMiddleware, InsertNext, InsertedJobs};
+///
+/// struct CountInserts;
+///
+/// impl InsertMiddleware for CountInserts {
+///     async fn insert_many(
+///         &self,
+///         jobs: Vec<InsertContext>,
+///         next: InsertNext<'_>,
+///     ) -> Result<InsertedJobs, Error> {
+///         let count = jobs.len();
+///         let inserted = next.run(jobs).await?;
+///         println!("inserted {count} jobs");
+///         Ok(inserted)
+///     }
+/// }
+/// ```
+pub trait InsertMiddleware: Send + Sync + 'static {
+    /// Wraps the insertion of `jobs`.
+    fn insert_many(
+        &self,
+        jobs: Vec<InsertContext>,
+        next: InsertNext<'_>,
+    ) -> impl Future<Output = Result<InsertedJobs, Error>> + Send;
+}
+
+/// Object-safe form of [`InsertMiddleware`].
+pub(crate) trait DynInsertMiddleware: Send + Sync + 'static {
+    fn insert_many<'a>(
+        &'a self,
+        jobs: Vec<InsertContext>,
+        next: InsertNext<'a>,
+    ) -> BoxFuture<'a, Result<InsertedJobs, Error>>;
+}
+
+impl<M: InsertMiddleware> DynInsertMiddleware for M {
+    fn insert_many<'a>(
+        &'a self,
+        jobs: Vec<InsertContext>,
+        next: InsertNext<'a>,
+    ) -> BoxFuture<'a, Result<InsertedJobs, Error>> {
+        Box::pin(InsertMiddleware::insert_many(self, jobs, next))
+    }
+}
+
+pub(crate) type InsertEndpoint<'a> =
+    Box<dyn FnOnce(Vec<InsertContext>) -> BoxFuture<'a, Result<InsertedJobs, Error>> + Send + 'a>;
+
+/// The remainder of an insertion: any inner middleware followed by River's
+/// persistence of the jobs.
+pub struct InsertNext<'a> {
+    endpoint: InsertEndpoint<'a>,
+    remaining: &'a [Arc<dyn DynInsertMiddleware>],
+}
+
+impl<'a> InsertNext<'a> {
+    pub(crate) fn new(
+        middleware: &'a [Arc<dyn DynInsertMiddleware>],
+        endpoint: InsertEndpoint<'a>,
+    ) -> Self {
+        Self {
+            endpoint,
+            remaining: middleware,
+        }
+    }
+
+    /// Continues the insertion with `jobs`.
+    ///
+    /// # Errors
+    ///
+    /// Returns the error of any inner middleware, hook, or extension, or of
+    /// the database insertion.
+    pub async fn run(self, jobs: Vec<InsertContext>) -> Result<InsertedJobs, Error> {
+        match self.remaining.split_first() {
+            Some((middleware, remaining)) => {
+                middleware
+                    .insert_many(
+                        jobs,
+                        InsertNext {
+                            endpoint: self.endpoint,
+                            remaining,
+                        },
+                    )
+                    .await
+            }
+            None => (self.endpoint)(jobs).await,
+        }
+    }
+}
+
+impl fmt::Debug for InsertNext<'_> {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("InsertNext")
+            .field("remaining_middleware", &self.remaining.len())
+            .finish_non_exhaustive()
+    }
+}
+
+/// Jobs written by an insertion, as seen by [`InsertMiddleware`].
+#[derive(Clone, Debug)]
+#[non_exhaustive]
+pub enum InsertedJobs {
+    /// Rows returned by an insertion, in input order.
+    Rows(Vec<InsertedJob>),
+    /// Number of rows written by a fast insertion that doesn't return rows.
+    Count(u64),
+}
+
+impl InsertedJobs {
+    /// Returns the number of jobs inserted, including unique jobs whose
+    /// insertion was skipped as a duplicate.
+    #[must_use]
+    pub fn len(&self) -> u64 {
+        match self {
+            Self::Rows(rows) => u64::try_from(rows.len()).unwrap_or(u64::MAX),
+            Self::Count(count) => *count,
+        }
+    }
+
+    /// Returns whether no jobs were inserted.
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+}
+
+/// One row returned by an insertion.
+#[derive(Clone, Debug)]
+#[non_exhaustive]
+pub struct InsertedJob {
+    /// The inserted job, or the existing job a unique insertion matched.
+    pub job: JobRow,
+    /// Whether the insertion was skipped because a matching unique job
+    /// already existed.
+    pub unique_skipped_as_duplicate: bool,
+}
+
+impl InsertedJob {
+    pub(crate) const fn new(job: JobRow, unique_skipped_as_duplicate: bool) -> Self {
+        Self {
+            job,
+            unique_skipped_as_duplicate,
+        }
     }
 }
 
@@ -304,39 +578,131 @@ pub enum ErrorHandlerDecision {
     Cancel,
 }
 
-/// Handler invoked for worker errors, panics, and forced task abortion.
-#[async_trait]
+/// Handler invoked for worker errors, panics, and stuck jobs.
+///
+/// Both methods have default implementations. Handler errors are logged and
+/// don't change how River handles the job.
 pub trait ErrorHandler: Send + Sync + 'static {
-    /// Optionally overrides default retry handling.
-    async fn handle_error(
+    /// Called when a worker returns an error, panics, or is aborted. Returning
+    /// [`ErrorHandlerDecision::Cancel`] cancels the job regardless of its
+    /// remaining attempts.
+    fn handle_error(
         &self,
-        _context: &WorkContext,
-        _job: &JobRow,
-        _result: &WorkResult,
-    ) -> Result<ErrorHandlerDecision, Error> {
-        Ok(ErrorHandlerDecision::default())
+        context: &WorkContext,
+        job: &JobRow,
+        result: &WorkResult,
+    ) -> impl Future<Output = Result<ErrorHandlerDecision, BoxError>> + Send {
+        let _ = (context, job, result);
+        std::future::ready(Ok(ErrorHandlerDecision::default()))
     }
 
-    /// Observes a job that exceeded its cancellation grace period.
-    async fn handle_stuck(&self, _job: &JobRow) -> Result<(), Error> {
-        Ok(())
+    /// Called when a job keeps running past its cancellation grace period.
+    fn handle_stuck(&self, job: &JobRow) -> impl Future<Output = Result<(), BoxError>> + Send {
+        let _ = job;
+        std::future::ready(Ok(()))
     }
 }
 
-/// Collection of extension components installed as one unit.
+/// Object-safe form of [`ErrorHandler`].
+pub(crate) trait DynErrorHandler: Send + Sync + 'static {
+    fn handle_error<'a>(
+        &'a self,
+        context: &'a WorkContext,
+        job: &'a JobRow,
+        result: &'a WorkResult,
+    ) -> BoxFuture<'a, Result<ErrorHandlerDecision, Error>>;
+    fn handle_stuck<'a>(&'a self, job: &'a JobRow) -> BoxFuture<'a, Result<(), Error>>;
+}
+
+impl<H: ErrorHandler> DynErrorHandler for H {
+    fn handle_error<'a>(
+        &'a self,
+        context: &'a WorkContext,
+        job: &'a JobRow,
+        result: &'a WorkResult,
+    ) -> BoxFuture<'a, Result<ErrorHandlerDecision, Error>> {
+        Box::pin(async move {
+            ErrorHandler::handle_error(self, context, job, result)
+                .await
+                .map_err(hook_error("error handler"))
+        })
+    }
+
+    fn handle_stuck<'a>(&'a self, job: &'a JobRow) -> BoxFuture<'a, Result<(), Error>> {
+        Box::pin(async move {
+            ErrorHandler::handle_stuck(self, job)
+                .await
+                .map_err(hook_error("stuck job handler"))
+        })
+    }
+}
+
+/// A set of extensions installed together, such as a tracing integration
+/// that needs a hook and middleware.
+///
+/// ```
+/// use riverqueue::{BoxError, Extensions, Hook, InsertContext, Plugin};
+///
+/// struct AuditHook;
+///
+/// impl Hook for AuditHook {
+///     async fn insert_begin(&self, insert: &mut InsertContext) -> Result<(), BoxError> {
+///         println!("inserting {}", insert.kind);
+///         Ok(())
+///     }
+/// }
+///
+/// struct Audit;
+///
+/// impl Plugin for Audit {
+///     fn install(&self, extensions: &mut Extensions) {
+///         extensions.hook(AuditHook);
+///     }
+/// }
+/// ```
 pub trait Plugin: Send + Sync + 'static {
-    /// Hooks contributed by this plugin.
-    fn hooks(&self) -> Vec<Arc<dyn Hook>> {
-        Vec::new()
+    /// Registers the plugin's hooks and middleware.
+    fn install(&self, extensions: &mut Extensions);
+}
+
+/// Registrar through which a [`Plugin`] adds hooks and middleware.
+///
+/// Extensions are appended after any registered earlier, in the order the
+/// plugin adds them.
+#[derive(Default)]
+pub struct Extensions {
+    pub(crate) hooks: Vec<Arc<dyn DynHook>>,
+    pub(crate) insert_middleware: Vec<Arc<dyn DynInsertMiddleware>>,
+    pub(crate) work_middleware: Vec<Arc<dyn WorkMiddleware>>,
+}
+
+impl Extensions {
+    /// Adds a lifecycle hook.
+    pub fn hook<H: Hook>(&mut self, hook: H) -> &mut Self {
+        self.hooks.push(Arc::new(hook));
+        self
     }
 
-    /// Insertion middleware contributed by this plugin.
-    fn insert_middleware(&self) -> Vec<Arc<dyn InsertMiddleware>> {
-        Vec::new()
+    /// Adds insertion middleware.
+    pub fn insert_middleware<M: InsertMiddleware>(&mut self, middleware: M) -> &mut Self {
+        self.insert_middleware.push(Arc::new(middleware));
+        self
     }
 
-    /// Worker middleware contributed by this plugin.
-    fn work_middleware(&self) -> Vec<Arc<dyn WorkMiddleware>> {
-        Vec::new()
+    /// Adds worker middleware.
+    pub fn work_middleware<M: WorkMiddleware>(&mut self, middleware: M) -> &mut Self {
+        self.work_middleware.push(Arc::new(middleware));
+        self
+    }
+}
+
+impl fmt::Debug for Extensions {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("Extensions")
+            .field("hooks", &self.hooks.len())
+            .field("insert_middleware", &self.insert_middleware.len())
+            .field("work_middleware", &self.work_middleware.len())
+            .finish()
     }
 }

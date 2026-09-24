@@ -230,10 +230,8 @@ async fn claimed_rows_decode_individually_and_accept_go_integer_ranges() {
     // A row whose tags are not an array cannot become a `JobRow`. Claiming it
     // with the others must record a failure for it alone.
     let malformed = client
-        .insert_with(
-            ResilienceArgs {},
-            InsertOpts::default().with_max_attempts(1),
-        )
+        .insert(ResilienceArgs {})
+        .opts(InsertOpts::default().with_max_attempts(1))
         .await
         .unwrap();
     sqlx::query("UPDATE river_job SET tags = jsonb('{}') WHERE id = ?")
@@ -521,11 +519,12 @@ async fn unique_duplicates_are_detected_across_clients_with_the_same_id() {
     let opts = InsertOpts::default().with_unique(UniqueOpts::new().by_args());
 
     let inserted = first
-        .insert_with(ResilienceArgs {}, opts.clone())
+        .insert(ResilienceArgs {})
+        .opts(opts.clone())
         .await
         .unwrap();
     assert!(!inserted.unique_skipped_as_duplicate);
-    let duplicate = second.insert_with(ResilienceArgs {}, opts).await.unwrap();
+    let duplicate = second.insert(ResilienceArgs {}).opts(opts).await.unwrap();
     assert!(duplicate.unique_skipped_as_duplicate);
     assert_eq!(duplicate.job.row.id, inserted.job.row.id);
 }

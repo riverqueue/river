@@ -472,26 +472,9 @@ mod tests {
     };
 
     use super::*;
-    #[cfg(feature = "postgres")]
-    use async_trait::async_trait;
     use serde::{Deserialize, Serialize};
     #[cfg(feature = "postgres")]
     use sqlx::postgres::PgPoolOptions;
-
-    #[cfg(feature = "postgres")]
-    use crate::{InsertContext, InsertMiddleware};
-
-    #[cfg(feature = "postgres")]
-    struct FailingInsertMiddleware(Arc<AtomicUsize>);
-
-    #[cfg(feature = "postgres")]
-    #[async_trait]
-    impl InsertMiddleware for FailingInsertMiddleware {
-        async fn before_insert(&self, _insert: &mut InsertContext) -> Result<(), Error> {
-            self.0.fetch_add(1, Ordering::SeqCst);
-            Err(Error::runtime("periodic insert failed"))
-        }
-    }
 
     #[derive(Clone, Deserialize, Serialize)]
     struct TestArgs;
@@ -532,18 +515,21 @@ mod tests {
     #[tokio::test]
     async fn insert_failure_does_not_advance_next_run() {
         let attempts = Arc::new(AtomicUsize::new(0));
+        let constructed = Arc::clone(&attempts);
         let jobs = PeriodicJobs::from_jobs(vec![PeriodicJob::new(
             IntervalSchedule::new(Duration::from_secs(1)).unwrap(),
-            || TestArgs,
+            move || {
+                constructed.fetch_add(1, Ordering::SeqCst);
+                TestArgs
+            },
         )])
         .unwrap();
+        // Nothing listens on this port, so every insertion fails.
         let pool = PgPoolOptions::new()
-            .connect_lazy("postgres://localhost/river_periodic_test")
+            .acquire_timeout(Duration::from_millis(100))
+            .connect_lazy("postgres://127.0.0.1:1/river_periodic_test")
             .unwrap();
-        let client = Client::builder(pool)
-            .insert_middleware(FailingInsertMiddleware(attempts.clone()))
-            .build()
-            .unwrap();
+        let client = Client::builder(pool).build().unwrap();
         let now = Utc::now();
         let target = now + chrono::Duration::seconds(1);
 

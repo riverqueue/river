@@ -210,13 +210,13 @@ impl QueueConfig {
 pub struct ClientBuilder {
     pub(super) database: Database,
     pub(super) default_max_attempts: i16,
-    pub(super) error_handler: Option<Arc<dyn ErrorHandler>>,
-    pub(super) hooks: Vec<Arc<dyn Hook>>,
+    pub(super) error_handler: Option<Arc<dyn crate::extension::DynErrorHandler>>,
+    pub(super) hooks: Vec<Arc<dyn crate::extension::DynHook>>,
     pub(super) id: String,
     pub(super) job_stuck_threshold: Duration,
     pub(super) job_timeout: Option<Duration>,
     pub(super) maintenance: MaintenanceConfig,
-    pub(super) insert_middleware: Vec<Arc<dyn InsertMiddleware>>,
+    pub(super) insert_middleware: Vec<Arc<dyn crate::extension::DynInsertMiddleware>>,
     pub(super) periodic_jobs: Vec<PeriodicJob>,
     pub(super) pilot: Arc<dyn Pilot>,
     pub(super) poll_only: bool,
@@ -324,13 +324,19 @@ impl ClientBuilder {
         self
     }
 
-    /// Installs all extension points contributed by a plugin.
+    /// Installs the hooks and middleware contributed by a plugin, after any
+    /// registered earlier.
     #[must_use]
-    #[allow(clippy::needless_pass_by_value)]
+    #[allow(
+        clippy::needless_pass_by_value,
+        reason = "taking the plugin by value matches the other registration methods"
+    )]
     pub fn plugin<P: Plugin>(mut self, plugin: P) -> Self {
-        self.hooks.extend(plugin.hooks());
-        self.insert_middleware.extend(plugin.insert_middleware());
-        self.work_middleware.extend(plugin.work_middleware());
+        let mut extensions = crate::Extensions::default();
+        plugin.install(&mut extensions);
+        self.hooks.extend(extensions.hooks);
+        self.insert_middleware.extend(extensions.insert_middleware);
+        self.work_middleware.extend(extensions.work_middleware);
         self
     }
 

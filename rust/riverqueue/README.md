@@ -79,13 +79,7 @@ the job type leaves unspecified. A call can override only the fields it needs:
 # struct SendEmail { address: String }
 # async fn example(client: Client) -> Result<(), riverqueue::Error> {
 client
-    .insert_with(
-        SendEmail { address: "urgent@example.com".to_owned() },
-        InsertOpts::default()
-            .with_queue("critical")
-            .with_priority(1)
-            .with_max_attempts(8),
-    )
+    .insert(SendEmail { address: "urgent@example.com".to_owned() }).opts(InsertOpts::default() .with_queue("critical") .with_priority(1) .with_max_attempts(8))
     .await?;
 # Ok(())
 # }

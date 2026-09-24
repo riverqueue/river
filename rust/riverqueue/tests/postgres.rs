@@ -643,7 +643,7 @@ async fn concurrent_unique_inserts_return_the_conflicting_job() {
             let opts = opts.clone();
             tasks.spawn(async move {
                 barrier.wait().await;
-                client.insert_with(EchoArgs { message }, opts).await
+                client.insert(EchoArgs { message }).opts(opts).await
             });
         }
 
@@ -712,12 +712,10 @@ async fn extension_claim_returns_ordered_rows_and_rolls_back_decode_errors() {
         ("mode".to_owned(), serde_json::json!("open")),
     ]);
     let leader = client
-        .insert_with(
-            EchoArgs {
-                message: "leader".to_owned(),
-            },
-            InsertOpts::default().with_metadata(matches.clone()),
-        )
+        .insert(EchoArgs {
+            message: "leader".to_owned(),
+        })
+        .opts(InsertOpts::default().with_metadata(matches.clone()))
         .await
         .unwrap();
     let mut expected = Vec::new();
@@ -727,10 +725,10 @@ async fn extension_claim_returns_ordered_rows_and_rolls_back_decode_errors() {
         ("first", 1, now - chrono::Duration::minutes(2)),
     ] {
         let inserted = client
-            .insert_with(
-                EchoArgs {
-                    message: message.to_owned(),
-                },
+            .insert(EchoArgs {
+                message: message.to_owned(),
+            })
+            .opts(
                 InsertOpts::default()
                     .with_metadata(matches.clone())
                     .with_priority(priority),
@@ -747,10 +745,10 @@ async fn extension_claim_returns_ordered_rows_and_rolls_back_decode_errors() {
         expected.push(inserted);
     }
     client
-        .insert_with(
-            EchoArgs {
-                message: "wrong metadata".to_owned(),
-            },
+        .insert(EchoArgs {
+            message: "wrong metadata".to_owned(),
+        })
+        .opts(
             InsertOpts::default().with_metadata(serde_json::Map::from_iter([
                 ("group".to_owned(), serde_json::json!("shared")),
                 ("mode".to_owned(), serde_json::json!("closed")),
@@ -863,7 +861,8 @@ async fn insert_many_variants_preserve_order_and_transactionality() {
     );
     let mut empty_transaction = pool.begin().await.unwrap();
     let empty_many_tx = client
-        .insert_many_tx(&mut empty_transaction, Vec::<EchoArgs>::new())
+        .insert_many(Vec::<EchoArgs>::new())
+        .tx(&mut empty_transaction)
         .await
         .unwrap_err();
     assert_eq!(
@@ -871,7 +870,8 @@ async fn insert_many_variants_preserve_order_and_transactionality() {
         "invalid job: job: no jobs to insert"
     );
     let empty_batch_tx = client
-        .insert_batch_tx(&mut empty_transaction, InsertBatch::new())
+        .insert_batch(InsertBatch::new())
+        .tx(&mut empty_transaction)
         .await
         .unwrap_err();
     assert_eq!(
@@ -882,7 +882,7 @@ async fn insert_many_variants_preserve_order_and_transactionality() {
 
     let past_scheduled_at = chrono::Utc::now() - chrono::Duration::minutes(1);
     let ordered = client
-        .insert_many_with([
+        .insert_many([
             (
                 EchoArgs {
                     message: "ordered-one".to_owned(),
@@ -974,7 +974,7 @@ async fn insert_many_variants_preserve_order_and_transactionality() {
 
     let unique_opts = InsertOpts::default().with_unique(UniqueOpts::new().by_args());
     let unique = client
-        .insert_many_with([
+        .insert_many([
             (
                 EchoArgs {
                     message: "unique-batch".to_owned(),
@@ -996,17 +996,15 @@ async fn insert_many_variants_preserve_order_and_transactionality() {
 
     let mut transaction = pool.begin().await.unwrap();
     let rolled_back = client
-        .insert_many_tx_with(
-            &mut transaction,
-            ["tx-rollback-one", "tx-rollback-two"].map(|message| {
-                (
-                    EchoArgs {
-                        message: message.to_owned(),
-                    },
-                    InsertOpts::default().with_tags(["tx-rollback"]),
-                )
-            }),
-        )
+        .insert_many(["tx-rollback-one", "tx-rollback-two"].map(|message| {
+            (
+                EchoArgs {
+                    message: message.to_owned(),
+                },
+                InsertOpts::default().with_tags(["tx-rollback"]),
+            )
+        }))
+        .tx(&mut transaction)
         .await
         .unwrap();
     assert_eq!(rolled_back[0].job.args.message, "tx-rollback-one");
@@ -1022,17 +1020,15 @@ async fn insert_many_variants_preserve_order_and_transactionality() {
 
     let mut transaction = pool.begin().await.unwrap();
     client
-        .insert_many_tx_with(
-            &mut transaction,
-            ["tx-commit-one", "tx-commit-two"].map(|message| {
-                (
-                    EchoArgs {
-                        message: message.to_owned(),
-                    },
-                    InsertOpts::default().with_tags(["tx-commit"]),
-                )
-            }),
-        )
+        .insert_many(["tx-commit-one", "tx-commit-two"].map(|message| {
+            (
+                EchoArgs {
+                    message: message.to_owned(),
+                },
+                InsertOpts::default().with_tags(["tx-commit"]),
+            )
+        }))
+        .tx(&mut transaction)
         .await
         .unwrap();
     transaction.commit().await.unwrap();
@@ -1045,7 +1041,7 @@ async fn insert_many_variants_preserve_order_and_transactionality() {
     assert_eq!(committed_messages, ["tx-commit-one", "tx-commit-two"]);
 
     let invalid_batch = client
-        .insert_many_with([
+        .insert_many([
             (
                 EchoArgs {
                     message: "atomic-valid".to_owned(),
@@ -1071,32 +1067,28 @@ async fn insert_many_variants_preserve_order_and_transactionality() {
 
     let mut transaction = pool.begin().await.unwrap();
     client
-        .insert_tx(
-            &mut transaction,
-            EchoArgs {
-                message: "ordinary-savepoint-control".to_owned(),
-            },
-        )
+        .insert(EchoArgs {
+            message: "ordinary-savepoint-control".to_owned(),
+        })
+        .tx(&mut transaction)
         .await
         .unwrap();
     let ordinary_savepoint = client
-        .insert_many_tx_with(
-            &mut transaction,
-            [
-                (
-                    EchoArgs {
-                        message: "ordinary-savepoint-prefix".to_owned(),
-                    },
-                    InsertOpts::default().with_tags(["ordinary-savepoint-batch"]),
-                ),
-                (
-                    EchoArgs {
-                        message: "ordinary-savepoint-invalid".to_owned(),
-                    },
-                    InsertOpts::default().with_priority(0),
-                ),
-            ],
-        )
+        .insert_many([
+            (
+                EchoArgs {
+                    message: "ordinary-savepoint-prefix".to_owned(),
+                },
+                InsertOpts::default().with_tags(["ordinary-savepoint-batch"]),
+            ),
+            (
+                EchoArgs {
+                    message: "ordinary-savepoint-invalid".to_owned(),
+                },
+                InsertOpts::default().with_priority(0),
+            ),
+        ])
+        .tx(&mut transaction)
         .await;
     assert!(ordinary_savepoint.is_err());
     transaction.commit().await.unwrap();
@@ -1118,17 +1110,16 @@ async fn insert_many_variants_preserve_order_and_transactionality() {
     let mut transaction = pool.begin().await.unwrap();
     assert_eq!(
         client
-            .insert_many_fast_tx_with(
-                &mut transaction,
-                ["fast-rollback-one", "fast-rollback-two"].map(|message| {
-                    (
-                        EchoArgs {
-                            message: message.to_owned(),
-                        },
-                        InsertOpts::default().with_tags(["fast-rollback"]),
-                    )
-                }),
-            )
+            .insert_many(["fast-rollback-one", "fast-rollback-two"].map(|message| {
+                (
+                    EchoArgs {
+                        message: message.to_owned(),
+                    },
+                    InsertOpts::default().with_tags(["fast-rollback"]),
+                )
+            }))
+            .fast()
+            .tx(&mut transaction)
             .await
             .unwrap(),
         2
@@ -1145,17 +1136,16 @@ async fn insert_many_variants_preserve_order_and_transactionality() {
     let mut transaction = pool.begin().await.unwrap();
     assert_eq!(
         client
-            .insert_many_fast_tx_with(
-                &mut transaction,
-                ["fast-commit-one", "fast-commit-two"].map(|message| {
-                    (
-                        EchoArgs {
-                            message: message.to_owned(),
-                        },
-                        InsertOpts::default().with_tags(["fast-commit"]),
-                    )
-                }),
-            )
+            .insert_many(["fast-commit-one", "fast-commit-two"].map(|message| {
+                (
+                    EchoArgs {
+                        message: message.to_owned(),
+                    },
+                    InsertOpts::default().with_tags(["fast-commit"]),
+                )
+            }))
+            .fast()
+            .tx(&mut transaction)
             .await
             .unwrap(),
         2
@@ -1173,42 +1163,37 @@ async fn insert_many_variants_preserve_order_and_transactionality() {
     );
 
     client
-        .insert_with(
-            EchoArgs {
-                message: "fast-unique-conflict".to_owned(),
-            },
-            unique_opts,
-        )
+        .insert(EchoArgs {
+            message: "fast-unique-conflict".to_owned(),
+        })
+        .opts(unique_opts)
         .await
         .unwrap();
     let mut transaction = pool.begin().await.unwrap();
     client
-        .insert_tx(
-            &mut transaction,
-            EchoArgs {
-                message: "fast-savepoint-control".to_owned(),
-            },
-        )
+        .insert(EchoArgs {
+            message: "fast-savepoint-control".to_owned(),
+        })
+        .tx(&mut transaction)
         .await
         .unwrap();
     let fast_atomic = client
-        .insert_many_fast_tx_with(
-            &mut transaction,
-            [
-                (
-                    EchoArgs {
-                        message: "fast-atomic-valid".to_owned(),
-                    },
-                    InsertOpts::default().with_tags(["fast-atomic"]),
-                ),
-                (
-                    EchoArgs {
-                        message: "fast-unique-conflict".to_owned(),
-                    },
-                    InsertOpts::default().with_unique(UniqueOpts::new().by_args()),
-                ),
-            ],
-        )
+        .insert_many([
+            (
+                EchoArgs {
+                    message: "fast-atomic-valid".to_owned(),
+                },
+                InsertOpts::default().with_tags(["fast-atomic"]),
+            ),
+            (
+                EchoArgs {
+                    message: "fast-unique-conflict".to_owned(),
+                },
+                InsertOpts::default().with_unique(UniqueOpts::new().by_args()),
+            ),
+        ])
+        .fast()
+        .tx(&mut transaction)
         .await;
     assert!(fast_atomic.is_err());
     transaction.commit().await.unwrap();
@@ -1331,7 +1316,7 @@ async fn migrates_inserts_and_works_a_job() {
         .unwrap();
 
     let fast_count = client
-        .insert_many_fast_with([
+        .insert_many([
             (
                 EchoArgs {
                     message: "fast one".to_owned(),
@@ -1352,6 +1337,7 @@ async fn migrates_inserts_and_works_a_job() {
                     .with_tags(["fast-two"]),
             ),
         ])
+        .fast()
         .await
         .unwrap();
     assert_eq!(fast_count, 2);
@@ -1435,7 +1421,8 @@ async fn migrates_inserts_and_works_a_job() {
     }
 
     let failed = client
-        .insert_with(FailArgs {}, InsertOpts::default().with_max_attempts(1))
+        .insert(FailArgs {})
+        .opts(InsertOpts::default().with_max_attempts(1))
         .await
         .unwrap();
     let failed = wait_for_state(&client, failed.job.row.id, JobState::Discarded).await;
@@ -1443,7 +1430,8 @@ async fn migrates_inserts_and_works_a_job() {
     assert_eq!(failed.errors[0].error, "intentional failure");
 
     let resumable = client
-        .insert_with(ResumableArgs {}, InsertOpts::default().with_max_attempts(2))
+        .insert(ResumableArgs {})
+        .opts(InsertOpts::default().with_max_attempts(2))
         .await
         .unwrap();
     let resumable = wait_for_state(&client, resumable.job.row.id, JobState::Completed).await;
@@ -1467,12 +1455,10 @@ async fn migrates_inserts_and_works_a_job() {
         )
         .unwrap();
     let dynamic = client
-        .insert_with(
-            EchoArgs {
-                message: "dynamic queue".to_owned(),
-            },
-            InsertOpts::default().with_queue("dynamic"),
-        )
+        .insert(EchoArgs {
+            message: "dynamic queue".to_owned(),
+        })
+        .opts(InsertOpts::default().with_queue("dynamic"))
         .await
         .unwrap();
     wait_for_state(&client, dynamic.job.row.id, JobState::Completed).await;
@@ -1480,21 +1466,17 @@ async fn migrates_inserts_and_works_a_job() {
 
     let unique_options = InsertOpts::default().with_unique(UniqueOpts::new().by_args());
     let unique_first = client
-        .insert_with(
-            EchoArgs {
-                message: "unique".to_owned(),
-            },
-            unique_options.clone(),
-        )
+        .insert(EchoArgs {
+            message: "unique".to_owned(),
+        })
+        .opts(unique_options.clone())
         .await
         .unwrap();
     let unique_second = client
-        .insert_with(
-            EchoArgs {
-                message: "unique".to_owned(),
-            },
-            unique_options,
-        )
+        .insert(EchoArgs {
+            message: "unique".to_owned(),
+        })
+        .opts(unique_options)
         .await
         .unwrap();
     assert_eq!(unique_first.job.row.id, unique_second.job.row.id);
@@ -1532,10 +1514,8 @@ async fn migrates_inserts_and_works_a_job() {
         .build()
         .unwrap();
     let interrupted = interrupt_client
-        .insert_with(
-            IgnoresCancelArgs {},
-            InsertOpts::default().with_queue("interrupt"),
-        )
+        .insert(IgnoresCancelArgs {})
+        .opts(InsertOpts::default().with_queue("interrupt"))
         .await
         .unwrap();
     let mut interrupted_events = interrupt_client
@@ -1619,12 +1599,10 @@ async fn migrates_inserts_and_works_a_job() {
 
     let mut transaction = pool.begin().await.unwrap();
     let transaction_insert = client
-        .insert_tx(
-            &mut transaction,
-            EchoArgs {
-                message: "from Rust".to_owned(),
-            },
-        )
+        .insert(EchoArgs {
+            message: "from Rust".to_owned(),
+        })
+        .tx(&mut transaction)
         .await
         .unwrap();
     let raw_transaction_insert = client
@@ -1744,10 +1722,10 @@ async fn migrates_inserts_and_works_a_job() {
         .build()
         .unwrap();
     let scheduled = maintenance_client
-        .insert_with(
-            EchoArgs {
-                message: "scheduled by leader".to_owned(),
-            },
+        .insert(EchoArgs {
+            message: "scheduled by leader".to_owned(),
+        })
+        .opts(
             InsertOpts::default()
                 .with_scheduled_at(chrono::Utc::now() + chrono::Duration::milliseconds(100)),
         )
@@ -2101,12 +2079,10 @@ async fn resumable_cursor_and_transactional_checkpoints() {
         "rollback_step",
     ] {
         let inserted = client
-            .insert_with(
-                ResumableCheckpointArgs {
-                    mode: mode.to_owned(),
-                },
-                InsertOpts::default().with_max_attempts(2),
-            )
+            .insert(ResumableCheckpointArgs {
+                mode: mode.to_owned(),
+            })
+            .opts(InsertOpts::default().with_max_attempts(2))
             .await
             .unwrap();
         job_ids.insert(mode, inserted.job.row.id);
@@ -2196,10 +2172,10 @@ async fn assert_cancellation_wins(pool: &PgPool, schema: &SchemaName, direct_com
     let mut expected = Vec::new();
     for message in ["long snooze", "short snooze", "retryable error"] {
         let inserted = client
-            .insert_with(
-                EchoArgs {
-                    message: message.to_owned(),
-                },
+            .insert(EchoArgs {
+                message: message.to_owned(),
+            })
+            .opts(
                 InsertOpts::default()
                     .with_max_attempts(20)
                     .with_scheduled_at(original_scheduled_at),
