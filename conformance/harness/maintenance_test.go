@@ -120,9 +120,9 @@ func TestMaintenanceConformance(t *testing.T) { //nolint:paralleltest // Owns th
 	}
 	scenarios := newScenarioTracker(t, scenarioOwnerMaintenance)
 	repositoryRoot := repoRoot(t)
-	goAdapter := startAdapter(t, repositoryRoot, databaseURL, "go", "go", "run", "./internal/cmd/riverconformanceadapter")
+	goAdapter := startReferenceAdapter(t, repositoryRoot, databaseURL, "go")
 	candidateSpec := conformanceCandidateSpec(t, repositoryRoot, false)
-	candidateAdapter := startAdapterCommand(t, repositoryRoot, databaseURL, candidateSpec.Implementation, candidateSpec.Command)
+	candidateAdapter := startCandidateAdapter(t, repositoryRoot, databaseURL, candidateSpec.Implementation, candidateSpec, candidateSpec.Command)
 	implementations := []maintenanceImplementation{
 		{adapter: goAdapter, applicationName: "river-conformance-go", name: "go"},
 		{adapter: candidateAdapter, applicationName: candidateSpec.ApplicationName, name: candidateSpec.Implementation},

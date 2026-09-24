@@ -2,6 +2,7 @@
   "$schema": "../schema/scenarios.schema.json",
   "protocol_revision": 1,
   "scenarios": [
+    { "evidence": [{ "path": "conformance/harness/multi_engine_test.go", "symbol": "verifySQLiteCandidatePair" }], "name": "multi_engine_sqlite_candidate_pairs", "tier": "mixed" },
     { "evidence": [{ "path": "conformance/harness/sqlite_test.go", "symbol": "verifySQLiteAttemptedByHistory" }], "name": "sqlite_runtime_attempted_by_ordering", "tier": "mixed" },
     { "evidence": [{ "path": "conformance/harness/sqlite_test.go", "symbol": "verifySQLiteCompetingWorkers" }], "name": "sqlite_runtime_competing_workers", "tier": "mixed" },
     { "evidence": [{ "path": "conformance/harness/resilience_test.go", "symbol": "TestResilienceSQLiteConformance" }], "name": "sqlite_runtime_completion_under_writer_lock", "tier": "chaos" },

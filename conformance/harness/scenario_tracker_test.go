@@ -85,7 +85,7 @@ func (tracker *scenarioTracker) record(t *testing.T) {
 func (tracker *scenarioTracker) verify() {
 	tracker.t.Helper()
 
-	if tracker.t.Failed() {
+	if tracker.t.Failed() || tracker.t.Skipped() {
 		return
 	}
 	var missing []string

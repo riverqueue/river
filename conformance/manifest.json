@@ -12,8 +12,8 @@
     "insert": "complete",
     "job_crud": "complete",
     "leadership": "complete",
-    "maintenance": "complete",
     "lifecycle": "complete",
+    "maintenance": "complete",
     "migrate": "complete",
     "notifications": "complete",
     "periodic_jobs": "complete",
@@ -22,10 +22,14 @@
     "reset": "complete",
     "resumable_jobs": "complete",
     "retry": "complete",
+    "subscriber_lag": "planned",
     "subscriptions": "complete",
     "transactions": "complete",
     "unique_jobs": "complete",
     "work": "complete"
+  },
+  "capability_decisions": {
+    "subscriber_lag": "Implementations report subscriber lag through their own APIs, but adapter protocol revision 1 exposes no normalized lag observation, so no shared scenario can verify it. A later contract revision must add one before any implementation claims it."
   },
   "implementations": {
     "go": {

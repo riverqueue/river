@@ -7,6 +7,12 @@
       "additionalProperties": {
         "enum": ["complete", "in_progress", "not_applicable", "planned"]
       },
+      "description": "Protocol capabilities. postgres-full-v1 adapters advertise exactly the complete ones.",
+      "type": "object"
+    },
+    "capability_decisions": {
+      "additionalProperties": { "minLength": 1, "type": "string" },
+      "description": "Why each capability that is not complete is planned, in progress, or not applicable.",
       "type": "object"
     },
     "implementations": {

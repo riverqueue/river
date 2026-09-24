@@ -1454,11 +1454,13 @@ impl Adapter {
             }
             "fault_disconnect_application" => {
                 let application_name = required_string(&params, "application_name")?;
-                if !matches!(
-                    application_name.as_str(),
-                    "river-conformance-go" | "river-conformance-rust"
-                ) {
-                    return Err("unsupported conformance application_name".into());
+                // Only conformance adapters may be disconnected. Every
+                // descriptor's application name carries this prefix, so the
+                // check stays candidate-neutral.
+                if !application_name.starts_with("river-conformance-")
+                    || application_name == "river-conformance-harness"
+                {
+                    return Err("application_name must name a conformance adapter".into());
                 }
                 let count = sqlx::query_scalar::<_, i64>(
                     "SELECT count(*) FROM (SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE application_name = $1 AND pid != pg_backend_pid()) AS terminated",

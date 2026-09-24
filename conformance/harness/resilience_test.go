@@ -44,18 +44,18 @@ func TestResilienceConformance(t *testing.T) { //nolint:paralleltest // Owns the
 
 	// The reference adapter always reaches the database directly. Every
 	// worker under test reaches it through its own fault proxy.
-	reference := startAdapter(t, repositoryRoot, databaseURL, "go", "go", "run", "./internal/cmd/riverconformanceadapter")
+	reference := startReferenceAdapter(t, repositoryRoot, databaseURL, "go")
 	reference.call(t, "migrate", map[string]any{}, nil)
 	goProxy := startFaultProxy(ctx, t, databaseURL)
 	candidateProxy := startFaultProxy(ctx, t, databaseURL)
 	workers := []resilienceWorker{
 		{
-			adapter: startAdapter(t, repositoryRoot, goProxy.url, "go-proxied", "go", "run", "./internal/cmd/riverconformanceadapter"),
+			adapter: startReferenceAdapter(t, repositoryRoot, goProxy.url, "go-proxied"),
 			name:    "go",
 			proxy:   goProxy,
 		},
 		{
-			adapter: startAdapterCommand(t, repositoryRoot, candidateProxy.url, candidateSpec.Implementation, candidateSpec.Command),
+			adapter: startCandidateAdapter(t, repositoryRoot, candidateProxy.url, candidateSpec.Implementation, candidateSpec, candidateSpec.Command),
 			name:    candidateSpec.Implementation,
 			proxy:   candidateProxy,
 		},
@@ -255,9 +255,8 @@ func TestResilienceSQLiteConformance(t *testing.T) { //nolint:tparallel // Subte
 	repositoryRoot := repoRoot(t)
 	databaseURL := filepath.Join(t.TempDir(), "river-conformance-resilience.sqlite")
 	const profileName = "sqlite-runtime-v1"
-	goAdapter := startAdapterForProfile(
-		t, repositoryRoot, databaseURL, "sqlite", profileName,
-		"go", "go", "run", "./internal/cmd/riverconformanceadapter",
+	goAdapter := startReferenceAdapterForProfile(
+		t, repositoryRoot, databaseURL, "sqlite", profileName, "go",
 	)
 	candidateSpec := conformanceCandidateSpec(t, repositoryRoot, false)
 	candidateAdapter := startAdapterCommandForProfile(

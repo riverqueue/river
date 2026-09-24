@@ -30,7 +30,11 @@ repository and setting `RIVER_CONFORMANCE_CANDIDATE_FILE` to its path:
   "application_name": "river-conformance-javascript",
   "command": ["node", "dist/conformance-adapter.js"],
   "implementation": "javascript",
-  "restart_command": ["node", "dist/conformance-adapter.js"],
+  "performance": {
+    "enqueue": { "max_p95_ratio": 3, "min_throughput_ratio": 0.25 }
+  },
+  "profiles": ["portable-storage-v1", "postgres-full-v1", "sqlite-runtime-v1"],
+  "start_options": ["elect_interval_ms", "rescuer_interval_ms", "scheduler_interval_ms"],
   "version": "0.47.0-alpha.1"
 }
 ```
@@ -39,20 +43,40 @@ For one-off runs, `RIVER_CONFORMANCE_CANDIDATE` accepts the descriptor as an
 inline JSON object. Set only one of the file and inline variables. Relative
 descriptor paths and every candidate command run from the River repository
 root, so a descriptor outside this checkout should use an absolute adapter path
-or a command whose arguments select that external project. The optional
-`release_command` replaces `command` for the performance gate. The checked
-Rust descriptor demonstrates every field without making Rust part of the
-protocol.
+or a command whose arguments select that external project. Command arguments
+may reference environment variables as `${NAME}` or `${NAME:-default}`; the
+Rust descriptor uses this to follow `CARGO_TARGET_DIR`. Unknown descriptor
+fields are rejected.
 
-`command` starts the ordinary candidate. `restart_command` must start a
-prebuilt process because crash/restart cases cannot rely on a build wrapper
-surviving process termination. `application_name` is the PostgreSQL
-`application_name` used for connection-fault tests. `version` is optional; if
-present, the handshake must match it exactly. For PostgreSQL, the candidate must
-advertise the exact versioned method set in `contract.json`. For SQLite, it must
-advertise the exact capabilities and methods in either `profiles/sqlite.json`
-or `profiles/sqlite-runtime.json`, as selected by the profile environment
-variable. Missing and extra methods both fail before behavioral scenarios run.
+- `command` starts an adapter process. `build_command`, when present, runs
+  once per test process before any adapter starts, so `command` can run the
+  built executable directly.
+- `restart_command` starts a prebuilt process for crash and restart
+  scenarios, which cannot rely on a build wrapper surviving process
+  termination. It defaults to `command`, and its executable must exist once
+  the build has run, so a stale binary in another target directory is never
+  picked up silently.
+- `release_build_command` and `release_command` replace the build and
+  commands for performance tiers.
+- `application_name` is the PostgreSQL `application_name` of the adapter's
+  connections. It must start with `river-conformance-`; fault injection only
+  terminates connections with that prefix.
+- `version`, if present, must equal the handshake's implementation version.
+- `profiles` lists the profiles the adapter serves (default
+  `portable-storage-v1`, `postgres-full-v1`, and `sqlite-runtime-v1`).
+- `start_options` lists optional `start` tuning parameters the adapter
+  honors. The harness sends `elect_interval_ms`, `rescuer_interval_ms`, and
+  `scheduler_interval_ms` only to adapters that declare them and otherwise
+  waits for the implementation's defaults. Go declares none because it does
+  not expose those intervals as configuration.
+- `performance` declares the candidate's release bounds relative to the
+  reference per benchmark mode; omitted modes use the harness defaults.
+
+For PostgreSQL, the candidate must advertise the exact versioned method set in
+`contract.json`. For SQLite, it must advertise the exact capabilities and
+methods in either `profiles/sqlite.json` or `profiles/sqlite-runtime.json`, as
+selected by the profile environment variable. Missing and extra methods both
+fail before behavioral scenarios run.
 
 The SQLite `portable-storage-v1` profile intentionally reuses the same adapter
 methods and harness helpers for deterministic controls, unique keys, migrations,
@@ -162,7 +186,7 @@ other.
 - `fault_disconnect_listeners` terminates the adapter's PostgreSQL listener
   backends and the harness waits for reconnection.
 - `fault_disconnect_application` terminates all non-caller connections for one
-  allow-listed adapter application name.
+  adapter application name, which must start with `river-conformance-`.
 - `fault_expire_leader` forces the current lease to expire before a replacement
   client starts.
 

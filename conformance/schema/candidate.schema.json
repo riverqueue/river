@@ -1,33 +1,95 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$defs": {
+    "command": {
+      "description": "Program and arguments, run from the River repository root. Arguments may reference environment variables as ${NAME} or ${NAME:-default}.",
+      "items": { "minLength": 1, "type": "string" },
+      "minItems": 1,
+      "type": "array"
+    },
+    "performance_bound": {
+      "additionalProperties": false,
+      "properties": {
+        "max_p95_ratio": {
+          "description": "Largest allowed candidate p95 latency as a multiple of the reference p95.",
+          "exclusiveMinimum": 0,
+          "type": "number"
+        },
+        "min_throughput_ratio": {
+          "description": "Smallest allowed candidate throughput as a fraction of the reference throughput.",
+          "exclusiveMinimum": 0,
+          "type": "number"
+        }
+      },
+      "required": ["max_p95_ratio", "min_throughput_ratio"],
+      "type": "object"
+    }
+  },
   "additionalProperties": false,
   "properties": {
     "$schema": { "type": "string" },
     "application_name": {
+      "description": "PostgreSQL application_name of the candidate's connections. The river-conformance- prefix lets fault injection target conformance adapters only.",
       "minLength": 1,
-      "pattern": "^[a-zA-Z0-9._-]+$",
+      "pattern": "^river-conformance-[a-zA-Z0-9._-]+$",
       "type": "string"
     },
+    "build_command": {
+      "$ref": "#/$defs/command",
+      "description": "Built once per test process before command or restart_command runs."
+    },
     "command": {
-      "items": { "minLength": 1, "type": "string" },
-      "minItems": 1,
-      "type": "array"
+      "$ref": "#/$defs/command",
+      "description": "Starts one adapter process."
     },
     "implementation": {
       "pattern": "^[a-z][a-z0-9_-]*$",
       "type": "string"
     },
-    "release_command": {
-      "items": { "minLength": 1, "type": "string" },
+    "performance": {
+      "additionalProperties": false,
+      "description": "Release performance bounds relative to the reference per benchmark mode. Modes that are omitted use the harness defaults (enqueue 2.0x p95 and 40% throughput; worker and mixed 1.25x p95 and 80% throughput).",
+      "properties": {
+        "enqueue": { "$ref": "#/$defs/performance_bound" },
+        "mixed": { "$ref": "#/$defs/performance_bound" },
+        "worker": { "$ref": "#/$defs/performance_bound" }
+      },
+      "type": "object"
+    },
+    "profiles": {
+      "description": "Conformance profiles the adapter serves. Omitted means portable-storage-v1, postgres-full-v1, and sqlite-runtime-v1.",
+      "items": {
+        "enum": ["insert-only-v1", "portable-storage-v1", "postgres-full-v1", "sqlite-runtime-v1"]
+      },
       "minItems": 1,
-      "type": "array"
+      "type": "array",
+      "uniqueItems": true
+    },
+    "release_build_command": {
+      "$ref": "#/$defs/command",
+      "description": "Replaces build_command for performance tiers."
+    },
+    "release_command": {
+      "$ref": "#/$defs/command",
+      "description": "Replaces command and restart_command for performance tiers."
     },
     "restart_command": {
-      "items": { "minLength": 1, "type": "string" },
-      "minItems": 1,
-      "type": "array"
+      "$ref": "#/$defs/command",
+      "description": "Starts a prebuilt adapter process that chaos scenarios may kill. Defaults to command."
     },
-    "version": { "minLength": 1, "type": "string" }
+    "start_options": {
+      "description": "Optional start tuning parameters the adapter honors. The harness sends them only to adapters that declare them.",
+      "items": {
+        "enum": ["elect_interval_ms", "rescuer_interval_ms", "scheduler_interval_ms"]
+      },
+      "type": "array",
+      "uniqueItems": true
+    },
+    "version": {
+      "description": "When present, the handshake implementation_version must equal it.",
+      "minLength": 1,
+      "type": "string"
+    }
   },
   "required": ["application_name", "command", "implementation"],
   "title": "River conformance candidate descriptor",

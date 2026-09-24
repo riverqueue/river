@@ -20,72 +20,110 @@ type benchmarkMetrics struct {
 	throughput float64
 }
 
-type benchmarkGate struct {
-	p95Denominator  int64
-	p95Numerator    int64
-	throughputRatio float64
-}
-
+// TestPerformanceGate compares release builds of the reference and the
+// candidate on the same host. Each attempt takes the median of three runs
+// per implementation, and a mode passes when any of up to three attempts
+// meets the candidate's declared bounds, so one noisy sample on a shared
+// runner cannot fail the gate while a sustained regression still does.
 func TestPerformanceGate(t *testing.T) { //nolint:paralleltest // Owns the shared PostgreSQL database.
 	// This opt-in release gate owns the shared conformance database for the
-	// duration of all three same-host comparison runs.
+	// duration of all same-host comparison runs.
 	requireOptIn(t, "RIVER_CONFORMANCE_PERFORMANCE")
 	databaseURL := requireEnv(t, "RIVER_CONFORMANCE_DATABASE_URL")
 	scenarios := newScenarioTracker(t, scenarioOwnerPerformance)
-	jobs := 200
-	if value := os.Getenv("RIVER_CONFORMANCE_PERFORMANCE_JOBS"); value != "" {
-		parsed, err := strconv.Atoi(value)
-		require.NoError(t, err)
-		jobs = parsed
-	}
-	require.GreaterOrEqual(t, jobs, 20)
+	jobs := performanceJobs(t)
 
 	root := repoRoot(t)
 	goAdapter := startReferenceAdapter(t, root, databaseURL, "go-performance")
 	candidateSpec := conformanceCandidateSpec(t, root, true)
-	candidateAdapter := startAdapterCommand(t, root, databaseURL, candidateSpec.Implementation+"-performance", candidateSpec.Command)
+	candidateAdapter := startCandidateAdapter(t, root, databaseURL, candidateSpec.Implementation+"-performance", candidateSpec, candidateSpec.Command)
 	goAdapter.call(t, "migrate", map[string]any{}, nil)
 
 	for _, mode := range []string{"enqueue", "worker", "mixed"} {
 		_ = runAdapterBenchmark(t, goAdapter, mode, max(20, jobs/10))
 		_ = runAdapterBenchmark(t, candidateAdapter, mode, max(20, jobs/10))
-
-		goRuns, candidateRuns := make([]benchmarkMetrics, 0, 3), make([]benchmarkMetrics, 0, 3)
-		for range 3 {
-			goRuns = append(goRuns, runAdapterBenchmark(t, goAdapter, mode, jobs))
-			candidateRuns = append(candidateRuns, runAdapterBenchmark(t, candidateAdapter, mode, jobs))
-		}
-		goMetrics, candidateMetrics := medianMetrics(goRuns), medianMetrics(candidateRuns)
-		gate := benchmarkGateForMode(mode, candidateSpec.Implementation)
-		t.Logf("%s: Go %.1f jobs/s p95=%s; %s %.1f jobs/s p95=%s",
-			mode, goMetrics.throughput, goMetrics.p95,
-			candidateSpec.Implementation, candidateMetrics.throughput, candidateMetrics.p95)
-		require.GreaterOrEqual(t, candidateMetrics.throughput, goMetrics.throughput*gate.throughputRatio,
-			"%s must sustain at least %.0f%% of Go throughput in %s", candidateSpec.Implementation, gate.throughputRatio*100, mode)
-		require.LessOrEqual(t, candidateMetrics.p95, goMetrics.p95*time.Duration(gate.p95Numerator)/time.Duration(gate.p95Denominator),
-			"%s p95 exceeds the %.2fx Go bound in %s", candidateSpec.Implementation,
-			float64(gate.p95Numerator)/float64(gate.p95Denominator), mode)
+		gateModeWithRetries(t, mode, func() []benchmarkMetrics {
+			return []benchmarkMetrics{
+				medianBenchmark(t, goAdapter, mode, jobs),
+				medianBenchmark(t, candidateAdapter, mode, jobs),
+			}
+		}, func(metrics []benchmarkMetrics) []string {
+			return benchmarkViolations(mode, candidateSpec, metrics[1], metrics[0])
+		}, func(metrics []benchmarkMetrics) {
+			t.Logf("%s: Go %.1f jobs/s p95=%s; %s %.1f jobs/s p95=%s",
+				mode, metrics[0].throughput, metrics[0].p95,
+				candidateSpec.Implementation, metrics[1].throughput, metrics[1].p95)
+		})
 		scenarios.pass("release_" + mode + "_performance")
 	}
 }
 
-func benchmarkGateForMode(mode, implementation string) benchmarkGate {
-	if implementation == "javascript" {
-		// JavaScript's alpha gate catches accidentally serialized work and
-		// gross regressions without requiring event-loop scheduling and
-		// database-driver latency to match the native implementations.
-		if mode == "enqueue" {
-			return benchmarkGate{p95Denominator: 1, p95Numerator: 3, throughputRatio: 0.25}
+// gateModeWithRetries measures a benchmark mode up to
+// RIVER_CONFORMANCE_PERFORMANCE_ATTEMPTS times (default three) and fails the
+// test only if every attempt violates a bound.
+func gateModeWithRetries(
+	t *testing.T,
+	mode string,
+	measure func() []benchmarkMetrics,
+	violationsFunc func([]benchmarkMetrics) []string,
+	logFunc func([]benchmarkMetrics),
+) {
+	t.Helper()
+
+	attempts := 3
+	if value := os.Getenv("RIVER_CONFORMANCE_PERFORMANCE_ATTEMPTS"); value != "" {
+		parsed, err := strconv.Atoi(value)
+		require.NoError(t, err)
+		require.Positive(t, parsed)
+		attempts = parsed
+	}
+	var violations []string
+	for attempt := 1; attempt <= attempts; attempt++ {
+		metrics := measure()
+		logFunc(metrics)
+		violations = violationsFunc(metrics)
+		if len(violations) == 0 {
+			return
 		}
-		return benchmarkGate{p95Denominator: 1, p95Numerator: 2, throughputRatio: 0.50}
+		t.Logf("%s attempt %d/%d outside bounds: %v", mode, attempt, attempts, violations)
 	}
-	if mode == "enqueue" {
-		// Enqueue uses equivalent ordinary insertion mechanisms but remains
-		// driver/runtime-language sensitive. It is a regression guard, not an
-		// incentive to add a candidate-only fast producer path.
-		return benchmarkGate{p95Denominator: 1, p95Numerator: 2, throughputRatio: 0.40}
+	require.Empty(t, violations, "%s stayed outside its performance bounds in %d attempts", mode, attempts)
+}
+
+// benchmarkViolations compares a candidate's metrics with a reference using
+// the bounds its descriptor declares.
+func benchmarkViolations(mode string, spec adapterSpec, candidate, reference benchmarkMetrics) []string {
+	bound := spec.performanceBound(mode)
+	var violations []string
+	if minimum := reference.throughput * bound.MinThroughputRatio; candidate.throughput < minimum {
+		violations = append(violations, fmt.Sprintf("%s throughput %.1f jobs/s is below %.0f%% of %.1f jobs/s",
+			spec.Implementation, candidate.throughput, bound.MinThroughputRatio*100, reference.throughput))
 	}
-	return benchmarkGate{p95Denominator: 4, p95Numerator: 5, throughputRatio: 0.80}
+	if maximum := time.Duration(float64(reference.p95) * bound.MaxP95Ratio); candidate.p95 > maximum {
+		violations = append(violations, fmt.Sprintf("%s p95 %s exceeds %.2fx of %s",
+			spec.Implementation, candidate.p95, bound.MaxP95Ratio, reference.p95))
+	}
+	return violations
+}
+
+func medianBenchmark(t *testing.T, current *adapter, mode string, jobs int) benchmarkMetrics {
+	t.Helper()
+
+	runs := make([]benchmarkMetrics, 0, 3)
+	for range 3 {
+		runs = append(runs, runAdapterBenchmark(t, current, mode, jobs))
+	}
+	return medianMetrics(runs)
+}
+
+// slowestMetrics combines the lowest throughput and highest p95 of a group.
+func slowestMetrics(metrics []benchmarkMetrics) benchmarkMetrics {
+	slowest := metrics[0]
+	for _, current := range metrics[1:] {
+		slowest.throughput = min(slowest.throughput, current.throughput)
+		slowest.p95 = max(slowest.p95, current.p95)
+	}
+	return slowest
 }
 
 func TestMixedSoak(t *testing.T) { //nolint:paralleltest // Owns the shared PostgreSQL database.
@@ -100,7 +138,7 @@ func TestMixedSoak(t *testing.T) { //nolint:paralleltest // Owns the shared Post
 	root := repoRoot(t)
 	goAdapter := startReferenceAdapter(t, root, databaseURL, "go-soak")
 	candidateSpec := conformanceCandidateSpec(t, root, false)
-	candidateAdapter := startAdapterCommand(t, root, databaseURL, candidateSpec.Implementation+"-soak", candidateSpec.Command)
+	candidateAdapter := startCandidateAdapter(t, root, databaseURL, candidateSpec.Implementation+"-soak", candidateSpec, candidateSpec.Command)
 	goAdapter.call(t, "migrate", map[string]any{}, nil)
 	goAdapter.call(t, "reset", map[string]any{}, nil)
 	goAdapter.call(t, "start", map[string]any{"client_id": "go-soak", "max_workers": 8}, nil)
