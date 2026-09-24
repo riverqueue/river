@@ -40,6 +40,6 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
     // A worker that owns a business transaction can call
     // `complete_with_business_write` after it has locked/claimed the job.
-    let _ = (complete_with_business_write, inserted.job.row.id);
+    let _ = (complete_with_business_write, inserted.id());
     Ok(())
 }
