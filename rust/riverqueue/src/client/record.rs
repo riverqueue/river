@@ -1,0 +1,120 @@
+//! Decoding of PostgreSQL job rows.
+
+#[allow(clippy::wildcard_imports)]
+use super::*;
+
+#[cfg(feature = "postgres")]
+pub(crate) struct JobRecord {
+    attempt: i16,
+    attempted_at: Option<DateTime<Utc>>,
+    attempted_by: Option<Vec<String>>,
+    created_at: DateTime<Utc>,
+    encoded_args: Json<Value>,
+    errors: Vec<Json<AttemptError>>,
+    finalized_at: Option<DateTime<Utc>>,
+    id: i64,
+    kind: String,
+    max_attempts: i16,
+    metadata: Json<Value>,
+    priority: i16,
+    queue: String,
+    scheduled_at: DateTime<Utc>,
+    state: String,
+    tags: Vec<String>,
+    unique_key: Option<Vec<u8>>,
+    pub(super) unique_skipped_as_duplicate: bool,
+    unique_states: Option<String>,
+}
+
+#[cfg(feature = "postgres")]
+impl<'row> FromRow<'row, PgRow> for JobRecord {
+    fn from_row(row: &'row PgRow) -> Result<Self, sqlx::Error> {
+        // `job_projection` fixes the first 18 columns in this order, and every
+        // JobRecord query appends the insert-only duplicate flag at index 18.
+        // Positional decoding avoids repeated column-name lookups on hot fetch
+        // and completion paths.
+        Ok(Self {
+            attempt: row.try_get(1)?,
+            attempted_at: row.try_get(2)?,
+            attempted_by: row.try_get(3)?,
+            created_at: row.try_get(4)?,
+            encoded_args: row.try_get(5)?,
+            errors: row.try_get(6)?,
+            finalized_at: row.try_get(7)?,
+            id: row.try_get(0)?,
+            kind: row.try_get(8)?,
+            max_attempts: row.try_get(9)?,
+            metadata: row.try_get(10)?,
+            priority: row.try_get(11)?,
+            queue: row.try_get(12)?,
+            scheduled_at: row.try_get(13)?,
+            state: row.try_get(14)?,
+            tags: row.try_get(15)?,
+            unique_key: row.try_get(16)?,
+            unique_skipped_as_duplicate: row.try_get(18)?,
+            unique_states: row.try_get(17)?,
+        })
+    }
+}
+
+#[cfg(feature = "postgres")]
+impl JobRecord {
+    pub(crate) fn into_job_row(self) -> Result<JobRow, Error> {
+        let Value::Object(metadata) = self.metadata.0 else {
+            return Err(Error::invalid_job(format!(
+                "job {} metadata is not an object",
+                self.id
+            )));
+        };
+        let unique_states = self
+            .unique_states
+            .map(|bits| {
+                let bitmask = u8::from_str_radix(&bits, 2).map_err(|error| {
+                    Error::invalid_job(format!(
+                        "job {} has invalid unique states {bits:?}: {error}",
+                        self.id
+                    ))
+                })?;
+                Ok::<_, Error>(
+                    JobState::ALL
+                        .into_iter()
+                        .filter(|state| bitmask & state.unique_bit() != 0)
+                        .collect(),
+                )
+            })
+            .transpose()?;
+        Ok(JobRow {
+            attempt: self.attempt,
+            attempted_at: self.attempted_at,
+            attempted_by: self.attempted_by.unwrap_or_default(),
+            created_at: self.created_at,
+            encoded_args: self.encoded_args.0,
+            errors: self.errors.into_iter().map(|error| error.0).collect(),
+            finalized_at: self.finalized_at,
+            id: self.id,
+            kind: self.kind,
+            max_attempts: self.max_attempts,
+            metadata,
+            priority: self.priority,
+            queue: self.queue,
+            scheduled_at: self.scheduled_at,
+            state: JobState::try_from(self.state.as_str())
+                .map_err(|error| Error::invalid_job(error.to_string()))?,
+            tags: self.tags,
+            unique_key: self.unique_key,
+            unique_states,
+        })
+    }
+}
+
+#[cfg(feature = "postgres")]
+pub(crate) fn job_projection(alias: &str) -> String {
+    format!(
+        "{alias}.id, {alias}.attempt, {alias}.attempted_at, {alias}.attempted_by, \
+         {alias}.created_at, {alias}.args AS encoded_args, \
+         coalesce({alias}.errors, '{{}}'::jsonb[]) AS errors, \
+         {alias}.finalized_at, {alias}.kind, {alias}.max_attempts, {alias}.metadata, \
+         {alias}.priority, {alias}.queue, {alias}.scheduled_at, {alias}.state::text AS state, \
+         {alias}.tags::text[] AS tags, {alias}.unique_key, {alias}.unique_states::text AS unique_states"
+    )
+}

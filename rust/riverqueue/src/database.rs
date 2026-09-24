@@ -291,6 +291,13 @@ impl Database {
     }
 
     #[cfg(feature = "postgres")]
+    #[cfg_attr(
+        not(feature = "sqlite"),
+        expect(
+            clippy::unnecessary_wraps,
+            reason = "another backend may be compiled in"
+        )
+    )]
     pub(crate) fn postgres_reindex(&self) -> Option<&PostgresReindexConfig> {
         match &self.inner {
             DatabaseInner::Postgres(source) => Some(source.reindex_config()),
