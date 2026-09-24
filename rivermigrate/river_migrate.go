@@ -426,10 +426,12 @@ func (m *Migrator[TTx]) migrateDown(ctx context.Context, exec riverdriver.Execut
 		return res, nil
 	}
 
-	// Migration version 1 is special-cased because if it was downmigrated
-	// it means the `river_migration` table is no longer present so there's
-	// nothing to delete out of.
-	if slices.ContainsFunc(res.Versions, func(v MigrateVersion) bool { return v.Version == 1 }) {
+	// Main line migration version 1 is special-cased because if it was
+	// downmigrated it means the `river_migration` table is no longer present
+	// so there's nothing to delete out of. Other lines don't own the table, so
+	// their rows must still be removed.
+	if m.line == riverdriver.MigrationLineMain &&
+		slices.ContainsFunc(res.Versions, func(v MigrateVersion) bool { return v.Version == migrateVersionTableAdded }) {
 		return res, nil
 	}
 
@@ -711,9 +713,10 @@ func (m *Migrator[TTx]) versionsDelete(ctx context.Context, exec riverdriver.Exe
 		return nil
 	}
 
-	// Don't try to remove anything if we're migrating back below version 1,
-	// where `river_migration` was added.
-	if len(versions) == 1 && versions[0] <= migrateVersionTableAdded {
+	// Don't try to remove anything if we're migrating the main line back below
+	// version 1, where `river_migration` was added. Other lines don't own the
+	// table, so their version 1 row must still be removed.
+	if m.line == riverdriver.MigrationLineMain && len(versions) == 1 && versions[0] <= migrateVersionTableAdded {
 		return nil
 	}
 

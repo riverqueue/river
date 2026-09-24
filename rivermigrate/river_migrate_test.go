@@ -806,6 +806,16 @@ func TestMigrator(t *testing.T) {
 		require.Equal(t, seqDownTo(migrationLineAlternateMaxVersion, 1),
 			sliceutil.Map(res.Versions, migrateVersionToInt))
 
+		// Unlike the main line, the alternate line's version 1 doesn't remove
+		// `river_migration`, so its row must have been deleted along with all
+		// the others.
+		migrations, err = bundle.driver.GetExecutor().MigrationGetByLine(ctx, &riverdriver.MigrationGetByLineParams{
+			Line:   migrationLineAlternate,
+			Schema: bundle.schema,
+		})
+		require.NoError(t, err)
+		require.Empty(t, migrations)
+
 		// The main migration line should not have been touched.
 		migrations, err = bundle.driver.GetExecutor().MigrationGetByLine(ctx, &riverdriver.MigrationGetByLineParams{
 			Line:   riverdriver.MigrationLineMain,
@@ -814,6 +824,97 @@ func TestMigrator(t *testing.T) {
 		require.NoError(t, err)
 		require.Equal(t, seqOneTo(migrationsBundle.MaxVersion),
 			sliceutil.Map(migrations, driverMigrationToInt))
+
+		// Migrating back up applies every version again, including version 1.
+		res, err = alternateMigrator.Migrate(ctx, DirectionUp, &MigrateOpts{})
+		require.NoError(t, err)
+		require.Equal(t, seqOneTo(migrationLineAlternateMaxVersion),
+			sliceutil.Map(res.Versions, migrateVersionToInt))
+	})
+
+	t.Run("AlternateLineDownToVersionOneThenOneStep", func(t *testing.T) {
+		t.Parallel()
+
+		migrator, bundle := setup(t)
+
+		_, err := migrator.Migrate(ctx, DirectionUp, &MigrateOpts{MaxSteps: migrationsBundle.MaxVersion})
+		require.NoError(t, err)
+
+		alternateMigrator, err := New(bundle.driver, &Config{
+			Line:   migrationLineAlternate,
+			Logger: bundle.logger,
+			Schema: bundle.schema,
+		})
+		require.NoError(t, err)
+
+		_, err = alternateMigrator.Migrate(ctx, DirectionUp, &MigrateOpts{})
+		require.NoError(t, err)
+
+		requireAlternateLineVersions := func(expectedVersions []int) {
+			t.Helper()
+
+			migrations, err := bundle.driver.GetExecutor().MigrationGetByLine(ctx, &riverdriver.MigrationGetByLineParams{
+				Line:   migrationLineAlternate,
+				Schema: bundle.schema,
+			})
+			require.NoError(t, err)
+			require.Equal(t, expectedVersions, sliceutil.Map(migrations, driverMigrationToInt))
+		}
+
+		// Migrating down to a target version leaves the target applied.
+		res, err := alternateMigrator.Migrate(ctx, DirectionDown, &MigrateOpts{TargetVersion: 1})
+		require.NoError(t, err)
+		require.Equal(t, seqDownTo(migrationLineAlternateMaxVersion, 2),
+			sliceutil.Map(res.Versions, migrateVersionToInt))
+		requireAlternateLineVersions([]int{1})
+
+		// One more step down removes version 1.
+		res, err = alternateMigrator.Migrate(ctx, DirectionDown, &MigrateOpts{})
+		require.NoError(t, err)
+		require.Equal(t, []int{1}, sliceutil.Map(res.Versions, migrateVersionToInt))
+		requireAlternateLineVersions([]int{})
+
+		// Nothing is left to migrate down.
+		res, err = alternateMigrator.Migrate(ctx, DirectionDown, &MigrateOpts{})
+		require.NoError(t, err)
+		require.Empty(t, res.Versions)
+	})
+
+	t.Run("AlternateLineUpAndDownTx", func(t *testing.T) {
+		t.Parallel()
+
+		migrator, bundle := setup(t)
+
+		// Main line is migrated outside the transaction because some of its
+		// migrations can't run within one.
+		_, err := migrator.Migrate(ctx, DirectionUp, &MigrateOpts{MaxSteps: migrationsBundle.MaxVersion})
+		require.NoError(t, err)
+
+		alternateMigrator, err := New(bundle.driver, &Config{
+			Line:   migrationLineAlternate,
+			Logger: bundle.logger,
+			Schema: bundle.schema,
+		})
+		require.NoError(t, err)
+
+		tx := testTx(t, bundle.driver)
+
+		res, err := alternateMigrator.MigrateTx(ctx, tx, DirectionUp, &MigrateOpts{})
+		require.NoError(t, err)
+		require.Equal(t, seqOneTo(migrationLineAlternateMaxVersion),
+			sliceutil.Map(res.Versions, migrateVersionToInt))
+
+		res, err = alternateMigrator.MigrateTx(ctx, tx, DirectionDown, &MigrateOpts{TargetVersion: -1})
+		require.NoError(t, err)
+		require.Equal(t, seqDownTo(migrationLineAlternateMaxVersion, 1),
+			sliceutil.Map(res.Versions, migrateVersionToInt))
+
+		migrations, err := bundle.driver.UnwrapExecutor(tx).MigrationGetByLine(ctx, &riverdriver.MigrationGetByLineParams{
+			Line:   migrationLineAlternate,
+			Schema: bundle.schema,
+		})
+		require.NoError(t, err)
+		require.Empty(t, migrations)
 	})
 
 	t.Run("AlternateLineBeforeLineColumn", func(t *testing.T) {
