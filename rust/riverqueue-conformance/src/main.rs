@@ -17,10 +17,11 @@ use riverqueue::{
     AttemptError, BoxError, Client, CronSchedule, DefaultRetryPolicy, ErrorHandler,
     ErrorHandlerDecision, EventKind, EventReceiver, Extensions, Hook, InsertContext,
     InsertMiddleware, InsertNext, InsertOpts, InsertResult, InsertedJobs, IntervalSchedule, Job,
-    JobArgs, JobDeleteManyParams, JobListCursor, JobListParams, JobRow, JobState, JobUpdateParams,
-    MaintenanceConfig, PeriodicJob, PeriodicJobOpts, PeriodicJobs, Plugin, Queue, QueueConfig,
-    QueueListParams, RetryPolicy, RunHandle, SortDirection, SubscribeConfig, UniqueOpts,
-    WorkCancelled, WorkContext, WorkMiddleware, WorkOutcome, WorkResult, Worker, WorkerRegistry,
+    JobArgs, JobDeleteManyParams, JobListCursor, JobListParams, JobListResult, JobRow, JobState,
+    JobUpdateParams, MaintenanceConfig, PeriodicJob, PeriodicJobOpts, PeriodicJobs, Plugin, Queue,
+    QueueConfig, QueueListParams, RetryPolicy, RunHandle, SortDirection, SubscribeConfig,
+    UniqueOpts, WorkCancelled, WorkContext, WorkMiddleware, WorkOutcome, WorkResult, Worker,
+    WorkerRegistry,
     database::{PostgresDatabase, PostgresReindexConfig, PostgresReindexSchedule, SqliteDatabase},
     encoding::encode_args,
     protocol::{UniqueKeyInput, unique_key, unique_states_bitmask},
@@ -1522,25 +1523,27 @@ impl Adapter {
                         .and_then(Value::as_str)
                         .unwrap_or_default(),
                 )?;
-                let row = client.job_get(required_i64(&params, "id")?).await?;
+                let row = client.jobs().get(required_i64(&params, "id")?).await?;
                 Ok(normalize_job(&row))
             }
             "list" => {
                 let list = list_params(&params)?;
-                let rows = self.client()?.job_list(&list).await?;
-                normalize_job_list(&rows, &list)
+                let rows = self.client()?.jobs().list(list).await?;
+                Ok(normalize_job_list(&rows))
             }
             "cancel" => {
                 let row = self
                     .client()?
-                    .job_cancel(required_i64(&params, "id")?)
+                    .jobs()
+                    .cancel(required_i64(&params, "id")?)
                     .await?;
                 Ok(normalize_job(&row))
             }
             "delete" => {
                 let row = self
                     .client()?
-                    .job_delete(required_i64(&params, "id")?)
+                    .jobs()
+                    .delete(required_i64(&params, "id")?)
                     .await?;
                 Ok(normalize_job(&row))
             }
@@ -1551,13 +1554,14 @@ impl Adapter {
                 } else {
                     JobDeleteManyParams::matching(list)
                 };
-                let rows = self.client()?.job_delete_many(&delete).await?;
+                let rows = self.client()?.jobs().delete_many(delete).await?;
                 Ok(json!({"jobs": rows.iter().map(normalize_job).collect::<Vec<_>>() }))
             }
             "retry" => {
                 let row = self
                     .client()?
-                    .job_retry(required_i64(&params, "id")?)
+                    .jobs()
+                    .retry(required_i64(&params, "id")?)
                     .await?;
                 Ok(normalize_job(&row))
             }
@@ -1572,7 +1576,8 @@ impl Adapter {
                 let output = params.get("output").cloned();
                 let row = self
                     .client()?
-                    .job_update(id, job_update_params(metadata, output))
+                    .jobs()
+                    .update(id, job_update_params(metadata, output))
                     .await?;
                 Ok(normalize_job(&row))
             }
@@ -1741,7 +1746,7 @@ impl Adapter {
                 if result.rows_affected() != 1 {
                     return Err(AdapterError::not_found("running job not found").into());
                 }
-                Ok(normalize_job(&self.client()?.job_get(id).await?))
+                Ok(normalize_job(&self.client()?.jobs().get(id).await?))
             }
             "raw_insert_no_notify" => {
                 let params: InsertParams = serde_json::from_value(params)?;
@@ -1759,7 +1764,7 @@ impl Adapter {
                 .bind(max_attempts)
                 .fetch_one(&self.pool)
                 .await?;
-                Ok(normalize_job(&self.client()?.job_get(id).await?))
+                Ok(normalize_job(&self.client()?.jobs().get(id).await?))
             }
             "raw_insert_exact_json" => {
                 let id = sqlx::query_scalar::<_, i64>(
@@ -1795,10 +1800,14 @@ impl Adapter {
                 )
                 .fetch_one(&self.pool)
                 .await?;
-                Ok(normalize_job(&self.client()?.job_get(id).await?))
+                Ok(normalize_job(&self.client()?.jobs().get(id).await?))
             }
             "raw_job_exact_json" => {
-                let row = self.client()?.job_get(required_i64(&params, "id")?).await?;
+                let row = self
+                    .client()?
+                    .jobs()
+                    .get(required_i64(&params, "id")?)
+                    .await?;
                 exact_json_tokens(&row)
             }
             "raw_job_timestamps" => {
@@ -2038,7 +2047,7 @@ impl Adapter {
                 let transaction = self.transactions.get_mut(&handle).ok_or_else(|| {
                     AdapterError::not_found(format!("transaction {handle:?} not found"))
                 })?;
-                Ok(normalize_job(&client.job_get_tx(transaction, id).await?))
+                Ok(normalize_job(&client.jobs().get(id).tx(transaction).await?))
             }
             "tx_cancel" => {
                 let handle = required_string(&params, "handle")?;
@@ -2047,7 +2056,9 @@ impl Adapter {
                 let transaction = self.transactions.get_mut(&handle).ok_or_else(|| {
                     AdapterError::not_found(format!("transaction {handle:?} not found"))
                 })?;
-                Ok(normalize_job(&client.job_cancel_tx(transaction, id).await?))
+                Ok(normalize_job(
+                    &client.jobs().cancel(id).tx(transaction).await?,
+                ))
             }
             "tx_delete" => {
                 let handle = required_string(&params, "handle")?;
@@ -2056,7 +2067,9 @@ impl Adapter {
                 let transaction = self.transactions.get_mut(&handle).ok_or_else(|| {
                     AdapterError::not_found(format!("transaction {handle:?} not found"))
                 })?;
-                Ok(normalize_job(&client.job_delete_tx(transaction, id).await?))
+                Ok(normalize_job(
+                    &client.jobs().delete(id).tx(transaction).await?,
+                ))
             }
             "tx_retry" => {
                 let handle = required_string(&params, "handle")?;
@@ -2065,7 +2078,9 @@ impl Adapter {
                 let transaction = self.transactions.get_mut(&handle).ok_or_else(|| {
                     AdapterError::not_found(format!("transaction {handle:?} not found"))
                 })?;
-                Ok(normalize_job(&client.job_retry_tx(transaction, id).await?))
+                Ok(normalize_job(
+                    &client.jobs().retry(id).tx(transaction).await?,
+                ))
             }
             "tx_update" => {
                 let handle = required_string(&params, "handle")?;
@@ -2082,7 +2097,9 @@ impl Adapter {
                     AdapterError::not_found(format!("transaction {handle:?} not found"))
                 })?;
                 let row = client
-                    .job_update_tx(transaction, id, job_update_params(metadata, output))
+                    .jobs()
+                    .update(id, job_update_params(metadata, output))
+                    .tx(transaction)
                     .await?;
                 Ok(normalize_job(&row))
             }
@@ -2093,8 +2110,8 @@ impl Adapter {
                 let transaction = self.transactions.get_mut(&handle).ok_or_else(|| {
                     AdapterError::not_found(format!("transaction {handle:?} not found"))
                 })?;
-                let rows = client.job_list_tx(transaction, &list).await?;
-                normalize_job_list(&rows, &list)
+                let rows = client.jobs().list(list).tx(transaction).await?;
+                Ok(normalize_job_list(&rows))
             }
             "tx_delete_many" => {
                 let handle = required_string(&params, "handle")?;
@@ -2109,7 +2126,7 @@ impl Adapter {
                 let transaction = self.transactions.get_mut(&handle).ok_or_else(|| {
                     AdapterError::not_found(format!("transaction {handle:?} not found"))
                 })?;
-                let rows = client.job_delete_many_tx(transaction, &delete).await?;
+                let rows = client.jobs().delete_many(delete).tx(transaction).await?;
                 Ok(json!({"jobs": rows.iter().map(normalize_job).collect::<Vec<_>>() }))
             }
             "tx_queue_get" => {
@@ -2404,7 +2421,7 @@ impl SqliteAdapter {
                 .bind(max_attempts)
                 .fetch_one(&self.pool)
                 .await?;
-                Ok(normalize_job(&self.client()?.job_get(id).await?))
+                Ok(normalize_job(&self.client()?.jobs().get(id).await?))
             }
             "raw_insert_exact_json" => {
                 let id = sqlx::query_scalar::<_, i64>(
@@ -2432,25 +2449,31 @@ impl SqliteAdapter {
                     )
                     .into());
                 }
-                let row = self.client()?.job_get(required_i64(&params, "id")?).await?;
+                let row = self
+                    .client()?
+                    .jobs()
+                    .get(required_i64(&params, "id")?)
+                    .await?;
                 Ok(normalize_job(&row))
             }
             "list" => {
                 let list = list_params(&params)?;
-                let rows = self.client()?.job_list(&list).await?;
-                normalize_job_list(&rows, &list)
+                let rows = self.client()?.jobs().list(list).await?;
+                Ok(normalize_job_list(&rows))
             }
             "cancel" => {
                 let row = self
                     .client()?
-                    .job_cancel(required_i64(&params, "id")?)
+                    .jobs()
+                    .cancel(required_i64(&params, "id")?)
                     .await?;
                 Ok(normalize_job(&row))
             }
             "delete" => {
                 let row = self
                     .client()?
-                    .job_delete(required_i64(&params, "id")?)
+                    .jobs()
+                    .delete(required_i64(&params, "id")?)
                     .await?;
                 Ok(normalize_job(&row))
             }
@@ -2461,13 +2484,14 @@ impl SqliteAdapter {
                 } else {
                     JobDeleteManyParams::matching(list)
                 };
-                let rows = self.client()?.job_delete_many(&delete).await?;
+                let rows = self.client()?.jobs().delete_many(delete).await?;
                 Ok(json!({"jobs": rows.iter().map(normalize_job).collect::<Vec<_>>() }))
             }
             "retry" => {
                 let row = self
                     .client()?
-                    .job_retry(required_i64(&params, "id")?)
+                    .jobs()
+                    .retry(required_i64(&params, "id")?)
                     .await?;
                 Ok(normalize_job(&row))
             }
@@ -2482,7 +2506,8 @@ impl SqliteAdapter {
                 let output = params.get("output").cloned();
                 let row = self
                     .client()?
-                    .job_update(id, job_update_params(metadata, output))
+                    .jobs()
+                    .update(id, job_update_params(metadata, output))
                     .await?;
                 Ok(normalize_job(&row))
             }
@@ -2514,7 +2539,7 @@ impl SqliteAdapter {
                 if result.rows_affected() != 1 {
                     return Err(AdapterError::not_found("running job not found").into());
                 }
-                Ok(normalize_job(&self.client()?.job_get(id).await?))
+                Ok(normalize_job(&self.client()?.jobs().get(id).await?))
             }
             "raw_job_timestamps" => {
                 let id = required_i64(&params, "id")?;
@@ -2527,7 +2552,11 @@ impl SqliteAdapter {
                 Ok(json!({"created_at": created_at, "scheduled_at": scheduled_at}))
             }
             "raw_job_exact_json" => {
-                let row = self.client()?.job_get(required_i64(&params, "id")?).await?;
+                let row = self
+                    .client()?
+                    .jobs()
+                    .get(required_i64(&params, "id")?)
+                    .await?;
                 exact_json_tokens(&row)
             }
             "queue_add" => {
@@ -2839,7 +2868,7 @@ impl SqliteAdapter {
                 let transaction = self.transactions.get_mut(&handle).ok_or_else(|| {
                     AdapterError::not_found(format!("transaction {handle:?} not found"))
                 })?;
-                Ok(normalize_job(&client.job_get_tx(transaction, id).await?))
+                Ok(normalize_job(&client.jobs().get(id).tx(transaction).await?))
             }
             "tx_cancel" => {
                 let handle = required_string(&params, "handle")?;
@@ -2848,7 +2877,9 @@ impl SqliteAdapter {
                 let transaction = self.transactions.get_mut(&handle).ok_or_else(|| {
                     AdapterError::not_found(format!("transaction {handle:?} not found"))
                 })?;
-                Ok(normalize_job(&client.job_cancel_tx(transaction, id).await?))
+                Ok(normalize_job(
+                    &client.jobs().cancel(id).tx(transaction).await?,
+                ))
             }
             "tx_delete" => {
                 let handle = required_string(&params, "handle")?;
@@ -2857,7 +2888,9 @@ impl SqliteAdapter {
                 let transaction = self.transactions.get_mut(&handle).ok_or_else(|| {
                     AdapterError::not_found(format!("transaction {handle:?} not found"))
                 })?;
-                Ok(normalize_job(&client.job_delete_tx(transaction, id).await?))
+                Ok(normalize_job(
+                    &client.jobs().delete(id).tx(transaction).await?,
+                ))
             }
             "tx_retry" => {
                 let handle = required_string(&params, "handle")?;
@@ -2866,7 +2899,9 @@ impl SqliteAdapter {
                 let transaction = self.transactions.get_mut(&handle).ok_or_else(|| {
                     AdapterError::not_found(format!("transaction {handle:?} not found"))
                 })?;
-                Ok(normalize_job(&client.job_retry_tx(transaction, id).await?))
+                Ok(normalize_job(
+                    &client.jobs().retry(id).tx(transaction).await?,
+                ))
             }
             "tx_update" => {
                 let handle = required_string(&params, "handle")?;
@@ -2883,7 +2918,9 @@ impl SqliteAdapter {
                     AdapterError::not_found(format!("transaction {handle:?} not found"))
                 })?;
                 let row = client
-                    .job_update_tx(transaction, id, job_update_params(metadata, output))
+                    .jobs()
+                    .update(id, job_update_params(metadata, output))
+                    .tx(transaction)
                     .await?;
                 Ok(normalize_job(&row))
             }
@@ -2894,8 +2931,8 @@ impl SqliteAdapter {
                 let transaction = self.transactions.get_mut(&handle).ok_or_else(|| {
                     AdapterError::not_found(format!("transaction {handle:?} not found"))
                 })?;
-                let rows = client.job_list_tx(transaction, &list).await?;
-                normalize_job_list(&rows, &list)
+                let rows = client.jobs().list(list).tx(transaction).await?;
+                Ok(normalize_job_list(&rows))
             }
             "tx_delete_many" => {
                 let handle = required_string(&params, "handle")?;
@@ -2910,7 +2947,7 @@ impl SqliteAdapter {
                 let transaction = self.transactions.get_mut(&handle).ok_or_else(|| {
                     AdapterError::not_found(format!("transaction {handle:?} not found"))
                 })?;
-                let rows = client.job_delete_many_tx(transaction, &delete).await?;
+                let rows = client.jobs().delete_many(delete).tx(transaction).await?;
                 Ok(json!({"jobs": rows.iter().map(normalize_job).collect::<Vec<_>>() }))
             }
             "tx_queue_get" => {
@@ -3116,7 +3153,7 @@ async fn wait_for_state(
         });
     let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
     loop {
-        let row = client.job_get(id).await?;
+        let row = client.jobs().get(id).await?;
         if states.contains(&row.state) {
             return Ok(row);
         }
@@ -3212,20 +3249,11 @@ fn normalize_insert_many_results<A: JobArgs>(results: &[InsertResult<A>]) -> Val
     })
 }
 
-fn normalize_job_list(
-    rows: &[JobRow],
-    params: &JobListParams,
-) -> Result<Value, Box<dyn std::error::Error + Send + Sync>> {
-    let cursor = rows
-        .last()
-        .map(|row| JobListCursor::from_job(row, params))
-        .transpose()
-        .map_err(io::Error::other)?
-        .map(|cursor| cursor.encode());
-    Ok(json!({
-        "cursor": cursor,
-        "jobs": rows.iter().map(normalize_job).collect::<Vec<_>>(),
-    }))
+fn normalize_job_list(result: &JobListResult) -> Value {
+    json!({
+        "cursor": result.last_cursor.as_ref().map(JobListCursor::encode),
+        "jobs": result.jobs.iter().map(normalize_job).collect::<Vec<_>>(),
+    })
 }
 
 fn normalize_queue(queue: &Queue) -> Value {

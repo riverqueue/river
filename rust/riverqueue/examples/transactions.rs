@@ -19,7 +19,7 @@ async fn complete_with_business_write(
         .bind(job_id)
         .execute(connection.as_mut())
         .await?;
-    client.job_complete_tx(connection, job_id).await?;
+    client.jobs().complete(job_id).tx(connection).await?;
     Ok(())
 }
 

@@ -318,14 +318,28 @@ impl<T> IntoDatabase for T where T: private::IntoDatabaseSealed {}
 /// operations.
 ///
 /// This trait has no public methods and is sealed. It is deliberately not
-/// implemented for pools or bare connections so a `_tx` method cannot
-/// accidentally run in autocommit mode.
+/// implemented for pools or bare connections so a request's `tx` method
+/// cannot accidentally run in autocommit mode.
 ///
 /// For SQLite transactions that may write, use
 /// `pool.begin_with("BEGIN IMMEDIATE")`. A deferred transaction that reads
 /// before writing can fail with `SQLITE_BUSY_SNAPSHOT` when another pool
 /// connection commits between those operations; a busy timeout cannot make a
 /// stale snapshot writable.
+///
+/// A transaction borrowed mutably is accepted:
+///
+/// ```no_run
+/// # async fn example(
+/// #     client: &riverqueue::Client,
+/// #     pool: &sqlx::PgPool,
+/// # ) -> Result<(), riverqueue::Error> {
+/// let mut tx = pool.begin().await?;
+/// client.jobs().get(1).tx(&mut tx).await?;
+/// tx.commit().await?;
+/// # Ok(())
+/// # }
+/// ```
 ///
 /// Bare connections and pool connections are intentionally rejected:
 ///
@@ -334,7 +348,7 @@ impl<T> IntoDatabase for T where T: private::IntoDatabaseSealed {}
 /// #     client: &riverqueue::Client,
 /// #     connection: &mut sqlx::PgConnection,
 /// # ) -> Result<(), riverqueue::Error> {
-/// client.job_get_tx(connection, 1).await?;
+/// client.jobs().get(1).tx(connection).await?;
 /// # Ok(())
 /// # }
 /// ```
@@ -344,7 +358,7 @@ impl<T> IntoDatabase for T where T: private::IntoDatabaseSealed {}
 /// #     client: &riverqueue::Client,
 /// #     connection: &mut sqlx::pool::PoolConnection<sqlx::Postgres>,
 /// # ) -> Result<(), riverqueue::Error> {
-/// client.job_get_tx(connection, 1).await?;
+/// client.jobs().get(1).tx(connection).await?;
 /// # Ok(())
 /// # }
 /// ```

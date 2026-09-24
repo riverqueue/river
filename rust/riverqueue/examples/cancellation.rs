@@ -44,7 +44,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let mut run = client.start()?;
     let job = client.insert(CancellableReport { report_id: 42 }).await?;
 
-    client.job_cancel(job.id()).await?;
+    client.jobs().cancel(job.id()).await?;
     run.shutdown().await?;
     Ok(())
 }

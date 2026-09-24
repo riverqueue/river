@@ -28,7 +28,9 @@ pub mod worker;
 
 pub use client::{
     Client, ClientBuilder, InsertBatchRequest, InsertManyFastRequest, InsertManyItem,
-    InsertManyRequest, InsertRequest, MaintenanceConfig, QueueConfig, RunHandle, Stopper,
+    InsertManyRequest, InsertRequest, JobCancelRequest, JobCompleteRequest, JobCompleteTxRequest,
+    JobDeleteManyRequest, JobDeleteRequest, JobGetRequest, JobListRequest, JobRetryRequest,
+    JobUpdateRequest, Jobs, MaintenanceConfig, QueueConfig, RunHandle, Stopper,
 };
 pub(crate) use database::SchemaName;
 pub use error::{BoxError, ConfigurationError, Error, JobValidationError, RuntimeError};
@@ -55,7 +57,7 @@ pub(crate) use protocol::{
 };
 pub use query::{
     JobDeleteManyParams, JobListCursor, JobListCursorError, JobListOrderBy, JobListParams,
-    JobUpdateParams, SortDirection,
+    JobListResult, JobUpdateParams, SortDirection,
 };
 pub use queue::{Queue, QueueListParams};
 pub use riverqueue_macros::JobArgs;

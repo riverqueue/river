@@ -207,12 +207,12 @@ async fn dropping_a_shutdown_future_keeps_the_soft_stop() {
 
     assert_eq!(gate.ending(running), Some(Ending::Released));
     assert_eq!(
-        client.job_get(running).await.unwrap().state,
+        client.jobs().get(running).await.unwrap().state,
         JobState::Completed
     );
     // The soft stop requested by the dropped future stopped fetching.
     assert_eq!(
-        client.job_get(unfetched).await.unwrap().state,
+        client.jobs().get(unfetched).await.unwrap().state,
         JobState::Available
     );
     // The handle is still usable after the dropped future.
@@ -231,7 +231,7 @@ async fn dropping_the_handle_requests_a_hard_stop() {
     drop(run);
 
     let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
-    while client.job_get(running).await.unwrap().state != JobState::Available {
+    while client.jobs().get(running).await.unwrap().state != JobState::Available {
         assert!(
             tokio::time::Instant::now() < deadline,
             "the job was not interrupted"
@@ -277,7 +277,7 @@ async fn graceful_shutdown_signal_stops_softly() {
 
     assert_eq!(gate.ending(running), Some(Ending::Released));
     assert_eq!(
-        client.job_get(running).await.unwrap().state,
+        client.jobs().get(running).await.unwrap().state,
         JobState::Completed
     );
 }
@@ -308,7 +308,7 @@ async fn lifecycle_methods_are_idempotent() {
     stopper.stop_now();
     gate.release();
     let completed = async {
-        while client.job_get(job).await.unwrap().state != JobState::Completed {
+        while client.jobs().get(job).await.unwrap().state != JobState::Completed {
             tokio::time::sleep(Duration::from_millis(10)).await;
         }
     };
@@ -332,7 +332,7 @@ async fn soft_stop_timeout_escalates_a_stop_from_a_stopper() {
     wait_stopped(&mut run).await;
 
     assert_eq!(gate.ending(running), Some(Ending::Cancelled));
-    let job = client.job_get(running).await.unwrap();
+    let job = client.jobs().get(running).await.unwrap();
     assert_eq!(job.state, JobState::Available);
     assert_eq!(job.attempt, 0, "an interrupted job keeps its attempt");
     assert!(job.errors.is_empty());
@@ -359,11 +359,11 @@ async fn stop_from_another_task_while_waiting() {
 
     assert_eq!(gate.ending(running), Some(Ending::Released));
     assert_eq!(
-        client.job_get(running).await.unwrap().state,
+        client.jobs().get(running).await.unwrap().state,
         JobState::Completed
     );
     assert_eq!(
-        client.job_get(unfetched).await.unwrap().state,
+        client.jobs().get(unfetched).await.unwrap().state,
         JobState::Available
     );
 }
@@ -399,7 +399,7 @@ async fn stop_now_from_another_task_interrupts_running_jobs() {
     stop_task.await.unwrap();
 
     assert_eq!(gate.ending(interrupted), Some(Ending::Cancelled));
-    let interrupted = client.job_get(interrupted).await.unwrap();
+    let interrupted = client.jobs().get(interrupted).await.unwrap();
     assert_eq!(interrupted.state, JobState::Available);
     assert_eq!(
         interrupted.attempt, 0,
@@ -410,7 +410,7 @@ async fn stop_now_from_another_task_interrupts_running_jobs() {
     // Like Go, a hard stop finalizes a job whose cancellation was requested
     // instead of making it available again.
     assert_eq!(gate.ending(cancel_attempted), Some(Ending::Cancelled));
-    let cancel_attempted = client.job_get(cancel_attempted).await.unwrap();
+    let cancel_attempted = client.jobs().get(cancel_attempted).await.unwrap();
     assert_eq!(cancel_attempted.state, JobState::Cancelled);
     assert!(cancel_attempted.finalized_at.is_some());
 }

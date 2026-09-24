@@ -951,13 +951,15 @@ async fn insert_many_variants_preserve_order_and_transactionality() {
     assert_eq!(heterogeneous[1].job.queue, "heterogeneous-queue");
 
     let time_without_states = client
-        .job_list(
-            &JobListParams::default()
+        .jobs()
+        .list(
+            JobListParams::default()
                 .with_ids(ordered.iter().map(|result| result.job.row.id))
                 .with_order_by(JobListOrderBy::Time),
         )
         .await
-        .unwrap();
+        .unwrap()
+        .jobs;
     assert_eq!(
         time_without_states
             .iter()
@@ -969,7 +971,8 @@ async fn insert_many_variants_preserve_order_and_transactionality() {
             .collect::<Vec<_>>()
     );
     let finalized_without_states = client
-        .job_list(&JobListParams::default().with_order_by(JobListOrderBy::FinalizedAt))
+        .jobs()
+        .list(JobListParams::default().with_order_by(JobListOrderBy::FinalizedAt))
         .await;
     assert!(matches!(
         finalized_without_states,
@@ -1346,9 +1349,11 @@ async fn migrates_inserts_and_works_a_job() {
         .unwrap();
     assert_eq!(fast_count, 2);
     let fast_rows = client
-        .job_list(&JobListParams::default().with_tags_any(["fast-one", "fast-two"]))
+        .jobs()
+        .list(JobListParams::default().with_tags_any(["fast-one", "fast-two"]))
         .await
-        .unwrap();
+        .unwrap()
+        .jobs;
     assert_eq!(fast_rows.len(), 2);
     assert!(fast_rows.iter().any(|row| row.state == JobState::Pending));
     assert!(
@@ -1373,12 +1378,14 @@ async fn migrates_inserts_and_works_a_job() {
         .unwrap();
     let mut transaction = pool.begin().await.unwrap();
     let error = client
-        .job_complete_tx(&mut transaction, non_running.job.row.id)
+        .jobs()
+        .complete(non_running.job.row.id)
+        .tx(&mut transaction)
         .await
         .unwrap_err();
     assert!(error.to_string().contains("job must be running"));
     assert!(matches!(
-        client.job_complete_tx(&mut transaction, i64::MAX).await,
+        client.jobs().complete(i64::MAX).tx(&mut transaction).await,
         Err(riverqueue::Error::NotFound)
     ));
     transaction.rollback().await.unwrap();
@@ -1390,13 +1397,20 @@ async fn migrates_inserts_and_works_a_job() {
         .unwrap();
     let mut transaction = pool.begin().await.unwrap();
     let completed_then_rolled_back = client
-        .job_complete_tx(&mut transaction, non_running.job.row.id)
+        .jobs()
+        .complete(non_running.job.row.id)
+        .tx(&mut transaction)
         .await
         .unwrap();
     assert_eq!(completed_then_rolled_back.state, JobState::Completed);
     transaction.rollback().await.unwrap();
     assert_eq!(
-        client.job_get(non_running.job.row.id).await.unwrap().state,
+        client
+            .jobs()
+            .get(non_running.job.row.id)
+            .await
+            .unwrap()
+            .state,
         JobState::Running
     );
     sqlx::query("UPDATE river_job SET state = 'available' WHERE id = $1")
@@ -1445,7 +1459,7 @@ async fn migrates_inserts_and_works_a_job() {
 
     let cancelling = client.insert(CancelArgs {}).await.unwrap();
     wait_for_state(&client, cancelling.job.row.id, JobState::Running).await;
-    client.job_cancel(cancelling.job.row.id).await.unwrap();
+    client.jobs().cancel(cancelling.job.row.id).await.unwrap();
     let cancelled = wait_for_state(&client, cancelling.job.row.id, JobState::Cancelled).await;
     assert!(cancelled.finalized_at.is_some());
     assert!(cancelled.metadata.contains_key("cancel_attempted_at"));
@@ -1529,7 +1543,8 @@ async fn migrates_inserts_and_works_a_job() {
     wait_for_state(&interrupt_client, interrupted.job.row.id, JobState::Running).await;
     interrupt_handle.shutdown_now().await.unwrap();
     let interrupted_row = interrupt_client
-        .job_get(interrupted.job.row.id)
+        .jobs()
+        .get(interrupted.job.row.id)
         .await
         .unwrap();
     assert_eq!(interrupted_row.attempt, 0);
@@ -1578,12 +1593,15 @@ async fn migrates_inserts_and_works_a_job() {
     assert!(queues.iter().any(|queue| queue.name == "dynamic"));
 
     let listed = client
-        .job_list(&JobListParams::default().with_kinds([EchoArgs::KIND]))
+        .jobs()
+        .list(JobListParams::default().with_kinds([EchoArgs::KIND]))
         .await
-        .unwrap();
+        .unwrap()
+        .jobs;
     assert!(listed.iter().any(|row| row.id == inserted.job.row.id));
     let updated = client
-        .job_update(
+        .jobs()
+        .update(
             inserted.job.row.id,
             JobUpdateParams::default().with_output(serde_json::json!({"ok": true})),
         )
@@ -1591,13 +1609,13 @@ async fn migrates_inserts_and_works_a_job() {
         .unwrap();
     assert_eq!(updated.output(), Some(&serde_json::json!({"ok": true})));
 
-    let retried = client.job_retry(failed.id).await.unwrap();
+    let retried = client.jobs().retry(failed.id).await.unwrap();
     assert_eq!(retried.state, JobState::Available);
     assert_eq!(retried.max_attempts, 2);
-    let deleted = client.job_delete(retried.id).await.unwrap();
+    let deleted = client.jobs().delete(retried.id).await.unwrap();
     assert_eq!(deleted.id, retried.id);
     assert!(matches!(
-        client.job_get(retried.id).await,
+        client.jobs().get(retried.id).await,
         Err(riverqueue::Error::NotFound)
     ));
 
@@ -1621,17 +1639,18 @@ async fn migrates_inserts_and_works_a_job() {
         .await
         .unwrap();
     assert!(matches!(
-        client.job_get(transaction_insert.job.row.id).await,
+        client.jobs().get(transaction_insert.job.row.id).await,
         Err(riverqueue::Error::NotFound)
     ));
     assert!(matches!(
-        client.job_get(raw_transaction_insert.job.id).await,
+        client.jobs().get(raw_transaction_insert.job.id).await,
         Err(riverqueue::Error::NotFound)
     ));
     transaction.commit().await.unwrap();
     assert_eq!(
         client
-            .job_get(transaction_insert.job.row.id)
+            .jobs()
+            .get(transaction_insert.job.row.id)
             .await
             .unwrap()
             .state,
@@ -1639,7 +1658,8 @@ async fn migrates_inserts_and_works_a_job() {
     );
     assert_eq!(
         client
-            .job_get(raw_transaction_insert.job.id)
+            .jobs()
+            .get(raw_transaction_insert.job.id)
             .await
             .unwrap()
             .decode_args::<serde_json::Value>()
@@ -1655,22 +1675,26 @@ async fn migrates_inserts_and_works_a_job() {
 
     let mut transaction = pool.begin().await.unwrap();
     let tx_row = client
-        .job_get_tx(&mut transaction, transaction_insert.job.row.id)
+        .jobs()
+        .get(transaction_insert.job.row.id)
+        .tx(&mut transaction)
         .await
         .unwrap();
     assert_eq!(tx_row.id, transaction_insert.job.row.id);
     client
-        .job_update_tx(
-            &mut transaction,
+        .jobs()
+        .update(
             tx_row.id,
             JobUpdateParams::default().with_output(serde_json::json!("transactional")),
         )
+        .tx(&mut transaction)
         .await
         .unwrap();
     transaction.rollback().await.unwrap();
     assert!(
         client
-            .job_get(transaction_insert.job.row.id)
+            .jobs()
+            .get(transaction_insert.job.row.id)
             .await
             .unwrap()
             .output()
@@ -1773,7 +1797,8 @@ async fn migrates_inserts_and_works_a_job() {
     assert!(pilot_completions.load(Ordering::SeqCst) > 0);
     assert_eq!(
         maintenance_client
-            .job_get(scheduled.job.row.id)
+            .jobs()
+            .get(scheduled.job.row.id)
             .await
             .unwrap()
             .metadata["extension_handled"],
@@ -2001,7 +2026,7 @@ async fn rescuer_honors_worker_timeout_and_retry_overrides() {
 
     tokio::time::sleep(Duration::from_millis(100)).await;
     for id in [disabled_timeout_id, long_timeout_id] {
-        let row = client.job_get(id).await.unwrap();
+        let row = client.jobs().get(id).await.unwrap();
         assert_eq!(row.state, JobState::Running);
         assert!(row.errors.is_empty());
         assert!(!row.metadata.contains_key("river:rescue_count"));
@@ -2195,7 +2220,7 @@ async fn assert_cancellation_wins(pool: &PgPool, schema: &SchemaName, direct_com
         .execute(pool)
         .await
         .unwrap();
-        let marked = client.job_cancel(inserted.job.row.id).await.unwrap();
+        let marked = client.jobs().cancel(inserted.job.row.id).await.unwrap();
         assert_eq!(marked.state, JobState::Running);
         assert!(marked.metadata.contains_key("cancel_attempted_at"));
         expected.push((marked.id, marked.attempt, marked.scheduled_at));
@@ -2233,9 +2258,11 @@ async fn wait_for_job_matching(client: &Client, predicate: impl Fn(&JobRow) -> b
     let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
     loop {
         let rows = client
-            .job_list(&JobListParams::default().with_limit(10_000))
+            .jobs()
+            .list(JobListParams::default().with_limit(10_000))
             .await
-            .unwrap();
+            .unwrap()
+            .jobs;
         if let Some(row) = rows.into_iter().find(&predicate) {
             return row;
         }
@@ -2250,7 +2277,7 @@ async fn wait_for_job_matching(client: &Client, predicate: impl Fn(&JobRow) -> b
 async fn wait_for_state(client: &Client, id: i64, expected: JobState) -> JobRow {
     let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
     loop {
-        let row = client.job_get(id).await.unwrap();
+        let row = client.jobs().get(id).await.unwrap();
         if row.state == expected {
             return row;
         }

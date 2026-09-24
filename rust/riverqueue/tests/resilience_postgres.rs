@@ -530,11 +530,11 @@ async fn claimed_rows_decode_individually_and_leniently() {
     for id in decodable_ids {
         assert_eq!(events_by_id[&id].kind, JobEventKind::Completed);
     }
-    let sparse_errors = client.job_get(sparse_errors.job.row.id).await.unwrap();
+    let sparse_errors = client.jobs().get(sparse_errors.job.row.id).await.unwrap();
     assert_eq!(sparse_errors.errors.len(), 1);
     assert_eq!(sparse_errors.errors[0].error, "go");
     assert_eq!(sparse_errors.errors[0].attempt, 0);
-    let odd_errors = client.job_get(odd_errors.job.row.id).await.unwrap();
+    let odd_errors = client.jobs().get(odd_errors.job.row.id).await.unwrap();
     assert_eq!(
         odd_errors.errors,
         [
@@ -658,7 +658,7 @@ async fn completion_retries_a_transient_database_error() {
     .await
     .unwrap();
     assert!(injected >= 2, "the injected failure never fired");
-    let job = client.job_get(job.job.row.id).await.unwrap();
+    let job = client.jobs().get(job.job.row.id).await.unwrap();
     assert_eq!(job.attempt, 1);
     assert!(job.errors.is_empty());
 
@@ -811,7 +811,7 @@ async fn hard_shutdown_interrupts_only_cooperative_cancellations() {
         .unwrap()
         .unwrap();
 
-    let cooperative = client.job_get(cooperative.job.row.id).await.unwrap();
+    let cooperative = client.jobs().get(cooperative.job.row.id).await.unwrap();
     assert_eq!(cooperative.state, JobState::Available);
     assert_eq!(cooperative.attempt, 0);
     assert!(cooperative.attempted_at.is_some(), "attempted_at is kept");
@@ -823,7 +823,11 @@ async fn hard_shutdown_interrupts_only_cooperative_cancellations() {
     assert_eq!(notification.payload(), r#"{"queue" : "default"}"#);
     drop(listener);
 
-    let cancel_attempted = client.job_get(cancel_attempted.job.row.id).await.unwrap();
+    let cancel_attempted = client
+        .jobs()
+        .get(cancel_attempted.job.row.id)
+        .await
+        .unwrap();
     assert_eq!(cancel_attempted.state, JobState::Cancelled);
     assert!(cancel_attempted.finalized_at.is_some());
 
@@ -831,7 +835,7 @@ async fn hard_shutdown_interrupts_only_cooperative_cancellations() {
         (real_error, "real failure during shutdown"),
         (panicked, "panic during shutdown"),
     ] {
-        let job = client.job_get(job.job.row.id).await.unwrap();
+        let job = client.jobs().get(job.job.row.id).await.unwrap();
         assert!(
             matches!(job.state, JobState::Available | JobState::Retryable),
             "{:?}",
@@ -898,7 +902,7 @@ async fn stuck_job_keeps_its_worker_slot_until_it_ends() {
         later_started >= blocking_finished,
         "the stuck job's worker slot was released while it still ran"
     );
-    let blocked = client.job_get(blocked.job.row.id).await.unwrap();
+    let blocked = client.jobs().get(blocked.job.row.id).await.unwrap();
     assert_eq!(blocked.attempt, 1);
     assert_eq!(blocked.errors.len(), 1);
     assert_eq!(
@@ -953,12 +957,12 @@ async fn out_of_range_snooze_is_clamped_and_cancel_time_matches_go() {
     })
     .await;
     run.shutdown().await.unwrap();
-    let snoozed = client.job_get(snoozed.job.row.id).await.unwrap();
+    let snoozed = client.jobs().get(snoozed.job.row.id).await.unwrap();
     assert_eq!(snoozed.attempt, 0);
     assert!(snoozed.scheduled_at > chrono::Utc::now() + chrono::Duration::days(365 * 200));
 
     // River Go writes `cancel_attempted_at` as `time.Time` JSON.
-    let cancelled = client.job_cancel(snoozed.id).await.unwrap();
+    let cancelled = client.jobs().cancel(snoozed.id).await.unwrap();
     let cancel_attempted_at = cancelled.metadata["cancel_attempted_at"].as_str().unwrap();
     assert!(cancel_attempted_at.ends_with('Z'), "{cancel_attempted_at}");
     if let Some((_, fraction)) = cancel_attempted_at.trim_end_matches('Z').split_once('.') {
@@ -1027,7 +1031,7 @@ async fn client_survives_database_outage_and_catches_up() {
         .unwrap()
         .unwrap();
 
-    let in_flight = inserter.job_get(in_flight.job.row.id).await.unwrap();
+    let in_flight = inserter.jobs().get(in_flight.job.row.id).await.unwrap();
     assert_eq!(in_flight.attempt, 1, "the in-flight job was not rescued");
     assert!(in_flight.errors.is_empty());
 
@@ -1255,7 +1259,7 @@ async fn extension_set_state_hook_runs_in_the_completion_transaction() {
     );
     assert_eq!(schema.job_state(kept.job.row.id).await, "completed");
     assert!(matches!(
-        client.job_get(deleted.job.row.id).await,
+        client.jobs().get(deleted.job.row.id).await,
         Err(riverqueue::Error::NotFound)
     ));
     let mut seen = pilot.seen.lock().unwrap().clone();

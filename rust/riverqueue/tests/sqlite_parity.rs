@@ -82,7 +82,8 @@ async fn job_delete_many() {
 
     // Running jobs are excluded before the limit applies.
     let deleted = client
-        .job_delete_many(&riverqueue::JobDeleteManyParams::matching(
+        .jobs()
+        .delete_many(riverqueue::JobDeleteManyParams::matching(
             riverqueue::JobListParams::default()
                 .with_ids([running, first, second, third])
                 .with_limit(2),
@@ -94,7 +95,8 @@ async fn job_delete_many() {
         vec![first, second]
     );
     let remaining = client
-        .job_delete_many(&riverqueue::JobDeleteManyParams::all())
+        .jobs()
+        .delete_many(riverqueue::JobDeleteManyParams::all())
         .await
         .unwrap();
     assert_eq!(
@@ -102,7 +104,7 @@ async fn job_delete_many() {
         vec![third]
     );
     assert_eq!(
-        client.job_get(running).await.unwrap().state,
+        client.jobs().get(running).await.unwrap().state,
         riverqueue::JobState::Running
     );
 
@@ -171,8 +173,8 @@ async fn cancel_and_retry_post_hooks_share_the_transaction() {
         .unwrap();
     let id = insert_raw_job(&pool, "available").await;
 
-    client.job_cancel(id).await.unwrap();
-    client.job_retry(id).await.unwrap();
+    client.jobs().cancel(id).await.unwrap();
+    client.jobs().retry(id).await.unwrap();
     assert_eq!(
         *pilot.calls.lock().unwrap(),
         [
@@ -188,9 +190,9 @@ async fn cancel_and_retry_post_hooks_share_the_transaction() {
         })
         .build()
         .unwrap();
-    assert!(failing.job_cancel(id).await.is_err());
+    assert!(failing.jobs().cancel(id).await.is_err());
     assert_eq!(
-        client.job_get(id).await.unwrap().state,
+        client.jobs().get(id).await.unwrap().state,
         riverqueue::JobState::Available
     );
 

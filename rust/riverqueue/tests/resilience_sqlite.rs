@@ -342,10 +342,10 @@ async fn claimed_rows_decode_individually_and_accept_go_integer_ranges() {
         "decoding must not rewrite the stored value"
     );
     assert!(errors.is_none());
-    let wide = client.job_get(wide.job.row.id).await.unwrap();
+    let wide = client.jobs().get(wide.job.row.id).await.unwrap();
     assert_eq!(wide.max_attempts, i16::MAX);
 
-    let odd_errors = client.job_get(odd_errors.job.row.id).await.unwrap();
+    let odd_errors = client.jobs().get(odd_errors.job.row.id).await.unwrap();
     let zero_time = "0001-01-01T00:00:00Z".parse().unwrap();
     assert_eq!(
         odd_errors.errors,
@@ -380,7 +380,7 @@ async fn claimed_rows_decode_individually_and_accept_go_integer_ranges() {
 
         // The attempt error is appended without rewriting the undecodable
         // tags, and the undecodable row still can't be read.
-        assert!(client.job_get(id).await.is_err());
+        assert!(client.jobs().get(id).await.is_err());
         let (stored_state, attempt, errors, tags, scheduled_at): (
             String,
             i64,
@@ -575,7 +575,7 @@ async fn hard_shutdown_interrupts_only_cooperative_cancellations() {
         .unwrap()
         .unwrap();
 
-    let cooperative = client.job_get(cooperative.job.row.id).await.unwrap();
+    let cooperative = client.jobs().get(cooperative.job.row.id).await.unwrap();
     assert_eq!(cooperative.state, JobState::Available);
     assert_eq!(cooperative.attempt, 0);
     assert!(cooperative.attempted_at.is_some(), "attempted_at is kept");
@@ -587,11 +587,15 @@ async fn hard_shutdown_interrupts_only_cooperative_cancellations() {
             .unwrap();
     assert!(notifications_after > notifications_before);
 
-    let cancel_attempted = client.job_get(cancel_attempted.job.row.id).await.unwrap();
+    let cancel_attempted = client
+        .jobs()
+        .get(cancel_attempted.job.row.id)
+        .await
+        .unwrap();
     assert_eq!(cancel_attempted.state, JobState::Cancelled);
     assert!(cancel_attempted.finalized_at.is_some());
 
-    let real_error = client.job_get(real_error.job.row.id).await.unwrap();
+    let real_error = client.jobs().get(real_error.job.row.id).await.unwrap();
     assert!(matches!(
         real_error.state,
         JobState::Available | JobState::Retryable
@@ -609,7 +613,7 @@ async fn cancel_attempted_at_matches_go_time_json() {
         .build()
         .unwrap();
     let job = client.insert(ResilienceArgs {}).await.unwrap();
-    let cancelled = client.job_cancel(job.job.row.id).await.unwrap();
+    let cancelled = client.jobs().cancel(job.job.row.id).await.unwrap();
     let cancel_attempted_at = cancelled.metadata["cancel_attempted_at"].as_str().unwrap();
     assert!(cancel_attempted_at.ends_with('Z'), "{cancel_attempted_at}");
     if let Some((_, fraction)) = cancel_attempted_at.trim_end_matches('Z').split_once('.') {

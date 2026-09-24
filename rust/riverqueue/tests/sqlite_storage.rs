@@ -109,20 +109,23 @@ async fn job_list_time_without_states_uses_id_and_finalized_requires_states() {
     let params = JobListParams::default()
         .with_ids([first, second])
         .with_order_by(JobListOrderBy::Time);
-    let rows = client.job_list(&params).await.unwrap();
+    let rows = client.jobs().list(params.clone()).await.unwrap().jobs;
     assert_eq!(
         rows.iter().map(|row| row.id).collect::<Vec<_>>(),
         [first, second]
     );
     let cursor = JobListCursor::from_job(&rows[0], &params).unwrap();
     let page = client
-        .job_list(&params.clone().with_after(cursor))
+        .jobs()
+        .list(params.clone().with_after(cursor))
         .await
-        .unwrap();
+        .unwrap()
+        .jobs;
     assert_eq!(page.iter().map(|row| row.id).collect::<Vec<_>>(), [second]);
 
     let error = client
-        .job_list(&JobListParams::default().with_order_by(JobListOrderBy::FinalizedAt))
+        .jobs()
+        .list(JobListParams::default().with_order_by(JobListOrderBy::FinalizedAt))
         .await
         .unwrap_err();
     assert!(matches!(error, Error::InvalidJob(_)));
@@ -169,7 +172,7 @@ async fn job_crud_preserves_sqlite_semantics() {
     )
     .await;
 
-    let running = client.job_get(running_id).await.unwrap();
+    let running = client.jobs().get(running_id).await.unwrap();
     assert_eq!(running.state, JobState::Running);
     assert_eq!(running.tags, ["running", "shared"]);
 
@@ -178,20 +181,28 @@ async fn job_crud_preserves_sqlite_semantics() {
         .with_limit(2)
         .with_order_by(JobListOrderBy::ScheduledAt);
     list_params.direction = SortDirection::Descending;
-    let first_page = client.job_list(&list_params).await.unwrap();
+    let first_page = client.jobs().list(list_params.clone()).await.unwrap();
     assert_eq!(
-        first_page.iter().map(|job| job.id).collect::<Vec<_>>(),
+        first_page.jobs.iter().map(|job| job.id).collect::<Vec<_>>(),
         [running_id, retry_id]
     );
-    list_params.after = Some(JobListCursor::from_job(&first_page[1], &list_params).unwrap());
-    let second_page = client.job_list(&list_params).await.unwrap();
+    let last_cursor = first_page.last_cursor.unwrap();
+    assert_eq!(
+        last_cursor.encode(),
+        JobListCursor::from_job(&first_page.jobs[1], &list_params)
+            .unwrap()
+            .encode()
+    );
+    list_params.after = Some(last_cursor);
+    let second_page = client.jobs().list(list_params).await.unwrap().jobs;
     assert_eq!(
         second_page.iter().map(|job| job.id).collect::<Vec<_>>(),
         [delete_id]
     );
 
     let updated = client
-        .job_update(
+        .jobs()
+        .update(
             delete_id,
             JobUpdateParams::default()
                 .with_metadata(Map::from_iter([("added".to_owned(), json!(42))]))
@@ -205,18 +216,21 @@ async fn job_crud_preserves_sqlite_semantics() {
 
     let mut transaction = pool.begin().await.unwrap();
     let transaction_update = client
-        .job_update_tx(
-            &mut transaction,
+        .jobs()
+        .update(
             delete_id,
             JobUpdateParams::default()
                 .with_metadata(Map::from_iter([("rolled_back".to_owned(), json!(true))])),
         )
+        .tx(&mut transaction)
         .await
         .unwrap();
     assert_eq!(transaction_update.metadata["rolled_back"], true);
     assert_eq!(
         client
-            .job_get_tx(&mut transaction, delete_id)
+            .jobs()
+            .get(delete_id)
+            .tx(&mut transaction)
             .await
             .unwrap()
             .metadata["rolled_back"],
@@ -225,7 +239,8 @@ async fn job_crud_preserves_sqlite_semantics() {
     transaction.rollback().await.unwrap();
     assert!(
         !client
-            .job_get(delete_id)
+            .jobs()
+            .get(delete_id)
             .await
             .unwrap()
             .metadata
@@ -234,26 +249,30 @@ async fn job_crud_preserves_sqlite_semantics() {
 
     let mut transaction = pool.begin().await.unwrap();
     let completed = client
-        .job_complete_tx(&mut transaction, running_id)
+        .jobs()
+        .complete(running_id)
+        .tx(&mut transaction)
         .await
         .unwrap();
     assert_eq!(completed.state, JobState::Completed);
     transaction.rollback().await.unwrap();
     assert_eq!(
-        client.job_get(running_id).await.unwrap().state,
+        client.jobs().get(running_id).await.unwrap().state,
         JobState::Running
     );
     let mut transaction = pool.begin().await.unwrap();
     client
-        .job_complete_tx(&mut transaction, running_id)
+        .jobs()
+        .complete(running_id)
+        .tx(&mut transaction)
         .await
         .unwrap();
     transaction.commit().await.unwrap();
-    let completed = client.job_get(running_id).await.unwrap();
+    let completed = client.jobs().get(running_id).await.unwrap();
     assert_eq!(completed.state, JobState::Completed);
     assert!(completed.finalized_at.is_some());
 
-    let retried = client.job_retry(retry_id).await.unwrap();
+    let retried = client.jobs().retry(retry_id).await.unwrap();
     assert_eq!(retried.state, JobState::Available);
     assert_eq!(retried.max_attempts, 4);
     let insert_notification: String = sqlx::query_scalar(
@@ -267,10 +286,10 @@ async fn job_crud_preserves_sqlite_semantics() {
         json!({"queue": "default"})
     );
 
-    let deleted = client.job_delete(delete_id).await.unwrap();
+    let deleted = client.jobs().delete(delete_id).await.unwrap();
     assert_eq!(deleted.id, delete_id);
     assert!(matches!(
-        client.job_get(delete_id).await,
+        client.jobs().get(delete_id).await,
         Err(Error::NotFound)
     ));
 
@@ -283,7 +302,7 @@ async fn job_crud_preserves_sqlite_semantics() {
     )
     .await;
     assert!(matches!(
-        client.job_delete(still_running_id).await,
+        client.jobs().delete(still_running_id).await,
         Err(Error::JobRunning)
     ));
 
@@ -313,7 +332,8 @@ async fn job_delete_many_is_atomic_and_skips_running_jobs() {
 
     assert!(matches!(
         client
-            .job_delete_many(&JobDeleteManyParams::matching(JobListParams::default()))
+            .jobs()
+            .delete_many(JobDeleteManyParams::matching(JobListParams::default()))
             .await,
         Err(Error::InvalidJob(_))
     ));
@@ -321,7 +341,9 @@ async fn job_delete_many_is_atomic_and_skips_running_jobs() {
         JobDeleteManyParams::matching(JobListParams::default().with_ids([first, second, running]));
     let mut transaction = pool.begin().await.unwrap();
     let rolled_back = client
-        .job_delete_many_tx(&mut transaction, &params)
+        .jobs()
+        .delete_many(params.clone())
+        .tx(&mut transaction)
         .await
         .unwrap();
     assert_eq!(
@@ -329,16 +351,16 @@ async fn job_delete_many_is_atomic_and_skips_running_jobs() {
         [first, second]
     );
     transaction.rollback().await.unwrap();
-    assert!(client.job_get(first).await.is_ok());
-    assert!(client.job_get(second).await.is_ok());
+    assert!(client.jobs().get(first).await.is_ok());
+    assert!(client.jobs().get(second).await.is_ok());
 
-    let deleted = client.job_delete_many(&params).await.unwrap();
+    let deleted = client.jobs().delete_many(params).await.unwrap();
     assert_eq!(
         deleted.iter().map(|job| job.id).collect::<Vec<_>>(),
         [first, second]
     );
     assert_eq!(
-        client.job_get(running).await.unwrap().state,
+        client.jobs().get(running).await.unwrap().state,
         JobState::Running
     );
 

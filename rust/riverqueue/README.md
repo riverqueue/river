@@ -97,15 +97,14 @@ happens to equal a default. `insert_many` preserves input/result order and is
 atomic. PostgreSQL's `insert_many_fast` uses `COPY`, returns only a count, and
 rejects the entire batch on a unique conflict.
 
-Use `insert_tx` or `insert_tx_with` with `&mut transaction` to enqueue in the
-same SQL transaction as application writes. Notifications become visible only
-on commit, and jobs do not survive rollback. With a multi-connection SQLite
-pool, start transactions that may write with
-`pool.begin_with("BEGIN IMMEDIATE")`. SQLite's ordinary deferred `begin()` can
-establish a read snapshot that cannot be upgraded after another connection
-commits, producing `SQLITE_BUSY_SNAPSHOT` even when a busy timeout is set.
-River starts its own SQLite writer transactions in immediate mode; callers
-choose the mode of transactions passed to `_tx` methods.
+Chain `.tx(&mut transaction)` onto an insertion, or onto any request from
+`client.jobs()`, to run it in the same SQL transaction as application writes. Notifications become visible only on commit, and jobs do
+not survive rollback. With a multi-connection SQLite pool, start transactions
+that may write with `pool.begin_with("BEGIN IMMEDIATE")`. SQLite's ordinary
+deferred `begin()` can establish a read snapshot that cannot be upgraded after
+another connection commits, producing `SQLITE_BUSY_SNAPSHOT` even when a busy
+timeout is set. River starts its own SQLite writer transactions in immediate
+mode; callers choose the mode of transactions passed to `.tx`.
 
 Don't abandon a `pool.begin()` future partway, for example inside a
 `select!` or timeout that can fire first. SQLx 0.9 records a transaction only

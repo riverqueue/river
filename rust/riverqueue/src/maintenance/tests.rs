@@ -737,13 +737,13 @@ async fn cancel_and_retry_post_hooks_share_the_transaction() {
     let client = database.client().with_pilot(pilot.clone()).build().unwrap();
     let id = database.insert_job(RawJob::default()).await;
 
-    let cancelled = client.job_cancel(id).await.unwrap();
+    let cancelled = client.jobs().cancel(id).await.unwrap();
     assert_eq!(cancelled.state, JobState::Cancelled);
     assert_eq!(
         *pilot.cancels.lock().unwrap(),
         [(id, "cancelled".to_owned())]
     );
-    let retried = client.job_retry(id).await.unwrap();
+    let retried = client.jobs().retry(id).await.unwrap();
     assert_eq!(retried.state, JobState::Available);
     assert_eq!(
         *pilot.retries.lock().unwrap(),
@@ -759,10 +759,10 @@ async fn cancel_and_retry_post_hooks_share_the_transaction() {
         })
         .build()
         .unwrap();
-    assert!(failing.job_cancel(id).await.is_err());
+    assert!(failing.jobs().cancel(id).await.is_err());
     assert_eq!(database.state(id).await.as_deref(), Some("available"));
     let mut transaction = database.pool.begin().await.unwrap();
-    assert!(client.job_cancel_tx(&mut transaction, id).await.is_ok());
+    assert!(client.jobs().cancel(id).tx(&mut transaction).await.is_ok());
     transaction.rollback().await.unwrap();
     assert_eq!(database.state(id).await.as_deref(), Some("available"));
     database.cleanup().await;
