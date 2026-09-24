@@ -212,6 +212,44 @@
       "args": {
         "id": 42
       },
+      "expected_sha256": "5396f06a082abd7a929915135ebd363a9a47d800176b03ce7736f93a5ba9e22e",
+      "expected_state_mask": 245,
+      "kind": "conformance_simple",
+      "name": "period_from_non_utc_now",
+      "now": "2026-01-01T22:04:05.6789-05:00",
+      "options": {
+        "by_args": false,
+        "by_period_nanos": 3600000000000,
+        "by_queue": false,
+        "exclude_kind": false
+      },
+      "queue": "default",
+      "scheduled_at": null,
+      "selected_unique_paths": null
+    },
+    {
+      "args": {
+        "id": 42
+      },
+      "expected_sha256": "b7f3c49952996b760b8b3ff6cf48f426e03a6ef0f004fb6faa51725365cf309a",
+      "expected_state_mask": 245,
+      "kind": "conformance_simple",
+      "name": "period_from_non_utc_schedule",
+      "now": "2026-01-02T03:04:05.6789Z",
+      "options": {
+        "by_args": false,
+        "by_period_nanos": 3600000000000,
+        "by_queue": false,
+        "exclude_kind": false
+      },
+      "queue": "default",
+      "scheduled_at": "2026-01-02T10:51:05.6789+05:30",
+      "selected_unique_paths": null
+    },
+    {
+      "args": {
+        "id": 42
+      },
       "expected_sha256": "d20ce47da8e8015e68b020bbca2b17494139519ae05f8985e5992db4d8dd8a09",
       "expected_state_mask": 245,
       "kind": "conformance_simple",

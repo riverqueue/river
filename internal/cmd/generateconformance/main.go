@@ -257,6 +257,24 @@ func main() {
 			scheduledAt: &scheduledAt,
 		},
 		{
+			// A process clock outside UTC must produce the same period as UTC.
+			args:  simpleArgs{ID: 42},
+			name:  "period_from_non_utc_now",
+			now:   now.In(time.FixedZone("UTC-5", -5*60*60)),
+			opts:  dbunique.UniqueOpts{ByPeriod: time.Hour},
+			queue: "default",
+		},
+		{
+			// A half-hour offset puts the local wall-clock hour in a different
+			// UTC hour, so a local truncation would pick the wrong period.
+			args:        simpleArgs{ID: 42},
+			name:        "period_from_non_utc_schedule",
+			now:         now,
+			opts:        dbunique.UniqueOpts{ByPeriod: time.Hour},
+			queue:       "default",
+			scheduledAt: new(scheduledAt.In(time.FixedZone("UTC+5:30", 5*60*60+30*60))),
+		},
+		{
 			args:  simpleArgs{ID: 42},
 			name:  "queue_without_kind",
 			now:   now,
