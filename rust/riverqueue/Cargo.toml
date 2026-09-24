@@ -56,6 +56,10 @@ name = "custom_schema"
 required-features = ["postgres"]
 
 [[example]]
+name = "sqlite"
+required-features = ["sqlite"]
+
+[[example]]
 name = "transactions"
 required-features = ["postgres"]
 
