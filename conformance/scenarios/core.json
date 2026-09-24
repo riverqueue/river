@@ -62,6 +62,7 @@
     { "evidence": [{ "path": "conformance/harness/coordination_scenarios_test.go", "symbol": "verifyInsertNotificationWakeup" }], "name": "notification_only_wakeups", "tier": "mixed" },
     { "evidence": [{ "path": "conformance/harness/runtime_scenarios_test.go", "symbol": "verifyPanicAttemptTrace" }], "name": "panic_attempt_trace", "tier": "runtime" },
     { "evidence": [{ "path": "conformance/harness/coordination_scenarios_test.go", "symbol": "verifyPauseResumeNotification" }], "name": "pause_resume_notification", "tier": "mixed" },
+    { "evidence": [{ "path": "conformance/harness/maintenance_test.go", "symbol": "verifyPeriodicDueJobAvailable" }], "name": "periodic_due_job_available", "tier": "runtime" },
     { "evidence": [{ "path": "conformance/harness/runtime_scenarios_test.go", "symbol": "verifyPeriodicRunOnStart" }], "name": "periodic_run_on_start", "tier": "runtime" },
     { "evidence": [{ "path": "conformance/harness/lifecycle_scenarios_test.go", "symbol": "verifyPoolPressure" }], "name": "pool_pressure_completion", "tier": "performance" },
     { "evidence": [{ "path": "conformance/harness/coordination_scenarios_test.go", "symbol": "verifyProcessKillRestartAndRescue" }], "name": "process_kill_restart_and_rescue", "tier": "chaos" },

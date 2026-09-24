@@ -378,6 +378,49 @@ impl ExtensionClient<'_> {
         self.insert_raw_job(Some(executor), job).await
     }
 
+    /// Inserts an encoded periodic job due at `target` inside a
+    /// caller-managed transaction, exactly as River's periodic job enqueuer
+    /// does.
+    ///
+    /// When `opts.scheduled_at` is unset, the job is inserted `available`
+    /// with `scheduled_at` set to `target` so it runs immediately, and a
+    /// `by_period` unique key uses the target's period. An explicit
+    /// `scheduled_at` inserts a `scheduled` job, and `pending` is kept.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the transaction belongs to another backend, the
+    /// kind is not registered, the options are invalid, or insertion fails.
+    pub async fn insert_periodic_tx<'executor, E>(
+        &self,
+        transaction: E,
+        kind: &str,
+        unique_fields: &[&str],
+        encoded_args: Box<RawValue>,
+        opts: InsertParams,
+        target: DateTime<Utc>,
+    ) -> Result<RawInsertResult, Error>
+    where
+        E: DatabaseTransactionExecutor<'executor>,
+    {
+        let executor = self
+            .client
+            .inner
+            .erase_executor(transaction)
+            .map_err(Error::from)?
+            .into_inner();
+        self.client.validate_known_kind(kind)?;
+        let job = self.client.prepare_periodic(
+            kind,
+            unique_fields,
+            encoded_args,
+            opts,
+            target,
+            Utc::now(),
+        )?;
+        self.insert_raw_job(Some(executor), job).await
+    }
+
     /// Reinserts persisted fields through River's canonical insertion
     /// pipeline inside a caller-managed transaction.
     ///

@@ -630,6 +630,7 @@
       "rationale": "Only the elected leader enqueues periodic jobs, tagging them with reserved metadata; duplicate or missing enqueues are visible across implementations.",
       "scenarios": [
         "mixed_leader_death_failover_both_directions",
+        "periodic_due_job_available",
         "periodic_run_on_start",
         "sqlite_runtime_periodic_scheduler"
       ],

@@ -219,6 +219,13 @@ func TestMaintenanceConformance(t *testing.T) { //nolint:paralleltest // Owns th
 		}
 		scenarios.pass("leadership_renewal_under_slow_maintenance")
 	})
+
+	t.Run("PeriodicDueJobAvailable", func(t *testing.T) { //nolint:paralleltest // Shares adapters.
+		for _, implementation := range implementations {
+			verifyPeriodicDueJobAvailable(t, harness, goAdapter, implementation)
+		}
+		scenarios.pass("periodic_due_job_available")
+	})
 }
 
 func verifyCronScheduleGoldens(t *testing.T, repositoryRoot string, adapters ...*adapter) {
@@ -573,4 +580,40 @@ func verifyRenewalUnderSlowMaintenance(t *testing.T, harness *maintenanceHarness
 	}
 	require.NoError(t, tx.Rollback(ctx))
 	implementation.adapter.call(t, "stop", map[string]any{}, nil)
+}
+
+// verifyPeriodicDueJobAvailable checks that a periodic job whose constructor
+// leaves the schedule unset is inserted available at its target time, as Go's
+// periodic job enqueuer does, rather than scheduled behind the job scheduler.
+// A trigger records each row's state as inserted, because the scheduler would
+// otherwise promote a scheduled row before the harness could observe it.
+func verifyPeriodicDueJobAvailable(t *testing.T, harness *maintenanceHarness, migrator *adapter, implementation maintenanceImplementation) {
+	t.Helper()
+
+	schema := harness.schema(migrator, "maint_periodic_due")
+	insertedStates := table(schema, "conformance_inserted_state")
+	recordFunction := table(schema, "conformance_record_inserted_state")
+	harness.exec("CREATE TABLE " + insertedStates + " (id bigint PRIMARY KEY, state text NOT NULL)")
+	harness.exec("CREATE FUNCTION " + recordFunction + "() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN " +
+		"INSERT INTO " + insertedStates + " (id, state) VALUES (NEW.id, NEW.state::text); RETURN NEW; END $$")
+	harness.exec("CREATE TRIGGER conformance_record_inserted_state AFTER INSERT ON " + table(schema, "river_job") +
+		" FOR EACH ROW EXECUTE FUNCTION " + recordFunction + "()")
+
+	implementation.adapter.startWithTuning(t, startParams(schema, implementation.name+"-periodic-due", map[string]any{
+		"periodic_run_on_start": true,
+	}), maintenanceTuning())
+	periodicJobs := func() int64 {
+		return harness.queryInt("SELECT count(*) FROM " + table(schema, "river_job") +
+			" WHERE metadata->>'river:periodic_job_id' = 'conformance-periodic'")
+	}
+	harness.waitFor(implementation.name+" periodic run on start", 30*time.Second, func() bool {
+		return periodicJobs() == 1
+	})
+	implementation.adapter.call(t, "stop", map[string]any{}, nil)
+
+	var state string
+	require.NoError(t, harness.pool.QueryRow(context.Background(), "SELECT inserted.state FROM "+insertedStates+" inserted "+
+		"JOIN "+table(schema, "river_job")+" job USING (id) "+
+		"WHERE job.metadata->>'river:periodic_job_id' = 'conformance-periodic'").Scan(&state))
+	require.Equal(t, "available", state, "%s must insert a due periodic job available at its target time", implementation.name)
 }
