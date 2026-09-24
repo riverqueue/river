@@ -14,14 +14,14 @@ use async_trait::async_trait;
 use chrono::{DateTime, SecondsFormat, Utc};
 use riverqueue::database::SchemaName;
 use riverqueue::{
-    AttemptError, BoxError, Client, DefaultRetryPolicy, ErrorHandler, ErrorHandlerDecision,
-    EventKind, EventReceiver, Extensions, Hook, InsertContext, InsertMiddleware, InsertNext,
-    InsertOpts, InsertResult, InsertedJobs, IntervalSchedule, Job, JobArgs, JobDeleteManyParams,
-    JobListCursor, JobListParams, JobRow, JobState, JobUpdateParams, MaintenanceConfig,
-    PeriodicJob, PeriodicJobOpts, PeriodicJobs, Plugin, Queue, QueueConfig, QueueListParams,
-    RetryPolicy, RunHandle, SortDirection, SubscribeConfig, UniqueOpts, WorkCancelled, WorkContext,
-    WorkMiddleware, WorkOutcome, WorkResult, Worker, WorkerRegistry,
-    database::{PostgresDatabase, SqliteDatabase},
+    AttemptError, BoxError, Client, CronSchedule, DefaultRetryPolicy, ErrorHandler,
+    ErrorHandlerDecision, EventKind, EventReceiver, Extensions, Hook, InsertContext,
+    InsertMiddleware, InsertNext, InsertOpts, InsertResult, InsertedJobs, IntervalSchedule, Job,
+    JobArgs, JobDeleteManyParams, JobListCursor, JobListParams, JobRow, JobState, JobUpdateParams,
+    MaintenanceConfig, PeriodicJob, PeriodicJobOpts, PeriodicJobs, Plugin, Queue, QueueConfig,
+    QueueListParams, RetryPolicy, RunHandle, SortDirection, SubscribeConfig, UniqueOpts,
+    WorkCancelled, WorkContext, WorkMiddleware, WorkOutcome, WorkResult, Worker, WorkerRegistry,
+    database::{PostgresDatabase, PostgresReindexConfig, PostgresReindexSchedule, SqliteDatabase},
     encoding::encode_args,
     protocol::{UniqueKeyInput, unique_key, unique_states_bitmask},
 };
@@ -38,7 +38,7 @@ use sqlx::{
 };
 use tokio::sync::watch;
 
-const ADAPTER_VERSION: u32 = 12;
+const ADAPTER_VERSION: u32 = 13;
 const PROTOCOL_REVISION: u32 = 1;
 
 const ADAPTER_METHODS: &[&str] = &[
@@ -48,6 +48,7 @@ const ADAPTER_METHODS: &[&str] = &[
     "cancel",
     "clock_set",
     "connection_count",
+    "cron_next",
     "delete",
     "delete_many",
     "fault_disconnect_application",
@@ -139,6 +140,7 @@ const CAPABILITIES: &[&str] = &[
 const SQLITE_ADAPTER_METHODS: &[&str] = &[
     "cancel",
     "clock_set",
+    "cron_next",
     "delete",
     "delete_many",
     "get",
@@ -192,6 +194,7 @@ const SQLITE_RUNTIME_METHODS: &[&str] = &[
     "barrier_release",
     "cancel",
     "clock_set",
+    "cron_next",
     "delete",
     "delete_many",
     "get",
@@ -1195,6 +1198,7 @@ impl Adapter {
                     .ok_or("seed must be an unsigned integer")?;
                 Ok(json!({}))
             }
+            "cron_next" => cron_next(&params),
             "retry_delay" => {
                 let now = self
                     .clock
@@ -1596,32 +1600,22 @@ impl Adapter {
                     pool: Some(self.pool.clone()),
                     probe: Arc::clone(&probe),
                 })?;
-                let mut maintenance = MaintenanceConfig::default();
-                if let Some(milliseconds) = optional_i64(&params, "elect_interval_ms") {
-                    maintenance = maintenance.with_elect_interval(duration_millis(milliseconds)?);
-                }
-                if let Some(milliseconds) = optional_i64(&params, "rescue_after_ms") {
-                    maintenance = maintenance.with_rescue_after(duration_millis(milliseconds)?);
-                }
-                if let Some(milliseconds) = optional_i64(&params, "rescuer_interval_ms") {
-                    maintenance = maintenance.with_rescuer_interval(duration_millis(milliseconds)?);
-                }
-                if let Some(milliseconds) = optional_i64(&params, "scheduler_interval_ms") {
-                    maintenance =
-                        maintenance.with_scheduler_interval(duration_millis(milliseconds)?);
-                }
-                let mut builder =
-                    Client::builder(PostgresDatabase::new(self.pool.clone()).schema(schema))
-                        .id(client_id)
-                        .job_stuck_threshold(Duration::from_millis(100))
-                        .maintenance(maintenance)
-                        .workers(workers)
-                        .queue(
-                            queue,
-                            QueueConfig::new(usize::try_from(max_workers)?)
-                                .with_fetch_cooldown(Duration::from_millis(1))
-                                .with_fetch_poll_interval(fetch_poll_interval),
-                        );
+                let maintenance = maintenance_config(&params)?;
+                let mut builder = Client::builder(
+                    PostgresDatabase::new(self.pool.clone())
+                        .schema(schema)
+                        .reindex(reindex_config(&params)?),
+                )
+                .id(client_id)
+                .job_stuck_threshold(Duration::from_millis(100))
+                .maintenance(maintenance)
+                .workers(workers)
+                .queue(
+                    queue,
+                    QueueConfig::new(usize::try_from(max_workers)?)
+                        .with_fetch_cooldown(Duration::from_millis(1))
+                        .with_fetch_poll_interval(fetch_poll_interval),
+                );
                 if poll_only {
                     builder = builder.without_notifications();
                 }
@@ -1640,6 +1634,13 @@ impl Adapter {
                 }
                 if let Some(milliseconds) = optional_i64(&params, "job_timeout_ms") {
                     builder = builder.job_timeout(Some(duration_millis(milliseconds)?));
+                }
+                if params
+                    .get("job_timeout_disabled")
+                    .and_then(Value::as_bool)
+                    .unwrap_or(false)
+                {
+                    builder = builder.job_timeout(None);
                 }
                 if params
                     .get("periodic_run_on_start")
@@ -2082,6 +2083,7 @@ impl SqliteAdapter {
                     .ok_or("seed must be an unsigned integer")?;
                 Ok(json!({}))
             }
+            "cron_next" => cron_next(&params),
             "retry_delay" => {
                 let now = self
                     .clock
@@ -2392,20 +2394,7 @@ impl SqliteAdapter {
                     pool: None,
                     probe: Arc::clone(&probe),
                 })?;
-                let mut maintenance = MaintenanceConfig::default();
-                if let Some(milliseconds) = optional_i64(&params, "elect_interval_ms") {
-                    maintenance = maintenance.with_elect_interval(duration_millis(milliseconds)?);
-                }
-                if let Some(milliseconds) = optional_i64(&params, "rescue_after_ms") {
-                    maintenance = maintenance.with_rescue_after(duration_millis(milliseconds)?);
-                }
-                if let Some(milliseconds) = optional_i64(&params, "rescuer_interval_ms") {
-                    maintenance = maintenance.with_rescuer_interval(duration_millis(milliseconds)?);
-                }
-                if let Some(milliseconds) = optional_i64(&params, "scheduler_interval_ms") {
-                    maintenance =
-                        maintenance.with_scheduler_interval(duration_millis(milliseconds)?);
-                }
+                let maintenance = maintenance_config(&params)?;
                 let mut builder = Client::builder(SqliteDatabase::new(self.pool.clone()))
                     .id(client_id)
                     .job_stuck_threshold(Duration::from_millis(100))
@@ -2435,6 +2424,13 @@ impl SqliteAdapter {
                 }
                 if let Some(milliseconds) = optional_i64(&params, "job_timeout_ms") {
                     builder = builder.job_timeout(Some(duration_millis(milliseconds)?));
+                }
+                if params
+                    .get("job_timeout_disabled")
+                    .and_then(Value::as_bool)
+                    .unwrap_or(false)
+                {
+                    builder = builder.job_timeout(None);
                 }
                 if params
                     .get("periodic_run_on_start")
@@ -3051,6 +3047,97 @@ fn migrate_opts(params: &Value) -> Result<MigrateOpts, Box<dyn std::error::Error
         opts = opts.with_target_version(target_version);
     }
     Ok(opts)
+}
+
+/// Applies optional maintenance tuning from `start` parameters. Job
+/// retentions of `-1` keep that state forever, like Go.
+fn maintenance_config(
+    params: &Value,
+) -> Result<MaintenanceConfig, Box<dyn std::error::Error + Send + Sync>> {
+    let mut maintenance = MaintenanceConfig::default();
+    let retention = |name: &str| -> Result<
+        Option<Option<Duration>>,
+        Box<dyn std::error::Error + Send + Sync>,
+    > {
+        match optional_i64(params, name) {
+            None => Ok(None),
+            Some(-1) => Ok(Some(None)),
+            Some(milliseconds) => Ok(Some(Some(duration_millis(milliseconds)?))),
+        }
+    };
+    if let Some(retention) = retention("cancelled_job_retention_ms")? {
+        maintenance = maintenance.with_cancelled_job_retention(retention);
+    }
+    if let Some(retention) = retention("completed_job_retention_ms")? {
+        maintenance = maintenance.with_completed_job_retention(retention);
+    }
+    if let Some(retention) = retention("discarded_job_retention_ms")? {
+        maintenance = maintenance.with_discarded_job_retention(retention);
+    }
+    if let Some(milliseconds) = optional_i64(params, "elect_interval_ms") {
+        maintenance = maintenance.with_elect_interval(duration_millis(milliseconds)?);
+    }
+    if let Some(milliseconds) = optional_i64(params, "job_cleaner_interval_ms") {
+        maintenance = maintenance.with_job_cleaner_interval(duration_millis(milliseconds)?);
+    }
+    if let Some(milliseconds) = optional_i64(params, "queue_cleaner_interval_ms") {
+        maintenance = maintenance.with_queue_cleaner_interval(duration_millis(milliseconds)?);
+    }
+    if let Some(milliseconds) = optional_i64(params, "rescue_after_ms") {
+        maintenance = maintenance.with_rescue_after(duration_millis(milliseconds)?);
+    }
+    if let Some(milliseconds) = optional_i64(params, "rescuer_interval_ms") {
+        maintenance = maintenance.with_rescuer_interval(duration_millis(milliseconds)?);
+    }
+    if let Some(milliseconds) = optional_i64(params, "scheduler_interval_ms") {
+        maintenance = maintenance.with_scheduler_interval(duration_millis(milliseconds)?);
+    }
+    Ok(maintenance)
+}
+
+/// Builds the PostgreSQL reindexer configuration from optional `start`
+/// parameters.
+fn reindex_config(
+    params: &Value,
+) -> Result<PostgresReindexConfig, Box<dyn std::error::Error + Send + Sync>> {
+    let mut config = PostgresReindexConfig::default();
+    if let Some(names) = params.get("reindexer_index_names") {
+        let names = names
+            .as_array()
+            .ok_or("reindexer_index_names must be an array")?
+            .iter()
+            .map(|name| name.as_str().ok_or("reindexer index names must be strings"))
+            .collect::<Result<Vec<_>, _>>()?;
+        config = config.with_index_names(names);
+    }
+    if let Some(milliseconds) = optional_i64(params, "reindexer_interval_ms") {
+        config = config.with_schedule(PostgresReindexSchedule::Interval(duration_millis(
+            milliseconds,
+        )?));
+    }
+    Ok(config)
+}
+
+/// Evaluates River Go's standard cron syntax from a reference time, returning
+/// successive occurrences in that time's offset.
+fn cron_next(params: &Value) -> Result<Value, Box<dyn std::error::Error + Send + Sync>> {
+    let expression = required_string(params, "expression")?;
+    let from = DateTime::parse_from_rfc3339(&required_string(params, "from")?)?;
+    let count = usize::try_from(required_i64(params, "count")?)?;
+    if count == 0 {
+        return Err("count must be positive".into());
+    }
+    let schedule = CronSchedule::parse(&expression)?;
+    let mut next = Vec::with_capacity(count);
+    let mut current = from;
+    while next.len() < count {
+        let Some(occurrence) = schedule.next_after(&current) else {
+            break;
+        };
+        next.push(occurrence.to_rfc3339_opts(SecondsFormat::AutoSi, true));
+        current = occurrence;
+    }
+    Ok(json!({"next": next}))
 }
 
 fn duration_millis(

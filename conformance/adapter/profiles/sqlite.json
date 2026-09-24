@@ -19,6 +19,7 @@
   "methods": [
     "cancel",
     "clock_set",
+    "cron_next",
     "delete",
     "delete_many",
     "get",

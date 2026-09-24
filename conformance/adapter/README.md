@@ -78,6 +78,12 @@ that profile.
 - `migrate`, `reset`.
 - `clock_set`, `rng_seed`, and `retry_delay` drive deterministic retry
   goldens without relying on process-global randomness or wall time.
+- `cron_next` takes `expression`, an RFC 3339 `from` time, and `count`, and
+  returns up to `count` successive occurrences as RFC 3339 strings in the
+  reference time's offset. It must accept exactly River Go's documented cron
+  syntax (robfig/cron `ParseStandard`) and reject everything else; the
+  `cron_cases` and `cron_invalid` sections of
+  `fixtures/maintenance_values.json` are the goldens.
 - `leader`, `request_resign`, `listener_count`, and `connection_count`.
 
 ## Jobs and queues
@@ -87,7 +93,14 @@ that profile.
   input order and include each normalized job and its unique-conflict flag.
 - `queue_get`, `queue_list`, `queue_pause`, `queue_resume`, `queue_update`, and
   runtime `queue_add`/`queue_remove`.
-- `start`, `stop`, `wait`, and the compatibility shorthand `work`.
+- `start`, `stop`, `wait`, and the compatibility shorthand `work`. `start`
+  also accepts optional maintenance tuning: `cancelled_job_retention_ms`,
+  `completed_job_retention_ms`, and `discarded_job_retention_ms` (`-1` keeps
+  that state forever), `job_timeout_disabled`, `rescue_after_ms`,
+  `reindexer_index_names`, and `reindexer_interval_ms`. Interval keys that
+  River Go does not expose (`elect_interval_ms`, `job_cleaner_interval_ms`,
+  `queue_cleaner_interval_ms`, `rescuer_interval_ms`,
+  `scheduler_interval_ms`) only shorten waits and may be ignored.
 - `runtime_stats` exposes normalized hook, middleware, periodic, resumable,
   and event-subscription observations without exposing language-specific API
   shapes. Version 1 observes delivered event kinds but does not expose

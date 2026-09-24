@@ -1,6 +1,6 @@
 {
   "$schema": "../schema/adapter-contract.schema.json",
-  "adapter_version": 12,
+  "adapter_version": 13,
   "methods": [
     { "capability": "barriers", "description": "Create a named worker barrier.", "name": "barrier_create" },
     { "capability": "barriers", "description": "Release a named worker barrier.", "name": "barrier_release" },
@@ -8,6 +8,7 @@
     { "capability": "cancel", "description": "Cancel a job outside a transaction.", "name": "cancel" },
     { "capability": "deterministic_controls", "description": "Set the adapter's deterministic test clock.", "name": "clock_set" },
     { "capability": "lifecycle", "description": "Report application connections owned by the adapter.", "name": "connection_count" },
+    { "capability": "deterministic_controls", "description": "Calculate successive occurrences of a standard cron expression from a reference time, using River Go's documented cron semantics.", "name": "cron_next" },
     { "capability": "job_crud", "description": "Delete one job.", "name": "delete" },
     { "capability": "job_crud", "description": "Delete jobs using safe filters or an explicit all flag.", "name": "delete_many" },
     { "capability": "fault_injection", "description": "Disconnect allow-listed application connections.", "name": "fault_disconnect_application" },
