@@ -813,7 +813,70 @@ pub(crate) fn go_time_json(time: DateTime<Utc>) -> String {
     }
 }
 
+/// Generates a client ID unique to this `Client` instance.
+///
+/// Like Go, the ID combines the host name (dots replaced by underscores and
+/// truncated to 60 bytes) with the creation time to the microsecond. A random
+/// suffix keeps IDs distinct when several clients start in the same
+/// microsecond or containers report identical host names, because a shared ID
+/// would let two clients renew one leadership lease.
 fn default_client_id() -> String {
-    let host = std::env::var("HOSTNAME").unwrap_or_else(|_| "localhost".to_owned());
-    format!("{host}-{}", std::process::id())
+    default_client_id_with_host(&host_name(), Utc::now(), crate::maintenance::random_u64())
+}
+
+fn default_client_id_with_host(host: &str, created_at: DateTime<Utc>, random: u64) -> String {
+    const MAX_HOST_LENGTH: usize = 60;
+
+    let mut host = host.replace('.', "_");
+    if host.len() > MAX_HOST_LENGTH {
+        let mut end = MAX_HOST_LENGTH;
+        while !host.is_char_boundary(end) {
+            end -= 1;
+        }
+        host.truncate(end);
+    }
+    format!(
+        "{host}_{}_{:08x}",
+        created_at.format("%Y_%m_%dT%H_%M_%S_%6f"),
+        random & 0xffff_ffff
+    )
+}
+
+fn host_name() -> String {
+    std::env::var("HOSTNAME")
+        .ok()
+        .or_else(|| std::fs::read_to_string("/proc/sys/kernel/hostname").ok())
+        .or_else(|| std::fs::read_to_string("/etc/hostname").ok())
+        .map(|host| host.trim().to_owned())
+        .filter(|host| !host.is_empty())
+        .unwrap_or_else(|| "unknown_host".to_owned())
+}
+
+#[cfg(test)]
+mod default_client_id_tests {
+    use chrono::{TimeZone, Timelike};
+
+    use super::*;
+
+    #[test]
+    fn default_client_id_matches_go_shape_and_is_unique() {
+        let created_at = Utc
+            .with_ymd_and_hms(2026, 1, 2, 3, 4, 5)
+            .unwrap()
+            .with_nanosecond(678_901_000)
+            .unwrap();
+        assert_eq!(
+            default_client_id_with_host("worker.example.com", created_at, 0xdead_beef),
+            "worker_example_com_2026_01_02T03_04_05_678901_deadbeef"
+        );
+        let long = "h".repeat(80);
+        let id = default_client_id_with_host(&long, created_at, 1);
+        assert!(id.starts_with(&"h".repeat(60)));
+        assert!(!id.starts_with(&"h".repeat(61)));
+        assert!(id.len() <= 100, "client IDs are limited to 100 bytes");
+
+        let first = default_client_id();
+        let second = default_client_id();
+        assert_ne!(first, second);
+    }
 }

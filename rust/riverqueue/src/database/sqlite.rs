@@ -160,14 +160,16 @@ pub(crate) struct RescueJob<'a> {
     pub id: i64,
     pub scheduled_at: DateTime<Utc>,
     pub state: JobState,
+    /// The rescue applies only to a job still running from before this time.
+    pub stuck_horizon: DateTime<Utc>,
 }
 
+/// Job cleaner deletion horizons; `None` keeps that state indefinitely.
 #[derive(Clone, Debug)]
 pub(crate) struct CleanupJobs<'a> {
-    pub cancelled_before: DateTime<Utc>,
-    pub completed_before: DateTime<Utc>,
-    pub discarded_before: DateTime<Utc>,
-    pub metadata_exclusions: &'a [&'a str],
+    pub cancelled_before: Option<DateTime<Utc>>,
+    pub completed_before: Option<DateTime<Utc>>,
+    pub discarded_before: Option<DateTime<Utc>>,
     pub limit: i32,
     pub queues_excluded: &'a [&'a str],
 }
@@ -1235,9 +1237,12 @@ pub(crate) async fn leader_elect(
     .map_err(BackendError::from)
 }
 
+/// Extends a lease only for the same leader *and* term (`elected_at`), like
+/// Go's `LeaderAttemptReelect`.
 pub(crate) async fn leader_reelect(
     connection: &mut SqliteConnection,
-    leader: &Leader,
+    leader_id: &str,
+    elected_at: DateTime<Utc>,
     now: DateTime<Utc>,
     ttl: Duration,
 ) -> Result<Option<Leader>, BackendError> {
@@ -1253,30 +1258,21 @@ pub(crate) async fn leader_reelect(
     )
     .bind(sqlite_time(now))
     .bind(sqlite_ttl(ttl))
-    .bind(sqlite_time(leader.elected_at))
+    .bind(sqlite_time(elected_at))
     .bind(sqlite_time(now))
-    .bind(&leader.leader_id)
+    .bind(leader_id)
     .fetch_optional(&mut *connection)
     .await
     .map(|record| record.map(Leader::from))
     .map_err(BackendError::from)
 }
 
-pub(crate) async fn leader_get(
-    connection: &mut SqliteConnection,
-) -> Result<Option<Leader>, BackendError> {
-    sqlx::query_as::<_, LeaderRecord>(
-        "SELECT elected_at, expires_at, leader_id FROM river_leader LIMIT 1",
-    )
-    .fetch_optional(&mut *connection)
-    .await
-    .map(|record| record.map(Leader::from))
-    .map_err(BackendError::from)
-}
-
+/// Deletes a lease only for the same leader *and* term, like Go's
+/// `LeaderResign`.
 pub(crate) async fn leader_resign(
     connection: &mut SqliteConnection,
-    leader: &Leader,
+    leader_id: &str,
+    elected_at: DateTime<Utc>,
 ) -> Result<bool, BackendError> {
     let result = sqlx::query(
         r#"
@@ -1285,8 +1281,8 @@ pub(crate) async fn leader_resign(
           AND leader_id = ?
         "#,
     )
-    .bind(sqlite_time(leader.elected_at))
-    .bind(&leader.leader_id)
+    .bind(sqlite_time(elected_at))
+    .bind(leader_id)
     .execute(&mut *connection)
     .await?;
     Ok(result.rows_affected() > 0)
@@ -1456,7 +1452,7 @@ pub(crate) async fn rescue(
                 ) + 1
             ),
             state = ?
-        WHERE id = ? AND state = 'running'
+        WHERE id = ? AND state = 'running' AND attempted_at < ?
         RETURNING {JOB_COLUMNS}
         "#
     );
@@ -1466,6 +1462,7 @@ pub(crate) async fn rescue(
         .bind(sqlite_time(params.scheduled_at))
         .bind(params.state.as_str())
         .bind(params.id)
+        .bind(sqlite_time(params.stuck_horizon))
         .fetch_optional(&mut *connection)
         .await?
         .map(JobRecord::into_job)
@@ -1476,25 +1473,34 @@ pub(crate) async fn cleanup_jobs(
     connection: &mut SqliteConnection,
     params: &CleanupJobs<'_>,
 ) -> Result<u64, BackendError> {
-    if params.limit <= 0 {
+    let horizons = [
+        ("cancelled", params.cancelled_before),
+        ("completed", params.completed_before),
+        ("discarded", params.discarded_before),
+    ];
+    if params.limit <= 0 || horizons.iter().all(|(_, before)| before.is_none()) {
         return Ok(0);
     }
     let mut query = QueryBuilder::<Sqlite>::new(
-        r#"
-        DELETE FROM river_job
-        WHERE id IN (
-            SELECT id
-            FROM river_job
-            WHERE (
-                (state = 'cancelled' AND finalized_at < "#,
+        "DELETE FROM river_job WHERE id IN (SELECT id FROM river_job WHERE (",
     );
-    query
-        .push_bind(sqlite_time(params.cancelled_before))
-        .push(") OR (state = 'completed' AND finalized_at < ")
-        .push_bind(sqlite_time(params.completed_before))
-        .push(") OR (state = 'discarded' AND finalized_at < ")
-        .push_bind(sqlite_time(params.discarded_before))
-        .push(") )");
+    let mut first = true;
+    for (state, before) in horizons {
+        let Some(before) = before else {
+            continue;
+        };
+        if !first {
+            query.push(" OR ");
+        }
+        first = false;
+        query
+            .push("(state = ")
+            .push_bind(state)
+            .push(" AND finalized_at < ")
+            .push_bind(sqlite_time(before))
+            .push(")");
+    }
+    query.push(")");
     if !params.queues_excluded.is_empty() {
         query.push(" AND queue NOT IN (");
         let mut separated = query.separated(", ");
@@ -1502,11 +1508,6 @@ pub(crate) async fn cleanup_jobs(
             separated.push_bind(queue);
         }
         separated.push_unseparated(")");
-    }
-    for metadata_key in params.metadata_exclusions {
-        query.push(" AND json_extract(metadata, ");
-        query.push_bind(format!("$.{metadata_key}"));
-        query.push(") IS NULL");
     }
     query
         .push(" ORDER BY id ASC LIMIT ")
@@ -1852,6 +1853,10 @@ mod tests {
     }
 
     #[tokio::test]
+    #[expect(
+        clippy::too_many_lines,
+        reason = "one scenario walks every maintenance query in order"
+    )]
     async fn maintenance_leadership_and_wakeup_outbox() {
         let pool = setup().await;
         let mut connection = pool.acquire().await.unwrap();
@@ -1903,9 +1908,29 @@ mod tests {
                 .unwrap()
                 .is_none()
         );
+        // A same-ID lease from another term is neither renewed nor resigned.
+        let other_term = leader.elected_at - TimeDelta::seconds(1);
+        assert!(
+            leader_reelect(
+                &mut connection,
+                "leader-1",
+                other_term,
+                now + TimeDelta::seconds(1),
+                Duration::from_secs(30),
+            )
+            .await
+            .unwrap()
+            .is_none()
+        );
+        assert!(
+            !leader_resign(&mut connection, "leader-1", other_term)
+                .await
+                .unwrap()
+        );
         let renewed = leader_reelect(
             &mut connection,
-            &leader,
+            "leader-1",
+            leader.elected_at,
             now + TimeDelta::seconds(1),
             Duration::from_secs(30),
         )
@@ -1913,7 +1938,11 @@ mod tests {
         .unwrap()
         .unwrap();
         assert!(renewed.expires_at > leader.expires_at);
-        assert!(leader_resign(&mut connection, &renewed).await.unwrap());
+        assert!(
+            leader_resign(&mut connection, "leader-1", renewed.elected_at)
+                .await
+                .unwrap()
+        );
 
         let inserted = notification_insert(
             &mut connection,

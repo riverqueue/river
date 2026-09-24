@@ -11,6 +11,7 @@ use std::{
 use chrono::{DateTime, Utc};
 use cron::Schedule;
 use thiserror::Error as ThisError;
+use tokio::sync::Notify;
 
 use crate::{Client, Error, InsertOpts, JobArgs};
 
@@ -266,8 +267,20 @@ pub(crate) struct PeriodicRegistry {
 /// Dynamically configurable periodic jobs for a client.
 #[derive(Clone)]
 pub struct PeriodicJobs {
+    changed: Arc<Notify>,
     pub(crate) registry: Arc<Mutex<PeriodicRegistry>>,
 }
+
+/// Result of one scheduling pass.
+#[derive(Clone, Copy, Debug, Default)]
+pub(crate) struct RunDueOutcome {
+    /// At least one due occurrence failed to insert and stays due.
+    pub(crate) insert_failed: bool,
+}
+
+/// Jobs due within this margin are inserted in the current pass, like Go's
+/// enqueuer, which also keeps each occurrence's original scheduled time.
+const DUE_MARGIN: chrono::Duration = chrono::Duration::milliseconds(100);
 
 impl fmt::Debug for PeriodicJobs {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -286,6 +299,7 @@ impl PeriodicJobs {
             registry.insert(job);
         }
         Ok(Self {
+            changed: Arc::new(Notify::new()),
             registry: Arc::new(Mutex::new(registry)),
         })
     }
@@ -294,6 +308,33 @@ impl PeriodicJobs {
     /// leaves it consistent, so a poisoned lock is still usable.
     fn lock(&self) -> MutexGuard<'_, PeriodicRegistry> {
         self.registry.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+
+    /// Completes after the next registration change.
+    pub(crate) fn changed(&self) -> tokio::sync::futures::Notified<'_> {
+        self.changed.notified()
+    }
+
+    fn notify_changed(&self) {
+        self.changed.notify_waiters();
+    }
+
+    /// Returns the earliest scheduled occurrence, or now when a job still
+    /// needs its first schedule computed.
+    pub(crate) fn next_run_at(&self) -> Option<DateTime<Utc>> {
+        let registry = self.lock();
+        let mut next: Option<DateTime<Utc>> = None;
+        for entry in registry.entries.values() {
+            let candidate = if entry.needs_initialization {
+                Some(Utc::now())
+            } else {
+                entry.next_run
+            };
+            if let Some(candidate) = candidate {
+                next = Some(next.map_or(candidate, |next| next.min(candidate)));
+            }
+        }
+        next
     }
 
     /// Adds one periodic job and returns its removal handle.
@@ -305,7 +346,10 @@ impl PeriodicJobs {
             .filter_map(|entry| entry.job.opts.id.clone())
             .collect();
         validate_jobs(std::slice::from_ref(&job), &ids)?;
-        Ok(registry.insert(job))
+        let handle = registry.insert(job);
+        drop(registry);
+        self.notify_changed();
+        Ok(handle)
     }
 
     /// Adds many jobs atomically after validating their identifiers.
@@ -317,17 +361,23 @@ impl PeriodicJobs {
             .filter_map(|entry| entry.job.opts.id.clone())
             .collect();
         validate_jobs(&jobs, &ids)?;
-        Ok(jobs.into_iter().map(|job| registry.insert(job)).collect())
+        let handles = jobs.into_iter().map(|job| registry.insert(job)).collect();
+        drop(registry);
+        self.notify_changed();
+        Ok(handles)
     }
 
     /// Removes all configured periodic jobs.
     pub fn clear(&self) {
         self.lock().entries.clear();
+        self.notify_changed();
     }
 
     /// Removes a job by handle.
     pub fn remove(&self, handle: PeriodicJobHandle) -> bool {
-        self.lock().entries.remove(&handle).is_some()
+        let removed = self.lock().entries.remove(&handle).is_some();
+        self.notify_changed();
+        removed
     }
 
     /// Removes a job by identifier.
@@ -336,7 +386,10 @@ impl PeriodicJobs {
         let handle = registry.entries.iter().find_map(|(handle, entry)| {
             (entry.job.opts.id.as_deref() == Some(id)).then_some(*handle)
         });
-        handle.is_some_and(|handle| registry.entries.remove(&handle).is_some())
+        let removed = handle.is_some_and(|handle| registry.entries.remove(&handle).is_some());
+        drop(registry);
+        self.notify_changed();
+        removed
     }
 
     pub(crate) fn reset_for_leadership(&self) {
@@ -346,7 +399,12 @@ impl PeriodicJobs {
         }
     }
 
-    pub(crate) async fn run_due(&self, client: &Client, now: DateTime<Utc>) {
+    /// Inserts every occurrence due by `now` plus a small margin. Newly added
+    /// jobs are scheduled from `now` and, when configured, inserted once.
+    ///
+    /// An occurrence whose insert fails keeps its scheduled time and is
+    /// retried by the caller instead of being skipped as Go does.
+    pub(crate) async fn run_due(&self, client: &Client, now: DateTime<Utc>) -> RunDueOutcome {
         struct DueJob {
             advance_handle: Option<PeriodicJobHandle>,
             job: PeriodicJob,
@@ -370,7 +428,7 @@ impl PeriodicJobs {
                     continue;
                 }
                 if let Some(target) = entry.next_run
-                    && target <= now
+                    && target < now + DUE_MARGIN
                 {
                     due.push(DueJob {
                         advance_handle: Some(*handle),
@@ -382,6 +440,7 @@ impl PeriodicJobs {
             due
         };
 
+        let mut outcome = RunDueOutcome::default();
         for due_job in due {
             let result = (due_job.job.constructor)();
             let advance = match result {
@@ -401,6 +460,7 @@ impl PeriodicJobs {
                     }
                     if let Err(error) = client.insert_periodic(insert, opts).await {
                         tracing::error!(error = %error, "River periodic job insertion failed");
+                        outcome.insert_failed = true;
                         false
                     } else {
                         true
@@ -423,6 +483,7 @@ impl PeriodicJobs {
                 }
             }
         }
+        outcome
     }
 }
 

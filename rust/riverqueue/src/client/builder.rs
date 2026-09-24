@@ -3,6 +3,10 @@
 #[allow(clippy::wildcard_imports)]
 use super::*;
 
+/// Default age at which running jobs are rescued (Go
+/// `JobRescuerRescueAfterDefault`).
+const RESCUE_AFTER_DEFAULT: Duration = Duration::from_hours(1);
+
 /// Leader-owned maintenance timing and retention settings.
 #[derive(Clone, Debug)]
 pub struct MaintenanceConfig {
@@ -18,8 +22,12 @@ pub struct MaintenanceConfig {
     pub(crate) job_cleaner_interval: Duration,
     /// Timeout for each job-cleaner deletion statement.
     pub(crate) job_cleaner_timeout: Duration,
-    /// Age at which running jobs may be rescued.
-    pub(crate) rescue_after: Duration,
+    /// Test-only batch sizes of bulk maintenance services.
+    pub(crate) batch_sizes: crate::maintenance::BatchSizes,
+    /// Explicit age at which running jobs may be rescued.
+    pub(crate) rescue_after: Option<Duration>,
+    /// Rescue age in effect, resolved against the job timeout at build time.
+    pub(crate) rescue_after_effective: Duration,
     /// Stuck-job rescuer interval.
     pub(crate) rescuer_interval: Duration,
     /// Retention for inactive queue records.
@@ -91,7 +99,37 @@ impl MaintenanceConfig {
         with_job_cleaner_timeout,
         job_cleaner_timeout
     );
-    maintenance_duration!(rescue_after, with_rescue_after, rescue_after);
+
+    /// Returns the explicitly configured rescue age, if any.
+    ///
+    /// When unset, a client rescues jobs running longer than one hour, or
+    /// than its job timeout plus one hour when a job timeout is configured,
+    /// matching Go's `RescueStuckJobsAfter` default.
+    #[must_use]
+    pub const fn rescue_after(&self) -> Option<Duration> {
+        self.rescue_after
+    }
+
+    /// Sets the age at which running jobs are considered stuck and rescued.
+    /// It must not be shorter than the client's job timeout.
+    #[must_use]
+    pub const fn with_rescue_after(mut self, value: Duration) -> Self {
+        self.rescue_after = Some(value);
+        self
+    }
+
+    /// Overrides bulk maintenance batch sizes. Intended for tests that need
+    /// to exercise multi-batch behavior with small data sets.
+    #[doc(hidden)]
+    #[must_use]
+    pub const fn with_batch_sizes(mut self, default: i64, reduced: i64) -> Self {
+        self.batch_sizes = crate::maintenance::BatchSizes { default, reduced };
+        self
+    }
+
+    pub(crate) const fn effective_rescue_after(&self) -> Duration {
+        self.rescue_after_effective
+    }
     maintenance_duration!(rescuer_interval, with_rescuer_interval, rescuer_interval);
     maintenance_duration!(queue_retention, with_queue_retention, queue_retention);
     maintenance_duration!(
@@ -115,7 +153,9 @@ impl Default for MaintenanceConfig {
             elect_interval: Duration::from_secs(5),
             job_cleaner_interval: Duration::from_secs(30),
             job_cleaner_timeout: Duration::from_secs(30),
-            rescue_after: Duration::from_hours(1),
+            batch_sizes: crate::maintenance::BatchSizes::default(),
+            rescue_after: None,
+            rescue_after_effective: RESCUE_AFTER_DEFAULT,
             rescuer_interval: Duration::from_secs(30),
             queue_retention: Duration::from_hours(24),
             queue_cleaner_interval: Duration::from_hours(1),
@@ -425,7 +465,12 @@ impl ClientBuilder {
                 self.maintenance.job_cleaner_interval,
             ),
             ("job cleaner timeout", self.maintenance.job_cleaner_timeout),
-            ("rescue after", self.maintenance.rescue_after),
+            (
+                "rescue after",
+                self.maintenance
+                    .rescue_after
+                    .unwrap_or(RESCUE_AFTER_DEFAULT),
+            ),
             ("rescuer interval", self.maintenance.rescuer_interval),
             (
                 "queue cleaner interval",
@@ -467,9 +512,23 @@ impl ClientBuilder {
                 "workers must be configured when queues are configured".to_owned(),
             ));
         }
-        for metadata_key in self.pilot.job_cleaner_metadata_exclusions() {
-            validate_metadata_key(metadata_key)?;
+        // Like Go, rescuing jobs before their timeout could run them twice.
+        if let (Some(rescue_after), Some(job_timeout)) =
+            (self.maintenance.rescue_after, self.job_timeout)
+            && rescue_after < job_timeout
+        {
+            return Err(Error::configuration(
+                "rescue after cannot be less than the job timeout".to_owned(),
+            ));
         }
+        let mut maintenance = self.maintenance;
+        maintenance.rescue_after_effective = maintenance.rescue_after.unwrap_or_else(|| {
+            self.job_timeout
+                .filter(|timeout| !timeout.is_zero())
+                .map_or(RESCUE_AFTER_DEFAULT, |timeout| {
+                    timeout + RESCUE_AFTER_DEFAULT
+                })
+        });
 
         let periodic_jobs = PeriodicJobs::from_jobs(self.periodic_jobs)?;
         #[cfg(feature = "postgres")]
@@ -493,7 +552,7 @@ impl ClientBuilder {
                 id: self.id,
                 job_stuck_threshold: self.job_stuck_threshold,
                 job_timeout: self.job_timeout,
-                maintenance: self.maintenance,
+                maintenance,
                 insert_middleware: self.insert_middleware,
                 periodic_jobs,
                 pending_cancellations: Mutex::new(HashMap::new()),

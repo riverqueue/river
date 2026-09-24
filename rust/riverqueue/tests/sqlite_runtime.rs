@@ -1276,7 +1276,7 @@ async fn sqlite_pilot_rescue_selection_and_update_share_a_transaction() {
         .maintenance(
             MaintenanceConfig::default()
                 .with_elect_interval(Duration::from_millis(10))
-                .with_rescue_after(Duration::from_millis(10))
+                .with_rescue_after(Duration::from_mins(1))
                 .with_rescuer_interval(Duration::from_millis(10)),
         )
         .pilot(pilot.clone())
@@ -1332,7 +1332,7 @@ async fn sqlite_pilot_rescue_error_rolls_back_selection_side_effects() {
         .maintenance(
             MaintenanceConfig::default()
                 .with_elect_interval(Duration::from_millis(10))
-                .with_rescue_after(Duration::from_millis(10))
+                .with_rescue_after(Duration::from_mins(1))
                 .with_rescuer_interval(Duration::from_millis(10)),
         )
         .pilot(pilot.clone())
