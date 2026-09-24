@@ -17,7 +17,7 @@ use tokio::sync::{Mutex, oneshot};
 use tokio_util::sync::CancellationToken;
 
 use crate::{
-    Client, Error, Job, JobArgs, JobRow, JobUpdateParams, WorkError,
+    BoxError, Client, Error, Job, JobArgs, JobRow, JobUpdateParams, WorkError,
     database::DatabaseTransactionExecutor,
 };
 
@@ -87,10 +87,12 @@ impl WorkContext {
     /// failed attempt.
     ///
     /// Await steps sequentially. Nested steps are supported, but concurrent
-    /// steps do not define a checkpoint order.
+    /// steps do not define a checkpoint order. A step may fail with any error
+    /// convertible into [`BoxError`], including `anyhow::Error`; it is
+    /// returned as the source of [`Error::ResumableStep`].
     pub async fn resumable_step<F, Fut, E>(&self, name: &str, step: F) -> Result<(), Error>
     where
-        E: StdError + Send + Sync + 'static,
+        E: Into<BoxError>,
         F: FnOnce() -> Fut,
         Fut: Future<Output = Result<(), E>>,
     {
@@ -107,18 +109,20 @@ impl WorkContext {
                 state.completed_step = Some(name.to_owned());
                 Ok(())
             }
-            Err(error) => Err(state.fail_step(name, error)),
+            Err(error) => Err(state.fail_step(name, error.into())),
         }
     }
 
     /// Runs a named resumable step with the last cursor recorded for that step.
+    ///
+    /// Errors are handled as in [`WorkContext::resumable_step`].
     pub async fn resumable_step_with_cursor<T, F, Fut, E>(
         &self,
         name: &str,
         step: F,
     ) -> Result<(), Error>
     where
-        E: StdError + Send + Sync + 'static,
+        E: Into<BoxError>,
         F: FnOnce(T) -> Fut,
         Fut: Future<Output = Result<(), E>>,
         T: Default + DeserializeOwned,
@@ -142,7 +146,7 @@ impl WorkContext {
             Err(error) => {
                 let mut state = self.resumable.lock().await;
                 state.step_name = previous_step_name;
-                return Err(state.fail_step(name, error));
+                return Err(state.fail_step(name, Box::new(error)));
             }
         };
         let result = step(cursor).await;
@@ -154,7 +158,7 @@ impl WorkContext {
                 state.cursors.remove(name);
                 Ok(())
             }
-            Err(error) => Err(state.fail_step(name, error)),
+            Err(error) => Err(state.fail_step(name, error.into())),
         }
     }
 
@@ -429,8 +433,8 @@ impl ResumableState {
         state
     }
 
-    fn fail_step(&mut self, name: &str, error: impl StdError + Send + Sync + 'static) -> Error {
-        let source = WorkError::new(Box::new(error));
+    fn fail_step(&mut self, name: &str, error: BoxError) -> Error {
+        let source = WorkError::new(error);
         self.failure = Some(WorkError::new(Box::new(Error::ResumableStep {
             name: name.to_owned(),
             source: Box::new(source.clone()),
@@ -481,7 +485,16 @@ where
     A: JobArgs,
 {
     /// Worker-specific error type. Errors use River's retry policy.
-    type Error: StdError + Send + Sync + 'static;
+    ///
+    /// Any error convertible into [`BoxError`] works, including concrete
+    /// error types, `Box<dyn Error + Send + Sync>`, and report types such as
+    /// `anyhow::Error` or `eyre::Report`. Hooks and error handlers receive it
+    /// as a [`WorkError`], whose [`source_ref`](WorkError::source_ref) can be
+    /// downcast to a concrete error type. A report type converts into its own
+    /// wrapper, which keeps its message and source chain but can't be
+    /// downcast to the type it wraps; return a concrete error type when an
+    /// extension needs to downcast it.
+    type Error: Into<BoxError>;
 
     /// Overrides the client retry delay for this job. Returning `None` uses the
     /// client policy.
@@ -541,7 +554,7 @@ struct FunctionWorker<F> {
 impl<A, E, F, Fut> Worker<A> for FunctionWorker<F>
 where
     A: JobArgs,
-    E: StdError + Send + Sync + 'static,
+    E: Into<BoxError>,
     F: Fn(WorkContext, Job<A>) -> Fut + Send + Sync + 'static,
     Fut: Future<Output = Result<WorkOutcome, E>> + Send,
 {
@@ -613,7 +626,7 @@ where
         self.worker
             .work(context, job)
             .await
-            .map_err(|error| WorkError::new(Box::new(error)))
+            .map_err(|error| WorkError::new(error.into()))
     }
 }
 
@@ -718,8 +731,10 @@ impl WorkerRegistry {
 
     /// Registers an asynchronous function or closure as a worker.
     ///
-    /// Use [`Worker`] instead when a job kind needs to override its timeout or
-    /// retry schedule.
+    /// The function may return any error convertible into [`BoxError`], such
+    /// as `anyhow::Result<WorkOutcome>`; see [`Worker::Error`]. Use [`Worker`]
+    /// instead when a job kind needs to override its timeout or retry
+    /// schedule.
     ///
     /// # Errors
     ///
@@ -728,7 +743,7 @@ impl WorkerRegistry {
     pub fn register_fn<A, E, F, Fut>(&mut self, function: F) -> Result<&mut Self, Error>
     where
         A: JobArgs,
-        E: StdError + Send + Sync + 'static,
+        E: Into<BoxError>,
         F: Fn(WorkContext, Job<A>) -> Fut + Send + Sync + 'static,
         Fut: Future<Output = Result<WorkOutcome, E>> + Send,
     {
@@ -1068,6 +1083,103 @@ mod tests {
 
         assert!(error.source_ref().is::<serde_json::Error>());
         assert!(timeout_receiver.await.is_err());
+    }
+
+    async fn run_once(workers: &WorkerRegistry, row: &JobRow) -> Result<WorkOutcome, WorkError> {
+        let (timeout_sender, _timeout_receiver) = oneshot::channel();
+        workers
+            .work(
+                WorkContext::new(CancellationToken::new()),
+                row,
+                timeout_sender,
+            )
+            .await
+    }
+
+    async fn anyhow_function_worker(
+        _context: WorkContext,
+        job: Job<FunctionJobArgs>,
+    ) -> anyhow::Result<WorkOutcome> {
+        use anyhow::Context as _;
+
+        if job.args.fail {
+            return Err(std::io::Error::other("disk full")).context("writing report");
+        }
+        Ok(WorkOutcome::Complete)
+    }
+
+    #[tokio::test]
+    async fn register_fn_accepts_anyhow_results() {
+        let mut workers = WorkerRegistry::new();
+        workers.register_fn(anyhow_function_worker).unwrap();
+
+        assert_eq!(
+            run_once(&workers, &job_row(FunctionJobArgs::KIND, false))
+                .await
+                .unwrap(),
+            WorkOutcome::Complete
+        );
+        let error = run_once(&workers, &job_row(FunctionJobArgs::KIND, true))
+            .await
+            .unwrap_err();
+        assert_eq!(error.to_string(), "writing report");
+        // The report's source chain is preserved for inspection.
+        let root = error
+            .source_ref()
+            .source()
+            .and_then(|source| source.downcast_ref::<std::io::Error>())
+            .expect("anyhow context source");
+        assert_eq!(root.to_string(), "disk full");
+    }
+
+    struct BoxedErrorWorker;
+
+    impl Worker<FunctionJobArgs> for BoxedErrorWorker {
+        type Error = BoxError;
+
+        async fn work(
+            &self,
+            _context: WorkContext,
+            _job: Job<FunctionJobArgs>,
+        ) -> Result<WorkOutcome, Self::Error> {
+            tokio::task::yield_now().await;
+            Err(Box::new(FunctionError))
+        }
+    }
+
+    #[tokio::test]
+    async fn boxed_worker_errors_remain_downcastable() {
+        let mut workers = WorkerRegistry::new();
+        workers.register(BoxedErrorWorker).unwrap();
+
+        let error = run_once(&workers, &job_row(FunctionJobArgs::KIND, false))
+            .await
+            .unwrap_err();
+        assert!(error.source_ref().downcast_ref::<FunctionError>().is_some());
+    }
+
+    #[tokio::test]
+    async fn resumable_steps_accept_anyhow_errors() {
+        let context = WorkContext::new(CancellationToken::new());
+        let error = context
+            .resumable_step("first", || async {
+                Err::<(), _>(anyhow::anyhow!("step failed"))
+            })
+            .await
+            .unwrap_err();
+
+        assert!(matches!(&error, Error::ResumableStep { name, .. } if name == "first"));
+        assert_eq!(error.source().unwrap().to_string(), "step failed");
+
+        let context = WorkContext::new(CancellationToken::new());
+        let error = context
+            .resumable_step_with_cursor("second", |_: i64| async {
+                Err::<(), _>(anyhow::anyhow!("cursor step failed"))
+            })
+            .await
+            .unwrap_err();
+        assert!(matches!(&error, Error::ResumableStep { name, .. } if name == "second"));
+        assert_eq!(error.source().unwrap().to_string(), "cursor step failed");
     }
 
     #[test]
