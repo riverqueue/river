@@ -56,7 +56,18 @@ fn completion_events_follow_persisted_state() {
     ];
 
     for (state, requested, expected) in cases {
-        assert_eq!(persisted_completion_event_kind(state, requested), expected);
+        assert_eq!(
+            persisted_completion_event_kind(state, requested),
+            Some(expected)
+        );
+    }
+    // A row moved back to a non-final state by someone else reports nothing
+    // rather than failing the completer.
+    for state in [JobState::Pending, JobState::Running] {
+        assert_eq!(
+            persisted_completion_event_kind(state, JobEventKind::Completed),
+            None
+        );
     }
 }
 
@@ -185,4 +196,31 @@ fn retry_delay_is_seeded_bounded_and_capped() {
         default_retry_delay(&retry_row(309), now, 123),
         Duration::from_nanos(i64::MAX as u64)
     );
+}
+
+#[tokio::test]
+async fn completion_retries_recover_from_a_transient_error() {
+    let attempts = AtomicU64::new(0);
+    let result = with_completion_retries("test completion", || async {
+        if attempts.fetch_add(1, Ordering::SeqCst) == 0 {
+            Err(Error::from(sqlx::Error::PoolTimedOut))
+        } else {
+            Ok("persisted")
+        }
+    })
+    .await;
+    assert_eq!(result.unwrap(), "persisted");
+    assert_eq!(attempts.load(Ordering::SeqCst), 2);
+}
+
+#[tokio::test]
+async fn completion_retries_stop_immediately_for_a_closed_pool() {
+    let attempts = AtomicU64::new(0);
+    let result = with_completion_retries("test completion", || async {
+        attempts.fetch_add(1, Ordering::SeqCst);
+        Err::<(), _>(Error::from(sqlx::Error::PoolClosed))
+    })
+    .await;
+    assert!(result.is_err());
+    assert_eq!(attempts.load(Ordering::SeqCst), 1);
 }

@@ -1,6 +1,7 @@
 //! Database-backed client, insertion, and worker runtime.
 
 mod attempts;
+mod backoff;
 mod builder;
 mod completer;
 mod executor;
@@ -23,8 +24,8 @@ pub(crate) use self::record::{UndecodableJob, saturating_i16};
 pub use self::run::RunHandle;
 #[allow(clippy::wildcard_imports, unused_imports)]
 use self::{
-    attempts::*, builder::*, completer::*, executor::*, extension::*, insert::*, notifier::*,
-    producer::*, run::*, validate::*,
+    attempts::*, backoff::*, builder::*, completer::*, executor::*, extension::*, insert::*,
+    notifier::*, producer::*, run::*, validate::*,
 };
 pub(crate) use self::{
     executor::default_retry_delay, notifier::RuntimeNotification, validate::validate_queue,

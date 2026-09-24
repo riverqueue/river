@@ -24,6 +24,7 @@ async-trait = "0.1.92"
 base64 = "0.22.1"
 chrono = { version = "0.4.45", features = ["serde"] }
 cron = "0.17.0"
+futures-util = { version = "0.3.34", default-features = false, features = ["std"] }
 proc-macro2 = "1.0.107"
 quote = "1.0.47"
 serde = { version = "1.0.229", features = ["derive"] }

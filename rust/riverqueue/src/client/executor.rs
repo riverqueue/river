@@ -367,7 +367,7 @@ pub(super) async fn persist_result(
                 JobState::Completed,
                 Some(now),
                 None,
-                row.attempt,
+                None,
                 None,
                 metadata_updates,
                 JobEventKind::Completed,
@@ -376,7 +376,7 @@ pub(super) async fn persist_result(
                 JobState::Cancelled,
                 Some(now),
                 None,
-                row.attempt,
+                None,
                 Some(AttemptError {
                     at: row.attempted_at.unwrap_or(now),
                     attempt: row.attempt,
@@ -390,7 +390,7 @@ pub(super) async fn persist_result(
                 JobState::Discarded,
                 Some(now),
                 None,
-                row.attempt,
+                None,
                 Some(AttemptError {
                     at: row.attempted_at.unwrap_or(now),
                     attempt: row.attempt,
@@ -421,7 +421,7 @@ pub(super) async fn persist_result(
                     state,
                     None,
                     Some(scheduled_at),
-                    row.attempt - 1,
+                    Some(row.attempt - 1),
                     None,
                     metadata,
                     JobEventKind::Snoozed,
@@ -449,7 +449,7 @@ pub(super) async fn persist_result(
                         JobState::Cancelled,
                         Some(now),
                         None,
-                        row.attempt,
+                        None,
                         Some(attempt_error),
                         metadata_updates,
                         JobEventKind::Cancelled,
@@ -459,7 +459,7 @@ pub(super) async fn persist_result(
                         JobState::Discarded,
                         Some(now),
                         None,
-                        row.attempt,
+                        None,
                         Some(attempt_error),
                         metadata_updates,
                         JobEventKind::Failed,
@@ -489,7 +489,7 @@ pub(super) async fn persist_result(
                         state,
                         None,
                         Some(scheduled_at),
-                        row.attempt,
+                        None,
                         Some(attempt_error),
                         metadata_updates,
                         JobEventKind::Failed,
@@ -508,7 +508,7 @@ pub(super) async fn persist_result(
             attempt = CASE WHEN state = 'running' \
                                 AND NOT ($7::text IN ('available', 'retryable', 'scheduled') \
                                     AND metadata ? 'cancel_attempted_at') \
-                           THEN $2 ELSE attempt END, \
+                           THEN coalesce($2, attempt) ELSE attempt END, \
             errors = CASE WHEN state != 'running' OR $3::jsonb IS NULL THEN errors ELSE array_append(coalesce(errors, '{{}}'), $3::jsonb) END, \
             finalized_at = CASE WHEN state != 'running' THEN finalized_at \
                                 WHEN $7::text IN ('available', 'retryable', 'scheduled') AND metadata ? 'cancel_attempted_at' \
@@ -525,16 +525,12 @@ pub(super) async fn persist_result(
          RETURNING {}, false AS unique_skipped_as_duplicate",
         job_projection("job")
     );
-    let error_json = attempt_error
-        .as_ref()
-        .map(serde_json::to_value)
-        .transpose()?;
     if !inner.pilot.intercepts_completion() {
         completion_sender
             .send(CompletionUpdate {
                 attempt,
                 cancellation: completion.cancellation.clone(),
-                error_json,
+                error: attempt_error,
                 event_kind,
                 finalized_at,
                 job_id: row.id,
@@ -573,7 +569,7 @@ pub(super) async fn persist_result(
                     let updated = crate::database::sqlite::complete(
                         &mut transaction,
                         &crate::database::sqlite::CompleteJob {
-                            attempt: Some(attempt),
+                            attempt,
                             error: attempt_error.as_ref(),
                             finalized_at,
                             id: row.id,
@@ -612,10 +608,10 @@ pub(super) async fn persist_result(
             );
             return Ok(PersistResult::Finished(None));
         };
-        let event_kind = persisted_completion_event_kind(row.state, event_kind);
-        return Ok(PersistResult::Finished(Some(Box::new(Event::job(
-            event_kind, row,
-        )))));
+        return Ok(PersistResult::Finished(
+            persisted_completion_event_kind(row.state, event_kind)
+                .map(|event_kind| Box::new(Event::job(event_kind, row))),
+        ));
     }
     #[cfg(feature = "postgres")]
     if let Some(pool) = inner.postgres_pool() {
@@ -644,7 +640,7 @@ pub(super) async fn persist_result(
                         &sql,
                         row.id,
                         attempt,
-                        error_json.as_ref(),
+                        attempt_error.as_ref(),
                         finalized_at,
                         &metadata,
                         scheduled_at,
@@ -675,10 +671,10 @@ pub(super) async fn persist_result(
             return Ok(PersistResult::Finished(None));
         };
         let row = record.into_job_row()?;
-        let event_kind = persisted_completion_event_kind(row.state, event_kind);
-        return Ok(PersistResult::Finished(Some(Box::new(Event::job(
-            event_kind, row,
-        )))));
+        return Ok(PersistResult::Finished(
+            persisted_completion_event_kind(row.state, event_kind)
+                .map(|event_kind| Box::new(Event::job(event_kind, row))),
+        ));
     }
     #[allow(unreachable_code)]
     Err(Error::runtime(
@@ -692,8 +688,8 @@ pub(super) async fn persist_completion_update<'executor, E>(
     executor: E,
     sql: &str,
     job_id: i64,
-    attempt: i16,
-    error_json: Option<&Value>,
+    attempt: Option<i16>,
+    attempt_error: Option<&AttemptError>,
     finalized_at: Option<DateTime<Utc>>,
     metadata: &Map<String, Value>,
     scheduled_at: Option<DateTime<Utc>>,
@@ -706,7 +702,7 @@ where
         sqlx::query_as::<_, JobRecord>(AssertSqlSafe(sql.to_owned()))
             .bind(job_id)
             .bind(attempt)
-            .bind(error_json.map(Json))
+            .bind(attempt_error.map(Json))
             .bind(finalized_at)
             .bind(Json(metadata))
             .bind(scheduled_at)
@@ -759,11 +755,9 @@ pub(super) async fn persist_interrupted(
             .map_err(sqlite_backend_error)?;
         }
         transaction.commit().await?;
-        return Ok(updated.map(|row| {
-            Event::job(
-                persisted_completion_event_kind(row.state, JobEventKind::Interrupted),
-                row,
-            )
+        return Ok(updated.and_then(|row| {
+            persisted_completion_event_kind(row.state, JobEventKind::Interrupted)
+                .map(|event_kind| Event::job(event_kind, row))
         }));
     }
     #[cfg(feature = "postgres")]
@@ -791,12 +785,13 @@ pub(super) async fn persist_interrupted(
                     .expect("PostgreSQL completion path requires a PostgreSQL pool"),
             )
             .await?;
-        return Ok(record.map(JobRecord::into_job_row).transpose()?.map(|row| {
-            Event::job(
-                persisted_completion_event_kind(row.state, JobEventKind::Interrupted),
-                row,
-            )
-        }));
+        return Ok(record
+            .map(JobRecord::into_job_row)
+            .transpose()?
+            .and_then(|row| {
+                persisted_completion_event_kind(row.state, JobEventKind::Interrupted)
+                    .map(|event_kind| Event::job(event_kind, row))
+            }));
     }
     #[allow(unreachable_code)]
     Err(Error::runtime(
@@ -840,17 +835,10 @@ pub(super) async fn record_undecodable_job(
         };
         (state, None, Some(scheduled_after(now, delay)))
     };
-    let error_json = match serde_json::to_value(&attempt_error) {
-        Ok(error_json) => error_json,
-        Err(json_error) => {
-            error!(job_id, error = %json_error, "could not encode River attempt error");
-            return;
-        }
-    };
     let update = CompletionUpdate {
-        attempt,
+        attempt: None,
         cancellation: CancellationToken::new(),
-        error_json: Some(error_json),
+        error: Some(attempt_error),
         event_kind: JobEventKind::Failed,
         finalized_at,
         job_id,

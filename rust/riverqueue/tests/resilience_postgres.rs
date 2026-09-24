@@ -9,7 +9,10 @@
 use std::{
     convert::Infallible,
     future::Future,
-    sync::atomic::{AtomicUsize, Ordering},
+    sync::{
+        Arc,
+        atomic::{AtomicUsize, Ordering},
+    },
     time::Duration,
 };
 
@@ -21,10 +24,45 @@ use riverqueue::{
 use riverqueue_migrate::PostgresMigrator;
 use serde::{Deserialize, Serialize};
 use sqlx::{AssertSqlSafe, PgPool};
+use tokio::sync::Semaphore;
 
 #[derive(Clone, Debug, Deserialize, JobArgs, Serialize)]
 #[river(kind = "rust_postgres_resilience")]
 struct ResilienceArgs {}
+
+#[derive(Clone, Debug, Deserialize, JobArgs, Serialize)]
+#[river(kind = "rust_postgres_resilience_gated")]
+struct GatedArgs {}
+
+/// Lets a test hold a gated job inside its worker until released.
+#[derive(Clone)]
+struct Gate {
+    release: Arc<Semaphore>,
+    started: Arc<Semaphore>,
+}
+
+impl Default for Gate {
+    fn default() -> Self {
+        Self {
+            release: Arc::new(Semaphore::new(0)),
+            started: Arc::new(Semaphore::new(0)),
+        }
+    }
+}
+
+impl Gate {
+    async fn wait_started(&self) {
+        tokio::time::timeout(Duration::from_secs(10), self.started.acquire())
+            .await
+            .expect("gated job did not start")
+            .unwrap()
+            .forget();
+    }
+
+    fn release(&self) {
+        self.release.add_permits(1);
+    }
+}
 
 fn database_url() -> String {
     std::env::var("RIVER_RUST_DATABASE_URL")
@@ -75,6 +113,17 @@ impl TestSchema {
             .unwrap();
     }
 
+    async fn job_attempt(&self, id: i64) -> i16 {
+        sqlx::query_scalar(AssertSqlSafe(format!(
+            "SELECT attempt FROM {} WHERE id = $1",
+            self.table()
+        )))
+        .bind(id)
+        .fetch_one(&self.pool)
+        .await
+        .unwrap()
+    }
+
     async fn job_state(&self, id: i64) -> String {
         sqlx::query_scalar(AssertSqlSafe(format!(
             "SELECT state::text FROM {} WHERE id = $1",
@@ -94,10 +143,25 @@ impl TestSchema {
 }
 
 fn completing_workers() -> WorkerRegistry {
+    gated_workers(&Gate::default())
+}
+
+fn gated_workers(gate: &Gate) -> WorkerRegistry {
     let mut workers = WorkerRegistry::new();
     workers
         .register_fn(|_context: WorkContext, _job: Job<ResilienceArgs>| async {
             Ok::<_, Infallible>(WorkOutcome::Complete)
+        })
+        .unwrap();
+    let gate = gate.clone();
+    workers
+        .register_fn(move |_context: WorkContext, _job: Job<GatedArgs>| {
+            let gate = gate.clone();
+            async move {
+                gate.started.add_permits(1);
+                gate.release.acquire().await.unwrap().forget();
+                Ok::<_, Infallible>(WorkOutcome::Complete)
+            }
         })
         .unwrap();
     workers
@@ -204,6 +268,170 @@ async fn claimed_rows_decode_individually_and_leniently() {
             .starts_with("River could not decode the job row"),
         "{errors:?}"
     );
+
+    schema.drop().await;
+}
+
+fn gated_client(schema: &TestSchema, id: &str, gate: &Gate) -> Client {
+    Client::builder(schema.database())
+        .id(id)
+        .without_notifications()
+        .workers(gated_workers(gate))
+        .queue("default", fast_queue())
+        .build()
+        .unwrap()
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn completion_retries_a_transient_database_error() {
+    let schema = TestSchema::new("retry").await;
+    // Fail the first running-to-completed transition with a serialization
+    // failure. A sequence records the injection outside the aborted statement.
+    schema
+        .execute(format!(
+            "CREATE SEQUENCE {name}.completion_fault; \
+             CREATE FUNCTION {name}.fail_completion_once() RETURNS trigger \
+             LANGUAGE plpgsql AS $$ BEGIN \
+                 IF OLD.state = 'running' AND NEW.state = 'completed' \
+                    AND nextval('{name}.completion_fault') = 1 THEN \
+                     RAISE EXCEPTION 'injected completion failure' USING ERRCODE = '40001'; \
+                 END IF; \
+                 RETURN NEW; \
+             END $$; \
+             CREATE TRIGGER fail_completion_once BEFORE UPDATE ON {name}.river_job \
+             FOR EACH ROW EXECUTE FUNCTION {name}.fail_completion_once()",
+            name = schema.name
+        ))
+        .await;
+    let client = gated_client(&schema, "postgres-resilience-retry", &Gate::default());
+    let job = client.insert(ResilienceArgs {}).await.unwrap();
+
+    let run = client.start().unwrap();
+    wait_until(
+        Duration::from_secs(10),
+        "completion after retry",
+        || async { schema.job_state(job.job.row.id).await == "completed" },
+    )
+    .await;
+    run.shutdown().await.unwrap();
+
+    let injected: i64 = sqlx::query_scalar(AssertSqlSafe(format!(
+        "SELECT last_value FROM {}.completion_fault",
+        schema.name
+    )))
+    .fetch_one(&schema.pool)
+    .await
+    .unwrap();
+    assert!(injected >= 2, "the injected failure never fired");
+    let job = client.job_get(job.job.row.id).await.unwrap();
+    assert_eq!(job.attempt, 1);
+    assert!(job.errors.is_empty());
+
+    schema.drop().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn completion_waits_for_a_row_lock() {
+    let schema = TestSchema::new("lock").await;
+    let gate = Gate::default();
+    let client = gated_client(&schema, "postgres-resilience-lock", &gate);
+    let job = client.insert(GatedArgs {}).await.unwrap();
+
+    let run = client.start().unwrap();
+    gate.wait_started().await;
+    let mut locker = schema.pool.begin().await.unwrap();
+    sqlx::query(AssertSqlSafe(format!(
+        "SELECT 1 FROM {} WHERE id = $1 FOR UPDATE",
+        schema.table()
+    )))
+    .bind(job.job.row.id)
+    .execute(&mut *locker)
+    .await
+    .unwrap();
+    gate.release();
+    wait_until(
+        Duration::from_secs(10),
+        "completion to wait on the lock",
+        || async {
+            let waiting: i64 = sqlx::query_scalar(
+                "SELECT count(*) FROM pg_locks WHERE NOT granted AND locktype = 'transactionid'",
+            )
+            .fetch_one(&schema.pool)
+            .await
+            .unwrap();
+            waiting > 0
+        },
+    )
+    .await;
+    locker.commit().await.unwrap();
+    wait_until(
+        Duration::from_secs(10),
+        "completion after unlock",
+        || async { schema.job_state(job.job.row.id).await == "completed" },
+    )
+    .await;
+    run.shutdown().await.unwrap();
+
+    schema.drop().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn completion_leaves_rows_moved_out_of_running_and_keeps_working() {
+    let schema = TestSchema::new("moved").await;
+    let gate = Gate::default();
+    let client = gated_client(&schema, "postgres-resilience-moved", &gate);
+    let pending = client.insert(GatedArgs {}).await.unwrap();
+
+    let run = client.start().unwrap();
+    gate.wait_started().await;
+    // An operator or extension moves the running job back to `pending`.
+    schema
+        .execute(format!(
+            "UPDATE {} SET state = 'pending' WHERE id = {}",
+            schema.table(),
+            pending.job.row.id
+        ))
+        .await;
+    gate.release();
+    let later = client.insert(ResilienceArgs {}).await.unwrap();
+    wait_until(
+        Duration::from_secs(10),
+        "a later job to complete",
+        || async { schema.job_state(later.job.row.id).await == "completed" },
+    )
+    .await;
+    run.shutdown().await.unwrap();
+
+    assert_eq!(schema.job_state(pending.job.row.id).await, "pending");
+
+    schema.drop().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn completion_does_not_rewrite_a_newer_attempt_number() {
+    let schema = TestSchema::new("attempt").await;
+    let gate = Gate::default();
+    let client = gated_client(&schema, "postgres-resilience-attempt", &gate);
+    let job = client.insert(GatedArgs {}).await.unwrap();
+
+    let run = client.start().unwrap();
+    gate.wait_started().await;
+    // Another client rescued and refetched the job while this attempt ran.
+    schema
+        .execute(format!(
+            "UPDATE {} SET attempt = 5 WHERE id = {}",
+            schema.table(),
+            job.job.row.id
+        ))
+        .await;
+    gate.release();
+    wait_until(Duration::from_secs(10), "stale completion", || async {
+        schema.job_state(job.job.row.id).await == "completed"
+    })
+    .await;
+    run.shutdown().await.unwrap();
+
+    assert_eq!(schema.job_attempt(job.job.row.id).await, 5);
 
     schema.drop().await;
 }
