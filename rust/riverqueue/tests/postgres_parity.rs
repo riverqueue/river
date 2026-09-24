@@ -5,7 +5,13 @@
 
 mod support;
 
-use riverqueue::{Client, Error, database::PostgresDatabase};
+use std::{convert::Infallible, time::Duration};
+
+use riverqueue::{
+    Client, Error, Job, JobArgs, JobState, QueueConfig, WorkContext, WorkOutcome, WorkerRegistry,
+    database::PostgresDatabase,
+};
+use serde::{Deserialize, Serialize};
 
 use support::PostgresSchema;
 
@@ -190,5 +196,59 @@ async fn job_list_single_finalized_state_by_time() {
     let both = client.job_list(&params).await.unwrap();
     assert_eq!(both.len(), 4);
 
+    database.cleanup().await;
+}
+
+#[derive(Clone, Debug, Deserialize, JobArgs, Serialize)]
+#[river(kind = "parity_noop")]
+struct NoopArgs {}
+
+fn noop_workers() -> WorkerRegistry {
+    let mut workers = WorkerRegistry::new();
+    workers
+        .register_fn(|_context: WorkContext, _job: Job<NoopArgs>| async {
+            Ok::<_, Infallible>(WorkOutcome::Complete)
+        })
+        .unwrap();
+    workers
+}
+
+async fn wait_for_job_state(client: &Client, id: i64, state: JobState) -> riverqueue::JobRow {
+    tokio::time::timeout(Duration::from_secs(10), async {
+        loop {
+            let row = client.job_get(id).await.unwrap();
+            if row.state == state {
+                return row;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .unwrap_or_else(|_| panic!("job {id} did not reach {state:?}"))
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn schema_names_are_quoted_like_go() {
+    // Go quotes any schema with `SafeIdentifier`; a hyphenated mixed-case
+    // schema must migrate, notify, elect, and work jobs from Rust.
+    let database = PostgresSchema::new("Rpp-Mixed-Schema").await;
+    assert!(database.schema.as_deref().unwrap().contains('-'));
+    let client = Client::builder(
+        PostgresDatabase::new(database.pool.clone()).schema(database.schema.clone()),
+    )
+    .queue(
+        "default",
+        QueueConfig::new(1).with_fetch_poll_interval(Duration::from_secs(60)),
+    )
+    .workers(noop_workers())
+    .build()
+    .unwrap();
+    let mut handle = client.start().unwrap();
+    handle.wait_ready().await.unwrap();
+
+    let inserted = client.insert(NoopArgs {}).await.unwrap();
+    wait_for_job_state(&client, inserted.job.row.id, JobState::Completed).await;
+
+    handle.shutdown().await.unwrap();
     database.cleanup().await;
 }
