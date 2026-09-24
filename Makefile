@@ -99,7 +99,7 @@ test/rust/postgres: ## Run all Rust tests, including PostgreSQL integration test
 
 .PHONY: test/conformance
 test/conformance: ## Run Go and configured candidate conformance (requires database URL)
-	go test -tags riverconformance ./conformance/harness -run '^Test(Mixed|Resilience)Conformance$$' -count=1
+	go test -tags riverconformance ./conformance/harness -run '^Test(Maintenance|Mixed|Resilience)Conformance$$' -count=1
 
 .PHONY: test/conformance/sqlite
 test/conformance/sqlite: ## Run candidate-neutral SQLite storage and runtime conformance
