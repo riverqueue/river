@@ -4,13 +4,10 @@
 
 use std::fmt;
 
-#[cfg(feature = "postgres")]
-use sqlx::{PgConnection, PgPool};
-#[cfg(feature = "sqlite")]
-use sqlx::{SqliteConnection, SqlitePool};
-
 #[cfg(feature = "sqlite")]
 use super::SqliteDatabase;
+use crate::__private::DatabaseConnection;
+
 use super::{
     DatabaseExecutor, DatabaseKind, DatabaseMismatch, DatabasePool, DatabaseTransactionExecutor,
     IntoDatabase, SchemaName, into_database, private,
@@ -44,6 +41,19 @@ impl Database {
             DatabaseInner::Postgres(_) => DatabaseKind::Postgres,
             #[cfg(feature = "sqlite")]
             DatabaseInner::Sqlite(_) => DatabaseKind::Sqlite,
+        }
+    }
+
+    /// Whether the backend delivers notifications to listeners when a
+    /// transaction commits, like Go's `SupportsListener`. SQLite clients poll
+    /// a notification outbox instead, so operations River commits itself also
+    /// wake the local client directly.
+    pub(crate) const fn supports_listener(&self) -> bool {
+        match &self.inner {
+            #[cfg(feature = "postgres")]
+            DatabaseInner::Postgres(_) => true,
+            #[cfg(feature = "sqlite")]
+            DatabaseInner::Sqlite(_) => false,
         }
     }
 
@@ -84,12 +94,7 @@ impl Database {
         E: DatabaseExecutor<'executor>,
     {
         let executor = private::DatabaseExecutorSealed::erase(executor);
-        if self.kind() != executor.kind() {
-            return Err(DatabaseMismatch {
-                actual: executor.kind(),
-                expected: self.kind(),
-            });
-        }
+        self.check_kind(executor.kind())?;
         Ok(executor)
     }
 
@@ -102,10 +107,33 @@ impl Database {
     where
         E: DatabaseTransactionExecutor<'executor>,
     {
-        let executor = self.executor(transaction)?;
         Ok(ErasedTransaction {
-            inner: executor.into_inner(),
+            connection: self.connection(transaction)?,
         })
+    }
+
+    /// Borrows a caller-managed transaction's connection after checking that
+    /// it belongs to this database's backend.
+    pub(crate) fn connection<'executor, E>(
+        &self,
+        transaction: E,
+    ) -> Result<DatabaseConnection<'executor>, DatabaseMismatch>
+    where
+        E: DatabaseTransactionExecutor<'executor>,
+    {
+        let connection = private::DatabaseTransactionExecutorSealed::connection(transaction);
+        self.check_kind(connection.kind())?;
+        Ok(connection)
+    }
+
+    fn check_kind(&self, actual: DatabaseKind) -> Result<(), DatabaseMismatch> {
+        if self.kind() != actual {
+            return Err(DatabaseMismatch {
+                actual,
+                expected: self.kind(),
+            });
+        }
+        Ok(())
     }
 
     /// Returns a backend-specific borrowed pool for internal dispatch.
@@ -154,9 +182,12 @@ impl fmt::Debug for ErasedExecutor<'_> {
 }
 
 /// Transaction-preserving exact-version executor erasure.
+///
+/// It holds only a transaction's connection, so an erased transaction can
+/// never stand in for a pool.
 #[doc(hidden)]
 pub struct ErasedTransaction<'executor> {
-    pub(super) inner: ExecutorInner<'executor>,
+    pub(super) connection: DatabaseConnection<'executor>,
 }
 
 impl fmt::Debug for ErasedTransaction<'_> {
@@ -170,21 +201,8 @@ impl fmt::Debug for ErasedTransaction<'_> {
 impl ErasedTransaction<'_> {
     /// Borrows the backend connection for exact-version SQL while retaining
     /// the marker needed to call River's transaction-only methods later.
-    pub fn connection(&mut self) -> crate::__private::DatabaseConnection<'_> {
-        match &mut self.inner {
-            #[cfg(feature = "postgres")]
-            ExecutorInner::PostgresConnection(connection) => {
-                crate::__private::DatabaseConnection::Postgres(connection)
-            }
-            #[cfg(feature = "sqlite")]
-            ExecutorInner::SqliteConnection(connection) => {
-                crate::__private::DatabaseConnection::Sqlite(connection)
-            }
-            #[cfg(feature = "postgres")]
-            ExecutorInner::PostgresPool(_) => unreachable!("transactions cannot contain pools"),
-            #[cfg(feature = "sqlite")]
-            ExecutorInner::SqlitePool(_) => unreachable!("transactions cannot contain pools"),
-        }
+    pub fn connection(&mut self) -> DatabaseConnection<'_> {
+        self.connection.reborrow()
     }
 }
 
@@ -192,20 +210,10 @@ impl<'executor> ErasedExecutor<'executor> {
     /// Converts a connection-backed executor for an exact-version extension.
     /// Pool-backed executors return `None`.
     #[must_use]
-    pub fn into_connection(self) -> Option<crate::__private::DatabaseConnection<'executor>> {
+    pub fn into_connection(self) -> Option<DatabaseConnection<'executor>> {
         match self.inner {
-            #[cfg(feature = "postgres")]
-            ExecutorInner::PostgresConnection(connection) => {
-                Some(crate::__private::DatabaseConnection::Postgres(connection))
-            }
-            #[cfg(feature = "postgres")]
-            ExecutorInner::PostgresPool(_) => None,
-            #[cfg(feature = "sqlite")]
-            ExecutorInner::SqliteConnection(connection) => {
-                Some(crate::__private::DatabaseConnection::Sqlite(connection))
-            }
-            #[cfg(feature = "sqlite")]
-            ExecutorInner::SqlitePool(_) => None,
+            ExecutorInner::Connection(connection) => Some(connection),
+            ExecutorInner::Pool(_) => None,
         }
     }
 
@@ -213,37 +221,15 @@ impl<'executor> ErasedExecutor<'executor> {
     #[must_use]
     pub const fn kind(&self) -> DatabaseKind {
         match &self.inner {
-            #[cfg(feature = "postgres")]
-            ExecutorInner::PostgresConnection(_) | ExecutorInner::PostgresPool(_) => {
-                DatabaseKind::Postgres
-            }
-            #[cfg(feature = "sqlite")]
-            ExecutorInner::SqliteConnection(_) | ExecutorInner::SqlitePool(_) => {
-                DatabaseKind::Sqlite
-            }
+            ExecutorInner::Connection(connection) => connection.kind(),
+            ExecutorInner::Pool(kind) => *kind,
         }
-    }
-
-    pub(crate) fn into_inner(self) -> ExecutorInner<'executor> {
-        self.inner
     }
 }
 
+/// What an erased executor borrows. A pool is recorded only by its backend:
+/// River never runs an extension's statements on a pool it did not open.
 pub(crate) enum ExecutorInner<'executor> {
-    #[cfg(feature = "postgres")]
-    PostgresConnection(&'executor mut PgConnection),
-    #[cfg(feature = "postgres")]
-    #[allow(
-        dead_code,
-        reason = "transactional operations reject pools without reading them"
-    )]
-    PostgresPool(&'executor PgPool),
-    #[cfg(feature = "sqlite")]
-    SqliteConnection(&'executor mut SqliteConnection),
-    #[cfg(feature = "sqlite")]
-    #[allow(
-        dead_code,
-        reason = "transactional operations reject pools without reading them"
-    )]
-    SqlitePool(&'executor SqlitePool),
+    Connection(DatabaseConnection<'executor>),
+    Pool(DatabaseKind),
 }

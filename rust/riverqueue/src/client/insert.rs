@@ -32,34 +32,6 @@ pub(super) enum InsertMode {
     Rows,
 }
 
-/// A transaction connection that insertion writes through.
-pub(super) enum InsertConnection<'c> {
-    #[cfg(feature = "postgres")]
-    Postgres(&'c mut PgConnection),
-    #[cfg(feature = "sqlite")]
-    Sqlite(&'c mut sqlx::SqliteConnection),
-}
-
-impl InsertConnection<'_> {
-    fn reborrow(&mut self) -> InsertConnection<'_> {
-        match self {
-            #[cfg(feature = "postgres")]
-            Self::Postgres(connection) => InsertConnection::Postgres(connection),
-            #[cfg(feature = "sqlite")]
-            Self::Sqlite(connection) => InsertConnection::Sqlite(connection),
-        }
-    }
-
-    fn pilot_connection(&mut self) -> PilotDatabaseConnection<'_> {
-        match self {
-            #[cfg(feature = "postgres")]
-            Self::Postgres(connection) => PilotDatabaseConnection::Postgres(connection),
-            #[cfg(feature = "sqlite")]
-            Self::Sqlite(connection) => PilotDatabaseConnection::Sqlite(connection),
-        }
-    }
-}
-
 /// One job of a homogeneous [`Client::insert_many`] batch: arguments plus
 /// options that override the job type's defaults.
 ///
@@ -87,36 +59,6 @@ impl<A: JobArgs> From<A> for InsertManyItem<A> {
 impl<A: JobArgs> From<(A, InsertOpts)> for InsertManyItem<A> {
     fn from((args, opts): (A, InsertOpts)) -> Self {
         Self::new(args, opts)
-    }
-}
-
-/// Where an insertion request writes.
-enum Target<'a> {
-    /// The client's own pool, in a transaction River commits.
-    Client,
-    /// A caller-managed transaction.
-    Transaction(Result<ExecutorInner<'a>, Error>),
-}
-
-impl<'a> Target<'a> {
-    fn transaction<E>(client: &Client, executor: E) -> Self
-    where
-        E: DatabaseTransactionExecutor<'a>,
-    {
-        Self::Transaction(
-            client
-                .inner
-                .erase_executor(executor)
-                .map(crate::database::ErasedExecutor::into_inner)
-                .map_err(Error::from),
-        )
-    }
-
-    fn into_executor(self) -> Result<Option<ExecutorInner<'a>>, Error> {
-        match self {
-            Self::Client => Ok(None),
-            Self::Transaction(executor) => executor.map(Some),
-        }
     }
 }
 
@@ -655,7 +597,7 @@ impl Client {
     /// Runs an insertion that returns rows, decoding them with decode hooks.
     pub(super) async fn run_insert(
         &self,
-        executor: Option<ExecutorInner<'_>>,
+        executor: Option<PilotDatabaseConnection<'_>>,
         jobs: Vec<InsertContext>,
         mode: InsertMode,
     ) -> Result<Vec<InsertedJob>, Error> {
@@ -678,7 +620,7 @@ impl Client {
     /// Runs the insertion pipeline, returning what middleware returned.
     pub(super) async fn run_insert_inserted(
         &self,
-        executor: Option<ExecutorInner<'_>>,
+        executor: Option<PilotDatabaseConnection<'_>>,
         jobs: Vec<InsertContext>,
         mode: InsertMode,
     ) -> Result<InsertedJobs, Error> {
@@ -693,7 +635,7 @@ impl Client {
                     let mut transaction = crate::database::begin_postgres(pool).await?;
                     let inserted = self
                         .insert_on_connection(
-                            InsertConnection::Postgres(&mut transaction),
+                            PilotDatabaseConnection::Postgres(&mut transaction),
                             jobs,
                             mode,
                         )
@@ -706,7 +648,7 @@ impl Client {
                     let mut transaction = crate::database::begin_sqlite_write(pool).await?;
                     let inserted = self
                         .insert_on_connection(
-                            InsertConnection::Sqlite(&mut transaction),
+                            PilotDatabaseConnection::Sqlite(&mut transaction),
                             jobs,
                             mode,
                         )
@@ -720,37 +662,49 @@ impl Client {
         };
         match executor {
             #[cfg(feature = "postgres")]
-            ExecutorInner::PostgresConnection(connection) => {
+            PilotDatabaseConnection::Postgres(connection) => {
                 if !atomic {
                     return self
-                        .insert_on_connection(InsertConnection::Postgres(connection), jobs, mode)
+                        .insert_on_connection(
+                            PilotDatabaseConnection::Postgres(connection),
+                            jobs,
+                            mode,
+                        )
                         .await;
                 }
                 let savepoint = self.batch_savepoint(mode);
                 begin_postgres_savepoint(connection, &savepoint).await?;
                 let result = self
-                    .insert_on_connection(InsertConnection::Postgres(&mut *connection), jobs, mode)
+                    .insert_on_connection(
+                        PilotDatabaseConnection::Postgres(&mut *connection),
+                        jobs,
+                        mode,
+                    )
                     .await;
                 finish_postgres_savepoint(connection, &savepoint, result).await
             }
             #[cfg(feature = "sqlite")]
-            ExecutorInner::SqliteConnection(connection) => {
+            PilotDatabaseConnection::Sqlite(connection) => {
                 if !atomic {
                     return self
-                        .insert_on_connection(InsertConnection::Sqlite(connection), jobs, mode)
+                        .insert_on_connection(
+                            PilotDatabaseConnection::Sqlite(connection),
+                            jobs,
+                            mode,
+                        )
                         .await;
                 }
                 let savepoint = self.batch_savepoint(mode);
                 begin_sqlite_savepoint(connection, &savepoint).await?;
                 let result = self
-                    .insert_on_connection(InsertConnection::Sqlite(&mut *connection), jobs, mode)
+                    .insert_on_connection(
+                        PilotDatabaseConnection::Sqlite(&mut *connection),
+                        jobs,
+                        mode,
+                    )
                     .await;
                 finish_sqlite_savepoint(connection, &savepoint, result).await
             }
-            #[cfg(feature = "postgres")]
-            ExecutorInner::PostgresPool(_) => Err(transaction_pool_error("insertion")),
-            #[cfg(feature = "sqlite")]
-            ExecutorInner::SqlitePool(_) => Err(transaction_pool_error("insertion")),
         }
     }
 
@@ -785,7 +739,7 @@ impl Client {
     /// Runs insertion middleware around persistence of `jobs`.
     async fn insert_on_connection<'c>(
         &'c self,
-        connection: InsertConnection<'c>,
+        connection: PilotDatabaseConnection<'c>,
         jobs: Vec<InsertContext>,
         mode: InsertMode,
     ) -> Result<InsertedJobs, Error> {
@@ -800,7 +754,7 @@ impl Client {
     /// jobs, and notifies queues that gained available jobs.
     async fn persist_jobs(
         &self,
-        mut connection: InsertConnection<'_>,
+        mut connection: PilotDatabaseConnection<'_>,
         mut jobs: Vec<InsertContext>,
         mode: InsertMode,
     ) -> Result<InsertedJobs, Error> {
@@ -823,7 +777,7 @@ impl Client {
                 self.inner
                     .pilot
                     .before_job_insert(
-                        connection.pilot_connection(),
+                        connection.reborrow(),
                         &mut PilotJobInsertParams {
                             encoded_args,
                             kind,
@@ -852,7 +806,7 @@ impl Client {
         #[cfg(feature = "postgres")]
         if mode == InsertMode::Fast
             && !intercepts
-            && let InsertConnection::Postgres(connection) = &mut connection
+            && let PilotDatabaseConnection::Postgres(connection) = &mut connection
         {
             let count = self.copy_jobs(connection, &jobs).await?;
             let queues = jobs
@@ -860,7 +814,7 @@ impl Client {
                 .filter(|job| job.state == JobState::Available)
                 .map(|job| job.opts.queue.as_str())
                 .collect::<std::collections::BTreeSet<_>>();
-            self.notify_insert(InsertConnection::Postgres(connection), queues)
+            self.notify_insert(PilotDatabaseConnection::Postgres(connection), queues)
                 .await?;
             return Ok(InsertedJobs::Count(count));
         }
@@ -895,7 +849,7 @@ impl Client {
     /// Runs the extension's post-insert hook on the rows an insertion wrote.
     async fn after_jobs_inserted(
         &self,
-        mut connection: InsertConnection<'_>,
+        mut connection: PilotDatabaseConnection<'_>,
         rows: &[InsertedJob],
     ) -> Result<(), Error> {
         let inserted = rows
@@ -909,7 +863,7 @@ impl Client {
         self.inner
             .pilot
             .after_jobs_inserted(
-                connection.pilot_connection(),
+                connection.reborrow(),
                 &crate::__private::JobsInsertedParams {
                     database: self.inner.pilot_database_config(),
                     jobs: &inserted,
@@ -926,7 +880,7 @@ impl Client {
     /// transaction so it's delivered only if the jobs commit.
     async fn notify_insert(
         &self,
-        connection: InsertConnection<'_>,
+        connection: PilotDatabaseConnection<'_>,
         queues: std::collections::BTreeSet<&str>,
     ) -> Result<(), Error> {
         if queues.is_empty() {
@@ -934,7 +888,7 @@ impl Client {
         }
         match connection {
             #[cfg(feature = "postgres")]
-            InsertConnection::Postgres(connection) => {
+            PilotDatabaseConnection::Postgres(connection) => {
                 let queues = queues.into_iter().collect::<Vec<_>>();
                 sqlx::query(
                     "SELECT pg_notify(concat(coalesce($1::text, current_schema()), '.', $2::text), json_build_object('queue', queue)::text) \
@@ -947,7 +901,7 @@ impl Client {
                 .await?;
             }
             #[cfg(feature = "sqlite")]
-            InsertConnection::Sqlite(connection) => {
+            PilotDatabaseConnection::Sqlite(connection) => {
                 let payloads = queues
                     .into_iter()
                     .map(|queue| serde_json::json!({ "queue": queue }).to_string())
@@ -970,7 +924,7 @@ impl Client {
     /// Writes one job, returning it or the existing unique job it matched.
     async fn insert_row(
         &self,
-        connection: InsertConnection<'_>,
+        connection: PilotDatabaseConnection<'_>,
         job: InsertContext,
         now: DateTime<Utc>,
     ) -> Result<InsertedJob, Error> {
@@ -986,7 +940,7 @@ impl Client {
         let _ = now;
         match connection {
             #[cfg(feature = "postgres")]
-            InsertConnection::Postgres(connection) => {
+            PilotDatabaseConnection::Postgres(connection) => {
                 let table = self.inner.schema.qualify("river_job");
                 let state_type = self.inner.schema.qualify("river_job_state");
                 let state_function = self.inner.schema.qualify("river_job_state_in_bitmask");
@@ -1026,7 +980,7 @@ impl Client {
                 Ok(InsertedJob::new(record.into_job_row()?, duplicate))
             }
             #[cfg(feature = "sqlite")]
-            InsertConnection::Sqlite(connection) => {
+            PilotDatabaseConnection::Sqlite(connection) => {
                 let nonce = unique_key.as_ref().map(|_| self.unique_insert_nonce());
                 let inserted = crate::database::sqlite::insert(
                     connection,

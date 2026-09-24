@@ -68,6 +68,7 @@ pub(crate) mod erased;
 #[cfg(feature = "sqlite")]
 pub(crate) mod sqlite;
 
+use crate::__private::DatabaseConnection;
 pub(crate) use erased::{
     Database, DatabaseInner, ErasedExecutor, ErasedTransaction, ExecutorInner,
 };
@@ -372,8 +373,8 @@ pub(crate) enum DatabasePool<'pool> {
 
 mod private {
     use super::{
-        Database, DatabaseInner, ErasedExecutor, ErasedTransaction, ExecutorInner, PoolConnection,
-        Transaction,
+        Database, DatabaseConnection, DatabaseInner, DatabaseKind, ErasedExecutor,
+        ErasedTransaction, ExecutorInner, PoolConnection, Transaction,
     };
     #[cfg(feature = "postgres")]
     use super::{PgConnection, PgPool, Postgres, PostgresDatabase};
@@ -388,9 +389,25 @@ mod private {
         fn erase(self) -> ErasedExecutor<'executor>;
     }
 
+    /// A caller-managed transaction. Only transactions implement this, so
+    /// the connection it yields is always inside a transaction River does
+    /// not commit.
     pub trait DatabaseTransactionExecutorSealed<'executor>:
         DatabaseExecutorSealed<'executor>
     {
+        fn connection(self) -> DatabaseConnection<'executor>;
+    }
+
+    const fn connection_executor(connection: DatabaseConnection<'_>) -> ErasedExecutor<'_> {
+        ErasedExecutor {
+            inner: ExecutorInner::Connection(connection),
+        }
+    }
+
+    const fn pool_executor<'executor>(kind: DatabaseKind) -> ErasedExecutor<'executor> {
+        ErasedExecutor {
+            inner: ExecutorInner::Pool(kind),
+        }
     }
 
     impl IntoDatabaseSealed for Database {
@@ -462,36 +479,28 @@ mod private {
     #[cfg(feature = "postgres")]
     impl<'executor> DatabaseExecutorSealed<'executor> for &'executor mut PgConnection {
         fn erase(self) -> ErasedExecutor<'executor> {
-            ErasedExecutor {
-                inner: ExecutorInner::PostgresConnection(self),
-            }
+            connection_executor(DatabaseConnection::Postgres(self))
         }
     }
 
     #[cfg(feature = "postgres")]
     impl<'executor> DatabaseExecutorSealed<'executor> for &'executor mut PoolConnection<Postgres> {
         fn erase(self) -> ErasedExecutor<'executor> {
-            ErasedExecutor {
-                inner: ExecutorInner::PostgresConnection(self.as_mut()),
-            }
+            connection_executor(DatabaseConnection::Postgres(self.as_mut()))
         }
     }
 
     #[cfg(feature = "postgres")]
     impl<'executor> DatabaseExecutorSealed<'executor> for &'executor PgPool {
         fn erase(self) -> ErasedExecutor<'executor> {
-            ErasedExecutor {
-                inner: ExecutorInner::PostgresPool(self),
-            }
+            pool_executor(DatabaseKind::Postgres)
         }
     }
 
     #[cfg(feature = "postgres")]
     impl<'executor> DatabaseExecutorSealed<'executor> for &'executor mut Transaction<'_, Postgres> {
         fn erase(self) -> ErasedExecutor<'executor> {
-            ErasedExecutor {
-                inner: ExecutorInner::PostgresConnection(self.as_mut()),
-            }
+            connection_executor(DatabaseTransactionExecutorSealed::connection(self))
         }
     }
 
@@ -499,41 +508,36 @@ mod private {
     impl<'executor> DatabaseTransactionExecutorSealed<'executor>
         for &'executor mut Transaction<'_, Postgres>
     {
+        fn connection(self) -> DatabaseConnection<'executor> {
+            DatabaseConnection::Postgres(self.as_mut())
+        }
     }
 
     #[cfg(feature = "sqlite")]
     impl<'executor> DatabaseExecutorSealed<'executor> for &'executor mut SqliteConnection {
         fn erase(self) -> ErasedExecutor<'executor> {
-            ErasedExecutor {
-                inner: ExecutorInner::SqliteConnection(self),
-            }
+            connection_executor(DatabaseConnection::Sqlite(self))
         }
     }
 
     #[cfg(feature = "sqlite")]
     impl<'executor> DatabaseExecutorSealed<'executor> for &'executor mut PoolConnection<Sqlite> {
         fn erase(self) -> ErasedExecutor<'executor> {
-            ErasedExecutor {
-                inner: ExecutorInner::SqliteConnection(self.as_mut()),
-            }
+            connection_executor(DatabaseConnection::Sqlite(self.as_mut()))
         }
     }
 
     #[cfg(feature = "sqlite")]
     impl<'executor> DatabaseExecutorSealed<'executor> for &'executor SqlitePool {
         fn erase(self) -> ErasedExecutor<'executor> {
-            ErasedExecutor {
-                inner: ExecutorInner::SqlitePool(self),
-            }
+            pool_executor(DatabaseKind::Sqlite)
         }
     }
 
     #[cfg(feature = "sqlite")]
     impl<'executor> DatabaseExecutorSealed<'executor> for &'executor mut Transaction<'_, Sqlite> {
         fn erase(self) -> ErasedExecutor<'executor> {
-            ErasedExecutor {
-                inner: ExecutorInner::SqliteConnection(self.as_mut()),
-            }
+            connection_executor(DatabaseTransactionExecutorSealed::connection(self))
         }
     }
 
@@ -541,31 +545,23 @@ mod private {
     impl<'executor> DatabaseTransactionExecutorSealed<'executor>
         for &'executor mut Transaction<'_, Sqlite>
     {
+        fn connection(self) -> DatabaseConnection<'executor> {
+            DatabaseConnection::Sqlite(self.as_mut())
+        }
     }
 
     impl<'executor> DatabaseExecutorSealed<'executor> for &'executor mut ErasedTransaction<'_> {
         fn erase(self) -> ErasedExecutor<'executor> {
-            let inner = match &mut self.inner {
-                #[cfg(feature = "postgres")]
-                ExecutorInner::PostgresConnection(connection) => {
-                    ExecutorInner::PostgresConnection(connection)
-                }
-                #[cfg(feature = "sqlite")]
-                ExecutorInner::SqliteConnection(connection) => {
-                    ExecutorInner::SqliteConnection(connection)
-                }
-                #[cfg(feature = "postgres")]
-                ExecutorInner::PostgresPool(_) => unreachable!("transactions cannot contain pools"),
-                #[cfg(feature = "sqlite")]
-                ExecutorInner::SqlitePool(_) => unreachable!("transactions cannot contain pools"),
-            };
-            ErasedExecutor { inner }
+            connection_executor(self.connection())
         }
     }
 
     impl<'executor> DatabaseTransactionExecutorSealed<'executor>
         for &'executor mut ErasedTransaction<'_>
     {
+        fn connection(self) -> DatabaseConnection<'executor> {
+            ErasedTransaction::connection(self)
+        }
     }
 }
 

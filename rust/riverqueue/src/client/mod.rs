@@ -10,6 +10,7 @@ mod insert;
 mod notifier;
 mod producer;
 mod record;
+mod request;
 mod run;
 #[cfg(test)]
 mod tests;
@@ -29,7 +30,7 @@ pub use self::run::{RunHandle, Stopper};
 #[allow(clippy::wildcard_imports, unused_imports)]
 use self::{
     attempts::*, backoff::*, builder::*, completer::*, executor::*, extension::*, insert::*,
-    notifier::*, producer::*, run::*, validate::*,
+    notifier::*, producer::*, request::*, run::*, validate::*,
 };
 pub(crate) use self::{
     completer::after_jobs_set_state, executor::default_retry_delay, notifier::RuntimeNotification,
@@ -86,10 +87,7 @@ use crate::{
     MAX_ATTEMPTS_DEFAULT, Metric, Plugin, QUEUE_NUM_WORKERS_MAX, QueueEventKind, RetryPolicy,
     SchemaName, SubscribeConfig, WorkCancelled, WorkContext, WorkError, WorkMiddleware,
     WorkOutcome, WorkResult, WorkerRegistry, WorkerTimeout,
-    database::{
-        Database, DatabaseExecutor, DatabaseKind, DatabasePool, DatabaseTransactionExecutor,
-        ErasedExecutor, ExecutorInner, IntoDatabase,
-    },
+    database::{Database, DatabaseKind, DatabasePool, DatabaseTransactionExecutor, IntoDatabase},
     periodic::{PeriodicInsert, PeriodicJob, PeriodicJobs},
     unique::build_unique_key_parts,
 };
@@ -140,12 +138,6 @@ pub(crate) struct ClientInner {
 #[cfg(feature = "sqlite")]
 fn sqlite_backend_error(error: crate::database::sqlite::BackendError) -> Error {
     Error::Database(Box::new(error))
-}
-
-fn transaction_pool_error(operation: &'static str) -> Error {
-    Error::configuration(format!(
-        "{operation} requires a caller-managed transaction, not a pool or bare connection"
-    ))
 }
 
 #[cfg(feature = "postgres")]
@@ -202,14 +194,16 @@ async fn finish_sqlite_savepoint<T>(
 }
 
 impl ClientInner {
-    pub(crate) fn erase_executor<'executor, E>(
+    /// Borrows a caller-managed transaction's connection, rejecting a
+    /// transaction from another backend.
+    pub(crate) fn transaction_connection<'executor, E>(
         &self,
-        executor: E,
-    ) -> Result<ErasedExecutor<'executor>, crate::database::DatabaseMismatch>
+        transaction: E,
+    ) -> Result<PilotDatabaseConnection<'executor>, Error>
     where
-        E: DatabaseExecutor<'executor>,
+        E: DatabaseTransactionExecutor<'executor>,
     {
-        self.database.executor(executor)
+        Ok(self.database.connection(transaction)?)
     }
 
     #[cfg(feature = "postgres")]
@@ -506,102 +500,24 @@ impl Client {
 }
 
 impl Client {
-    /// Gets one job by ID.
-    pub async fn job_get(&self, id: i64) -> Result<JobRow, Error> {
-        #[cfg(feature = "sqlite")]
-        if let Some(pool) = self.inner.sqlite_pool() {
-            let mut connection = pool.acquire().await?;
-            return crate::database::sqlite::get(&mut connection, id)
-                .await
-                .map_err(sqlite_backend_error)?
-                .ok_or(Error::NotFound);
-        }
-        #[cfg(feature = "postgres")]
-        let Some(pool) = self.inner.postgres_pool() else {
-            return Err(Error::runtime(
-                "database dispatch selected no supported backend".to_owned(),
-            ));
-        };
-        #[cfg(feature = "postgres")]
-        let table = self.inner.schema.qualify("river_job");
-        #[cfg(feature = "postgres")]
-        let sql = format!(
-            "SELECT {}, false AS unique_skipped_as_duplicate FROM {table} AS job WHERE id = $1 LIMIT 1",
-            job_projection("job")
-        );
-        #[cfg(feature = "postgres")]
-        let record = sqlx::query_as::<_, JobRecord>(AssertSqlSafe(sql))
-            .bind(id)
-            .fetch_optional(pool)
-            .await?
-            .ok_or(Error::NotFound)?;
-        #[cfg(feature = "postgres")]
-        return record.into_job_row();
-        #[allow(unreachable_code)]
-        Err(Error::runtime(
-            "database dispatch selected no supported backend".to_owned(),
-        ))
-    }
-
     /// Cancels a job and returns its current row.
     pub async fn job_cancel(&self, id: i64) -> Result<JobRow, Error> {
-        match self.inner.database.pool() {
-            #[cfg(feature = "postgres")]
-            DatabasePool::Postgres(pool) => {
-                let mut transaction = crate::database::begin_postgres(pool).await?;
-                let row = self.job_cancel_tx(&mut transaction, id).await?;
-                transaction.commit().await?;
-                Ok(row)
-            }
-            #[cfg(feature = "sqlite")]
-            DatabasePool::Sqlite(pool) => {
-                let mut transaction = crate::database::begin_sqlite_write(pool).await?;
-                let now = Utc::now();
-                let updated = crate::database::sqlite::cancel(&mut transaction, id, now)
-                    .await
-                    .map_err(sqlite_backend_error)?;
-                let was_updated = updated.is_some();
-                let row = match updated {
-                    Some(row) => row,
-                    None => crate::database::sqlite::get(&mut transaction, id)
-                        .await
-                        .map_err(sqlite_backend_error)?
-                        .ok_or(Error::NotFound)?,
-                };
-                crate::storage::after_job_cancel_or_retry(
-                    &self.inner,
-                    PilotDatabaseConnection::Sqlite(&mut transaction),
-                    &row,
-                    crate::storage::JobUpdate::Cancel,
-                )
-                .await?;
-                if was_updated {
-                    let payload = serde_json::json!({
-                        "action": "cancel",
-                        "job_id": id,
-                        "queue": row.queue,
-                    })
-                    .to_string();
-                    crate::database::sqlite::notification_insert(
-                        &mut transaction,
-                        &[crate::database::sqlite::NotificationInput {
-                            payload: &payload,
-                            topic: crate::NOTIFICATION_TOPIC_CONTROL,
-                        }],
-                    )
-                    .await
-                    .map_err(sqlite_backend_error)?;
-                }
-                transaction.commit().await?;
-                signal_running_attempt(
-                    &self.inner.running,
-                    &self.inner.pending_cancellations,
-                    &self.inner.fetch_registration_windows,
-                    id,
-                );
-                Ok(row)
-            }
+        let mut session = crate::storage::Session::begin(
+            &self.inner.database,
+            crate::storage::Access::Transaction,
+        )
+        .await?;
+        let row = session.storage(&self.inner).job_cancel(id).await?;
+        session.commit().await?;
+        if !self.inner.database.supports_listener() {
+            signal_running_attempt(
+                &self.inner.running,
+                &self.inner.pending_cancellations,
+                &self.inner.fetch_registration_windows,
+                id,
+            );
         }
+        Ok(row)
     }
 
     /// Cancels a job inside a caller-managed transaction. The notification is
@@ -610,136 +526,29 @@ impl Client {
     where
         E: DatabaseTransactionExecutor<'executor>,
     {
-        #[cfg(feature = "postgres")]
-        let table = self.inner.schema.qualify("river_job");
-        #[cfg(feature = "postgres")]
-        let sql = format!(
-            "WITH locked AS (\
-                SELECT id, queue, state, finalized_at FROM {table} WHERE id = $1 FOR UPDATE\
-             ), notified AS (\
-                SELECT id, pg_notify(concat(coalesce($2::text, current_schema()), '.', $3::text), json_build_object('action', 'cancel', 'job_id', id, 'queue', queue)::text)\
-                FROM locked WHERE state NOT IN ('cancelled', 'completed', 'discarded') AND finalized_at IS NULL\
-             ), updated AS (\
-                UPDATE {table} AS job SET \
-                    state = CASE WHEN state = 'running' THEN state ELSE 'cancelled' END, \
-                    finalized_at = CASE WHEN state = 'running' THEN finalized_at ELSE now() END, \
-                    metadata = jsonb_set(metadata, '{{cancel_attempted_at}}'::text[], to_jsonb($4::text), true) \
-                FROM notified WHERE job.id = notified.id RETURNING job.*\
-             ) \
-             SELECT {}, false AS unique_skipped_as_duplicate FROM updated AS job \
-             UNION ALL \
-             SELECT {}, false AS unique_skipped_as_duplicate FROM {table} AS job \
-             WHERE id = $1 AND NOT EXISTS (SELECT 1 FROM updated) LIMIT 1",
-            job_projection("job"),
-            job_projection("job")
-        );
-        #[cfg(feature = "postgres")]
-        let postgres_query = || {
-            sqlx::query_as::<_, JobRecord>(AssertSqlSafe(sql.clone()))
-                .bind(id)
-                .bind(self.inner.schema.as_deref())
-                .bind(crate::NOTIFICATION_TOPIC_CONTROL)
-                .bind(go_time_json(Utc::now()))
-        };
-        match self
-            .inner
-            .erase_executor(connection)
-            .map_err(Error::from)?
-            .into_inner()
-        {
-            #[cfg(feature = "postgres")]
-            ExecutorInner::PostgresConnection(connection) => {
-                let row = postgres_query()
-                    .fetch_optional(&mut *connection)
-                    .await?
-                    .ok_or(Error::NotFound)?
-                    .into_job_row()?;
-                crate::storage::after_job_cancel_or_retry(
-                    &self.inner,
-                    PilotDatabaseConnection::Postgres(connection),
-                    &row,
-                    crate::storage::JobUpdate::Cancel,
-                )
-                .await?;
-                Ok(row)
-            }
-            #[cfg(feature = "sqlite")]
-            ExecutorInner::SqliteConnection(connection) => {
-                let updated = crate::database::sqlite::cancel(connection, id, Utc::now())
-                    .await
-                    .map_err(sqlite_backend_error)?;
-                let was_updated = updated.is_some();
-                let row = match updated {
-                    Some(row) => row,
-                    None => crate::database::sqlite::get(connection, id)
-                        .await
-                        .map_err(sqlite_backend_error)?
-                        .ok_or(Error::NotFound)?,
-                };
-                crate::storage::after_job_cancel_or_retry(
-                    &self.inner,
-                    PilotDatabaseConnection::Sqlite(&mut *connection),
-                    &row,
-                    crate::storage::JobUpdate::Cancel,
-                )
-                .await?;
-                if was_updated {
-                    let payload = serde_json::json!({
-                        "action": "cancel",
-                        "job_id": id,
-                        "queue": row.queue,
-                    })
-                    .to_string();
-                    crate::database::sqlite::notification_insert(
-                        connection,
-                        &[crate::database::sqlite::NotificationInput {
-                            payload: &payload,
-                            topic: crate::NOTIFICATION_TOPIC_CONTROL,
-                        }],
-                    )
-                    .await
-                    .map_err(sqlite_backend_error)?;
-                }
-                Ok(row)
-            }
-            #[cfg(feature = "postgres")]
-            ExecutorInner::PostgresPool(_) => Err(transaction_pool_error("job_cancel_tx")),
-            #[cfg(feature = "sqlite")]
-            ExecutorInner::SqlitePool(_) => Err(transaction_pool_error("job_cancel_tx")),
-        }
+        let connection = self.inner.transaction_connection(connection)?;
+        crate::storage::Storage::new(&self.inner, connection)
+            .job_cancel(id)
+            .await
     }
 
     /// Requests that the current leader resign after committing an internal
     /// transaction.
     pub async fn request_resign(&self) -> Result<(), Error> {
-        match self.inner.database.pool() {
-            #[cfg(feature = "postgres")]
-            DatabasePool::Postgres(pool) => {
-                let mut transaction = crate::database::begin_postgres(pool).await?;
-                self.request_resign_tx(&mut transaction).await?;
-                transaction.commit().await?;
-                Ok(())
-            }
-            #[cfg(feature = "sqlite")]
-            DatabasePool::Sqlite(pool) => {
-                let mut transaction = crate::database::begin_sqlite_write(pool).await?;
-                crate::database::sqlite::notification_insert(
-                    &mut transaction,
-                    &[crate::database::sqlite::NotificationInput {
-                        payload: r#"{"action":"request_resign"}"#,
-                        topic: crate::NOTIFICATION_TOPIC_LEADERSHIP,
-                    }],
-                )
-                .await
-                .map_err(sqlite_backend_error)?;
-                transaction.commit().await?;
-                let _ = self
-                    .inner
-                    .queue_notifications
-                    .send(RuntimeNotification::LeadershipRequestResign);
-                Ok(())
-            }
+        let mut session = crate::storage::Session::begin(
+            &self.inner.database,
+            crate::storage::Access::Transaction,
+        )
+        .await?;
+        session.storage(&self.inner).leader_request_resign().await?;
+        session.commit().await?;
+        if !self.inner.database.supports_listener() {
+            let _ = self
+                .inner
+                .queue_notifications
+                .send(RuntimeNotification::LeadershipRequestResign);
         }
+        Ok(())
     }
 
     /// Requests leader resignation in a caller-managed transaction.
@@ -747,42 +556,10 @@ impl Client {
     where
         E: DatabaseTransactionExecutor<'executor>,
     {
-        match self
-            .inner
-            .erase_executor(connection)
-            .map_err(Error::from)?
-            .into_inner()
-        {
-            #[cfg(feature = "postgres")]
-            ExecutorInner::PostgresConnection(connection) => {
-                sqlx::query(
-                    "SELECT pg_notify(concat(coalesce($1::text, current_schema()), '.', $2::text), $3::text)",
-                )
-                .bind(self.inner.schema.as_deref())
-                .bind(crate::NOTIFICATION_TOPIC_LEADERSHIP)
-                .bind(r#"{"action":"request_resign"}"#)
-                .execute(connection)
-                .await?;
-                Ok(())
-            }
-            #[cfg(feature = "sqlite")]
-            ExecutorInner::SqliteConnection(connection) => {
-                crate::database::sqlite::notification_insert(
-                    connection,
-                    &[crate::database::sqlite::NotificationInput {
-                        payload: r#"{"action":"request_resign"}"#,
-                        topic: crate::NOTIFICATION_TOPIC_LEADERSHIP,
-                    }],
-                )
-                .await
-                .map_err(sqlite_backend_error)?;
-                Ok(())
-            }
-            #[cfg(feature = "postgres")]
-            ExecutorInner::PostgresPool(_) => Err(transaction_pool_error("request_resign_tx")),
-            #[cfg(feature = "sqlite")]
-            ExecutorInner::SqlitePool(_) => Err(transaction_pool_error("request_resign_tx")),
-        }
+        let connection = self.inner.transaction_connection(connection)?;
+        crate::storage::Storage::new(&self.inner, connection)
+            .leader_request_resign()
+            .await
     }
 }
 
