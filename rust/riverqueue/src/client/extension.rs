@@ -293,6 +293,7 @@ impl ExtensionClient<'_> {
             result,
             context.metadata_updates(),
             error_handler_result,
+            true,
             completion_sender,
         )
         .await

@@ -284,6 +284,31 @@ async fn rescuer_rescues_past_full_batch_of_jobs_with_no_timeout() {
     database.cleanup().await;
 }
 
+#[tokio::test(flavor = "multi_thread")]
+async fn rescuer_rescues_undecodable_stuck_jobs() {
+    let database = TestDatabase::new("rmt_rescue_undecodable").await;
+    let client = database.client().build().unwrap();
+
+    // Like River Go's `JobGetStuck`, a stuck job whose row can't be fully
+    // decoded is still read, so neither it nor the jobs read with it are
+    // stranded.
+    let undecodable = database
+        .insert_job(RawJob {
+            metadata: serde_json::json!([1]),
+            ..stuck(ShortTimeoutArgs::KIND)
+        })
+        .await;
+    let decodable = database.insert_job(stuck(ShortTimeoutArgs::KIND)).await;
+
+    rescuer::run_once(&context(&client, 100)).await.unwrap();
+
+    for id in [undecodable, decodable] {
+        let (state, errors, _) = database.job(id).await.unwrap();
+        assert_eq!((state.as_str(), errors), ("retryable", 1), "job {id}");
+    }
+    database.cleanup().await;
+}
+
 /// Mutates selected jobs inside the rescue transaction to simulate workers
 /// that finish or re-claim jobs after selection, then lets OSS continue.
 struct StaleSnapshotPilot {

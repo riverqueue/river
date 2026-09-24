@@ -1,26 +1,91 @@
-//! Lenient decoding of persisted job rows.
+//! Decoding of persisted job rows.
 //!
 //! River Go decodes rows with `encoding/json` and native integers, so a row
 //! written by Go (or edited by an operator) can contain values that a strict
-//! Rust decoder rejects: attempt errors with missing or extra fields, or
-//! SQLite integers outside `i16`. Runtime paths decode each row on its own so
-//! one such row cannot fail a whole claimed or completed batch.
+//! Rust decoder rejects, like SQLite integers outside `i16`, and on SQLite,
+//! JSON columns can be changed to any shape.
+//!
+//! Like River Go, reads that return a job to a caller decode strictly, while
+//! the runtime decodes each row it has claimed, completed, or found stuck on
+//! its own and tolerates fields that can't be decoded. Such a row keeps the
+//! fields that could be decoded, leaves the others empty, and carries the
+//! decode error, so one bad row can't fail or strand the rows read with it.
+
+use std::fmt::Display;
 
 #[cfg(feature = "postgres")]
-#[allow(clippy::wildcard_imports)]
-use super::*;
+use chrono::{DateTime, Utc};
+#[cfg(feature = "postgres")]
+use serde_json::{Value, value::RawValue};
+#[cfg(feature = "postgres")]
+use sqlx::{FromRow, Row, postgres::PgRow, types::Json};
+use tracing::error;
 
-/// A row that River could not decode into a [`JobRow`].
-///
-/// The runtime keeps enough lenient fields to record a failed attempt for a
-/// claimed row, the way River Go's executor records an argument decode error.
+use crate::JobRow;
+#[cfg(feature = "postgres")]
+use crate::{AttemptError, Error, JobState};
+
+/// A row with fields that River couldn't decode.
 #[derive(Debug)]
 pub(crate) struct UndecodableJob {
-    pub(crate) attempt: i64,
+    /// Why the row couldn't be decoded, with a line for each field that
+    /// couldn't be, like River Go's joined decode errors.
     pub(crate) error: String,
-    pub(crate) error_count: usize,
-    pub(crate) id: Option<i64>,
-    pub(crate) max_attempts: i64,
+    /// The row with every field that could be decoded and the others left
+    /// empty, or `None` when not even the columns that identify the job could
+    /// be.
+    pub(crate) row: Option<Box<JobRow>>,
+}
+
+/// A row decoded on its own, with any undecodable fields reported
+/// separately.
+pub(crate) type DecodedJob = Result<JobRow, UndecodableJob>;
+
+/// Returns a row for a runtime path that tolerates undecodable fields, like
+/// River Go's set-state and stuck-job reads. Only a row that can't be
+/// identified at all is dropped, with a log.
+pub(crate) fn tolerant_row(decoded: DecodedJob) -> Option<JobRow> {
+    match decoded {
+        Ok(row) => Some(row),
+        Err(UndecodableJob { error, row: None }) => {
+            error!(%error, "River job row couldn't be identified; skipping it");
+            None
+        }
+        Err(UndecodableJob { row, .. }) => row.map(|row| *row),
+    }
+}
+
+/// Collects why fields of one row couldn't be decoded.
+#[derive(Default)]
+pub(crate) struct FieldErrors(Vec<String>);
+
+impl FieldErrors {
+    /// Returns a decoded field, or records why it couldn't be decoded and
+    /// leaves it empty.
+    pub(crate) fn field<T: Default>(
+        &mut self,
+        column: &str,
+        decoded: Result<T, impl Display>,
+    ) -> T {
+        decoded.unwrap_or_else(|error| {
+            self.0
+                .push(format!("error unmarshaling `{column}`: {error}"));
+            T::default()
+        })
+    }
+
+    /// Finishes decoding `row`, reporting it as undecodable if any of its
+    /// fields couldn't be decoded.
+    pub(crate) fn finish(self, row: JobRow) -> DecodedJob {
+        if self.0.is_empty() {
+            Ok(row)
+        } else {
+            Err(UndecodableJob {
+                error: self.0.join("\n"),
+                row: Some(Box::new(row)),
+            })
+        }
+    }
 }
 
 /// Converts a persisted integer to `i16`, saturating at the type bounds.
@@ -33,14 +98,17 @@ pub(crate) fn saturating_i16(value: i64) -> i16 {
     i16::try_from(value).unwrap_or(if value < 0 { i16::MIN } else { i16::MAX })
 }
 
+/// A PostgreSQL job row. Columns the database constrains decode strictly, while
+/// those that can hold values River can't represent are kept as their decode
+/// results.
 #[cfg(feature = "postgres")]
 pub(crate) struct JobRecord {
     attempt: i16,
     attempted_at: Option<DateTime<Utc>>,
-    attempted_by: Option<Vec<String>>,
+    attempted_by: Result<Option<Vec<String>>, sqlx::Error>,
     created_at: DateTime<Utc>,
     encoded_args: Json<Box<RawValue>>,
-    errors: Vec<Json<Box<RawValue>>>,
+    errors: Result<Vec<Option<Json<Box<RawValue>>>>, sqlx::Error>,
     finalized_at: Option<DateTime<Utc>>,
     id: i64,
     kind: String,
@@ -50,7 +118,7 @@ pub(crate) struct JobRecord {
     queue: String,
     scheduled_at: DateTime<Utc>,
     state: String,
-    tags: Vec<String>,
+    tags: Result<Vec<String>, sqlx::Error>,
     unique_key: Option<Vec<u8>>,
     pub(super) unique_skipped_as_duplicate: bool,
     unique_states: Option<String>,
@@ -66,10 +134,10 @@ impl<'row> FromRow<'row, PgRow> for JobRecord {
         Ok(Self {
             attempt: row.try_get(1)?,
             attempted_at: row.try_get(2)?,
-            attempted_by: row.try_get(3)?,
+            attempted_by: row.try_get(3),
             created_at: row.try_get(4)?,
             encoded_args: row.try_get(5)?,
-            errors: row.try_get(6)?,
+            errors: row.try_get(6),
             finalized_at: row.try_get(7)?,
             id: row.try_get(0)?,
             kind: row.try_get(8)?,
@@ -79,7 +147,7 @@ impl<'row> FromRow<'row, PgRow> for JobRecord {
             queue: row.try_get(12)?,
             scheduled_at: row.try_get(13)?,
             state: row.try_get(14)?,
-            tags: row.try_get(15)?,
+            tags: row.try_get(15),
             unique_key: row.try_get(16)?,
             unique_skipped_as_duplicate: row.try_get(18)?,
             unique_states: row.try_get(17)?,
@@ -89,42 +157,66 @@ impl<'row> FromRow<'row, PgRow> for JobRecord {
 
 #[cfg(feature = "postgres")]
 impl JobRecord {
+    /// Decodes the row, failing if any field can't be decoded.
     pub(crate) fn into_job_row(self) -> Result<JobRow, Error> {
-        let Value::Object(metadata) = self.metadata.0 else {
-            return Err(Error::invalid_job(format!(
-                "job {} metadata is not an object",
-                self.id
-            )));
-        };
-        let unique_states = self
-            .unique_states
-            .map(|bits| {
-                let bitmask = u8::from_str_radix(&bits, 2).map_err(|error| {
-                    Error::invalid_job(format!(
-                        "job {} has invalid unique states {bits:?}: {error}",
-                        self.id
-                    ))
-                })?;
-                Ok::<_, Error>(
-                    JobState::ALL
-                        .into_iter()
-                        .filter(|state| bitmask & state.unique_bit() != 0)
-                        .collect(),
-                )
-            })
-            .transpose()?;
-        Ok(JobRow {
+        let id = self.id;
+        self.decode()
+            .map_err(|job| Error::invalid_job(format!("job {id}: {}", job.error)))
+    }
+
+    /// Decodes the row, keeping the fields that can be decoded when others
+    /// can't. River Go reads the metadata as raw JSON, but a [`JobRow`] can
+    /// only represent an object.
+    pub(crate) fn decode(self) -> DecodedJob {
+        let state = JobState::try_from(self.state.as_str()).map_err(|error| UndecodableJob {
+            error: format!("job {}: {error}", self.id),
+            row: None,
+        })?;
+        let mut errors = FieldErrors::default();
+        let attempted_by = errors.field("attempted_by", self.attempted_by);
+        let attempt_errors = errors.field(
+            "errors",
+            self.errors
+                .map_err(|error| error.to_string())
+                .and_then(|errors| {
+                    errors
+                        .iter()
+                        .map(|error| match error {
+                            Some(error) => AttemptError::from_json_lenient(error.0.get())
+                                .map_err(|error| error.to_string()),
+                            None => Err("unexpected SQL NULL element".to_owned()),
+                        })
+                        .collect()
+                }),
+        );
+        let metadata = errors.field(
+            "metadata",
+            match self.metadata.0 {
+                Value::Object(metadata) => Ok(metadata),
+                _ => Err("not a JSON object"),
+            },
+        );
+        let tags = errors.field("tags", self.tags);
+        let unique_states = errors.field(
+            "unique_states",
+            self.unique_states
+                .map(|bits| {
+                    u8::from_str_radix(&bits, 2).map(|bitmask| {
+                        JobState::ALL
+                            .into_iter()
+                            .filter(|state| bitmask & state.unique_bit() != 0)
+                            .collect()
+                    })
+                })
+                .transpose(),
+        );
+        errors.finish(JobRow {
             attempt: self.attempt,
             attempted_at: self.attempted_at,
-            attempted_by: self.attempted_by.unwrap_or_default(),
+            attempted_by: attempted_by.unwrap_or_default(),
             created_at: self.created_at,
             encoded_args: self.encoded_args.0,
-            errors: self
-                .errors
-                .iter()
-                .map(|error| AttemptError::from_json_lenient(error.0.get()))
-                .collect::<Result<_, _>>()
-                .map_err(|error| Error::invalid_job(format!("job {}: {error}", self.id)))?,
+            errors: attempt_errors,
             finalized_at: self.finalized_at,
             id: self.id,
             kind: self.kind,
@@ -133,31 +225,23 @@ impl JobRecord {
             priority: self.priority,
             queue: self.queue,
             scheduled_at: self.scheduled_at,
-            state: JobState::try_from(self.state.as_str())
-                .map_err(|error| Error::invalid_job(error.to_string()))?,
-            tags: self.tags,
+            state,
+            tags,
             unique_key: self.unique_key,
             unique_states,
         })
     }
 }
 
-/// Decodes a row selected with [`job_projection`] on its own, keeping enough
-/// of an undecodable row to report it.
+/// Decodes a row selected with [`job_projection`] on its own.
 #[cfg(feature = "postgres")]
-pub(crate) fn decode_job_row(row: &PgRow) -> Result<JobRow, UndecodableJob> {
-    let decoded = JobRecord::from_row(row)
-        .map_err(Error::from)
-        .and_then(JobRecord::into_job_row);
-    decoded.map_err(|error| UndecodableJob {
-        attempt: row.try_get::<i16, _>(1).map_or(0, i64::from),
-        error: error.to_string(),
-        error_count: row
-            .try_get::<Vec<Json<Box<RawValue>>>, _>(6)
-            .map_or(0, |errors| errors.len()),
-        id: row.try_get(0).ok(),
-        max_attempts: row.try_get::<i16, _>(9).map_or(0, i64::from),
-    })
+pub(crate) fn decode_job_row(row: &PgRow) -> DecodedJob {
+    JobRecord::from_row(row)
+        .map_err(|error| UndecodableJob {
+            error: error.to_string(),
+            row: None,
+        })?
+        .decode()
 }
 
 #[cfg(feature = "postgres")]

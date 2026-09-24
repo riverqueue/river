@@ -17,11 +17,13 @@ use std::{
 };
 
 use async_trait::async_trait;
+use chrono::{DateTime, Utc};
 use riverqueue::__private::ClientBuilderExt;
 use riverqueue::{
     __private::{DatabaseConnection, JobSetStateParams, Pilot, PilotError},
-    AttemptError, BoxError, Client, ErrorHandler, EventKind, InsertOpts, Job, JobArgs, JobRow,
-    JobState, QueueConfig, WorkCancelled, WorkContext, WorkOutcome, WorkerRegistry,
+    AttemptError, BoxError, Client, ErrorHandler, ErrorHandlerDecision, EventKind, InsertOpts, Job,
+    JobArgs, JobEventKind, JobRow, JobState, QueueConfig, RetryPolicy, WorkCancelled, WorkContext,
+    WorkOutcome, WorkResult, WorkerRegistry,
     database::{PostgresDatabase, SchemaName},
 };
 use riverqueue_migrate::PostgresMigrator;
@@ -412,15 +414,55 @@ where
     }
 }
 
+/// Records every failed attempt the error handler sees.
+#[derive(Clone, Default)]
+struct RecordingErrorHandler(Arc<std::sync::Mutex<Vec<(JobRow, String)>>>);
+
+#[allow(
+    clippy::unused_async_trait_impl,
+    reason = "these extensions only record state synchronously"
+)]
+impl ErrorHandler for RecordingErrorHandler {
+    async fn handle_error(
+        &self,
+        _context: &WorkContext,
+        job: &JobRow,
+        result: &WorkResult,
+    ) -> Result<ErrorHandlerDecision, BoxError> {
+        let error = match result {
+            WorkResult::Failed(error) => error.to_string(),
+            other => format!("{other:?}"),
+        };
+        self.0.lock().unwrap().push((job.clone(), error));
+        Ok(ErrorHandlerDecision::Continue)
+    }
+}
+
+/// Schedules every retry an hour out so a failed job stays `retryable`.
+struct RetryAnHourLater;
+
+impl RetryPolicy for RetryAnHourLater {
+    fn next_retry(&self, _job: &JobRow, _error: &str, _now: DateTime<Utc>) -> Duration {
+        Duration::from_hours(1)
+    }
+}
+
 #[tokio::test(flavor = "multi_thread")]
+#[allow(clippy::too_many_lines)]
 async fn claimed_rows_decode_individually_and_leniently() {
     let schema = TestSchema::new("decode").await;
+    let error_handler = RecordingErrorHandler::default();
     let client = Client::builder(schema.database())
         .id("postgres-resilience-decode")
         .without_notifications()
+        .error_handler(error_handler.clone())
+        .retry_policy(RetryAnHourLater)
         .workers(completing_workers())
         .queue("default", fast_queue())
         .build()
+        .unwrap();
+    let mut events = client
+        .subscribe(&[EventKind::JobCompleted, EventKind::JobFailed])
         .unwrap();
 
     // River Go decodes attempt errors with `encoding/json`, which tolerates
@@ -448,49 +490,51 @@ async fn claimed_rows_decode_individually_and_leniently() {
             odd_errors.job.row.id
         ))
         .await;
-    // Array metadata cannot become a `JobRow`. Claiming it with the others
-    // must record a failure for it alone.
-    let malformed = client
+    // Array metadata can't become a `JobRow`. Claimed with the others, such a
+    // job isn't worked, and its attempt fails like any other: retried with
+    // the client's retry policy, or discarded at its maximum attempts.
+    let malformed_retried = client.insert(ResilienceArgs {}).await.unwrap();
+    let malformed_discarded = client
         .insert(ResilienceArgs {})
         .opts(InsertOpts::default().with_max_attempts(1))
         .await
         .unwrap();
-    schema
-        .execute(format!(
-            "UPDATE {} SET metadata = '[1]'::jsonb WHERE id = {}",
-            schema.table(),
-            malformed.job.row.id
-        ))
-        .await;
+    let malformed_ids = [malformed_retried.job.row.id, malformed_discarded.job.row.id];
+    for id in malformed_ids {
+        schema
+            .execute(format!(
+                "UPDATE {} SET metadata = '[1]'::jsonb WHERE id = {id}",
+                schema.table()
+            ))
+            .await;
+    }
     let ordinary = client.insert(ResilienceArgs {}).await.unwrap();
-
-    let mut run = client.start().unwrap();
-    for id in [
+    let decodable_ids = [
         sparse_errors.job.row.id,
         odd_errors.job.row.id,
         ordinary.job.row.id,
-    ] {
-        wait_until(
-            Duration::from_secs(10),
-            "decodable job completion",
-            || async { schema.job_state(id).await == "completed" },
-        )
-        .await;
+    ];
+
+    let mut run = client.start().unwrap();
+    let mut events_by_id = std::collections::HashMap::new();
+    while events_by_id.len() < decodable_ids.len() + malformed_ids.len() {
+        let event = tokio::time::timeout(Duration::from_secs(10), events.recv())
+            .await
+            .expect("job events")
+            .unwrap();
+        let event = event.as_job().unwrap().clone();
+        events_by_id.insert(event.job.id, event);
     }
-    wait_until(Duration::from_secs(10), "malformed job failure", || async {
-        schema.job_state(malformed.job.row.id).await == "discarded"
-    })
-    .await;
     run.shutdown().await.unwrap();
 
+    for id in decodable_ids {
+        assert_eq!(events_by_id[&id].kind, JobEventKind::Completed);
+    }
     let sparse_errors = client.job_get(sparse_errors.job.row.id).await.unwrap();
-    assert_eq!(sparse_errors.state, JobState::Completed);
     assert_eq!(sparse_errors.errors.len(), 1);
     assert_eq!(sparse_errors.errors[0].error, "go");
     assert_eq!(sparse_errors.errors[0].attempt, 0);
-
     let odd_errors = client.job_get(odd_errors.job.row.id).await.unwrap();
-    assert_eq!(odd_errors.state, JobState::Completed);
     assert_eq!(
         odd_errors.errors,
         [
@@ -504,24 +548,61 @@ async fn claimed_rows_decode_individually_and_leniently() {
         ]
     );
 
-    let (attempt, errors): (i16, Vec<serde_json::Value>) = sqlx::query_as(AssertSqlSafe(format!(
-        "SELECT attempt, errors FROM {} WHERE id = $1",
-        schema.table()
-    )))
-    .bind(malformed.job.row.id)
-    .fetch_one(&schema.pool)
-    .await
-    .unwrap();
-    assert_eq!(attempt, 1);
-    assert_eq!(errors.len(), 1);
-    assert_eq!(errors[0]["attempt"], 1);
-    assert!(
-        errors[0]["error"]
-            .as_str()
-            .unwrap()
-            .starts_with("River could not decode the job row"),
-        "{errors:?}"
-    );
+    // Failed events and the error handler carry the fields that could be
+    // decoded, with the metadata left empty.
+    let handled = error_handler.0.lock().unwrap().clone();
+    assert_eq!(handled.len(), malformed_ids.len());
+    for (id, state) in [
+        (malformed_retried.job.row.id, JobState::Retryable),
+        (malformed_discarded.job.row.id, JobState::Discarded),
+    ] {
+        let event = &events_by_id[&id];
+        assert_eq!(event.kind, JobEventKind::Failed);
+        assert_eq!(event.job.state, state);
+        assert_eq!(event.job.kind, ResilienceArgs::KIND);
+        assert!(event.job.metadata.is_empty());
+        assert!(
+            event.job.errors[0]
+                .error
+                .starts_with("job row couldn't be decoded: error unmarshaling `metadata`: "),
+            "{:?}",
+            event.job.errors
+        );
+
+        let (job, error) = handled.iter().find(|(job, _)| job.id == id).unwrap();
+        assert_eq!(job.attempt, 1);
+        assert!(job.metadata.is_empty());
+        assert_eq!(error, &event.job.errors[0].error);
+
+        // The attempt error is appended without rewriting the undecodable
+        // metadata.
+        let (state, attempt, errors, metadata, scheduled_at): (
+            String,
+            i16,
+            Vec<serde_json::Value>,
+            serde_json::Value,
+            DateTime<Utc>,
+        ) = sqlx::query_as(AssertSqlSafe(format!(
+            "SELECT state::text, attempt, errors, metadata, scheduled_at FROM {} WHERE id = $1",
+            schema.table()
+        )))
+        .bind(id)
+        .fetch_one(&schema.pool)
+        .await
+        .unwrap();
+        assert_eq!(state, event.job.state.as_str());
+        assert_eq!(attempt, 1);
+        assert_eq!(errors.len(), 1);
+        assert_eq!(errors[0]["attempt"], 1);
+        assert_eq!(errors[0]["error"], event.job.errors[0].error.as_str());
+        assert_eq!(metadata, serde_json::json!([1]));
+        if state == "retryable" {
+            assert!(
+                scheduled_at > Utc::now() + chrono::Duration::minutes(50),
+                "the client retry policy wasn't used: {scheduled_at}"
+            );
+        }
+    }
 
     schema.drop().await;
 }

@@ -3,10 +3,20 @@
 #[allow(clippy::wildcard_imports)]
 use super::*;
 
+/// Runs one claimed job's attempt and persists its result.
+///
+/// `decode_error` is set for a job whose row couldn't be fully decoded, in
+/// which case `row` holds only the fields that could be. Like River Go, such a
+/// job isn't worked: its attempt fails with the decode error before hooks or
+/// middleware run, the same way as an unknown job kind, and goes through
+/// ordinary error handling. The error handler sees the partial row, and the
+/// job is retried with the client's retry policy or discarded at its maximum
+/// attempts.
 #[allow(clippy::too_many_lines)]
 pub(super) async fn execute_job(
     inner: Arc<ClientInner>,
     row: JobRow,
+    decode_error: Option<String>,
     hard_cancel: CancellationToken,
     cancellation: CancellationToken,
     completion_sender: mpsc::Sender<CompletionUpdate>,
@@ -30,76 +40,29 @@ pub(super) async fn execute_job(
             row.id,
             &row.metadata,
         );
-        let mut worker_row = row.clone();
-        let worker_context = context.clone();
-        let worker_inner = Arc::clone(&inner);
         // Like River Go's executor start time, which it records as the
         // attempt error's `at`.
         let attempt_started_at = Utc::now();
-        let (timeout_sender, timeout_receiver) = oneshot::channel();
-        let mut worker_task = AbortOnDrop(tokio::spawn(async move {
-            worker_context.resumable_validate()?;
-            for hook in &worker_inner.hooks {
-                hook.work_begin(&worker_context, &mut worker_row)
-                    .await
-                    .map_err(boxed_extension_error)?;
-            }
-            for middleware in &worker_inner.work_middleware {
-                middleware
-                    .before_work(&worker_context, &mut worker_row)
-                    .await
-                    .map_err(boxed_extension_error)?;
-            }
-            let result = worker_inner
-                .workers
-                .work(worker_context.clone(), &worker_row, timeout_sender)
-                .await;
-            let public_result = erased_work_result(&result);
-            for middleware in worker_inner.work_middleware.iter().rev() {
-                middleware
-                    .after_work(&worker_context, &worker_row, &public_result)
-                    .await
-                    .map_err(boxed_extension_error)?;
-            }
-            for hook in &worker_inner.hooks {
-                hook.work_end(&worker_context, &worker_row, &public_result)
-                    .await
-                    .map_err(boxed_extension_error)?;
-            }
-            result
-        }));
-
-        // The worker reports its timeout after decoding the job's arguments,
-        // following any hooks and middleware, so the timeout covers the work
-        // itself as in River Go.
-        let timeout_elapsed = async {
-            let timeout = match timeout_receiver.await {
-                Ok(WorkerTimeout::After(timeout)) => Some(timeout),
-                Ok(WorkerTimeout::ClientDefault) => inner.job_timeout,
-                // Disabled, or the attempt ended before work started.
-                Ok(WorkerTimeout::Disabled) | Err(_) => None,
-            };
-            match timeout {
-                Some(timeout) => tokio::time::sleep(timeout).await,
-                None => std::future::pending().await,
-            }
-        };
-        let mut cancellation_cause = None;
         let work_started = std::time::Instant::now();
-        let result = tokio::select! {
-            result = &mut worker_task.0 => Some(worker_join_result(result)),
-            () = cancellation.cancelled() => {
-                cancellation_cause = Some(if hard_cancel.is_cancelled() {
-                    CancellationCause::Shutdown
-                } else {
-                    CancellationCause::Remote
-                });
-                finish_cancelled_task(&inner, &row, &mut worker_task.0, &hard_cancel).await
+        let mut cancellation_cause = None;
+        let worked = decode_error.is_none();
+        let result = match decode_error {
+            Some(decode_error) => {
+                error!(error = %decode_error, "River job row couldn't be decoded; failing attempt without working it");
+                Some(Err(worker_failure_from_source(
+                    format!("job row couldn't be decoded: {decode_error}").into(),
+                )))
             }
-            () = timeout_elapsed => {
-                cancellation_cause = Some(CancellationCause::Timeout);
-                cancellation.cancel();
-                finish_cancelled_task(&inner, &row, &mut worker_task.0, &hard_cancel).await
+            None => {
+                run_worker(
+                    &inner,
+                    &row,
+                    &context,
+                    &hard_cancel,
+                    &cancellation,
+                    &mut cancellation_cause,
+                )
+                .await
             }
         };
         let Some(result) = result else {
@@ -189,6 +152,7 @@ pub(super) async fn execute_job(
             result,
             metadata_updates,
             error_handler_result,
+            worked,
             &completion_sender,
         )
         .await;
@@ -202,6 +166,85 @@ pub(super) async fn execute_job(
     }
     .instrument(span)
     .await;
+}
+
+/// Works a job, returning its result, or `None` when the worker task outlived
+/// its abort during shutdown.
+async fn run_worker(
+    inner: &Arc<ClientInner>,
+    row: &JobRow,
+    context: &WorkContext,
+    hard_cancel: &CancellationToken,
+    cancellation: &CancellationToken,
+    cancellation_cause: &mut Option<CancellationCause>,
+) -> Option<WorkerResult> {
+    let mut worker_row = row.clone();
+    let worker_context = context.clone();
+    let worker_inner = Arc::clone(inner);
+    let (timeout_sender, timeout_receiver) = oneshot::channel();
+    let mut worker_task = AbortOnDrop(tokio::spawn(async move {
+        worker_context.resumable_validate()?;
+        for hook in &worker_inner.hooks {
+            hook.work_begin(&worker_context, &mut worker_row)
+                .await
+                .map_err(boxed_extension_error)?;
+        }
+        for middleware in &worker_inner.work_middleware {
+            middleware
+                .before_work(&worker_context, &mut worker_row)
+                .await
+                .map_err(boxed_extension_error)?;
+        }
+        let result = worker_inner
+            .workers
+            .work(worker_context.clone(), &worker_row, timeout_sender)
+            .await;
+        let public_result = erased_work_result(&result);
+        for middleware in worker_inner.work_middleware.iter().rev() {
+            middleware
+                .after_work(&worker_context, &worker_row, &public_result)
+                .await
+                .map_err(boxed_extension_error)?;
+        }
+        for hook in &worker_inner.hooks {
+            hook.work_end(&worker_context, &worker_row, &public_result)
+                .await
+                .map_err(boxed_extension_error)?;
+        }
+        result
+    }));
+
+    // The worker reports its timeout after decoding the job's arguments,
+    // following any hooks and middleware, so the timeout covers the work
+    // itself as in River Go.
+    let timeout_elapsed = async {
+        let timeout = match timeout_receiver.await {
+            Ok(WorkerTimeout::After(timeout)) => Some(timeout),
+            Ok(WorkerTimeout::ClientDefault) => inner.job_timeout,
+            // Disabled, or the attempt ended before work started.
+            Ok(WorkerTimeout::Disabled) | Err(_) => None,
+        };
+        match timeout {
+            Some(timeout) => tokio::time::sleep(timeout).await,
+            None => std::future::pending().await,
+        }
+    };
+    tokio::select! {
+        result = &mut worker_task.0 => Some(worker_join_result(result)),
+        () = cancellation.cancelled() => {
+            *cancellation_cause = Some(if hard_cancel.is_cancelled() {
+                CancellationCause::Shutdown
+            } else {
+                CancellationCause::Remote
+            });
+            finish_cancelled_task(inner, row, &mut worker_task.0, hard_cancel).await
+        }
+        () = timeout_elapsed => {
+            *cancellation_cause = Some(CancellationCause::Timeout);
+            cancellation.cancel();
+            finish_cancelled_task(inner, row, &mut worker_task.0, hard_cancel).await
+        }
+    }
 }
 
 pub(super) type WorkerResult = Result<WorkOutcome, WorkerFailure>;
@@ -398,6 +441,7 @@ pub(super) async fn persist_result(
     result: WorkerResult,
     metadata_updates: Map<String, Value>,
     error_handler_result: ErrorHandlerDecision,
+    worked: bool,
     completion_sender: &mpsc::Sender<CompletionUpdate>,
 ) -> Result<(), Error> {
     let now = Utc::now();
@@ -506,13 +550,19 @@ pub(super) async fn persist_result(
                         JobEventKind::Failed,
                     )
                 } else {
-                    let worker_retry_after = inner
-                        .workers
-                        .next_retry(row, &retry_error, now)
-                        .unwrap_or_else(|retry_error| {
-                            debug!(error = %retry_error, "could not evaluate worker retry override");
-                            None
-                        });
+                    // Like River Go, a job that wasn't worked because its row
+                    // couldn't be decoded uses only the client's retry policy.
+                    let worker_retry_after = if worked {
+                        inner
+                            .workers
+                            .next_retry(row, &retry_error, now)
+                            .unwrap_or_else(|retry_error| {
+                                debug!(error = %retry_error, "could not evaluate worker retry override");
+                                None
+                            })
+                    } else {
+                        None
+                    };
                     let delay = worker_retry_after.unwrap_or_else(|| {
                         inner
                             .retry_policy
@@ -552,66 +602,6 @@ pub(super) async fn persist_result(
         })
         .await
         .map_err(|_| Error::runtime("completion batcher stopped".to_owned()))
-}
-
-/// Records a failed attempt for a claimed row that could not be decoded.
-///
-/// River Go's executor records an argument decoding failure as an ordinary
-/// attempt error, so the job is retried or discarded instead of staying
-/// `running` until the rescuer. Without a decoded row, the client retry policy
-/// cannot run; River's default `attempt^4` schedule is used instead.
-pub(super) async fn record_undecodable_job(
-    inner: &ClientInner,
-    completion_sender: &mpsc::Sender<CompletionUpdate>,
-    job: UndecodableJob,
-) {
-    let Some(job_id) = job.id else {
-        error!(error = %job.error, "claimed River job row has no decodable ID; leaving it for the rescuer");
-        return;
-    };
-    error!(job_id, error = %job.error, "claimed River job row could not be decoded; recording a failed attempt");
-    let now = Utc::now();
-    let attempt = saturating_i16(job.attempt);
-    let attempt_error = AttemptError {
-        at: now,
-        attempt,
-        error: format!("River could not decode the job row: {}", job.error),
-        trace: String::new(),
-    };
-    let (state, finalized_at, scheduled_at) = if job.attempt >= job.max_attempts {
-        (JobState::Discarded, Some(now), None)
-    } else {
-        let error_count = u32::try_from(job.error_count.saturating_add(1)).unwrap_or(u32::MAX);
-        let delay = Duration::from_secs(u64::from(error_count).saturating_pow(4));
-        let state = if delay <= inner.maintenance.scheduler_interval {
-            JobState::Available
-        } else {
-            JobState::Retryable
-        };
-        (state, None, Some(scheduled_after(now, delay)))
-    };
-    let update = CompletionUpdate {
-        attempt: None,
-        cancellation: CancellationToken::new(),
-        error: Some(attempt_error),
-        event_kind: JobEventKind::Failed,
-        finalized_at,
-        job_id,
-        metadata: Map::new(),
-        scheduled_at,
-        state,
-        timing: CompletionTiming {
-            completion_started: std::time::Instant::now(),
-            queue_wait_duration: Duration::ZERO,
-            run_duration: Duration::ZERO,
-        },
-    };
-    if completion_sender.send(update).await.is_err() {
-        error!(
-            job_id,
-            "completion batcher stopped before recording an undecodable River job"
-        );
-    }
 }
 
 /// Longest delay River schedules ahead, matching Go's `time.Duration` range.
