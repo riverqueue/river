@@ -36,7 +36,7 @@ pub use extension::{
 pub use job::{
     AttemptError, ExtensionClaimParams, ExtensionInsertParams, InsertBatch, InsertBatchResult,
     InsertOpts, InsertParams, InsertResult, Job, JobArgs, JobRow, JobRowParts, JobState,
-    JobStateParseError, RawInsertResult, UniqueOpts,
+    JobStateParseError, RawInsertResult, ScheduleOverride, UniqueOpts,
 };
 pub use periodic::{
     CronSchedule, CronScheduleParseError, IntervalSchedule, NeverSchedule, PeriodicJob,

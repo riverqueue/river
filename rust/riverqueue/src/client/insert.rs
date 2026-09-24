@@ -111,12 +111,13 @@ impl Client {
             self.validate_known_kind(item.kind)?;
             let opts =
                 InsertOpts::resolve(self.inner.default_max_attempts, item.defaults, item.opts);
+            let encoded_args = item.encoded_args?;
             let (mut job, unique_skipped_as_duplicate) = self
                 .insert_encoded_on(
                     &mut *connection,
                     item.kind,
                     item.unique_fields,
-                    &item.encoded_args,
+                    &encoded_args,
                     opts,
                 )
                 .await?;
@@ -142,12 +143,13 @@ impl Client {
             self.validate_known_kind(item.kind)?;
             let opts =
                 InsertOpts::resolve(self.inner.default_max_attempts, item.defaults, item.opts);
+            let encoded_args = item.encoded_args?;
             let (mut job, unique_skipped_as_duplicate) = self
                 .insert_encoded_on(
                     &mut *connection,
                     item.kind,
                     item.unique_fields,
-                    &item.encoded_args,
+                    &encoded_args,
                     opts,
                 )
                 .await?;

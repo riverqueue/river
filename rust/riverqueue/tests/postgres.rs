@@ -929,12 +929,10 @@ async fn insert_many_variants_preserve_order_and_transactionality() {
         .push(EchoArgs {
             message: "heterogeneous".to_owned(),
         })
-        .unwrap()
         .push_with(
             CancelArgs {},
             InsertOpts::default().with_queue("heterogeneous-queue"),
-        )
-        .unwrap();
+        );
     let heterogeneous = client.insert_batch(heterogeneous).await.unwrap();
     assert_eq!(heterogeneous.len(), 2);
     assert_eq!(heterogeneous[0].job.kind, EchoArgs::KIND);

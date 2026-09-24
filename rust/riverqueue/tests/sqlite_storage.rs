@@ -14,6 +14,35 @@ struct EmptyBatchArgs {
     value: i32,
 }
 
+#[derive(Clone, Debug, Deserialize, JobArgs, Serialize)]
+#[river(kind = "sqlite_unencodable")]
+struct UnencodableArgs {
+    // JSON object keys must be strings.
+    pairs: std::collections::BTreeMap<(i32, i32), i32>,
+}
+
+#[tokio::test]
+async fn batch_encoding_errors_surface_at_insert_without_inserting() {
+    let (client, pool) = setup().await;
+
+    let mut batch = InsertBatch::new();
+    batch
+        .push(EmptyBatchArgs { value: 1 })
+        .push(UnencodableArgs {
+            pairs: std::collections::BTreeMap::from([((1, 2), 3)]),
+        });
+    let error = client.insert_batch(batch).await.unwrap_err();
+
+    assert!(matches!(error, Error::Json(_)), "{error:?}");
+    let count: i64 = sqlx::query_scalar("SELECT count(*) FROM river_job")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(count, 0);
+
+    pool.close().await;
+}
+
 #[tokio::test]
 async fn empty_batches_are_rejected_before_database_work() {
     let (client, pool) = setup().await;

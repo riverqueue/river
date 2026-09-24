@@ -36,7 +36,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
             address: "person@example.com".to_owned(),
         })
         .await?;
-    while completed.recv().await?.as_job().map(|event| event.job.id) != Some(inserted.job.row.id) {}
+    while completed.recv().await?.as_job().map(|event| event.job.id) != Some(inserted.id()) {}
 
     run.shutdown().await?;
     Ok(())

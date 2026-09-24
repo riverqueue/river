@@ -1510,14 +1510,10 @@ async fn sqlite_inserts_heterogeneous_batch_in_order() {
     let pool = setup().await;
     let client = Client::builder(pool).build().unwrap();
     let mut batch = InsertBatch::new();
-    batch
-        .push(RuntimeArgs { value: 7 })
-        .unwrap()
-        .push_with(
-            CancelArgs {},
-            InsertOpts::default().with_queue("heterogeneous-queue"),
-        )
-        .unwrap();
+    batch.push(RuntimeArgs { value: 7 }).push_with(
+        CancelArgs {},
+        InsertOpts::default().with_queue("heterogeneous-queue"),
+    );
 
     let results = client.insert_batch(batch).await.unwrap();
 

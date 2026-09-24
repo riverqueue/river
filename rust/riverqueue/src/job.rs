@@ -59,67 +59,36 @@ impl InsertBatch {
 
     /// Appends a job using its job-type defaults.
     ///
-    /// # Errors
-    ///
-    /// Returns an error when the arguments cannot be encoded as JSON.
-    pub fn push<A: JobArgs>(&mut self, args: A) -> Result<&mut Self, serde_json::Error> {
+    /// Arguments are encoded immediately. If encoding fails, the error is
+    /// returned when the batch is inserted and no job in it is inserted.
+    pub fn push<A: JobArgs>(&mut self, args: A) -> &mut Self {
         self.push_with(args, InsertOpts::default())
     }
 
     /// Appends a job with options overlaid on its job-type defaults.
     ///
-    /// # Errors
-    ///
-    /// Returns an error when the arguments cannot be encoded as JSON.
+    /// Arguments are encoded immediately. If encoding fails, the error is
+    /// returned when the batch is inserted and no job in it is inserted.
     #[expect(
         clippy::needless_pass_by_value,
         reason = "the batch takes ownership of its jobs"
     )]
-    pub fn push_with<A: JobArgs>(
-        &mut self,
-        args: A,
-        opts: InsertOpts,
-    ) -> Result<&mut Self, serde_json::Error> {
+    pub fn push_with<A: JobArgs>(&mut self, args: A, opts: InsertOpts) -> &mut Self {
         self.items.push(InsertBatchItem {
             defaults: A::default_insert_opts(),
-            encoded_args: crate::encoding::encode_args(&args)?,
+            encoded_args: crate::encoding::encode_args(&args),
             kind: A::KIND,
             opts,
             unique_fields: A::unique_fields(),
         });
-        Ok(self)
-    }
-
-    /// Appends a job using its job-type defaults and returns the batch for
-    /// chaining.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error when the arguments cannot be encoded as JSON.
-    pub fn with<A: JobArgs>(mut self, args: A) -> Result<Self, serde_json::Error> {
-        self.push(args)?;
-        Ok(self)
-    }
-
-    /// Appends a job with insertion options and returns the batch for chaining.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error when the arguments cannot be encoded as JSON.
-    pub fn with_options<A: JobArgs>(
-        mut self,
-        args: A,
-        opts: InsertOpts,
-    ) -> Result<Self, serde_json::Error> {
-        self.push_with(args, opts)?;
-        Ok(self)
+        self
     }
 }
 
 #[derive(Debug)]
 pub(crate) struct InsertBatchItem {
     pub(crate) defaults: InsertOpts,
-    pub(crate) encoded_args: Box<RawValue>,
+    pub(crate) encoded_args: Result<Box<RawValue>, serde_json::Error>,
     pub(crate) kind: &'static str,
     pub(crate) opts: InsertOpts,
     pub(crate) unique_fields: &'static [&'static str],
@@ -177,10 +146,16 @@ pub struct InsertOpts {
     unique: Option<UniqueOpts>,
 }
 
-#[derive(Clone, Copy, Debug, Default)]
-enum ScheduleOverride {
+/// How an [`InsertOpts`] layer affects a job's schedule.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum ScheduleOverride {
+    /// Schedule the job no earlier than this time.
     At(DateTime<Utc>),
+    /// Make the job immediately eligible, replacing any schedule from a lower
+    /// layer.
     Immediate,
+    /// Keep the schedule from a lower layer, or run immediately when none
+    /// sets one.
     #[default]
     Inherit,
 }
@@ -216,16 +191,10 @@ impl InsertOpts {
         self.queue.as_deref()
     }
 
-    /// Returns the schedule override. The outer option indicates whether an
-    /// override was supplied; the inner option selects scheduled versus
-    /// immediately eligible work.
+    /// Returns how these options affect the job's schedule.
     #[must_use]
-    pub const fn scheduled_at(&self) -> Option<Option<DateTime<Utc>>> {
-        match self.scheduled_at {
-            ScheduleOverride::At(scheduled_at) => Some(Some(scheduled_at)),
-            ScheduleOverride::Immediate => Some(None),
-            ScheduleOverride::Inherit => None,
-        }
+    pub const fn scheduled_at(&self) -> ScheduleOverride {
+        self.scheduled_at
     }
 
     /// Returns the configured tags replacement.
@@ -301,6 +270,38 @@ impl InsertOpts {
     #[must_use]
     pub fn with_unique(mut self, unique: UniqueOpts) -> Self {
         self.unique = Some(unique);
+        self
+    }
+
+    /// Returns these options with every option set in `overrides` replacing
+    /// the corresponding option here. Options `overrides` leaves unset are
+    /// kept.
+    ///
+    /// This is how River layers call-site options over job-type defaults, and
+    /// how `#[river(insert_opts = ...)]` layers a function's options over the
+    /// derive's attribute defaults.
+    #[must_use]
+    pub fn overlay(mut self, overrides: Self) -> Self {
+        let Self {
+            max_attempts,
+            metadata,
+            pending,
+            priority,
+            queue,
+            scheduled_at,
+            tags,
+            unique,
+        } = overrides;
+        self.max_attempts = max_attempts.or(self.max_attempts);
+        self.metadata = metadata.or(self.metadata);
+        self.pending = pending.or(self.pending);
+        self.priority = priority.or(self.priority);
+        self.queue = queue.or(self.queue);
+        if scheduled_at != ScheduleOverride::Inherit {
+            self.scheduled_at = scheduled_at;
+        }
+        self.tags = tags.or(self.tags);
+        self.unique = unique.or(self.unique);
         self
     }
 
@@ -392,6 +393,15 @@ pub struct InsertResult<A> {
     pub unique_skipped_as_duplicate: bool,
 }
 
+impl<A> InsertResult<A> {
+    /// Returns the ID of the inserted job, or of the existing job when a
+    /// unique insertion was skipped.
+    #[must_use]
+    pub const fn id(&self) -> i64 {
+        self.job.id()
+    }
+}
+
 /// Type-erased result from inserting an item in an [`InsertBatch`].
 #[derive(Clone, Debug)]
 #[non_exhaustive]
@@ -400,6 +410,15 @@ pub struct InsertBatchResult {
     pub job: JobRow,
     /// Whether insertion was skipped because a unique job already existed.
     pub unique_skipped_as_duplicate: bool,
+}
+
+impl InsertBatchResult {
+    /// Returns the ID of the inserted job, or of the existing job when a
+    /// unique insertion was skipped.
+    #[must_use]
+    pub const fn id(&self) -> i64 {
+        self.job.id
+    }
 }
 
 /// Type-erased result returned by River's exact-version insertion seam.
@@ -498,6 +517,12 @@ impl<A> Job<A> {
     #[must_use]
     pub const fn new(args: A, row: JobRow) -> Self {
         Self { args, row }
+    }
+
+    /// Returns the job's database ID.
+    #[must_use]
+    pub const fn id(&self) -> i64 {
+        self.row.id
     }
 }
 
@@ -935,6 +960,65 @@ mod tests {
         assert_eq!(resolved.priority, 2);
         assert_eq!(resolved.queue, "job_queue");
         assert_eq!(resolved.scheduled_at, None);
+    }
+
+    #[test]
+    fn overlay_replaces_only_options_set_in_overrides() {
+        let scheduled_at = Utc::now();
+        let base = InsertOpts::default()
+            .with_max_attempts(9)
+            .with_priority(3)
+            .with_queue("base_queue")
+            .with_scheduled_at(scheduled_at)
+            .with_tags(["base"]);
+
+        let kept = base.clone().overlay(InsertOpts::default());
+        assert_eq!(kept.max_attempts(), Some(9));
+        assert_eq!(kept.queue(), Some("base_queue"));
+        assert_eq!(kept.scheduled_at(), ScheduleOverride::At(scheduled_at));
+        assert_eq!(kept.tags(), Some(&["base".to_owned()][..]));
+
+        let overlaid = base.overlay(
+            InsertOpts::default()
+                .with_priority(2)
+                .with_tags(Vec::<String>::new())
+                .with_unique(UniqueOpts::new().by_queue())
+                .without_schedule(),
+        );
+        assert_eq!(overlaid.max_attempts(), Some(9));
+        assert_eq!(overlaid.priority(), Some(2));
+        assert_eq!(overlaid.queue(), Some("base_queue"));
+        assert_eq!(overlaid.scheduled_at(), ScheduleOverride::Immediate);
+        assert_eq!(overlaid.tags(), Some(&[][..]));
+        assert!(overlaid.unique().is_some_and(UniqueOpts::uses_queue));
+    }
+
+    #[test]
+    fn job_and_insert_result_expose_ids() {
+        let row = JobRow::new(
+            42,
+            "id_test",
+            crate::encoding::encode_args(&serde_json::json!({})).unwrap(),
+            Utc::now(),
+        );
+        let job = Job::new((), row.clone());
+        assert_eq!(job.id(), 42);
+        assert_eq!(
+            InsertResult {
+                job,
+                unique_skipped_as_duplicate: false,
+            }
+            .id(),
+            42
+        );
+        assert_eq!(
+            InsertBatchResult {
+                job: row,
+                unique_skipped_as_duplicate: true,
+            }
+            .id(),
+            42
+        );
     }
 
     #[test]
