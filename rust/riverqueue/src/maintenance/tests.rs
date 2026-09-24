@@ -971,3 +971,73 @@ async fn periodic_start_hooks_and_run_on_start_follow_each_leadership_gain() {
     assert_eq!(periodic_count().await, 2);
     database.cleanup().await;
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn maintenance_start_retries_then_requests_resignation() {
+    use crate::{Hook, PeriodicJobs};
+
+    // Fails the first three start attempts of every client, like Go's
+    // `QueueMaintainerStartRetriesAndResigns`.
+    struct FlakyHook(Arc<AtomicUsize>);
+
+    #[allow(
+        clippy::unused_async_trait_impl,
+        reason = "the hook only counts starts"
+    )]
+    impl Hook for FlakyHook {
+        async fn periodic_jobs_start(&self, _jobs: &PeriodicJobs) -> Result<(), crate::BoxError> {
+            if self.0.fetch_add(1, Ordering::SeqCst) < 3 {
+                return Err("start failed".into());
+            }
+            Ok(())
+        }
+    }
+
+    let database = TestDatabase::new("rmt_start_retry").await;
+    let attempts = Arc::new(AtomicUsize::new(0));
+    let client = database
+        .client()
+        .hook(FlakyHook(Arc::clone(&attempts)))
+        .maintenance(MaintenanceConfig::default().with_elect_interval(Duration::from_millis(50)))
+        .queue("default", QueueConfig::new(1))
+        .build()
+        .unwrap();
+    let elected_at = || {
+        let pool = database.pool.clone();
+        let table = database.table("river_leader");
+        async move {
+            sqlx::query_scalar::<_, DateTime<Utc>>(AssertSqlSafe(format!(
+                "SELECT elected_at FROM {table}"
+            )))
+            .fetch_optional(&pool)
+            .await
+            .unwrap()
+        }
+    };
+    let handle = client.start().unwrap();
+    let first_term = tokio::time::timeout(Duration::from_secs(10), async {
+        loop {
+            if let Some(elected_at) = elected_at().await {
+                return elected_at;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .unwrap();
+
+    // After three failed attempts the leader asks to resign, and the next
+    // term's start succeeds.
+    tokio::time::timeout(Duration::from_secs(20), async {
+        while attempts.load(Ordering::SeqCst) < 4 {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("maintenance start should be retried in a new term");
+    let second_term = elected_at().await.unwrap();
+    assert_ne!(second_term, first_term);
+    handle.shutdown().await.unwrap();
+    assert_eq!(attempts.load(Ordering::SeqCst), 4);
+    database.cleanup().await;
+}

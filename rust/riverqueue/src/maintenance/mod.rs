@@ -358,3 +358,45 @@ where
         },
     }
 }
+
+#[cfg(test)]
+mod unit_tests {
+    use super::{BatchSizes, ReducedBatchBreaker, exponential_backoff};
+
+    #[tokio::test(start_paused = true)]
+    async fn reduced_batch_breaker_opens_after_three_timeouts_in_ten_minutes() {
+        let sizes = BatchSizes {
+            default: 10,
+            reduced: 2,
+        };
+        let mut breaker = ReducedBatchBreaker::new(sizes);
+        breaker.trip();
+        breaker.trip();
+        // A success between failures resets the count.
+        breaker.reset_if_not_open();
+        breaker.trip();
+        breaker.trip();
+        assert_eq!(breaker.batch_size(), 10);
+        // Trips older than the window no longer count.
+        tokio::time::advance(std::time::Duration::from_mins(11)).await;
+        breaker.trip();
+        assert_eq!(breaker.batch_size(), 10);
+        breaker.trip();
+        breaker.trip();
+        assert_eq!(breaker.batch_size(), 2);
+        // Once open, the breaker stays open.
+        breaker.reset_if_not_open();
+        assert_eq!(breaker.batch_size(), 2);
+    }
+
+    #[test]
+    fn exponential_backoff_matches_go_schedule() {
+        for (attempt, seconds) in [(1, 1.0), (2, 2.0), (3, 4.0), (7, 64.0), (8, 1.0)] {
+            let backoff = exponential_backoff(attempt, 7).as_secs_f64();
+            assert!(
+                (seconds * 0.9..=seconds * 1.1).contains(&backoff),
+                "attempt {attempt}: {backoff}"
+            );
+        }
+    }
+}
