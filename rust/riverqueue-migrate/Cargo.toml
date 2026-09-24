@@ -14,12 +14,11 @@ all-features = true
 
 [features]
 default = ["postgres"]
-postgres = ["riverqueue-internal/postgres", "sqlx/postgres"]
+postgres = ["sqlx/postgres"]
 postgres-tests = ["postgres"]
-sqlite = ["riverqueue-internal/sqlite", "sqlx/sqlite"]
+sqlite = ["sqlx/sqlite"]
 
 [dependencies]
-riverqueue-internal = { path = "../riverqueue-internal", version = "=0.47.0-alpha.1", default-features = false }
 sqlx.workspace = true
 thiserror.workspace = true
 

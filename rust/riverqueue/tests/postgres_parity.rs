@@ -255,7 +255,7 @@ async fn schema_names_are_quoted_like_go() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn extension_notify_many_is_transactional() {
-    use riverqueue::internal::{
+    use riverqueue::__private::{
         DatabaseConfig, DatabaseConnection, NotificationTopic, notify_many,
     };
 

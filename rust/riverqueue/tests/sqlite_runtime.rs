@@ -8,16 +8,18 @@ use std::{
 };
 
 use async_trait::async_trait;
-use riverqueue::{
-    BoxError, Client, ErrorHandler, ErrorHandlerDecision, EventKind, ExtensionClaimParams,
-    ExtensionInsertParams, Hook, InsertBatch, InsertOpts, Job, JobArgs, JobRow, JobState,
-    MaintenanceConfig, QueueConfig, UniqueOpts, WorkContext, WorkOutcome, WorkResult,
-    WorkerRegistry, database::DatabaseKind,
+use riverqueue::__private::{
+    ClientBuilderExt, ExtensionClaimParams, ExtensionClient, ExtensionInsertParams,
 };
-use riverqueue_internal::{DatabaseConfig, DatabasePool, MaintenanceService};
-use riverqueue_internal::{
+use riverqueue::__private::{DatabaseConfig, DatabasePool, MaintenanceService};
+use riverqueue::__private::{
     DatabaseConnection, FetchParams, JobInsertParams, JobSetStateParams, Pilot, PilotError,
     RescueParams,
+};
+use riverqueue::{
+    BoxError, Client, ErrorHandler, ErrorHandlerDecision, EventKind, Hook, InsertBatch, InsertOpts,
+    Job, JobArgs, JobRow, JobState, MaintenanceConfig, QueueConfig, UniqueOpts, WorkContext,
+    WorkOutcome, WorkResult, WorkerRegistry, database::DatabaseKind,
 };
 use riverqueue_migrate::SqliteMigrator;
 use serde::{Deserialize, Serialize};
@@ -207,7 +209,7 @@ impl Pilot for SqlitePilot {
         let connection = connection
             .into_sqlite()
             .ok_or_else(|| std::io::Error::other("expected SQLite completion connection"))?;
-        for job in &params.jobs {
+        for job in params.jobs {
             sqlx::query("INSERT INTO pilot_effect (operation, job_id) VALUES ('completion', ?)")
                 .bind(job.id)
                 .execute(&mut *connection)
@@ -222,7 +224,7 @@ impl Pilot for SqlitePilot {
             }
             CompletionBehavior::Continue | CompletionBehavior::FailFirst => Ok(()),
             CompletionBehavior::Mark => {
-                for job in &params.jobs {
+                for job in params.jobs {
                     sqlx::query(
                         "UPDATE river_job SET \
                          metadata = jsonb_set(metadata, '$.pilot_handled', jsonb('true')) \
@@ -490,13 +492,14 @@ async fn extension_claimed_outcomes_use_canonical_completion_pipeline() {
     .await
     .unwrap();
 
-    let execution_context = WorkContext::new(tokio_util::sync::CancellationToken::new());
+    let execution_context =
+        riverqueue::__private::work_context(tokio_util::sync::CancellationToken::new());
     execution_context
         .metadata_set("shared_completion", true)
         .unwrap();
     let failed_job_id = rows[1].id;
-    client
-        .extension_persist_claimed_outcomes(
+    ExtensionClient::new(&client)
+        .persist_claimed_outcomes(
             &execution_context,
             vec![
                 (rows[0].clone(), Ok(WorkOutcome::Complete)),
@@ -584,9 +587,9 @@ async fn extension_claimed_outcomes_retry_after_interception_error() {
         .unwrap();
         rows.push(client.job_get(inserted.job.row.id).await.unwrap());
     }
-    let context = WorkContext::new(tokio_util::sync::CancellationToken::new());
-    client
-        .extension_persist_claimed_outcomes(
+    let context = riverqueue::__private::work_context(tokio_util::sync::CancellationToken::new());
+    ExtensionClient::new(&client)
+        .persist_claimed_outcomes(
             &context,
             rows.iter()
                 .cloned()
@@ -905,7 +908,7 @@ async fn sqlite_extension_claim_returns_ordered_rows_and_rolls_back_decode_error
             .await
             .unwrap();
         sqlx::query("UPDATE river_job SET scheduled_at = ? WHERE id = ?")
-            .bind(riverqueue::database::sqlite_timestamp(scheduled_at))
+            .bind(riverqueue::__private::sqlite_timestamp(scheduled_at))
             .bind(inserted.job.row.id)
             .execute(&pool)
             .await
@@ -928,7 +931,7 @@ async fn sqlite_extension_claim_returns_ordered_rows_and_rolls_back_decode_error
         .await
         .unwrap();
     sqlx::query("UPDATE river_job SET scheduled_at = ? WHERE id = ?")
-        .bind(riverqueue::database::sqlite_timestamp(
+        .bind(riverqueue::__private::sqlite_timestamp(
             now + chrono::Duration::hours(1),
         ))
         .bind(future.job.row.id)
@@ -936,8 +939,8 @@ async fn sqlite_extension_claim_returns_ordered_rows_and_rolls_back_decode_error
         .await
         .unwrap();
 
-    let rows = client
-        .extension_claim_jobs(ExtensionClaimParams {
+    let rows = ExtensionClient::new(&client)
+        .claim_jobs(ExtensionClaimParams {
             excluded_job_id: leader.job.row.id,
             kind: RuntimeArgs::KIND.to_owned(),
             maximum: 3,
@@ -975,8 +978,8 @@ async fn sqlite_extension_claim_returns_ordered_rows_and_rolls_back_decode_error
         .execute(&pool)
         .await
         .unwrap();
-    let error = client
-        .extension_claim_jobs(ExtensionClaimParams {
+    let error = ExtensionClient::new(&client)
+        .claim_jobs(ExtensionClaimParams {
             excluded_job_id: 0,
             kind: UnknownArgs::KIND.to_owned(),
             maximum: 1,
@@ -1152,7 +1155,7 @@ async fn sqlite_reinsert_preserves_wire_fields_and_runs_the_canonical_pipeline()
         .build()
         .unwrap();
     let scheduled_at = chrono::Utc::now() + chrono::Duration::hours(2);
-    let raw = client
+    let raw = riverqueue::__private::ExtensionClient::new(&client)
         .insert_raw(
             CancelArgs::KIND,
             &[],
@@ -1210,8 +1213,8 @@ async fn sqlite_reinsert_preserves_wire_fields_and_runs_the_canonical_pipeline()
         .execute(&mut *transaction)
         .await
         .unwrap();
-    let reinserted = client
-        .extension_insert_tx(
+    let reinserted = ExtensionClient::new(&client)
+        .insert_tx(
             &mut transaction,
             ExtensionInsertParams {
                 created_at: original.created_at,

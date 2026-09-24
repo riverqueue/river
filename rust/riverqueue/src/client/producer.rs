@@ -248,6 +248,8 @@ pub(super) async fn run_queue(
         }
     };
     let mut paused = initial_queue.paused_at.is_some();
+    let mut metadata = initial_queue.metadata.clone();
+    notify_queue_metadata(&inner, &queue, &metadata).await;
     let permits = Arc::new(Semaphore::new(config.max_workers));
     let mut jobs = JoinSet::new();
     let mut last_fetch = tokio::time::Instant::now() - config.fetch_cooldown;
@@ -296,6 +298,10 @@ pub(super) async fn run_queue(
         if refresh_queue_state {
             match crate::storage::load_queue(&inner, &queue).await {
                 Ok(Some(queue_row)) => {
+                    if queue_row.metadata != metadata {
+                        metadata.clone_from(&queue_row.metadata);
+                        notify_queue_metadata(&inner, &queue, &metadata).await;
+                    }
                     let next_paused = queue_row.paused_at.is_some();
                     if next_paused != paused {
                         paused = next_paused;
@@ -428,6 +434,62 @@ pub(super) async fn run_queue(
     clippy::too_many_lines,
     reason = "keeps hooks and metrics identical across backend fetch paths"
 )]
+/// Tells an extension about a queue's metadata, like River Go's producer does
+/// when it starts and when it's notified of a change.
+async fn notify_queue_metadata(inner: &ClientInner, queue: &str, metadata: &Map<String, Value>) {
+    let params = crate::__private::QueueMetadataChangedParams {
+        database: inner.pilot_database_config(),
+        metadata: metadata.clone(),
+        pool: inner.pilot_database_pool(),
+        queue: queue.to_owned(),
+    };
+    if let Err(hook_error) = inner.pilot.queue_metadata_changed(&params).await {
+        error!(queue = %queue, error = %hook_error, "River extension queue metadata hook failed");
+    }
+}
+
+/// Parameters passed to fetch extension hooks.
+fn extension_fetch_params(inner: &ClientInner, queue: &str, maximum: i32) -> FetchParams {
+    FetchParams {
+        client_id: inner.id.clone(),
+        database: inner.pilot_database_config(),
+        kinds: inner
+            .workers
+            .kinds()
+            .into_iter()
+            .map(str::to_owned)
+            .collect(),
+        maximum,
+        queue: queue.to_owned(),
+    }
+}
+
+/// Wraps claimed rows and emits fetch metrics.
+async fn finish_fetch(
+    inner: &ClientInner,
+    fetch_started: Option<std::time::Instant>,
+    rows: Vec<Result<JobRow, UndecodableJob>>,
+) -> FetchedJobs {
+    let fetched = FetchedJobs::from_decoded(rows);
+    if let Some(fetch_started) = fetch_started {
+        for metric in [
+            Metric::JobGetAvailableDuration(fetch_started.elapsed()),
+            Metric::JobGetAvailableCount(u64::try_from(fetched.len()).unwrap_or(u64::MAX)),
+        ] {
+            for hook in &inner.hooks {
+                if let Err(hook_error) = hook.metric_emit(metric).await {
+                    error!(error = %hook_error, "River metric hook failed");
+                }
+            }
+        }
+    }
+    fetched
+}
+
+#[allow(
+    clippy::too_many_lines,
+    reason = "each backend's claim and extension interception stay together until the backend rework"
+)]
 pub(super) async fn fetch_jobs(
     inner: &ClientInner,
     queue: &str,
@@ -447,22 +509,32 @@ pub(super) async fn fetch_jobs(
         };
         let rows = if inner.pilot.intercepts_fetch() {
             let mut transaction = crate::database::begin_sqlite_write(pool).await?;
+            let fetch_params = extension_fetch_params(inner, queue, maximum);
+            if let Some(claimed) = inner
+                .pilot
+                .claim_jobs(
+                    PilotDatabaseConnection::Sqlite(&mut transaction),
+                    &fetch_params,
+                )
+                .await
+                .map_err(|source| Error::Extension {
+                    phase: "fetch claim",
+                    source,
+                })?
+            {
+                transaction.commit().await?;
+                return Ok(finish_fetch(
+                    inner,
+                    fetch_started,
+                    claimed.into_iter().map(Ok).collect(),
+                )
+                .await);
+            }
             let selected_ids = inner
                 .pilot
                 .select_job_ids(
                     PilotDatabaseConnection::Sqlite(&mut transaction),
-                    &FetchParams {
-                        client_id: inner.id.clone(),
-                        database: inner.pilot_database_config(),
-                        kinds: inner
-                            .workers
-                            .kinds()
-                            .into_iter()
-                            .map(str::to_owned)
-                            .collect(),
-                        maximum,
-                        queue: queue.to_owned(),
-                    },
+                    &fetch_params,
                 )
                 .await
                 .map_err(|source| Error::Extension {
@@ -484,20 +556,7 @@ pub(super) async fn fetch_jobs(
                 .await
                 .map_err(sqlite_backend_error)?
         };
-        let fetched = FetchedJobs::from_decoded(rows);
-        if let Some(fetch_started) = fetch_started {
-            for metric in [
-                Metric::JobGetAvailableDuration(fetch_started.elapsed()),
-                Metric::JobGetAvailableCount(u64::try_from(fetched.len()).unwrap_or(u64::MAX)),
-            ] {
-                for hook in &inner.hooks {
-                    if let Err(hook_error) = hook.metric_emit(metric).await {
-                        error!(error = %hook_error, "River metric hook failed");
-                    }
-                }
-            }
-        }
-        return Ok(fetched);
+        return Ok(finish_fetch(inner, fetch_started, rows).await);
     }
     #[cfg(feature = "postgres")]
     {
@@ -519,28 +578,37 @@ pub(super) async fn fetch_jobs(
             job_projection("job")
         );
         let records = if inner.pilot.intercepts_fetch() {
-            let kinds = inner
-                .workers
-                .kinds()
-                .into_iter()
-                .map(str::to_owned)
-                .collect::<Vec<_>>();
             let mut transaction = inner
                 .postgres_pool()
                 .expect("PostgreSQL fetch extension requires a PostgreSQL pool")
                 .begin()
                 .await?;
+            let fetch_params = extension_fetch_params(inner, queue, maximum);
+            if let Some(claimed) = inner
+                .pilot
+                .claim_jobs(
+                    PilotDatabaseConnection::Postgres(&mut transaction),
+                    &fetch_params,
+                )
+                .await
+                .map_err(|source| Error::Extension {
+                    phase: "fetch claim",
+                    source,
+                })?
+            {
+                transaction.commit().await?;
+                return Ok(finish_fetch(
+                    inner,
+                    fetch_started,
+                    claimed.into_iter().map(Ok).collect(),
+                )
+                .await);
+            }
             let selected_ids = inner
                 .pilot
                 .select_job_ids(
                     PilotDatabaseConnection::Postgres(&mut transaction),
-                    &FetchParams {
-                        client_id: inner.id.clone(),
-                        database: inner.pilot_database_config(),
-                        kinds: kinds.clone(),
-                        maximum,
-                        queue: queue.to_owned(),
-                    },
+                    &fetch_params,
                 )
                 .await
                 .map_err(|source| Error::Extension {
@@ -581,20 +649,12 @@ pub(super) async fn fetch_jobs(
             )
             .await?
         };
-        let fetched = FetchedJobs::from_decoded(records.iter().map(decode_job_row).collect());
-        if let Some(fetch_started) = fetch_started {
-            for metric in [
-                Metric::JobGetAvailableDuration(fetch_started.elapsed()),
-                Metric::JobGetAvailableCount(u64::try_from(fetched.len()).unwrap_or(u64::MAX)),
-            ] {
-                for hook in &inner.hooks {
-                    if let Err(hook_error) = hook.metric_emit(metric).await {
-                        error!(error = %hook_error, "River metric hook failed");
-                    }
-                }
-            }
-        }
-        return Ok(fetched);
+        return Ok(finish_fetch(
+            inner,
+            fetch_started,
+            records.iter().map(decode_job_row).collect(),
+        )
+        .await);
     }
     #[allow(unreachable_code)]
     Err(Error::runtime(

@@ -32,10 +32,9 @@ pub struct WorkContext {
 }
 
 impl WorkContext {
-    /// Creates a context supervised by River.
-    #[doc(hidden)]
+    /// Creates a detached context with no client.
     #[must_use]
-    pub fn new(cancellation: CancellationToken) -> Self {
+    pub(crate) fn new(cancellation: CancellationToken) -> Self {
         Self {
             cancellation,
             client: None,
@@ -52,7 +51,7 @@ impl WorkContext {
     }
 
     /// Returns the River client supervising this job. Contexts constructed by
-    /// test helpers with [`WorkContext::new`] are detached and return `None`.
+    /// test helpers such as `riverqueue-test` are detached and return `None`.
     #[must_use]
     pub fn client(&self) -> Option<&Client> {
         self.client.as_ref()
@@ -328,11 +327,7 @@ impl WorkContext {
     }
 
     /// Returns a snapshot of metadata recorded during this attempt.
-    ///
-    /// This exact-version seam is used by `riverqueue-test` to return an
-    /// immutable result after invoking a worker directly.
-    #[doc(hidden)]
-    pub fn metadata_updates(&self) -> Map<String, Value> {
+    pub(crate) fn metadata_updates(&self) -> Map<String, Value> {
         self.lock_metadata().clone()
     }
 
@@ -353,17 +348,15 @@ impl WorkContext {
     }
 
     /// Creates a detached attempt context using persisted resumable metadata.
-    #[doc(hidden)]
     #[must_use]
-    pub fn for_test_job(job: &JobRow) -> Self {
+    pub(crate) fn for_test_job(job: &JobRow) -> Self {
         let mut context = Self::new(CancellationToken::new());
         context.resumable = Arc::new(Mutex::new(ResumableState::from_metadata(&job.metadata)));
         context
     }
 
     /// Validates checkpoint metadata before invoking user work.
-    #[doc(hidden)]
-    pub async fn resumable_validate(&self) -> Result<(), WorkError> {
+    pub(crate) async fn resumable_validate(&self) -> Result<(), WorkError> {
         match &self.resumable.lock().await.failure {
             Some(error) => Err(error.clone()),
             None => Ok(()),
@@ -371,8 +364,7 @@ impl WorkContext {
     }
 
     /// Resolves attempt-scoped resumable errors and metadata for runtime/test parity.
-    #[doc(hidden)]
-    pub async fn resumable_finish(&self, worker_failed: bool) -> Option<WorkError> {
+    pub(crate) async fn resumable_finish(&self, worker_failed: bool) -> Option<WorkError> {
         let state = self.resumable.lock().await;
         let failure = state.failure.clone().or_else(|| {
             (!worker_failed && !state.resume_matched).then(|| {

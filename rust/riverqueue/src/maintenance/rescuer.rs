@@ -6,7 +6,7 @@ use serde_json::Value;
 use sqlx::AssertSqlSafe;
 use tracing::{debug, error};
 
-use riverqueue_internal::{
+use crate::__private::{
     DatabaseConnection as PilotDatabaseConnection, RescueAction, RescueJob, RescueManyParams,
     RescueParams,
 };
@@ -119,7 +119,7 @@ fn rescue_jobs(
             finalized_at,
             id: row.id,
             scheduled_at,
-            state: state.as_str().to_owned(),
+            state,
         });
     }
     Ok(jobs)
@@ -368,7 +368,7 @@ async fn rescue_batch_postgres(
                 params
                     .jobs
                     .iter()
-                    .map(|job| job.state.clone())
+                    .map(|job| job.state.as_str())
                     .collect::<Vec<_>>(),
             )
             .bind(stuck_horizon)
@@ -441,9 +441,7 @@ async fn rescue_batch_sqlite(
         };
         if action == RescueAction::Continue {
             for job in &params.jobs {
-                let state = job.state.parse::<JobState>().map_err(|error| {
-                    Error::invalid_job_context("maintenance", error.to_string())
-                })?;
+                let state = job.state;
                 let error: AttemptError =
                     serde_json::from_value(job.attempt_error.clone()).map_err(Error::from)?;
                 sqlite::rescue(

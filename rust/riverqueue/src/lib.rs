@@ -7,6 +7,8 @@ compile_error!("riverqueue requires at least one database feature: `postgres` or
 
 extern crate self as riverqueue;
 
+#[doc(hidden)]
+pub mod __private;
 mod client;
 pub mod database;
 pub mod encoding;
@@ -25,8 +27,9 @@ pub mod worker;
 
 pub use client::{
     Client, ClientBuilder, InsertBatchRequest, InsertManyFastRequest, InsertManyItem,
-    InsertManyRequest, InsertRequest, MaintenanceConfig, QueueConfig, RunHandle, WeakClient,
+    InsertManyRequest, InsertRequest, MaintenanceConfig, QueueConfig, RunHandle,
 };
+pub(crate) use database::SchemaName;
 pub use error::{BoxError, ConfigurationError, Error, JobValidationError, RuntimeError};
 pub use event::{
     Event, EventKind, EventKindMismatch, EventReceiver, EventRecvError, JobEvent, JobEventKind,
@@ -38,9 +41,8 @@ pub use extension::{
     RetryPolicy, WorkCancelled, WorkError, WorkMiddleware, WorkResult,
 };
 pub use job::{
-    AttemptError, ExtensionClaimParams, ExtensionInsertParams, InsertBatch, InsertBatchResult,
-    InsertOpts, InsertParams, InsertResult, Job, JobArgs, JobRow, JobRowParts, JobState,
-    JobStateParseError, RawInsertResult, ScheduleOverride, UniqueOpts,
+    AttemptError, InsertBatch, InsertBatchResult, InsertOpts, InsertParams, InsertResult, Job,
+    JobArgs, JobRow, JobState, JobStateParseError, ScheduleOverride, UniqueOpts,
 };
 pub use periodic::{
     CronSchedule, CronScheduleParseError, CronTimeZone, IntervalSchedule, NeverSchedule,
@@ -55,10 +57,12 @@ pub use query::{
     JobUpdateParams, SortDirection,
 };
 pub use queue::{Queue, QueueListParams};
-#[doc(hidden)]
-pub use riverqueue_internal as internal;
-pub(crate) use riverqueue_internal::SchemaName;
 pub use riverqueue_macros::JobArgs;
+/// Database migrations, re-exported from `riverqueue-migrate`.
+///
+/// Apply migrations before starting clients, for example with
+/// [`migrate::PostgresMigrator`].
+pub use riverqueue_migrate as migrate;
 /// The SQLx version River's pools and transactions come from.
 ///
 /// River accepts SQLx pools and transactions directly, so applications must

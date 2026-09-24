@@ -1,131 +1,98 @@
-#![doc = include_str!("../README.md")]
-#![forbid(unsafe_code)]
+//! Unstable extension points for River's own companion crates.
+//!
+//! Nothing in this module is part of River's public API. It changes without
+//! notice between any two versions, so only crates released in lockstep with
+//! `riverqueue` may use it.
 
-#[cfg(not(any(feature = "postgres", feature = "sqlite")))]
-compile_error!(
-    "riverqueue-internal requires at least one database feature: `postgres` or `sqlite`"
-);
+#![allow(missing_docs)]
 
 use std::{fmt, time::Duration};
 
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
-use serde_json::{Map, Value};
+use serde_json::{Map, Value, value::RawValue};
+
+#[cfg(feature = "postgres")]
+use crate::database::SchemaName;
+use crate::{AttemptError, InsertResult, Job, JobRow, JobState};
 #[cfg(feature = "postgres")]
 use sqlx::{PgConnection, PgPool};
 #[cfg(feature = "sqlite")]
 use sqlx::{SqliteConnection, SqlitePool};
-use thiserror::Error;
 use tokio_util::sync::CancellationToken;
 
-/// PostgreSQL's maximum identifier length.
-pub const POSTGRES_IDENTIFIER_MAX: usize = 63;
+pub use crate::client::{ExtensionClient, WeakClient};
+pub use crate::database::erased::{Database, ErasedExecutor, ErasedTransaction};
+
+/// Builder operations reserved for River's own companion crates.
+pub trait ClientBuilderExt: Sized {
+    /// Installs a pilot from a companion crate.
+    #[must_use]
+    fn pilot<P: Pilot>(self, pilot: P) -> Self;
+}
+
+impl ClientBuilderExt for crate::ClientBuilder {
+    fn pilot<P: Pilot>(self, pilot: P) -> Self {
+        self.with_pilot(pilot)
+    }
+}
+
+/// Encodes a UTC timestamp in River's canonical SQLite wire format.
+///
+/// This keeps companion crates aligned with River and Go's
+/// millisecond-rounded, timezone-free SQLite representation.
+#[cfg(feature = "sqlite")]
+#[must_use]
+pub fn sqlite_timestamp(time: DateTime<Utc>) -> String {
+    crate::database::sqlite::sqlite_time(time)
+}
+
+/// Creates a detached work context with no client.
+#[must_use]
+pub fn work_context(cancellation: CancellationToken) -> crate::WorkContext {
+    crate::WorkContext::new(cancellation)
+}
+
+/// Creates a detached work context for a job, restoring its persisted
+/// resumable metadata.
+#[must_use]
+pub fn work_context_for_job(job: &JobRow) -> crate::WorkContext {
+    crate::WorkContext::for_test_job(job)
+}
+
+/// Returns a snapshot of metadata recorded during an attempt.
+#[must_use]
+pub fn work_context_metadata_updates(context: &crate::WorkContext) -> Map<String, Value> {
+    context.metadata_updates()
+}
+
+/// Validates resumable checkpoint metadata before invoking user work.
+///
+/// # Errors
+///
+/// Returns the resumable metadata failure recorded for the attempt.
+pub async fn work_context_resumable_validate(
+    context: &crate::WorkContext,
+) -> Result<(), crate::WorkError> {
+    context.resumable_validate().await
+}
+
+/// Resolves attempt-scoped resumable errors and metadata after user work.
+pub async fn work_context_resumable_finish(
+    context: &crate::WorkContext,
+    worker_failed: bool,
+) -> Option<crate::WorkError> {
+    context.resumable_finish(worker_failed).await
+}
 
 /// Notification topic for queue and job control messages.
-pub const NOTIFICATION_TOPIC_CONTROL: &str = "river_control";
+pub const NOTIFICATION_TOPIC_CONTROL: &str = crate::protocol::NOTIFICATION_TOPIC_CONTROL;
 
 /// Notification topic for newly available jobs.
-pub const NOTIFICATION_TOPIC_INSERT: &str = "river_insert";
+pub const NOTIFICATION_TOPIC_INSERT: &str = crate::protocol::NOTIFICATION_TOPIC_INSERT;
 
 /// Notification topic for leadership changes.
-pub const NOTIFICATION_TOPIC_LEADERSHIP: &str = "river_leadership";
-
-/// Longest River notification topic.
-pub const NOTIFICATION_TOPIC_LONGEST: &str = NOTIFICATION_TOPIC_LEADERSHIP;
-
-/// Maximum schema length after reserving `<schema>.river_leadership`.
-pub const SCHEMA_MAX_LEN: usize = POSTGRES_IDENTIFIER_MAX - NOTIFICATION_TOPIC_LONGEST.len() - 1;
-
-/// A validated PostgreSQL schema used by River.
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct SchemaName(Option<String>);
-
-impl SchemaName {
-    /// Uses PostgreSQL's current schema.
-    #[must_use]
-    pub const fn current() -> Self {
-        Self(None)
-    }
-
-    /// Validates an optional explicit schema.
-    ///
-    /// Like Go's `SafeIdentifier` quoting, any name is accepted and quoted
-    /// when rendered, including mixed case and punctuation such as
-    /// `river-prod`. Names containing NUL are rejected, as are names too long
-    /// to prefix River's notification topics within PostgreSQL's identifier
-    /// limit.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error when the schema is too long or contains NUL.
-    pub fn new(schema: impl Into<String>) -> Result<Self, SchemaNameError> {
-        let schema = schema.into();
-        if schema.is_empty() {
-            return Ok(Self::current());
-        }
-        if schema.len() > SCHEMA_MAX_LEN {
-            return Err(SchemaNameError::TooLong {
-                length: schema.len(),
-                maximum: SCHEMA_MAX_LEN,
-            });
-        }
-        if schema.contains('\0') {
-            return Err(SchemaNameError::Invalid(schema));
-        }
-
-        Ok(Self(Some(schema)))
-    }
-
-    /// Returns the unquoted explicit schema, if configured.
-    #[must_use]
-    pub fn as_deref(&self) -> Option<&str> {
-        self.0.as_deref()
-    }
-
-    /// Qualifies and safely quotes a database object name.
-    #[must_use]
-    pub fn qualify(&self, object: &str) -> String {
-        match &self.0 {
-            Some(schema) => format!("{}.{}", quote_identifier(schema), quote_identifier(object)),
-            None => quote_identifier(object),
-        }
-    }
-
-    /// Prefix used by River's canonical migration templates.
-    #[must_use]
-    pub fn migration_prefix(&self) -> String {
-        self.0.as_ref().map_or_else(String::new, |schema| {
-            format!("{}.", quote_identifier(schema))
-        })
-    }
-
-    /// Fully qualified PostgreSQL notification channel.
-    #[must_use]
-    pub fn notification_topic(&self, topic: &str) -> String {
-        match &self.0 {
-            Some(schema) => format!("{schema}.{topic}"),
-            None => format!("public.{topic}"),
-        }
-    }
-}
-
-/// Quotes a PostgreSQL identifier, doubling embedded quotes like Go's
-/// `dbutil.SafeIdentifier`.
-fn quote_identifier(identifier: &str) -> String {
-    format!("\"{}\"", identifier.replace('"', "\"\""))
-}
-
-impl Default for SchemaName {
-    fn default() -> Self {
-        Self::current()
-    }
-}
-
-impl fmt::Display for SchemaName {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter.write_str(self.as_deref().unwrap_or("<current>"))
-    }
-}
+pub const NOTIFICATION_TOPIC_LEADERSHIP: &str = crate::protocol::NOTIFICATION_TOPIC_LEADERSHIP;
 
 /// A River notification topic, mirroring Go's `notifier.NotificationTopic`.
 #[doc(hidden)]
@@ -218,21 +185,12 @@ pub async fn notify_many(
 /// Error type used across the exact-version internal pilot seam.
 pub type PilotError = Box<dyn std::error::Error + Send + Sync>;
 
-/// Built-in backend selected for an exact-version extension call.
-#[doc(hidden)]
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum DatabaseKind {
-    /// PostgreSQL.
-    #[cfg(feature = "postgres")]
-    Postgres,
-    /// SQLite.
-    #[cfg(feature = "sqlite")]
-    Sqlite,
-}
+pub use crate::database::DatabaseKind;
 
 /// Backend configuration passed through River's exact-version extension seam.
 #[doc(hidden)]
 #[derive(Clone, Debug)]
+#[non_exhaustive]
 pub enum DatabaseConfig {
     /// PostgreSQL backend configuration.
     #[cfg(feature = "postgres")]
@@ -268,6 +226,7 @@ impl DatabaseConfig {
 
 /// Borrowed transaction connection passed to an exact-version extension.
 #[doc(hidden)]
+#[non_exhaustive]
 pub enum DatabaseConnection<'connection> {
     /// PostgreSQL transaction connection.
     #[cfg(feature = "postgres")]
@@ -324,6 +283,7 @@ impl fmt::Debug for DatabaseConnection<'_> {
 /// Caller-owned pool passed to an exact-version background service.
 #[doc(hidden)]
 #[derive(Clone)]
+#[non_exhaustive]
 pub enum DatabasePool {
     /// PostgreSQL pool.
     #[cfg(feature = "postgres")]
@@ -423,7 +383,7 @@ pub struct RescueJob {
     /// Next scheduled time.
     pub scheduled_at: DateTime<Utc>,
     /// Target River state string.
-    pub state: String,
+    pub state: JobState,
 }
 
 /// Inputs of a batched rescue, mirroring Go's `JobRescueManyParams`.
@@ -458,72 +418,41 @@ pub enum RescueAction {
 pub struct JobUpdatedParams {
     /// Selected database backend configuration.
     pub database: DatabaseConfig,
-    /// Job ID.
-    pub id: i64,
-    /// Job kind.
-    pub kind: String,
-    /// Job metadata after the update.
-    pub metadata: Map<String, Value>,
-    /// Job queue.
-    pub queue: String,
-    /// River state string after the update.
-    pub state: String,
-}
-
-/// A job row as persisted by River's set-state-if-running update.
-///
-/// The fields match `riverqueue::JobRow`, which this crate cannot name;
-/// `riverqueue::JobRow::from_parts` rebuilds one when an extension needs it.
-/// States use River's wire strings (for example `"completed"`), and attempt
-/// errors keep their persisted JSON form.
-#[derive(Clone, Debug)]
-pub struct JobSetStateRow {
-    /// Database-generated ID.
-    pub id: i64,
-    /// Current attempt number.
-    pub attempt: i16,
-    /// Last attempt time.
-    pub attempted_at: Option<DateTime<Utc>>,
-    /// IDs of clients that attempted the job.
-    pub attempted_by: Vec<String>,
-    /// Creation time.
-    pub created_at: DateTime<Utc>,
-    /// Encoded job arguments.
-    pub encoded_args: Box<serde_json::value::RawValue>,
-    /// Persisted attempt errors in chronological order.
-    pub errors: Vec<Value>,
-    /// Terminal-state time.
-    pub finalized_at: Option<DateTime<Utc>>,
-    /// Stable job kind.
-    pub kind: String,
-    /// Maximum attempts.
-    pub max_attempts: i16,
-    /// Arbitrary and River-reserved metadata.
-    pub metadata: Map<String, Value>,
-    /// Priority from one through four.
-    pub priority: i16,
-    /// Queue name.
-    pub queue: String,
-    /// Earliest run time.
-    pub scheduled_at: DateTime<Utc>,
-    /// Current state as River's wire string.
-    pub state: String,
-    /// Searchable tags.
-    pub tags: Vec<String>,
-    /// Unique hash, if any.
-    pub unique_key: Option<Vec<u8>>,
-    /// States, as wire strings, in which the unique key is enforced.
-    pub unique_states: Option<Vec<String>>,
+    /// The job after the update.
+    pub job: JobRow,
 }
 
 /// Rows passed to [`Pilot::after_jobs_set_state`].
 #[derive(Clone, Debug)]
-pub struct JobSetStateParams {
+pub struct JobSetStateParams<'a> {
     /// Selected database backend configuration.
     pub database: DatabaseConfig,
     /// Every job in the batch that still exists, as returned by the update,
     /// including jobs that were no longer running and so kept their state.
-    pub jobs: Vec<JobSetStateRow>,
+    pub jobs: &'a [JobRow],
+}
+
+/// Rows passed to [`Pilot::after_jobs_inserted`].
+#[derive(Clone, Debug)]
+pub struct JobsInsertedParams<'a> {
+    /// Selected database backend configuration.
+    pub database: DatabaseConfig,
+    /// Jobs the insertion wrote, excluding unique insertions skipped as
+    /// duplicates, in input order.
+    pub jobs: &'a [JobRow],
+}
+
+/// Queue metadata passed to [`Pilot::queue_metadata_changed`].
+#[derive(Clone, Debug)]
+pub struct QueueMetadataChangedParams {
+    /// Selected database backend configuration.
+    pub database: DatabaseConfig,
+    /// The queue's current metadata.
+    pub metadata: Map<String, Value>,
+    /// Caller-owned pool.
+    pub pool: DatabasePool,
+    /// Queue name.
+    pub queue: String,
 }
 
 /// Mutable job insertion fields exposed to an exact-version extension.
@@ -541,6 +470,10 @@ pub struct JobInsertParams<'insert> {
     pub metadata: &'insert mut Map<String, Value>,
     /// Queue in which the job will run.
     pub queue: &'insert mut String,
+    /// Initial state: available, pending, or scheduled. An extension may
+    /// insert a job as pending, like River Go's insert hooks setting
+    /// `JobInsertParams.State`.
+    pub state: &'insert mut JobState,
 }
 
 impl fmt::Debug for JobInsertParams<'_> {
@@ -657,6 +590,24 @@ pub trait Pilot: Send + Sync + 'static {
         Ok(())
     }
 
+    /// Optionally claims jobs itself, like River Go's `Pilot.JobGetAvailable`.
+    ///
+    /// Called in the fetch transaction when [`Pilot::intercepts_fetch`]
+    /// returns `true`, before [`Pilot::select_job_ids`]. Returning rows skips
+    /// River's claim: the extension must have moved them to `running` with
+    /// the attempt incremented, `attempted_at` set, and this client appended
+    /// to `attempted_by`, exactly as River's claim does. Build them with
+    /// [`postgres_job_projection`] and [`decode_postgres_job_row`] (or their
+    /// SQLite equivalents) so they decode like River's own rows. `None`
+    /// continues with [`Pilot::select_job_ids`] and River's claim.
+    async fn claim_jobs(
+        &self,
+        _connection: DatabaseConnection<'_>,
+        _params: &FetchParams,
+    ) -> Result<Option<Vec<JobRow>>, PilotError> {
+        Ok(None)
+    }
+
     /// Optionally selects and locks fetch candidates using the provided
     /// transaction connection. Returned IDs are claimed by the OSS runtime in
     /// the same transaction. `None` delegates selection to River OSS.
@@ -734,6 +685,33 @@ pub trait Pilot: Send + Sync + 'static {
         Ok(())
     }
 
+    /// Runs after River writes a batch of inserted jobs, inside the insertion
+    /// transaction, like the post-insert work in River Go's
+    /// `Pilot.JobInsertMany`.
+    ///
+    /// Called only when [`Pilot::intercepts_insert`] returns `true`, on every
+    /// insertion path, including batches, fast inserts (which then write rows
+    /// individually rather than with `COPY`), caller-managed transactions,
+    /// and periodic jobs. Unique insertions skipped as duplicates aren't
+    /// included. Returning an error rolls back the insertion.
+    async fn after_jobs_inserted(
+        &self,
+        _connection: DatabaseConnection<'_>,
+        _params: &JobsInsertedParams<'_>,
+    ) -> Result<(), PilotError> {
+        Ok(())
+    }
+
+    /// Observes a queue's metadata when a producer starts and whenever it's
+    /// changed at runtime, like River Go's `Pilot.QueueMetadataChanged`.
+    /// Errors are logged.
+    async fn queue_metadata_changed(
+        &self,
+        _params: &QueueMetadataChangedParams,
+    ) -> Result<(), PilotError> {
+        Ok(())
+    }
+
     /// Leader-owned services contributed by the extension.
     fn maintenance_services(&self) -> Vec<std::sync::Arc<dyn MaintenanceService>> {
         Vec::new()
@@ -751,57 +729,163 @@ pub struct NoopPilot;
 
 impl Pilot for NoopPilot {}
 
-/// Invalid River schema name.
-#[derive(Debug, Error)]
-pub enum SchemaNameError {
-    /// Schema contains a NUL character, which PostgreSQL identifiers cannot.
-    #[error("schema name cannot contain NUL: {0:?}")]
-    Invalid(String),
-
-    /// Schema is too long to prefix River's notification topics.
-    #[error("schema length {length} exceeds maximum {maximum}")]
-    TooLong {
-        /// Observed byte length.
-        length: usize,
-        /// Maximum byte length.
-        maximum: usize,
-    },
+/// Columns River selects to decode a PostgreSQL job row, qualified by
+/// `alias`, for use with [`decode_postgres_job_row`].
+#[cfg(feature = "postgres")]
+#[must_use]
+pub fn postgres_job_projection(alias: &str) -> String {
+    crate::client::job_projection(alias)
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
+/// Decodes a row selected with [`postgres_job_projection`] exactly as River
+/// decodes its own rows.
+///
+/// # Errors
+///
+/// Returns an error when the row can't be decoded.
+#[cfg(feature = "postgres")]
+pub fn decode_postgres_job_row(row: &sqlx::postgres::PgRow) -> Result<JobRow, PilotError> {
+    crate::client::decode_job_row(row).map_err(|undecodable| undecodable.error.into())
+}
 
-    #[test]
-    fn schema_name_validates_and_qualifies() {
-        let schema = SchemaName::new("river_test").unwrap();
-        assert_eq!(schema.qualify("river_job"), "\"river_test\".\"river_job\"");
-        assert_eq!(
-            schema.notification_topic("river_insert"),
-            "river_test.river_insert"
-        );
+/// Columns River selects to decode a SQLite job row, for use with
+/// [`decode_sqlite_job_row`].
+#[cfg(feature = "sqlite")]
+pub const SQLITE_JOB_COLUMNS: &str = crate::database::sqlite::JOB_COLUMNS;
 
-        // Go quotes any schema with `SafeIdentifier`, so Rust accepts the
-        // same names and escapes embedded quotes.
-        let hyphenated = SchemaName::new("river-prod").unwrap();
-        assert_eq!(
-            hyphenated.qualify("river_job"),
-            "\"river-prod\".\"river_job\""
-        );
-        assert_eq!(
-            hyphenated.notification_topic("river_insert"),
-            "river-prod.river_insert"
-        );
-        assert_eq!(
-            SchemaName::new("MyRiver").unwrap().migration_prefix(),
-            "\"MyRiver\"."
-        );
-        assert_eq!(
-            SchemaName::new("odd\"name").unwrap().qualify("river_job"),
-            "\"odd\"\"name\".\"river_job\""
-        );
-        assert!(SchemaName::new("1leading_digit").is_ok());
-        assert!(SchemaName::new("nul\0byte").is_err());
-        assert!(SchemaName::new("a".repeat(SCHEMA_MAX_LEN + 1)).is_err());
+/// Decodes a row selected with [`SQLITE_JOB_COLUMNS`] exactly as River
+/// decodes its own rows.
+///
+/// # Errors
+///
+/// Returns an error when the row can't be decoded.
+#[cfg(feature = "sqlite")]
+pub fn decode_sqlite_job_row(row: &sqlx::sqlite::SqliteRow) -> Result<JobRow, PilotError> {
+    crate::database::sqlite::decode_job_row(row).map_err(|undecodable| undecodable.error.into())
+}
+
+/// Type-erased result returned by River's exact-version insertion seam.
+#[derive(Clone, Debug)]
+#[non_exhaustive]
+pub struct RawInsertResult {
+    /// Inserted job or the existing matching unique job.
+    pub job: JobRow,
+    /// Whether insertion was skipped because a unique job already existed.
+    pub unique_skipped_as_duplicate: bool,
+}
+
+/// Persisted insertion fields accepted by River's exact-version extension
+/// seam.
+///
+/// River resets execution fields and lets the backend allocate the live-row
+/// ID rather than explicitly retaining a source ID. The supplied creation
+/// time, schedule, and uniqueness wire values are retained while the ordinary
+/// hook, middleware, insertion-interception, and notification pipeline runs.
+#[derive(Clone, Debug)]
+pub struct ExtensionInsertParams {
+    /// Original creation time.
+    pub created_at: DateTime<Utc>,
+    /// Serialized job arguments.
+    pub encoded_args: Box<RawValue>,
+    /// Stable job kind.
+    pub kind: String,
+    /// Maximum attempts, including the first.
+    pub max_attempts: i16,
+    /// Arbitrary job metadata.
+    pub metadata: Map<String, Value>,
+    /// Priority from one through four.
+    pub priority: i16,
+    /// Queue in which the job runs.
+    pub queue: String,
+    /// Earliest time at which the reinserted job may run.
+    pub scheduled_at: DateTime<Utc>,
+    /// Searchable tags.
+    pub tags: Vec<String>,
+    /// Existing unique hash, if any.
+    pub unique_key: Option<Vec<u8>>,
+    /// Existing states in which the key is enforced, if any.
+    pub unique_states: Option<Vec<JobState>>,
+}
+
+/// Eligibility and metadata changes for an exact-version atomic job claim.
+///
+/// River claims available, due jobs matching the kind, queue, and top-level
+/// metadata values. It excludes one coordinating job, records the claiming
+/// client and attempt, applies `metadata_updates`, and returns complete rows in
+/// priority, scheduled-time, and ID order.
+#[derive(Clone, Debug)]
+pub struct ExtensionClaimParams {
+    /// Job ID excluded from the claim.
+    pub excluded_job_id: i64,
+    /// Stable job kind to claim.
+    pub kind: String,
+    /// Maximum number of jobs to claim.
+    pub maximum: i32,
+    /// Top-level metadata values that must match exactly.
+    pub metadata_matches: Map<String, Value>,
+    /// Top-level metadata values merged into every claimed job.
+    pub metadata_updates: Map<String, Value>,
+    /// Queue from which jobs are claimed.
+    pub queue: String,
+}
+
+impl RawInsertResult {
+    /// Converts an exact-version raw result after its arguments are decoded.
+    #[must_use]
+    pub fn into_typed<A>(self, args: A) -> InsertResult<A> {
+        InsertResult {
+            job: Job::new(args, self.job),
+            unique_skipped_as_duplicate: self.unique_skipped_as_duplicate,
+        }
+    }
+}
+
+/// Complete persisted job fields for exact-version record conversion.
+pub struct JobRowParts {
+    pub id: i64,
+    pub attempt: i16,
+    pub attempted_at: Option<DateTime<Utc>>,
+    pub attempted_by: Vec<String>,
+    pub created_at: DateTime<Utc>,
+    pub encoded_args: Box<RawValue>,
+    pub errors: Vec<AttemptError>,
+    pub finalized_at: Option<DateTime<Utc>>,
+    pub kind: String,
+    pub max_attempts: i16,
+    pub metadata: Map<String, Value>,
+    pub priority: i16,
+    pub queue: String,
+    pub scheduled_at: DateTime<Utc>,
+    pub state: JobState,
+    pub tags: Vec<String>,
+    pub unique_key: Option<Vec<u8>>,
+    pub unique_states: Option<Vec<JobState>>,
+}
+
+impl JobRowParts {
+    /// Converts complete fields from an exact-version database record.
+    #[must_use]
+    pub fn into_row(self) -> JobRow {
+        let parts = self;
+        JobRow {
+            attempt: parts.attempt,
+            attempted_at: parts.attempted_at,
+            attempted_by: parts.attempted_by,
+            created_at: parts.created_at,
+            encoded_args: parts.encoded_args,
+            errors: parts.errors,
+            finalized_at: parts.finalized_at,
+            id: parts.id,
+            kind: parts.kind,
+            max_attempts: parts.max_attempts,
+            metadata: parts.metadata,
+            priority: parts.priority,
+            queue: parts.queue,
+            scheduled_at: parts.scheduled_at,
+            state: parts.state,
+            tags: parts.tags,
+            unique_key: parts.unique_key,
+            unique_states: parts.unique_states,
+        }
     }
 }

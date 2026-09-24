@@ -421,86 +421,6 @@ impl InsertBatchResult {
     }
 }
 
-/// Type-erased result returned by River's exact-version insertion seam.
-#[doc(hidden)]
-#[derive(Clone, Debug)]
-#[non_exhaustive]
-pub struct RawInsertResult {
-    /// Inserted job or the existing matching unique job.
-    pub job: JobRow,
-    /// Whether insertion was skipped because a unique job already existed.
-    pub unique_skipped_as_duplicate: bool,
-}
-
-/// Persisted insertion fields accepted by River's exact-version extension
-/// seam.
-///
-/// River resets execution fields and lets the backend allocate the live-row
-/// ID rather than explicitly retaining a source ID. The supplied creation
-/// time, schedule, and uniqueness wire values are retained while the ordinary
-/// hook, middleware, insertion-interception, and notification pipeline runs.
-#[doc(hidden)]
-#[derive(Clone, Debug)]
-pub struct ExtensionInsertParams {
-    /// Original creation time.
-    pub created_at: DateTime<Utc>,
-    /// Serialized job arguments.
-    pub encoded_args: Box<RawValue>,
-    /// Stable job kind.
-    pub kind: String,
-    /// Maximum attempts, including the first.
-    pub max_attempts: i16,
-    /// Arbitrary job metadata.
-    pub metadata: Map<String, Value>,
-    /// Priority from one through four.
-    pub priority: i16,
-    /// Queue in which the job runs.
-    pub queue: String,
-    /// Earliest time at which the reinserted job may run.
-    pub scheduled_at: DateTime<Utc>,
-    /// Searchable tags.
-    pub tags: Vec<String>,
-    /// Existing unique hash, if any.
-    pub unique_key: Option<Vec<u8>>,
-    /// Existing states in which the key is enforced, if any.
-    pub unique_states: Option<Vec<JobState>>,
-}
-
-/// Eligibility and metadata changes for an exact-version atomic job claim.
-///
-/// River claims available, due jobs matching the kind, queue, and top-level
-/// metadata values. It excludes one coordinating job, records the claiming
-/// client and attempt, applies `metadata_updates`, and returns complete rows in
-/// priority, scheduled-time, and ID order.
-#[doc(hidden)]
-#[derive(Clone, Debug)]
-pub struct ExtensionClaimParams {
-    /// Job ID excluded from the claim.
-    pub excluded_job_id: i64,
-    /// Stable job kind to claim.
-    pub kind: String,
-    /// Maximum number of jobs to claim.
-    pub maximum: i32,
-    /// Top-level metadata values that must match exactly.
-    pub metadata_matches: Map<String, Value>,
-    /// Top-level metadata values merged into every claimed job.
-    pub metadata_updates: Map<String, Value>,
-    /// Queue from which jobs are claimed.
-    pub queue: String,
-}
-
-impl RawInsertResult {
-    /// Converts an exact-version raw result after its arguments are decoded.
-    #[doc(hidden)]
-    #[must_use]
-    pub fn into_typed<A>(self, args: A) -> InsertResult<A> {
-        InsertResult {
-            job: Job::new(args, self.job),
-            unique_skipped_as_duplicate: self.unique_skipped_as_duplicate,
-        }
-    }
-}
-
 /// Typed job passed to a worker.
 #[derive(Clone, Debug)]
 #[non_exhaustive]
@@ -578,55 +498,7 @@ pub struct JobRow {
     pub unique_states: Option<Vec<JobState>>,
 }
 
-/// Complete persisted job fields for exact-version record conversion.
-#[doc(hidden)]
-pub struct JobRowParts {
-    pub id: i64,
-    pub attempt: i16,
-    pub attempted_at: Option<DateTime<Utc>>,
-    pub attempted_by: Vec<String>,
-    pub created_at: DateTime<Utc>,
-    pub encoded_args: Box<RawValue>,
-    pub errors: Vec<AttemptError>,
-    pub finalized_at: Option<DateTime<Utc>>,
-    pub kind: String,
-    pub max_attempts: i16,
-    pub metadata: Map<String, Value>,
-    pub priority: i16,
-    pub queue: String,
-    pub scheduled_at: DateTime<Utc>,
-    pub state: JobState,
-    pub tags: Vec<String>,
-    pub unique_key: Option<Vec<u8>>,
-    pub unique_states: Option<Vec<JobState>>,
-}
-
 impl JobRow {
-    /// Converts complete fields from an exact-version database record.
-    #[doc(hidden)]
-    #[must_use]
-    pub fn from_parts(parts: JobRowParts) -> Self {
-        Self {
-            attempt: parts.attempt,
-            attempted_at: parts.attempted_at,
-            attempted_by: parts.attempted_by,
-            created_at: parts.created_at,
-            encoded_args: parts.encoded_args,
-            errors: parts.errors,
-            finalized_at: parts.finalized_at,
-            id: parts.id,
-            kind: parts.kind,
-            max_attempts: parts.max_attempts,
-            metadata: parts.metadata,
-            priority: parts.priority,
-            queue: parts.queue,
-            scheduled_at: parts.scheduled_at,
-            state: parts.state,
-            tags: parts.tags,
-            unique_key: parts.unique_key,
-            unique_states: parts.unique_states,
-        }
-    }
     /// Creates a minimal persisted row suitable for tests and adapters.
     ///
     /// Use [`encode_args`](crate::encoding::encode_args) to encode typed

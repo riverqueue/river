@@ -1,6 +1,6 @@
 #![cfg(feature = "postgres-tests")]
 
-use riverqueue_internal::SchemaName;
+use riverqueue_migrate::SchemaName;
 use riverqueue_migrate::{Direction, MIGRATION_VERSION_LATEST, MigrateOpts, PostgresMigrator};
 use serde_json::Value;
 use sqlx::{AssertSqlSafe, PgPool};

@@ -16,16 +16,16 @@ all-features = true
 
 [features]
 default = ["postgres"]
-postgres = ["riverqueue-internal/postgres", "sqlx/postgres"]
+postgres = ["riverqueue-migrate/postgres", "sqlx/postgres"]
 postgres-tests = ["postgres"]
-sqlite = ["riverqueue-internal/sqlite", "sqlx/sqlite"]
+sqlite = ["riverqueue-migrate/sqlite", "sqlx/sqlite"]
 
 [dependencies]
 async-trait.workspace = true
 base64.workspace = true
 chrono.workspace = true
 futures-util.workspace = true
-riverqueue-internal = { path = "../riverqueue-internal", version = "=0.47.0-alpha.1", default-features = false }
+riverqueue-migrate = { path = "../riverqueue-migrate", version = "=0.47.0-alpha.1", default-features = false }
 riverqueue-macros = { path = "../riverqueue-macros", version = "=0.47.0-alpha.1" }
 serde.workspace = true
 serde_json.workspace = true

@@ -6,6 +6,7 @@ use serde_json::{Map, Value};
 #[cfg(feature = "postgres")]
 use sqlx::{AssertSqlSafe, Executor, FromRow, PgConnection, Postgres, types::Json};
 
+use crate::__private::DatabaseConnection;
 use crate::client::after_jobs_set_state;
 #[cfg(feature = "sqlite")]
 use crate::database::sqlite;
@@ -20,7 +21,6 @@ use crate::{
     JobListOrderBy, SortDirection,
     client::{JobRecord, job_projection},
 };
-use riverqueue_internal::DatabaseConnection;
 
 /// Queue name that addresses every persisted queue in pause and resume.
 const QUEUE_ALL: &str = "*";
@@ -44,13 +44,9 @@ pub(crate) async fn after_job_cancel_or_retry(
     if !inner.pilot.intercepts_job_cancel_retry() {
         return Ok(());
     }
-    let params = riverqueue_internal::JobUpdatedParams {
+    let params = crate::__private::JobUpdatedParams {
         database: inner.pilot_database_config(),
-        id: row.id,
-        kind: row.kind.clone(),
-        metadata: row.metadata.clone(),
-        queue: row.queue.clone(),
-        state: row.state.as_str().to_owned(),
+        job: row.clone(),
     };
     let (phase, result) = match update {
         JobUpdate::Cancel => (

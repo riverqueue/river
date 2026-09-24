@@ -19,7 +19,7 @@ use sqlx::{AssertSqlSafe, PgPool, postgres::PgPoolOptions};
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 
-use riverqueue_internal::{
+use crate::__private::{
     DatabaseConnection, JobUpdatedParams, Pilot, PilotError, RescueAction, RescueManyParams,
 };
 use riverqueue_migrate::PostgresMigrator;
@@ -114,7 +114,7 @@ impl TestDatabase {
             NONCE.fetch_add(1, Ordering::Relaxed),
             Utc::now().timestamp_subsec_nanos()
         );
-        name.truncate(riverqueue_internal::SCHEMA_MAX_LEN);
+        name.truncate(riverqueue_migrate::SCHEMA_MAX_LEN);
         sqlx::raw_sql(AssertSqlSafe(format!("CREATE SCHEMA \"{name}\"")))
             .execute(&pool)
             .await
@@ -338,7 +338,7 @@ async fn rescuer_update_is_guarded_against_stale_selection() {
         let eligible = database.insert_job(stuck(ShortTimeoutArgs::KIND)).await;
         let client = database
             .client()
-            .pilot(StaleSnapshotPilot {
+            .with_pilot(StaleSnapshotPilot {
                 completed: Arc::new(std::sync::Mutex::new(vec![completed])),
                 handled,
                 reclaimed: Arc::new(std::sync::Mutex::new(vec![reclaimed])),
@@ -487,7 +487,7 @@ async fn job_cleaner_retention_exclusions_and_batches() {
         let hours = |retention: Option<u64>| retention.map(Duration::from_hours);
         let client = database
             .client()
-            .pilot(ExcludingPilot)
+            .with_pilot(ExcludingPilot)
             .maintenance(
                 MaintenanceConfig::default()
                     .with_cancelled_job_retention(hours(cancelled))
@@ -682,7 +682,7 @@ impl Pilot for HookPilot {
         self.cancels
             .lock()
             .unwrap()
-            .push((job.id, job.state.clone()));
+            .push((job.job.id, job.job.state.as_str().to_owned()));
         if self.fail {
             return Err(std::io::Error::other("cancel hook failed").into());
         }
@@ -697,7 +697,7 @@ impl Pilot for HookPilot {
         self.retries
             .lock()
             .unwrap()
-            .push((job.id, job.state.clone()));
+            .push((job.job.id, job.job.state.as_str().to_owned()));
         if self.fail {
             return Err(std::io::Error::other("retry hook failed").into());
         }
@@ -709,7 +709,7 @@ impl Pilot for HookPilot {
 async fn cancel_and_retry_post_hooks_share_the_transaction() {
     let database = TestDatabase::new("rmt_cancel_retry").await;
     let pilot = HookPilot::default();
-    let client = database.client().pilot(pilot.clone()).build().unwrap();
+    let client = database.client().with_pilot(pilot.clone()).build().unwrap();
     let id = database.insert_job(RawJob::default()).await;
 
     let cancelled = client.job_cancel(id).await.unwrap();
@@ -728,7 +728,7 @@ async fn cancel_and_retry_post_hooks_share_the_transaction() {
     // A failing hook rolls back the operation it follows.
     let failing = database
         .client()
-        .pilot(HookPilot {
+        .with_pilot(HookPilot {
             fail: true,
             ..HookPilot::default()
         })

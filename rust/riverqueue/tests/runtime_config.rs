@@ -462,10 +462,10 @@ async fn extension_claimed_outcomes_use_postgres_completion_batcher() {
     .await
     .unwrap();
     let row = client.job_get(inserted.job.row.id).await.unwrap();
-    let context = WorkContext::new(CancellationToken::new());
+    let context = riverqueue::__private::work_context(CancellationToken::new());
     context.metadata_set("shared_completion", true).unwrap();
-    client
-        .extension_persist_claimed_outcomes(&context, vec![(row, Ok(WorkOutcome::Complete))])
+    riverqueue::__private::ExtensionClient::new(&client)
+        .persist_claimed_outcomes(&context, vec![(row, Ok(WorkOutcome::Complete))])
         .await
         .unwrap();
 

@@ -693,7 +693,7 @@ pub(crate) async fn after_jobs_set_state(
 ) -> Result<(), Error> {
     let params = JobSetStateParams {
         database: inner.pilot_database_config(),
-        jobs: rows.iter().map(job_set_state_row).collect(),
+        jobs: rows,
     };
     inner
         .pilot
@@ -703,38 +703,6 @@ pub(crate) async fn after_jobs_set_state(
             phase: "job set state",
             source,
         })
-}
-
-fn job_set_state_row(row: &JobRow) -> JobSetStateRow {
-    JobSetStateRow {
-        id: row.id,
-        attempt: row.attempt,
-        attempted_at: row.attempted_at,
-        attempted_by: row.attempted_by.clone(),
-        created_at: row.created_at,
-        encoded_args: row.encoded_args.clone(),
-        errors: row
-            .errors
-            .iter()
-            .map(|error| serde_json::to_value(error).unwrap_or(Value::Null))
-            .collect(),
-        finalized_at: row.finalized_at,
-        kind: row.kind.clone(),
-        max_attempts: row.max_attempts,
-        metadata: row.metadata.clone(),
-        priority: row.priority,
-        queue: row.queue.clone(),
-        scheduled_at: row.scheduled_at,
-        state: row.state.as_str().to_owned(),
-        tags: row.tags.clone(),
-        unique_key: row.unique_key.clone(),
-        unique_states: row.unique_states.as_ref().map(|states| {
-            states
-                .iter()
-                .map(|state| state.as_str().to_owned())
-                .collect()
-        }),
-    }
 }
 
 pub(super) fn finish_batched_completion(

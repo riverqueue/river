@@ -5,6 +5,7 @@
 
 mod support;
 
+use riverqueue::__private::ClientBuilderExt;
 use riverqueue::{Client, Error};
 
 #[tokio::test(flavor = "multi_thread")]
@@ -118,23 +119,26 @@ struct HookPilot {
 }
 
 #[async_trait::async_trait]
-impl riverqueue::internal::Pilot for HookPilot {
+impl riverqueue::__private::Pilot for HookPilot {
     fn intercepts_job_cancel_retry(&self) -> bool {
         true
     }
 
     async fn after_job_cancel(
         &self,
-        connection: riverqueue::internal::DatabaseConnection<'_>,
-        job: &riverqueue::internal::JobUpdatedParams,
-    ) -> Result<(), riverqueue::internal::PilotError> {
+        connection: riverqueue::__private::DatabaseConnection<'_>,
+        job: &riverqueue::__private::JobUpdatedParams,
+    ) -> Result<(), riverqueue::__private::PilotError> {
         // The hook sees the update inside the same transaction.
         let connection = connection.into_sqlite().expect("SQLite connection");
         let state: String = sqlx::query_scalar("SELECT state FROM river_job WHERE id = ?")
-            .bind(job.id)
+            .bind(job.job.id)
             .fetch_one(connection)
             .await?;
-        self.calls.lock().unwrap().push(("cancel", job.id, state));
+        self.calls
+            .lock()
+            .unwrap()
+            .push(("cancel", job.job.id, state));
         if self.fail {
             return Err(std::io::Error::other("cancel hook failed").into());
         }
@@ -143,13 +147,13 @@ impl riverqueue::internal::Pilot for HookPilot {
 
     async fn after_job_retry(
         &self,
-        _connection: riverqueue::internal::DatabaseConnection<'_>,
-        job: &riverqueue::internal::JobUpdatedParams,
-    ) -> Result<(), riverqueue::internal::PilotError> {
+        _connection: riverqueue::__private::DatabaseConnection<'_>,
+        job: &riverqueue::__private::JobUpdatedParams,
+    ) -> Result<(), riverqueue::__private::PilotError> {
         self.calls
             .lock()
             .unwrap()
-            .push(("retry", job.id, job.state.clone()));
+            .push(("retry", job.job.id, job.job.state.as_str().to_owned()));
         if self.fail {
             return Err(std::io::Error::other("retry hook failed").into());
         }
@@ -195,7 +199,7 @@ async fn cancel_and_retry_post_hooks_share_the_transaction() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn extension_notify_many_writes_the_outbox() {
-    use riverqueue::internal::{
+    use riverqueue::__private::{
         DatabaseConfig, DatabaseConnection, NotificationTopic, notify_many,
     };
 
