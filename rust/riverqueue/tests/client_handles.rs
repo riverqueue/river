@@ -8,6 +8,7 @@ mod support;
 
 use riverqueue::{
     Client, Error, JobArgs, JobDeleteManyParams, JobListParams, JobState, JobUpdateParams,
+    QueueListParams, QueueSelector, QueueUpdateParams,
 };
 use serde::{Deserialize, Serialize};
 
@@ -154,7 +155,116 @@ macro_rules! scenarios {
 
             fixture.cleanup().await;
         }
+
+        #[tokio::test(flavor = "multi_thread")]
+        async fn queue_requests_take_effect_only_when_the_transaction_commits() {
+            let fixture = Fixture::new().await;
+            let queues = fixture.client.queues();
+            fixture.insert_queue("alpha").await;
+            fixture.insert_queue("beta").await;
+            let owner = serde_json::Map::from_iter([("owner".to_owned(), "rust".into())]);
+
+            let mut tx = fixture.begin().await;
+            queues.pause(QueueSelector::All).tx(&mut tx).await.unwrap();
+            assert!(
+                queues
+                    .get("alpha")
+                    .tx(&mut tx)
+                    .await
+                    .unwrap()
+                    .paused_at
+                    .is_some()
+            );
+            let beta = queues
+                .update("beta", QueueUpdateParams::new().metadata(owner.clone()))
+                .tx(&mut tx)
+                .await
+                .unwrap();
+            assert_eq!(beta.metadata, owner);
+            tx.rollback().await.unwrap();
+            assert!(paused(&fixture.client).await.is_empty());
+            assert!(queues.get("beta").await.unwrap().metadata.is_empty());
+
+            let mut tx = fixture.begin().await;
+            queues.pause(QueueSelector::All).tx(&mut tx).await.unwrap();
+            queues
+                .update("beta", QueueUpdateParams::new().metadata(owner.clone()))
+                .tx(&mut tx)
+                .await
+                .unwrap();
+            tx.commit().await.unwrap();
+            assert_eq!(paused(&fixture.client).await, ["alpha", "beta"]);
+            assert_eq!(queues.get("beta").await.unwrap().metadata, owner);
+
+            queues.resume("alpha").await.unwrap();
+            assert_eq!(paused(&fixture.client).await, ["beta"]);
+            queues.resume(QueueSelector::All).await.unwrap();
+            assert!(paused(&fixture.client).await.is_empty());
+
+            fixture.cleanup().await;
+        }
+
+        #[tokio::test(flavor = "multi_thread")]
+        async fn queue_selectors_match_names_literally() {
+            let fixture = Fixture::new().await;
+            let queues = fixture.client.queues();
+
+            // Selecting every queue succeeds when there are none, like Go.
+            queues.pause(QueueSelector::All).await.unwrap();
+            queues.resume(QueueSelector::All).await.unwrap();
+
+            fixture.insert_queue("alpha").await;
+            assert_eq!(
+                QueueSelector::from("alpha"),
+                QueueSelector::Named("alpha".to_owned())
+            );
+            assert_eq!(
+                QueueSelector::from("*".to_owned()),
+                QueueSelector::Named("*".to_owned())
+            );
+            // `*` is only a name, and no queue can have it.
+            assert!(matches!(queues.pause("*").await, Err(Error::NotFound)));
+            assert!(matches!(queues.resume("*").await, Err(Error::NotFound)));
+            assert!(paused(&fixture.client).await.is_empty());
+            assert!(matches!(
+                queues.pause("missing").await,
+                Err(Error::NotFound)
+            ));
+            assert!(matches!(queues.get("missing").await, Err(Error::NotFound)));
+            assert!(matches!(
+                queues.update("missing", QueueUpdateParams::new()).await,
+                Err(Error::NotFound)
+            ));
+
+            // Updating without metadata keeps it while refreshing the record.
+            let owner = serde_json::Map::from_iter([("owner".to_owned(), "rust".into())]);
+            let before = queues
+                .update("alpha", QueueUpdateParams::new().metadata(owner.clone()))
+                .await
+                .unwrap();
+            let after = queues
+                .update("alpha", QueueUpdateParams::new())
+                .await
+                .unwrap();
+            assert_eq!(after.metadata, owner);
+            assert!(after.updated_at >= before.updated_at);
+
+            fixture.cleanup().await;
+        }
     };
+}
+
+/// Returns the names of paused queues.
+async fn paused(client: &Client) -> Vec<String> {
+    client
+        .queues()
+        .list(QueueListParams::default())
+        .await
+        .unwrap()
+        .into_iter()
+        .filter(|queue| queue.paused_at.is_some())
+        .map(|queue| queue.name)
+        .collect()
 }
 
 #[cfg(feature = "postgres")]
@@ -190,6 +300,18 @@ mod postgres {
             self.pool.begin().await.unwrap()
         }
 
+        async fn insert_queue(&self, name: &str) {
+            sqlx::query(sqlx::AssertSqlSafe(format!(
+                "INSERT INTO {} (name, created_at, metadata, updated_at) \
+                 VALUES ($1, now(), '{{}}', now())",
+                self.schema.table("river_queue")
+            )))
+            .bind(name)
+            .execute(&self.pool)
+            .await
+            .unwrap();
+        }
+
         async fn cleanup(self) {
             self.schema.cleanup().await;
         }
@@ -220,6 +342,14 @@ mod sqlite {
 
         async fn begin(&self) -> Transaction<'static, Sqlite> {
             self.pool.begin_with("BEGIN IMMEDIATE").await.unwrap()
+        }
+
+        async fn insert_queue(&self, name: &str) {
+            sqlx::query("INSERT INTO river_queue (name, metadata) VALUES (?, jsonb('{}'))")
+                .bind(name)
+                .execute(&self.pool)
+                .await
+                .unwrap();
         }
 
         async fn cleanup(self) {

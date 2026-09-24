@@ -253,8 +253,20 @@ impl Backend for SqliteBackend<'_> {
     async fn queue_update(
         &mut self,
         name: &str,
-        metadata: &Map<String, Value>,
+        metadata: Option<&Map<String, Value>>,
     ) -> Result<Option<Queue>, Error> {
+        let existing;
+        let metadata = match metadata {
+            Some(metadata) => metadata,
+            // Keep the current metadata while refreshing `updated_at`.
+            None => match self.queue_get(name).await? {
+                Some(queue) => {
+                    existing = queue.metadata;
+                    &existing
+                }
+                None => return Ok(None),
+            },
+        };
         sqlite::queue_update(self.connection, name, metadata, Utc::now())
             .await
             .map_err(database_error)

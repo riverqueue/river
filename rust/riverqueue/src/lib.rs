@@ -30,7 +30,8 @@ pub use client::{
     Client, ClientBuilder, InsertBatchRequest, InsertManyFastRequest, InsertManyItem,
     InsertManyRequest, InsertRequest, JobCancelRequest, JobCompleteRequest, JobCompleteTxRequest,
     JobDeleteManyRequest, JobDeleteRequest, JobGetRequest, JobListRequest, JobRetryRequest,
-    JobUpdateRequest, Jobs, MaintenanceConfig, QueueConfig, RunHandle, Stopper,
+    JobUpdateRequest, Jobs, MaintenanceConfig, QueueConfig, QueueGetRequest, QueueListRequest,
+    QueuePauseRequest, QueueResumeRequest, QueueUpdateRequest, Queues, RunHandle, Stopper,
 };
 pub(crate) use database::SchemaName;
 pub use error::{BoxError, ConfigurationError, Error, JobValidationError, RuntimeError};
@@ -59,7 +60,7 @@ pub use query::{
     JobDeleteManyParams, JobListCursor, JobListCursorError, JobListOrderBy, JobListParams,
     JobListResult, JobUpdateParams, SortDirection,
 };
-pub use queue::{Queue, QueueListParams};
+pub use queue::{Queue, QueueListParams, QueueSelector, QueueUpdateParams};
 pub use riverqueue_macros::JobArgs;
 /// Database migrations, re-exported from `riverqueue-migrate`.
 ///

@@ -98,7 +98,8 @@ atomic. PostgreSQL's `insert_many_fast` uses `COPY`, returns only a count, and
 rejects the entire batch on a unique conflict.
 
 Chain `.tx(&mut transaction)` onto an insertion, or onto any request from
-`client.jobs()`, to run it in the same SQL transaction as application writes. Notifications become visible only on commit, and jobs do
+`client.jobs()` or `client.queues()`, to run it in the same SQL transaction as
+application writes. Notifications become visible only on commit, and jobs do
 not survive rollback. With a multi-connection SQLite pool, start transactions
 that may write with `pool.begin_with("BEGIN IMMEDIATE")`. SQLite's ordinary
 deferred `begin()` can establish a read snapshot that cannot be upgraded after

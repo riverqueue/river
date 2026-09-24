@@ -29,15 +29,23 @@ async fn queue_pause_and_resume() {
     // An unknown named queue is reported like Go's `ErrNotFound`, while `*`
     // succeeds even with no persisted queues.
     assert!(matches!(
-        client.queue_pause("missing").await,
+        client.queues().pause("missing").await,
         Err(Error::NotFound)
     ));
     assert!(matches!(
-        client.queue_resume("missing").await,
+        client.queues().resume("missing").await,
         Err(Error::NotFound)
     ));
-    client.queue_pause("*").await.unwrap();
-    client.queue_resume("*").await.unwrap();
+    client
+        .queues()
+        .pause(riverqueue::QueueSelector::All)
+        .await
+        .unwrap();
+    client
+        .queues()
+        .resume(riverqueue::QueueSelector::All)
+        .await
+        .unwrap();
 
     // Go accepts `|` as a queue-name separator.
     sqlx::query(sqlx::AssertSqlSafe(format!(
@@ -47,22 +55,24 @@ async fn queue_pause_and_resume() {
     .execute(&database.pool)
     .await
     .unwrap();
-    client.queue_pause("tenant|emails").await.unwrap();
+    client.queues().pause("tenant|emails").await.unwrap();
     assert!(
         client
-            .queue_get("tenant|emails")
+            .queues()
+            .get("tenant|emails")
             .await
             .unwrap()
             .paused_at
             .is_some()
     );
     // Pausing an already paused queue still addresses an existing row.
-    client.queue_pause("tenant|emails").await.unwrap();
-    client.queue_resume("tenant|emails").await.unwrap();
-    client.queue_resume("tenant|emails").await.unwrap();
+    client.queues().pause("tenant|emails").await.unwrap();
+    client.queues().resume("tenant|emails").await.unwrap();
+    client.queues().resume("tenant|emails").await.unwrap();
     assert!(
         client
-            .queue_get("tenant|emails")
+            .queues()
+            .get("tenant|emails")
             .await
             .unwrap()
             .paused_at

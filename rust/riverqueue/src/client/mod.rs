@@ -10,6 +10,7 @@ mod insert;
 mod jobs;
 mod notifier;
 mod producer;
+mod queues;
 mod record;
 mod request;
 mod run;
@@ -25,6 +26,10 @@ pub use self::insert::{
 pub use self::jobs::{
     JobCancelRequest, JobCompleteRequest, JobCompleteTxRequest, JobDeleteManyRequest,
     JobDeleteRequest, JobGetRequest, JobListRequest, JobRetryRequest, JobUpdateRequest, Jobs,
+};
+pub use self::queues::{
+    QueueGetRequest, QueueListRequest, QueuePauseRequest, QueueResumeRequest, QueueUpdateRequest,
+    Queues,
 };
 #[cfg(feature = "sqlite")]
 pub(crate) use self::record::FieldErrors;

@@ -1407,7 +1407,7 @@ async fn sqlite_queue_events_are_emitted_once_per_transition() {
     let mut run = client.start().unwrap();
     run.wait_ready().await.unwrap();
 
-    client.queue_pause("default").await.unwrap();
+    client.queues().pause("default").await.unwrap();
     let paused = tokio::time::timeout(Duration::from_secs(5), events.recv())
         .await
         .unwrap()
@@ -1420,14 +1420,14 @@ async fn sqlite_queue_events_are_emitted_once_per_transition() {
             .is_err()
     );
 
-    client.queue_pause("default").await.unwrap();
+    client.queues().pause("default").await.unwrap();
     assert!(
         tokio::time::timeout(Duration::from_millis(300), events.recv())
             .await
             .is_err()
     );
 
-    client.queue_resume("default").await.unwrap();
+    client.queues().resume("default").await.unwrap();
     let resumed = tokio::time::timeout(Duration::from_secs(5), events.recv())
         .await
         .unwrap()
@@ -1440,7 +1440,7 @@ async fn sqlite_queue_events_are_emitted_once_per_transition() {
             .is_err()
     );
 
-    client.queue_resume("default").await.unwrap();
+    client.queues().resume("default").await.unwrap();
     assert!(
         tokio::time::timeout(Duration::from_millis(300), events.recv())
             .await
