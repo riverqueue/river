@@ -69,7 +69,7 @@ func (p *pilotSpy) JobCleanerQueuesExcluded() []string {
 	return p.StandardPilot.JobCleanerQueuesExcluded()
 }
 
-func (p *pilotSpy) JobGetAvailable(ctx context.Context, exec riverdriver.Executor, state riverpilot.ProducerState, params *riverdriver.JobGetAvailableParams) ([]*rivertype.JobRow, error) {
+func (p *pilotSpy) JobGetAvailable(ctx context.Context, exec riverdriver.Executor, state riverpilot.ProducerState, params *riverdriver.JobGetAvailableParams) (*riverdriver.JobGetAvailableResult, error) {
 	p.testSignals.JobGetAvailable.Signal(struct{}{})
 	return p.StandardPilot.JobGetAvailable(ctx, exec, state, params)
 }
