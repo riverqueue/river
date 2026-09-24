@@ -65,3 +65,130 @@ async fn queue_pause_and_resume() {
 
     database.cleanup().await;
 }
+
+/// Inserts a raw job row and returns its ID.
+async fn insert_raw_job(
+    database: &PostgresSchema,
+    state: &str,
+    finalized_ago_secs: Option<i64>,
+) -> i64 {
+    let sql = format!(
+        "INSERT INTO {} (args, kind, max_attempts, state, attempt, attempted_at, finalized_at) \
+         VALUES ('{{}}', 'parity_raw', 25, $1::text::{}, \
+                 CASE WHEN $1 = 'running' THEN 1 ELSE 0 END, \
+                 CASE WHEN $1 = 'running' THEN now() END, \
+                 now() - make_interval(secs => $2::bigint)) \
+         RETURNING id",
+        database.table("river_job"),
+        database.schema.qualify("river_job_state"),
+    );
+    sqlx::query_scalar(sqlx::AssertSqlSafe(sql))
+        .bind(state)
+        .bind(finalized_ago_secs)
+        .fetch_one(&database.pool)
+        .await
+        .unwrap()
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn job_delete_many() {
+    let database = PostgresSchema::new("rpp_delete_many").await;
+    let client = insert_only_client(&database);
+
+    let running = insert_raw_job(&database, "running", None).await;
+    let first = insert_raw_job(&database, "available", None).await;
+    let locked = insert_raw_job(&database, "completed", Some(1)).await;
+    let last = insert_raw_job(&database, "cancelled", Some(1)).await;
+
+    // Running jobs are excluded before the limit, so a limit of two deletes two
+    // non-running rows even though the lowest ID is running.
+    let mut blocker = database.pool.begin().await.unwrap();
+    sqlx::query(sqlx::AssertSqlSafe(format!(
+        "SELECT id FROM {} WHERE id = $1 FOR UPDATE",
+        database.table("river_job")
+    )))
+    .bind(locked)
+    .execute(&mut *blocker)
+    .await
+    .unwrap();
+
+    // A row locked by another transaction is skipped rather than waited on.
+    let deleted = tokio::time::timeout(
+        std::time::Duration::from_secs(5),
+        client.job_delete_many(&riverqueue::JobDeleteManyParams::matching(
+            riverqueue::JobListParams::default()
+                .with_ids([running, first, locked, last])
+                .with_limit(2),
+        )),
+    )
+    .await
+    .expect("bulk delete must skip locked rows instead of blocking")
+    .unwrap();
+    assert_eq!(
+        deleted.iter().map(|job| job.id).collect::<Vec<_>>(),
+        vec![first, last]
+    );
+    blocker.rollback().await.unwrap();
+
+    let remaining = client
+        .job_delete_many(&riverqueue::JobDeleteManyParams::all())
+        .await
+        .unwrap();
+    assert_eq!(
+        remaining.iter().map(|job| job.id).collect::<Vec<_>>(),
+        vec![locked]
+    );
+    assert_eq!(
+        client.job_get(running).await.unwrap().state,
+        riverqueue::JobState::Running
+    );
+
+    database.cleanup().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn job_list_single_finalized_state_by_time() {
+    use riverqueue::{JobListOrderBy, JobListParams, JobState, SortDirection};
+
+    let database = PostgresSchema::new("rpp_list_final").await;
+    let client = insert_only_client(&database);
+
+    let oldest = insert_raw_job(&database, "completed", Some(30)).await;
+    let newest = insert_raw_job(&database, "completed", Some(10)).await;
+    let middle = insert_raw_job(&database, "completed", Some(20)).await;
+    let _other_state = insert_raw_job(&database, "discarded", Some(15)).await;
+
+    for (direction, expected) in [
+        (SortDirection::Ascending, vec![oldest, middle, newest]),
+        (SortDirection::Descending, vec![newest, middle, oldest]),
+    ] {
+        let mut params = JobListParams::default()
+            .with_order_by(JobListOrderBy::Time)
+            .with_limit(2);
+        params.states = vec![JobState::Completed];
+        params.direction = direction;
+        let first_page = client.job_list(&params).await.unwrap();
+        assert_eq!(
+            first_page.iter().map(|job| job.id).collect::<Vec<_>>(),
+            expected[..2]
+        );
+        let cursor =
+            riverqueue::JobListCursor::from_job(first_page.last().unwrap(), &params).unwrap();
+        let second_page = client
+            .job_list(&params.clone().with_after(cursor))
+            .await
+            .unwrap();
+        assert_eq!(
+            second_page.iter().map(|job| job.id).collect::<Vec<_>>(),
+            expected[2..]
+        );
+    }
+
+    // Multiple states keep the generic predicate and still filter correctly.
+    let mut params = JobListParams::default().with_order_by(JobListOrderBy::FinalizedAt);
+    params.states = vec![JobState::Completed, JobState::Discarded];
+    let both = client.job_list(&params).await.unwrap();
+    assert_eq!(both.len(), 4);
+
+    database.cleanup().await;
+}
