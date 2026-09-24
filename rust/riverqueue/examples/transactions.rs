@@ -29,12 +29,10 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let client = Client::builder(pool.clone()).build()?;
     let mut transaction = pool.begin().await?;
     let inserted = client
-        .insert_tx(
-            &mut transaction,
-            TransactionalEmail {
-                address: "person@example.com".to_owned(),
-            },
-        )
+        .insert(TransactionalEmail {
+            address: "person@example.com".to_owned(),
+        })
+        .tx(&mut transaction)
         .await?;
     transaction.commit().await?;
 

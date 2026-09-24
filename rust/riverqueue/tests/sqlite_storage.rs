@@ -63,7 +63,8 @@ async fn empty_batches_are_rejected_before_database_work() {
 
     let mut transaction = pool.begin().await.unwrap();
     let empty_many_tx = client
-        .insert_many_tx(&mut transaction, Vec::<EmptyBatchArgs>::new())
+        .insert_many(Vec::<EmptyBatchArgs>::new())
+        .tx(&mut transaction)
         .await
         .unwrap_err();
     assert_eq!(
@@ -71,7 +72,8 @@ async fn empty_batches_are_rejected_before_database_work() {
         "invalid job: job: no jobs to insert"
     );
     let empty_batch_tx = client
-        .insert_batch_tx(&mut transaction, InsertBatch::new())
+        .insert_batch(InsertBatch::new())
+        .tx(&mut transaction)
         .await
         .unwrap_err();
     assert_eq!(

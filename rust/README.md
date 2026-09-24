@@ -40,7 +40,7 @@ use sqlx::PgPool;
 let client = Client::builder(pool).build()?;
 // `EmailArgs` is a Serialize/Deserialize type deriving `JobArgs`.
 // client.insert(EmailArgs { /* ... */ }).await?;
-// client.insert_with(EmailArgs { /* ... */ }, InsertOpts::default()).await?;
+// client.insert(EmailArgs { /* ... */ }).opts(InsertOpts::default()).await?;
 # let _ = (client, InsertOpts::default());
 # Ok(())
 # }

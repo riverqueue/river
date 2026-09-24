@@ -18,8 +18,8 @@ use std::{
 
 use async_trait::async_trait;
 use riverqueue::{
-    Client, ErrorHandler, EventKind, InsertOpts, Job, JobArgs, JobRow, JobState, QueueConfig,
-    WorkCancelled, WorkContext, WorkOutcome, WorkerRegistry,
+    BoxError, Client, ErrorHandler, EventKind, InsertOpts, Job, JobArgs, JobRow, JobState,
+    QueueConfig, WorkCancelled, WorkContext, WorkOutcome, WorkerRegistry,
     database::{PostgresDatabase, SchemaName},
     internal::{DatabaseConnection, JobSetStateParams, Pilot, PilotError},
 };
@@ -73,9 +73,12 @@ struct BlockingTimeline {
 #[derive(Clone)]
 struct StuckSignal(Arc<Semaphore>);
 
-#[async_trait]
+#[allow(
+    clippy::unused_async_trait_impl,
+    reason = "these extensions only record state synchronously"
+)]
 impl ErrorHandler for StuckSignal {
-    async fn handle_stuck(&self, _job: &JobRow) -> Result<(), riverqueue::Error> {
+    async fn handle_stuck(&self, _job: &JobRow) -> Result<(), BoxError> {
         self.0.add_permits(1);
         Ok(())
     }
@@ -433,10 +436,8 @@ async fn claimed_rows_decode_individually_and_leniently() {
     // Array metadata cannot become a `JobRow`. Claiming it with the others
     // must record a failure for it alone.
     let malformed = client
-        .insert_with(
-            ResilienceArgs {},
-            InsertOpts::default().with_max_attempts(1),
-        )
+        .insert(ResilienceArgs {})
+        .opts(InsertOpts::default().with_max_attempts(1))
         .await
         .unwrap();
     schema
@@ -755,7 +756,8 @@ async fn stuck_job_keeps_its_worker_slot_until_it_ends() {
         .await
         .unwrap();
     let later = client
-        .insert_with(ResilienceArgs {}, InsertOpts::default().with_priority(2))
+        .insert(ResilienceArgs {})
+        .opts(InsertOpts::default().with_priority(2))
         .await
         .unwrap();
 
@@ -1101,8 +1103,8 @@ async fn extension_set_state_hook_runs_in_the_completion_transaction() {
     let mut events = client.subscribe(&[EventKind::JobCompleted]).unwrap();
     let kept = client.insert(GatedArgs {}).await.unwrap();
     let deleted = client
-        .insert_with(
-            GatedArgs {},
+        .insert(GatedArgs {})
+        .opts(
             InsertOpts::default().with_metadata(serde_json::Map::from_iter([(
                 "delete_me".to_owned(),
                 serde_json::json!(true),

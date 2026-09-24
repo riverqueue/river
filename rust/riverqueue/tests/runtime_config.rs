@@ -12,10 +12,10 @@ use std::{
 
 use async_trait::async_trait;
 use riverqueue::{
-    Client, EventKind, EventRecvError, Hook, InsertContext, InsertMiddleware, InsertOpts, Job,
-    JobArgs, JobRow, JobState, Metric, PeriodicJobs, Plugin, QueueConfig, SubscribeConfig,
-    WorkContext, WorkMiddleware, WorkOutcome, WorkResult, Worker, WorkerRegistry,
-    database::PostgresDatabase,
+    BoxError, Client, EventKind, EventRecvError, Extensions, Hook, InsertContext, InsertMiddleware,
+    InsertNext, InsertOpts, InsertedJobs, Job, JobArgs, JobRow, JobState, Metric, PeriodicJobs,
+    Plugin, QueueConfig, SubscribeConfig, WorkContext, WorkMiddleware, WorkOutcome, WorkResult,
+    Worker, WorkerRegistry, database::PostgresDatabase,
 };
 use riverqueue_migrate::PostgresMigrator;
 use serde::{Deserialize, Serialize};
@@ -138,44 +138,27 @@ struct RuntimeCounts {
     work_before: AtomicUsize,
 }
 
-#[async_trait]
+#[allow(
+    clippy::unused_async_trait_impl,
+    reason = "these extensions only record state synchronously"
+)]
 impl Hook for RuntimeHook {
-    async fn insert_begin(&self, _insert: &mut InsertContext) -> Result<(), riverqueue::Error> {
+    async fn insert_begin(&self, _insert: &mut InsertContext) -> Result<(), BoxError> {
         self.counts.insert_before.fetch_add(1, Ordering::SeqCst);
         Ok(())
     }
 
-    async fn insert_end(
-        &self,
-        _job: &JobRow,
-        _unique_skipped_as_duplicate: bool,
-    ) -> Result<(), riverqueue::Error> {
-        self.counts.insert_after.fetch_add(1, Ordering::SeqCst);
-        Ok(())
-    }
-
-    async fn insert_many_fast_end(&self, inserted_count: u64) -> Result<(), riverqueue::Error> {
-        self.counts
-            .fast_insert_after
-            .fetch_add(usize::try_from(inserted_count).unwrap(), Ordering::SeqCst);
-        Ok(())
-    }
-
-    async fn metric_emit(&self, _metric: Metric) -> Result<(), riverqueue::Error> {
+    async fn metric_emit(&self, _metric: Metric) -> Result<(), BoxError> {
         self.counts.metrics.fetch_add(1, Ordering::SeqCst);
         Ok(())
     }
 
-    async fn periodic_jobs_start(&self, _jobs: &PeriodicJobs) -> Result<(), riverqueue::Error> {
+    async fn periodic_jobs_start(&self, _jobs: &PeriodicJobs) -> Result<(), BoxError> {
         self.counts.periodic_starts.fetch_add(1, Ordering::SeqCst);
         Ok(())
     }
 
-    async fn work_begin(
-        &self,
-        _context: &WorkContext,
-        job: &mut JobRow,
-    ) -> Result<(), riverqueue::Error> {
+    async fn work_begin(&self, _context: &WorkContext, job: &mut JobRow) -> Result<(), BoxError> {
         self.counts.work_before.fetch_add(1, Ordering::SeqCst);
         let mut args: serde_json::Value = job.decode_args()?;
         args["hook_decrypted"] = true.into();
@@ -188,28 +171,39 @@ impl Hook for RuntimeHook {
         _context: &WorkContext,
         _job: &JobRow,
         _result: &WorkResult,
-    ) -> Result<(), riverqueue::Error> {
+    ) -> Result<(), BoxError> {
         self.counts.work_after.fetch_add(1, Ordering::SeqCst);
         Ok(())
     }
 }
 
 #[derive(Clone)]
-struct RuntimeInsertMiddleware;
+struct RuntimeInsertMiddleware(Arc<RuntimeCounts>);
 
-#[async_trait]
 impl InsertMiddleware for RuntimeInsertMiddleware {
-    async fn before_insert(&self, insert: &mut InsertContext) -> Result<(), riverqueue::Error> {
-        insert
-            .opts
-            .metadata
-            .insert("middleware".to_owned(), true.into());
-        Ok(())
-    }
-
-    async fn after_insert_many_fast(&self, inserted_count: u64) -> Result<(), riverqueue::Error> {
-        assert_eq!(inserted_count, 2);
-        Ok(())
+    async fn insert_many(
+        &self,
+        mut jobs: Vec<InsertContext>,
+        next: InsertNext<'_>,
+    ) -> Result<InsertedJobs, riverqueue::Error> {
+        for job in &mut jobs {
+            job.opts
+                .metadata
+                .insert("middleware".to_owned(), true.into());
+        }
+        let inserted = next.run(jobs).await?;
+        match &inserted {
+            InsertedJobs::Count(count) => {
+                self.0
+                    .fast_insert_after
+                    .fetch_add(usize::try_from(*count).unwrap(), Ordering::SeqCst);
+            }
+            InsertedJobs::Rows(rows) => {
+                self.0.insert_after.fetch_add(rows.len(), Ordering::SeqCst);
+            }
+            _ => unreachable!("River returns rows or a count"),
+        }
+        Ok(inserted)
     }
 }
 
@@ -218,18 +212,13 @@ struct RuntimePlugin {
 }
 
 impl Plugin for RuntimePlugin {
-    fn hooks(&self) -> Vec<Arc<dyn Hook>> {
-        vec![Arc::new(RuntimeHook {
-            counts: Arc::clone(&self.counts),
-        })]
-    }
-
-    fn insert_middleware(&self) -> Vec<Arc<dyn InsertMiddleware>> {
-        vec![Arc::new(RuntimeInsertMiddleware)]
-    }
-
-    fn work_middleware(&self) -> Vec<Arc<dyn WorkMiddleware>> {
-        vec![Arc::new(RuntimeWorkMiddleware(Arc::clone(&self.counts)))]
+    fn install(&self, extensions: &mut Extensions) {
+        extensions
+            .hook(RuntimeHook {
+                counts: Arc::clone(&self.counts),
+            })
+            .insert_middleware(RuntimeInsertMiddleware(Arc::clone(&self.counts)))
+            .work_middleware(RuntimeWorkMiddleware(Arc::clone(&self.counts)));
     }
 }
 
@@ -365,7 +354,7 @@ async fn completion_burst_does_not_lag_large_subscription() {
         .unwrap();
     let jobs = (0..JOB_COUNT).map(|_| (BurstArgs {}, riverqueue::InsertOpts::default()));
     assert_eq!(
-        client.insert_many_fast_with(jobs).await.unwrap(),
+        client.insert_many(jobs).fast().await.unwrap(),
         u64::try_from(JOB_COUNT).unwrap()
     );
     let expected_ids = sqlx::query_scalar::<_, i64>(AssertSqlSafe(format!(
@@ -457,8 +446,8 @@ async fn extension_claimed_outcomes_use_postgres_completion_batcher() {
     run.wait_ready().await.unwrap();
 
     let inserted = client
-        .insert_with(
-            BurstArgs {},
+        .insert(BurstArgs {})
+        .opts(
             InsertOpts::default()
                 .with_scheduled_at(chrono::Utc::now() + chrono::Duration::hours(1)),
         )
@@ -703,24 +692,20 @@ async fn shutdown_waits_for_active_work_and_soft_stop_escalates() {
             .build()
             .unwrap();
     let active = graceful_client
-        .insert_with(
-            ShutdownArgs {
-                ignore_cancellation: false,
-            },
-            riverqueue::InsertOpts::default().with_queue("graceful"),
-        )
+        .insert(ShutdownArgs {
+            ignore_cancellation: false,
+        })
+        .opts(riverqueue::InsertOpts::default().with_queue("graceful"))
         .await
         .unwrap();
     let mut graceful_handle = graceful_client.start().unwrap();
     graceful_handle.wait_ready().await.unwrap();
     graceful_started.acquire().await.unwrap().forget();
     let unfetched = graceful_client
-        .insert_with(
-            ShutdownArgs {
-                ignore_cancellation: false,
-            },
-            riverqueue::InsertOpts::default().with_queue("graceful"),
-        )
+        .insert(ShutdownArgs {
+            ignore_cancellation: false,
+        })
+        .opts(riverqueue::InsertOpts::default().with_queue("graceful"))
         .await
         .unwrap();
     let graceful_shutdown = tokio::spawn(graceful_handle.shutdown());
@@ -779,12 +764,10 @@ async fn shutdown_waits_for_active_work_and_soft_stop_escalates() {
         .subscribe(&[EventKind::JobInterrupted])
         .unwrap();
     let stuck = escalation_client
-        .insert_with(
-            ShutdownArgs {
-                ignore_cancellation: true,
-            },
-            riverqueue::InsertOpts::default().with_queue("escalation"),
-        )
+        .insert(ShutdownArgs {
+            ignore_cancellation: true,
+        })
+        .opts(riverqueue::InsertOpts::default().with_queue("escalation"))
         .await
         .unwrap();
     let mut escalation_handle = escalation_client.start().unwrap();
@@ -831,7 +814,7 @@ async fn poll_only_and_subscription_configuration() {
     run_handle.wait_ready().await.unwrap();
     assert_eq!(
         client
-            .insert_many_fast_with([
+            .insert_many([
                 (
                     RuntimeArgs {},
                     riverqueue::InsertOpts::default().with_pending(true),
@@ -841,6 +824,7 @@ async fn poll_only_and_subscription_configuration() {
                     riverqueue::InsertOpts::default().with_pending(true),
                 ),
             ])
+            .fast()
             .await
             .unwrap(),
         2

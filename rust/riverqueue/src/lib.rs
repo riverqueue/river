@@ -23,15 +23,19 @@ mod storage;
 mod unique;
 pub mod worker;
 
-pub use client::{Client, ClientBuilder, MaintenanceConfig, QueueConfig, RunHandle, WeakClient};
+pub use client::{
+    Client, ClientBuilder, InsertBatchRequest, InsertManyFastRequest, InsertManyItem,
+    InsertManyRequest, InsertRequest, MaintenanceConfig, QueueConfig, RunHandle, WeakClient,
+};
 pub use error::{BoxError, ConfigurationError, Error, JobValidationError, RuntimeError};
 pub use event::{
     Event, EventKind, EventKindMismatch, EventReceiver, EventRecvError, JobEvent, JobEventKind,
     JobStatistics, QueueEvent, QueueEventKind, SubscribeConfig,
 };
 pub use extension::{
-    DefaultRetryPolicy, ErrorHandler, ErrorHandlerDecision, Hook, InsertContext, InsertMiddleware,
-    Metric, MetricName, Plugin, RetryPolicy, WorkCancelled, WorkError, WorkMiddleware, WorkResult,
+    DefaultRetryPolicy, ErrorHandler, ErrorHandlerDecision, Extensions, Hook, InsertContext,
+    InsertMiddleware, InsertNext, InsertedJob, InsertedJobs, Metric, MetricName, Plugin,
+    RetryPolicy, WorkCancelled, WorkError, WorkMiddleware, WorkResult,
 };
 pub use job::{
     AttemptError, ExtensionClaimParams, ExtensionInsertParams, InsertBatch, InsertBatchResult,

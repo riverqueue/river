@@ -552,10 +552,18 @@ pub(crate) enum ExecutorInner<'executor> {
     #[cfg(feature = "postgres")]
     PostgresConnection(&'executor mut PgConnection),
     #[cfg(feature = "postgres")]
+    #[allow(
+        dead_code,
+        reason = "transactional operations reject pools without reading them"
+    )]
     PostgresPool(&'executor PgPool),
     #[cfg(feature = "sqlite")]
     SqliteConnection(&'executor mut SqliteConnection),
     #[cfg(feature = "sqlite")]
+    #[allow(
+        dead_code,
+        reason = "transactional operations reject pools without reading them"
+    )]
     SqlitePool(&'executor SqlitePool),
 }
 
