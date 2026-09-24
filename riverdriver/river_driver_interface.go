@@ -280,8 +280,8 @@ type Executor interface {
 	// the `line` column was added to the migrations table.
 	MigrationInsertManyAssumingMain(ctx context.Context, params *MigrationInsertManyAssumingMainParams) ([]*Migration, error)
 
-	// NotificationDeleteBefore deletes notifications before a certain time
-	// horizon.
+	// NotificationDeleteBefore deletes up to Max notifications before a certain
+	// time horizon, oldest first.
 	//
 	// A "notification" in this context refers to a row in `river_notification`
 	// which is a special table implemented in some databases (e.g. SQLite) that
@@ -845,6 +845,7 @@ type NotifyManyParams struct {
 
 type NotificationDeleteBeforeParams struct {
 	CreatedAtHorizon time.Time
+	Max              int
 	Schema           string
 }
 

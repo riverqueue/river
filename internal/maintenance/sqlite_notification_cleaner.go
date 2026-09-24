@@ -9,9 +9,12 @@ import (
 
 	"github.com/riverqueue/river/riverdriver"
 	"github.com/riverqueue/river/rivershared/baseservice"
+	"github.com/riverqueue/river/rivershared/circuitbreaker"
 	"github.com/riverqueue/river/rivershared/riversharedmaintenance"
 	"github.com/riverqueue/river/rivershared/startstop"
 	"github.com/riverqueue/river/rivershared/testsignal"
+	"github.com/riverqueue/river/rivershared/util/randutil"
+	"github.com/riverqueue/river/rivershared/util/serviceutil"
 	"github.com/riverqueue/river/rivershared/util/testutil"
 	"github.com/riverqueue/river/rivershared/util/timeoututil"
 	"github.com/riverqueue/river/rivershared/util/timeutil"
@@ -24,7 +27,7 @@ const (
 
 // SQLiteNotificationCleanerTestSignals are internal signals used exclusively in tests.
 type SQLiteNotificationCleanerTestSignals struct {
-	DeletedBatch testsignal.TestSignal[struct{}] // notifies when runOnce finishes a pass
+	DeletedBatch testsignal.TestSignal[struct{}] // notifies when a delete batch finishes
 }
 
 func (ts *SQLiteNotificationCleanerTestSignals) Init(tb testutil.TestingTB) {
@@ -32,6 +35,8 @@ func (ts *SQLiteNotificationCleanerTestSignals) Init(tb testutil.TestingTB) {
 }
 
 type SQLiteNotificationCleanerConfig struct {
+	riversharedmaintenance.BatchSizes
+
 	// Interval is the amount of time to wait between cleaner runs.
 	Interval time.Duration
 
@@ -47,6 +52,8 @@ type SQLiteNotificationCleanerConfig struct {
 }
 
 func (c *SQLiteNotificationCleanerConfig) mustValidate() *SQLiteNotificationCleanerConfig {
+	c.MustValidate()
+
 	if c.Interval <= 0 {
 		panic("SQLiteNotificationCleanerConfig.Interval must be above zero")
 	}
@@ -72,18 +79,25 @@ type SQLiteNotificationCleaner struct {
 	TestSignals SQLiteNotificationCleanerTestSignals
 
 	exec riverdriver.Executor
+
+	// After repeated timeouts, keep using smaller batches until restart.
+	reducedBatchSizeBreaker *circuitbreaker.CircuitBreaker
 }
 
 // NewSQLiteNotificationCleaner returns a SQLite notification cleaner.
 func NewSQLiteNotificationCleaner(archetype *baseservice.Archetype, config *SQLiteNotificationCleanerConfig, exec riverdriver.Executor) *SQLiteNotificationCleaner {
+	batchSizes := config.WithDefaults()
+
 	return baseservice.Init(archetype, &SQLiteNotificationCleaner{
 		Config: (&SQLiteNotificationCleanerConfig{
+			BatchSizes:      batchSizes,
 			Interval:        cmp.Or(config.Interval, SQLiteNotificationCleanerIntervalDefault),
 			RetentionPeriod: cmp.Or(config.RetentionPeriod, SQLiteNotificationCleanerRetentionPeriodDefault),
 			Schema:          config.Schema,
 			Timeout:         cmp.Or(config.Timeout, riversharedmaintenance.TimeoutDefault),
 		}).mustValidate(),
-		exec: exec,
+		exec:                    exec,
+		reducedBatchSizeBreaker: riversharedmaintenance.ReducedBatchSizeBreaker(batchSizes),
 	})
 }
 
@@ -129,24 +143,58 @@ func (s *SQLiteNotificationCleaner) Start(ctx context.Context) error { //nolint:
 	return nil
 }
 
+func (s *SQLiteNotificationCleaner) batchSize() int {
+	if s.reducedBatchSizeBreaker.Open() {
+		return s.Config.Reduced
+	}
+	return s.Config.Default
+}
+
 type sqliteNotificationCleanerRunOnceResult struct {
 	NumNotificationsDeleted int
 }
 
 func (s *SQLiteNotificationCleaner) runOnce(ctx context.Context) (*sqliteNotificationCleanerRunOnceResult, error) {
-	return timeoututil.WithTimeoutV(ctx, s.Config.Timeout, s.Name+".runOnce", func(ctx context.Context) (*sqliteNotificationCleanerRunOnceResult, error) {
-		numDeleted, err := s.exec.NotificationDeleteBefore(ctx, &riverdriver.NotificationDeleteBeforeParams{
-			CreatedAtHorizon: time.Now().Add(-s.Config.RetentionPeriod),
-			Schema:           s.Config.Schema,
+	res := &sqliteNotificationCleanerRunOnceResult{}
+	// Keep a fixed horizon so new expirations don't extend a cleanup pass.
+	createdAtHorizon := time.Now().Add(-s.Config.RetentionPeriod)
+
+	for {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+
+		numDeleted, err := timeoututil.WithTimeoutV(ctx, s.Config.Timeout, s.Name+".runOnce", func(ctx context.Context) (int, error) {
+			numDeleted, err := s.exec.NotificationDeleteBefore(ctx, &riverdriver.NotificationDeleteBeforeParams{
+				CreatedAtHorizon: createdAtHorizon,
+				Max:              s.batchSize(),
+				Schema:           s.Config.Schema,
+			})
+			if err != nil {
+				return 0, err
+			}
+
+			s.reducedBatchSizeBreaker.ResetIfNotOpen()
+
+			return numDeleted, nil
 		})
 		if err != nil {
+			if errors.Is(err, context.DeadlineExceeded) {
+				s.reducedBatchSizeBreaker.Trip()
+			}
+
 			return nil, err
 		}
 
 		s.TestSignals.DeletedBatch.Signal(struct{}{})
+		res.NumNotificationsDeleted += numDeleted
 
-		return &sqliteNotificationCleanerRunOnceResult{
-			NumNotificationsDeleted: numDeleted,
-		}, nil
-	})
+		if numDeleted < s.batchSize() {
+			return res, nil
+		}
+
+		// Each delete commits independently. Yield SQLite's writer lock before
+		// the next batch so job inserts and updates can make progress.
+		serviceutil.CancellableSleep(ctx, randutil.DurationBetween(riversharedmaintenance.BatchBackoffMin, riversharedmaintenance.BatchBackoffMax))
+	}
 }

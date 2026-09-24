@@ -921,7 +921,10 @@ func (e *Executor) MigrationInsertManyAssumingMain(ctx context.Context, params *
 }
 
 func (e *Executor) NotificationDeleteBefore(ctx context.Context, params *riverdriver.NotificationDeleteBeforeParams) (int, error) {
-	numDeleted, err := dbsqlc.New().NotificationDeleteBefore(schemaTemplateParam(ctx, params.Schema), e.dbtx, params.CreatedAtHorizon)
+	numDeleted, err := dbsqlc.New().NotificationDeleteBefore(schemaTemplateParam(ctx, params.Schema), e.dbtx, &dbsqlc.NotificationDeleteBeforeParams{
+		CreatedAtHorizon: params.CreatedAtHorizon,
+		Max:              int64(params.Max),
+	})
 	return int(numDeleted), interpretError(err)
 }
 

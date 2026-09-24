@@ -8,14 +8,21 @@ CREATE TABLE river_notification (
 
 -- name: NotificationDeleteBefore :execrows
 DELETE FROM /* TEMPLATE: schema */river_notification
-WHERE created_at < cast(@created_at_horizon AS text);
+WHERE id IN (
+    SELECT id
+    FROM /* TEMPLATE: schema */river_notification
+    WHERE created_at < cast(@created_at_horizon AS text)
+    ORDER BY created_at, id
+    LIMIT @max
+);
 
--- name: NotificationGetAfter :one
-SELECT *
+-- name: NotificationGetAfter :many
+SELECT id, payload, topic
 FROM /* TEMPLATE: schema */river_notification
 WHERE id > @after
+    AND topic IN (SELECT value FROM json_each(cast(@topics AS blob)))
 ORDER BY id ASC
-LIMIT 1;
+LIMIT @max;
 
 -- name: NotificationGetLastID :one
 SELECT cast(coalesce(max(id), 0) AS integer)

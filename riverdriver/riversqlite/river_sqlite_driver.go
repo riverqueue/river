@@ -89,7 +89,7 @@ func (d *Driver) GetListener(params *riverdriver.GetListenenerParams) riverdrive
 		pollInterval: notificationPollIntervalDefault,
 		replacer:     &d.replacer,
 		schema:       params.Schema,
-		topics:       make(map[string]struct{}),
+		topics:       make(map[string]int64),
 	}
 }
 
@@ -1178,7 +1178,10 @@ func (e *Executor) NotificationDeleteBefore(ctx context.Context, params *riverdr
 	numDeleted, err := dbsqlc.New().NotificationDeleteBefore(
 		schemaTemplateParam(ctx, params.Schema),
 		e.dbtx,
-		timeString(params.CreatedAtHorizon),
+		&dbsqlc.NotificationDeleteBeforeParams{
+			CreatedAtHorizon: timeString(params.CreatedAtHorizon),
+			Max:              int64(params.Max),
+		},
 	)
 	return int(numDeleted), interpretError(err)
 }

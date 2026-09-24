@@ -2,6 +2,7 @@ package riverdrivertest
 
 import (
 	"context"
+	"fmt"
 	"testing"
 	"time"
 
@@ -68,6 +69,67 @@ func exerciseListener[TTx any](ctx context.Context, t *testing.T, driverWithPool
 
 		listener, _ := setupListener(ctx, t, driverWithPool)
 		require.NoError(t, listener.Close(ctx))
+	})
+
+	t.Run("Listen_DoesNotReplayBeforeSubscription", func(t *testing.T) {
+		t.Parallel()
+
+		listener, bundle := setupListener(ctx, t, driverWithPool)
+		connectListener(ctx, t, listener)
+
+		require.NoError(t, bundle.exec.NotifyMany(ctx, &riverdriver.NotifyManyParams{Payload: []string{"old"}, Schema: listener.Schema(), Topic: "topic"}))
+		require.NoError(t, listener.Listen(ctx, "topic"))
+		require.NoError(t, bundle.exec.NotifyMany(ctx, &riverdriver.NotifyManyParams{Payload: []string{"new"}, Schema: listener.Schema(), Topic: "topic"}))
+
+		require.Equal(t, &riverdriver.Notification{Payload: "new", Topic: "topic"}, waitForNotification(ctx, t, listener))
+		requireNoNotification(ctx, t, listener)
+	})
+
+	t.Run("Listen_NewTopicPreservesOtherTopics", func(t *testing.T) {
+		t.Parallel()
+
+		listener, bundle := setupListener(ctx, t, driverWithPool)
+		connectListener(ctx, t, listener)
+
+		require.NoError(t, listener.Listen(ctx, "topic1"))
+		require.NoError(t, bundle.exec.NotifyMany(ctx, &riverdriver.NotifyManyParams{Payload: []string{"pending"}, Schema: listener.Schema(), Topic: "topic1"}))
+		require.NoError(t, bundle.exec.NotifyMany(ctx, &riverdriver.NotifyManyParams{Payload: []string{"old"}, Schema: listener.Schema(), Topic: "topic2"}))
+		require.NoError(t, listener.Listen(ctx, "topic2"))
+		require.NoError(t, bundle.exec.NotifyMany(ctx, &riverdriver.NotifyManyParams{Payload: []string{"new"}, Schema: listener.Schema(), Topic: "topic2"}))
+
+		require.Equal(t, &riverdriver.Notification{Payload: "pending", Topic: "topic1"}, waitForNotification(ctx, t, listener))
+		require.Equal(t, &riverdriver.Notification{Payload: "new", Topic: "topic2"}, waitForNotification(ctx, t, listener))
+		requireNoNotification(ctx, t, listener)
+	})
+
+	t.Run("Listen_RepeatedPreservesPendingNotifications", func(t *testing.T) {
+		t.Parallel()
+
+		listener, bundle := setupListener(ctx, t, driverWithPool)
+		connectListener(ctx, t, listener)
+
+		require.NoError(t, listener.Listen(ctx, "topic"))
+		require.NoError(t, bundle.exec.NotifyMany(ctx, &riverdriver.NotifyManyParams{Payload: []string{"pending"}, Schema: listener.Schema(), Topic: "topic"}))
+		require.NoError(t, listener.Listen(ctx, "topic"))
+
+		require.Equal(t, &riverdriver.Notification{Payload: "pending", Topic: "topic"}, waitForNotification(ctx, t, listener))
+		requireNoNotification(ctx, t, listener)
+	})
+
+	t.Run("Listen_ResubscribeSkipsGap", func(t *testing.T) {
+		t.Parallel()
+
+		listener, bundle := setupListener(ctx, t, driverWithPool)
+		connectListener(ctx, t, listener)
+
+		require.NoError(t, listener.Listen(ctx, "topic"))
+		require.NoError(t, listener.Unlisten(ctx, "topic"))
+		require.NoError(t, bundle.exec.NotifyMany(ctx, &riverdriver.NotifyManyParams{Payload: []string{"gap"}, Schema: listener.Schema(), Topic: "topic"}))
+		require.NoError(t, listener.Listen(ctx, "topic"))
+		require.NoError(t, bundle.exec.NotifyMany(ctx, &riverdriver.NotifyManyParams{Payload: []string{"new"}, Schema: listener.Schema(), Topic: "topic"}))
+
+		require.Equal(t, &riverdriver.Notification{Payload: "new", Topic: "topic"}, waitForNotification(ctx, t, listener))
+		requireNoNotification(ctx, t, listener)
 	})
 
 	t.Run("RoundTrip", func(t *testing.T) {
@@ -189,5 +251,110 @@ func exerciseListener[TTx any](ctx context.Context, t *testing.T, driverWithPool
 
 		require.NoError(t, listener.Listen(ctx, "topic1"))
 		require.NoError(t, listener.Unlisten(ctx, "topic1"))
+	})
+
+	t.Run("WaitForNotification_MultipleBatches", func(t *testing.T) {
+		t.Parallel()
+
+		listener, bundle := setupListener(ctx, t, driverWithPool)
+		connectListener(ctx, t, listener)
+
+		require.NoError(t, listener.Listen(ctx, "topic"))
+		payloads := make([]string, 600) // Exceeds the SQLite listener's read batch size.
+		for i := range payloads {
+			payloads[i] = fmt.Sprintf("payload_%d", i)
+		}
+		require.NoError(t, bundle.exec.NotifyMany(ctx, &riverdriver.NotifyManyParams{Payload: payloads, Schema: listener.Schema(), Topic: "ignored"}))
+		require.NoError(t, bundle.exec.NotifyMany(ctx, &riverdriver.NotifyManyParams{Payload: payloads, Schema: listener.Schema(), Topic: "topic"}))
+
+		for _, payload := range payloads {
+			require.Equal(t, &riverdriver.Notification{Payload: payload, Topic: "topic"}, waitForNotification(ctx, t, listener))
+		}
+		requireNoNotification(ctx, t, listener)
+	})
+
+	t.Run("WaitForNotification_ReconnectDiscardsBufferedNotifications", func(t *testing.T) {
+		t.Parallel()
+
+		listener, bundle := setupListener(ctx, t, driverWithPool)
+		connectListener(ctx, t, listener)
+
+		require.NoError(t, listener.Listen(ctx, "topic"))
+		require.NoError(t, bundle.exec.NotifyMany(ctx, &riverdriver.NotifyManyParams{Payload: []string{"first", "buffered"}, Schema: listener.Schema(), Topic: "topic"}))
+		require.Equal(t, "first", waitForNotification(ctx, t, listener).Payload)
+
+		require.NoError(t, listener.Close(ctx))
+		require.NoError(t, listener.Connect(ctx))
+		require.NoError(t, listener.Listen(ctx, "topic"))
+		require.NoError(t, bundle.exec.NotifyMany(ctx, &riverdriver.NotifyManyParams{Payload: []string{"new"}, Schema: listener.Schema(), Topic: "topic"}))
+
+		require.Equal(t, &riverdriver.Notification{Payload: "new", Topic: "topic"}, waitForNotification(ctx, t, listener))
+		requireNoNotification(ctx, t, listener)
+	})
+
+	t.Run("WaitForNotification_ResubscribeAfterCleanup", func(t *testing.T) {
+		t.Parallel()
+
+		listener, bundle := setupListener(ctx, t, driverWithPool)
+		if bundle.driver.DatabaseName() != riverdriver.DatabaseNameSQLite {
+			t.Skip("SQLite notifications can be buffered after their outbox rows are deleted")
+		}
+		connectListener(ctx, t, listener)
+
+		require.NoError(t, listener.Listen(ctx, "topic"))
+		require.NoError(t, bundle.exec.NotifyMany(ctx, &riverdriver.NotifyManyParams{Payload: []string{"first", "buffered"}, Schema: listener.Schema(), Topic: "topic"}))
+		require.Equal(t, "first", waitForNotification(ctx, t, listener).Payload)
+
+		require.NoError(t, listener.Unlisten(ctx, "topic"))
+		require.NoError(t, bundle.exec.Exec(ctx, "DELETE FROM river_notification"))
+		require.NoError(t, listener.Listen(ctx, "topic"))
+		require.NoError(t, bundle.exec.NotifyMany(ctx, &riverdriver.NotifyManyParams{Payload: []string{"new"}, Schema: listener.Schema(), Topic: "topic"}))
+
+		require.Equal(t, &riverdriver.Notification{Payload: "new", Topic: "topic"}, waitForNotification(ctx, t, listener))
+		requireNoNotification(ctx, t, listener)
+	})
+
+	t.Run("WaitForNotification_ResubscribeDiscardsBufferedNotifications", func(t *testing.T) {
+		t.Parallel()
+
+		listener, bundle := setupListener(ctx, t, driverWithPool)
+		if bundle.driver.DatabaseName() != riverdriver.DatabaseNameSQLite {
+			t.Skip("SQLite rechecks subscriptions when delivering buffered rows; Postgres can retain already received notifications")
+		}
+		connectListener(ctx, t, listener)
+
+		require.NoError(t, listener.Listen(ctx, "topic"))
+		require.NoError(t, bundle.exec.NotifyMany(ctx, &riverdriver.NotifyManyParams{Payload: []string{"first", "buffered"}, Schema: listener.Schema(), Topic: "topic"}))
+		require.Equal(t, "first", waitForNotification(ctx, t, listener).Payload)
+
+		require.NoError(t, listener.Unlisten(ctx, "topic"))
+		require.NoError(t, bundle.exec.NotifyMany(ctx, &riverdriver.NotifyManyParams{Payload: []string{"gap"}, Schema: listener.Schema(), Topic: "topic"}))
+		require.NoError(t, listener.Listen(ctx, "topic"))
+		require.NoError(t, bundle.exec.NotifyMany(ctx, &riverdriver.NotifyManyParams{Payload: []string{"new"}, Schema: listener.Schema(), Topic: "topic"}))
+
+		require.Equal(t, &riverdriver.Notification{Payload: "new", Topic: "topic"}, waitForNotification(ctx, t, listener))
+		requireNoNotification(ctx, t, listener)
+	})
+
+	t.Run("WaitForNotification_UnlistenDiscardsBufferedNotifications", func(t *testing.T) {
+		t.Parallel()
+
+		listener, bundle := setupListener(ctx, t, driverWithPool)
+		if bundle.driver.DatabaseName() != riverdriver.DatabaseNameSQLite {
+			t.Skip("SQLite rechecks subscriptions when delivering buffered rows; Postgres can retain already received notifications")
+		}
+		connectListener(ctx, t, listener)
+
+		require.NoError(t, listener.Listen(ctx, "topic1"))
+		require.NoError(t, listener.Listen(ctx, "topic2"))
+		require.NoError(t, bundle.exec.NotifyMany(ctx, &riverdriver.NotifyManyParams{Payload: []string{"first"}, Schema: listener.Schema(), Topic: "topic1"}))
+		require.NoError(t, bundle.exec.NotifyMany(ctx, &riverdriver.NotifyManyParams{Payload: []string{"buffered"}, Schema: listener.Schema(), Topic: "topic2"}))
+		require.Equal(t, "first", waitForNotification(ctx, t, listener).Payload)
+
+		require.NoError(t, listener.Unlisten(ctx, "topic2"))
+		require.NoError(t, bundle.exec.NotifyMany(ctx, &riverdriver.NotifyManyParams{Payload: []string{"new"}, Schema: listener.Schema(), Topic: "topic1"}))
+
+		require.Equal(t, &riverdriver.Notification{Payload: "new", Topic: "topic1"}, waitForNotification(ctx, t, listener))
+		requireNoNotification(ctx, t, listener)
 	})
 }
