@@ -970,6 +970,7 @@ dependencies = [
  "base64",
  "chrono",
  "cron",
+ "futures-util",
  "riverqueue-internal",
  "riverqueue-macros",
  "riverqueue-migrate",

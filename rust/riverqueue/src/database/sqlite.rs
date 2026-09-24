@@ -939,9 +939,11 @@ pub(crate) async fn complete_decoded(
         .map(json_text)
         .transpose()?
         .unwrap_or_else(|| "{}".to_owned());
+    // Like River Go, a `cancel_attempted_at` key cancels the job even when its
+    // value is JSON `null`; `->` distinguishes that from a missing key.
     let should_cancel = r#"(
         (? IN ('available', 'retryable', 'scheduled'))
-        AND json_extract(metadata, '$.cancel_attempted_at') IS NOT NULL
+        AND (metadata -> 'cancel_attempted_at') IS NOT NULL
     )"#;
     let sql = format!(
         r#"

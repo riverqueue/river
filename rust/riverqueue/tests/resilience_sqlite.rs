@@ -6,7 +6,10 @@ use std::{
     convert::Infallible,
     future::Future,
     path::{Path, PathBuf},
-    sync::atomic::{AtomicUsize, Ordering},
+    sync::{
+        Arc,
+        atomic::{AtomicUsize, Ordering},
+    },
     time::Duration,
 };
 
@@ -20,10 +23,51 @@ use sqlx::{
     SqlitePool,
     sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePoolOptions},
 };
+use tokio::sync::Semaphore;
 
 #[derive(Clone, Debug, Deserialize, JobArgs, Serialize)]
 #[river(kind = "rust_sqlite_resilience")]
 struct ResilienceArgs {}
+
+#[derive(Clone, Debug, Deserialize, JobArgs, Serialize)]
+#[river(kind = "rust_sqlite_resilience_gated")]
+struct GatedArgs {
+    fail: bool,
+}
+
+#[derive(Debug, thiserror::Error)]
+#[error("gated job failed")]
+struct GatedError;
+
+/// Lets a test hold a gated job inside its worker until released.
+#[derive(Clone)]
+struct Gate {
+    release: Arc<Semaphore>,
+    started: Arc<Semaphore>,
+}
+
+impl Default for Gate {
+    fn default() -> Self {
+        Self {
+            release: Arc::new(Semaphore::new(0)),
+            started: Arc::new(Semaphore::new(0)),
+        }
+    }
+}
+
+impl Gate {
+    async fn wait_started(&self) {
+        tokio::time::timeout(Duration::from_secs(10), self.started.acquire())
+            .await
+            .expect("gated job did not start")
+            .unwrap()
+            .forget();
+    }
+
+    fn release(&self) {
+        self.release.add_permits(1);
+    }
+}
 
 /// A migrated WAL database file that is removed when the test finishes.
 struct TestDatabase {
@@ -74,10 +118,29 @@ impl Drop for TestDatabase {
 }
 
 fn completing_workers() -> WorkerRegistry {
+    gated_workers(&Gate::default())
+}
+
+fn gated_workers(gate: &Gate) -> WorkerRegistry {
     let mut workers = WorkerRegistry::new();
     workers
         .register_fn(|_context: WorkContext, _job: Job<ResilienceArgs>| async {
             Ok::<_, Infallible>(WorkOutcome::Complete)
+        })
+        .unwrap();
+    let gate = gate.clone();
+    workers
+        .register_fn(move |_context: WorkContext, job: Job<GatedArgs>| {
+            let gate = gate.clone();
+            async move {
+                gate.started.add_permits(1);
+                gate.release.acquire().await.unwrap().forget();
+                if job.args.fail {
+                    Err(GatedError)
+                } else {
+                    Ok(WorkOutcome::Complete)
+                }
+            }
         })
         .unwrap();
     workers
@@ -201,4 +264,69 @@ async fn claimed_rows_decode_individually_and_accept_go_integer_ranges() {
             .starts_with("River could not decode the job row"),
         "{errors:?}"
     );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn completion_retries_while_a_foreign_writer_holds_the_lock() {
+    // The client gives up on a busy database after 50 ms, far less than the
+    // foreign transaction below holds the write lock.
+    let database = TestDatabase::new(Duration::from_millis(50)).await;
+    let gate = Gate::default();
+    let client = Client::builder(database.pool.clone())
+        .id("sqlite-resilience-writer-lock")
+        .without_notifications()
+        .workers(gated_workers(&gate))
+        .queue("default", fast_queue())
+        .build()
+        .unwrap();
+    let job = client.insert(GatedArgs { fail: false }).await.unwrap();
+
+    let run = client.start().unwrap();
+    gate.wait_started().await;
+    let foreign = TestDatabase::connect(&database.path, Duration::from_secs(5), 1).await;
+    let writer = foreign.begin_with("BEGIN IMMEDIATE").await.unwrap();
+    gate.release();
+    // Hold the lock across several busy timeouts and the first retry.
+    tokio::time::sleep(Duration::from_millis(1_500)).await;
+    writer.rollback().await.unwrap();
+    wait_until(
+        Duration::from_secs(15),
+        "completion after unlock",
+        || async { job_state(&database.pool, job.job.row.id).await == "completed" },
+    )
+    .await;
+    run.shutdown().await.unwrap();
+    foreign.close().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn completion_cancels_on_a_null_cancel_attempted_at_key() {
+    let database = TestDatabase::new(Duration::from_secs(5)).await;
+    let gate = Gate::default();
+    let client = Client::builder(database.pool.clone())
+        .id("sqlite-resilience-cancel-key")
+        .without_notifications()
+        .workers(gated_workers(&gate))
+        .queue("default", fast_queue())
+        .build()
+        .unwrap();
+    let job = client.insert(GatedArgs { fail: true }).await.unwrap();
+
+    let run = client.start().unwrap();
+    gate.wait_started().await;
+    // River Go treats the key's presence, not its value, as a cancellation.
+    sqlx::query(
+        "UPDATE river_job SET metadata = jsonb_set(metadata, '$.cancel_attempted_at', json('null')) \
+         WHERE id = ?",
+    )
+    .bind(job.job.row.id)
+    .execute(&database.pool)
+    .await
+    .unwrap();
+    gate.release();
+    wait_until(Duration::from_secs(10), "cancellation", || async {
+        job_state(&database.pool, job.job.row.id).await == "cancelled"
+    })
+    .await;
+    run.shutdown().await.unwrap();
 }
