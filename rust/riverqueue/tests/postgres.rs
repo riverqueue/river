@@ -787,9 +787,9 @@ async fn extension_claim_returns_ordered_rows_and_rolls_back_decode_errors() {
     }
 
     let invalid = client.insert(FailArgs {}).await.unwrap();
-    // Like Go's `json.Unmarshal`, attempt errors tolerate missing fields but
-    // not a non-object element.
-    let corrupt_sql = format!("UPDATE {table} SET errors = ARRAY['[]'::jsonb] WHERE id = $1");
+    // Attempt errors decode leniently, but a `NULL` tag can't become a
+    // `JobRow`, so claiming it through the extension fails and rolls back.
+    let corrupt_sql = format!("UPDATE {table} SET tags = ARRAY[NULL]::varchar[] WHERE id = $1");
     sqlx::query(AssertSqlSafe(corrupt_sql))
         .bind(invalid.job.row.id)
         .execute(&pool)

@@ -14,8 +14,8 @@ use std::{
 };
 
 use riverqueue::{
-    Client, InsertOpts, Job, JobArgs, JobState, MaintenanceConfig, QueueConfig, UniqueOpts,
-    WorkCancelled, WorkContext, WorkOutcome, WorkerRegistry,
+    AttemptError, Client, InsertOpts, Job, JobArgs, JobState, MaintenanceConfig, QueueConfig,
+    UniqueOpts, WorkCancelled, WorkContext, WorkOutcome, WorkerRegistry,
 };
 use riverqueue_migrate::SqliteMigrator;
 use serde::{Deserialize, Serialize};
@@ -227,6 +227,16 @@ async fn claimed_rows_decode_individually_and_accept_go_integer_ranges() {
         .execute(&database.pool)
         .await
         .unwrap();
+    // Attempt errors in a shape River doesn't write decode leniently like
+    // River Go's, so the job is still worked.
+    let odd_errors = client.insert(ResilienceArgs {}).await.unwrap();
+    sqlx::query(
+        r#"UPDATE river_job SET errors = jsonb('[{"attempt": "1", "error": {"message": "boom"}}, 42]') WHERE id = ?"#,
+    )
+    .bind(odd_errors.job.row.id)
+    .execute(&database.pool)
+    .await
+    .unwrap();
     // A row whose tags are not an array cannot become a `JobRow`. Claiming it
     // with the others must record a failure for it alone.
     let malformed = client
@@ -243,7 +253,7 @@ async fn claimed_rows_decode_individually_and_accept_go_integer_ranges() {
 
     let mut run = client.start().unwrap();
     run.wait_ready().await.unwrap();
-    for id in [wide.job.row.id, ordinary.job.row.id] {
+    for id in [wide.job.row.id, odd_errors.job.row.id, ordinary.job.row.id] {
         wait_until(
             Duration::from_secs(10),
             "decodable job completion",
@@ -274,6 +284,17 @@ async fn claimed_rows_decode_individually_and_accept_go_integer_ranges() {
     let wide = client.job_get(wide.job.row.id).await.unwrap();
     assert_eq!(wide.state, JobState::Completed);
     assert_eq!(wide.max_attempts, i16::MAX);
+
+    let odd_errors = client.job_get(odd_errors.job.row.id).await.unwrap();
+    assert_eq!(odd_errors.state, JobState::Completed);
+    let zero_time = "0001-01-01T00:00:00Z".parse().unwrap();
+    assert_eq!(
+        odd_errors.errors,
+        [
+            AttemptError::new(zero_time, 1, r#"{"message":"boom"}"#),
+            AttemptError::new(zero_time, 0, "42"),
+        ]
+    );
 
     let (attempt, errors): (i64, String) =
         sqlx::query_as("SELECT attempt, json(errors) FROM river_job WHERE id = ?")

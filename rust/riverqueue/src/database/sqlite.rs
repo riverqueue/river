@@ -25,7 +25,7 @@ use sqlx::{Row, sqlite::SqliteRow};
 use crate::{
     AttemptError, JobListOrderBy, JobRow, JobState, METADATA_KEY_UNIQUE_NONCE, Queue,
     SortDirection,
-    client::{UndecodableJob, decode_attempt_error, go_time_json, saturating_i16},
+    client::{UndecodableJob, go_time_json, saturating_i16},
 };
 
 pub(crate) const JOB_COLUMNS: &str = r#"
@@ -235,11 +235,7 @@ impl JobRecord {
             attempted_by: decode_json_or_default(self.attempted_by.as_deref())?,
             created_at: self.created_at,
             encoded_args: serde_json::value::RawValue::from_string(self.encoded_args)?,
-            errors: decode_json_or_default::<Vec<Value>>(self.errors.as_deref())?
-                .iter()
-                .map(decode_attempt_error)
-                .collect::<Result<_, _>>()
-                .map_err(|error| BackendError::InvalidRow(format!("job {}: {error}", self.id)))?,
+            errors: decode_json_or_default(self.errors.as_deref())?,
             finalized_at: self.finalized_at,
             kind: self.kind,
             max_attempts: saturating_i16(self.max_attempts),

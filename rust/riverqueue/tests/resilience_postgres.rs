@@ -20,8 +20,8 @@ use async_trait::async_trait;
 use riverqueue::__private::ClientBuilderExt;
 use riverqueue::{
     __private::{DatabaseConnection, JobSetStateParams, Pilot, PilotError},
-    BoxError, Client, ErrorHandler, EventKind, InsertOpts, Job, JobArgs, JobRow, JobState,
-    QueueConfig, WorkCancelled, WorkContext, WorkOutcome, WorkerRegistry,
+    AttemptError, BoxError, Client, ErrorHandler, EventKind, InsertOpts, Job, JobArgs, JobRow,
+    JobState, QueueConfig, WorkCancelled, WorkContext, WorkOutcome, WorkerRegistry,
     database::{PostgresDatabase, SchemaName},
 };
 use riverqueue_migrate::PostgresMigrator;
@@ -434,6 +434,20 @@ async fn claimed_rows_decode_individually_and_leniently() {
             sparse_errors.job.row.id
         ))
         .await;
+    // Attempt errors in a shape River doesn't write decode leniently like
+    // River Go's, so the job is still worked.
+    let odd_errors = client.insert(ResilienceArgs {}).await.unwrap();
+    schema
+        .execute(format!(
+            "UPDATE {} SET errors = ARRAY[\
+                '{{\"at\": \"2024-01-02 03:04:05+00\", \"attempt\": \"1\", \
+                  \"error\": {{\"message\": \"boom\"}}, \"trace\": [\"frame\"]}}'::jsonb, \
+                '42'::jsonb] \
+             WHERE id = {}",
+            schema.table(),
+            odd_errors.job.row.id
+        ))
+        .await;
     // Array metadata cannot become a `JobRow`. Claiming it with the others
     // must record a failure for it alone.
     let malformed = client
@@ -451,7 +465,11 @@ async fn claimed_rows_decode_individually_and_leniently() {
     let ordinary = client.insert(ResilienceArgs {}).await.unwrap();
 
     let mut run = client.start().unwrap();
-    for id in [sparse_errors.job.row.id, ordinary.job.row.id] {
+    for id in [
+        sparse_errors.job.row.id,
+        odd_errors.job.row.id,
+        ordinary.job.row.id,
+    ] {
         wait_until(
             Duration::from_secs(10),
             "decodable job completion",
@@ -470,6 +488,21 @@ async fn claimed_rows_decode_individually_and_leniently() {
     assert_eq!(sparse_errors.errors.len(), 1);
     assert_eq!(sparse_errors.errors[0].error, "go");
     assert_eq!(sparse_errors.errors[0].attempt, 0);
+
+    let odd_errors = client.job_get(odd_errors.job.row.id).await.unwrap();
+    assert_eq!(odd_errors.state, JobState::Completed);
+    assert_eq!(
+        odd_errors.errors,
+        [
+            AttemptError::new(
+                "2024-01-02T03:04:05Z".parse().unwrap(),
+                1,
+                r#"{"message":"boom"}"#
+            )
+            .with_trace(r#"["frame"]"#),
+            AttemptError::new("0001-01-01T00:00:00Z".parse().unwrap(), 0, "42"),
+        ]
+    );
 
     let (attempt, errors): (i16, Vec<serde_json::Value>) = sqlx::query_as(AssertSqlSafe(format!(
         "SELECT attempt, errors FROM {} WHERE id = $1",
