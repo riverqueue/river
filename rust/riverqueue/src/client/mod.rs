@@ -476,7 +476,13 @@ impl Client {
         })?;
         tokio::spawn(async move {
             loop {
-                match source.recv().await {
+                // Stop forwarding as soon as the subscriber drops its
+                // receiver, rather than at the next matching event.
+                let next = tokio::select! {
+                    () = sender.closed() => break,
+                    next = source.recv() => next,
+                };
+                match next {
                     Ok(event) if kinds.contains(&event.kind()) => match sender.try_send(event) {
                         Ok(()) => {}
                         Err(mpsc::error::TrySendError::Full(_)) => {
