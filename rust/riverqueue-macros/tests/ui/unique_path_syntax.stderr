@@ -1,0 +1,5 @@
+error: unique JSON path segment "*" contains JSON path syntax that River Go cannot hash deterministically
+ --> tests/ui/unique_path_syntax.rs:5:42
+  |
+5 | #[river(kind = "invoice", unique(by_args("lines.*")))]
+  |                                          ^^^^^^^^^

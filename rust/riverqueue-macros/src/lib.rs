@@ -2,22 +2,37 @@
 #![forbid(unsafe_code)]
 
 use proc_macro::TokenStream;
-use quote::quote;
+use proc_macro2::Span;
+use quote::{quote, quote_spanned};
 use syn::{
-    Data, DeriveInput, Fields, Lit, LitBool, LitInt, LitStr, Meta, Token, ext::IdentExt as _,
-    parenthesized, parse_macro_input, punctuated::Punctuated,
+    Data, DeriveInput, Fields, Ident, Lit, LitBool, LitInt, LitStr, Meta, Token,
+    ext::IdentExt as _, meta::ParseNestedMeta, parenthesized, parse_macro_input,
+    punctuated::Punctuated, spanned::Spanned as _, token,
 };
 
 /// Derives `riverqueue::JobArgs`.
 ///
-/// The type must declare `#[river(kind = "...")]`. It may also declare
-/// `aliases("old_kind")`, `queue = "..."`, `max_attempts = N`, `priority = N`,
-/// and `pending = true`. Fields marked `#[river(unique)]` are used by
-/// argument-scoped unique jobs. Their serialized names follow Serde's
-/// serialization-side `rename` and `rename_all` settings. A unique field may
-/// be conditionally omitted with `skip_serializing_if`, matching River Go, but
-/// cannot be flattened or unconditionally skipped during serialization.
-#[proc_macro_derive(JobArgs, attributes(river, serde))]
+/// The type must declare `#[river(kind = "...")]`. Other type-level options:
+///
+/// * `aliases("old_kind", ...)`: former kinds handled by the same worker.
+/// * `queue = "..."`, `max_attempts = N`, `priority = N`, `pending = true`,
+///   and `tags("a", "b")`: default insertion options.
+/// * `unique(...)`: makes the job unique by default. Options are `by_args`,
+///   `by_args("nested.path", ...)`, `by_period = "1h"` (a Go duration of at
+///   least one second), `by_queue`, `by_state(available, running, ...)`, and
+///   `exclude_kind`.
+/// * `insert_opts = path::to_fn`: a `fn() -> InsertOpts` whose options are
+///   overlaid on the attribute defaults, like Go's `JobArgsWithInsertOpts`.
+/// * `crate = "path"`: the path to `riverqueue` when it is renamed or
+///   re-exported.
+///
+/// Fields marked `#[river(unique)]` are the arguments hashed by `unique(by_args)`,
+/// together with any `by_args` paths; without either, every argument is
+/// hashed. Marking a field requires `unique(by_args)` on the type. Field
+/// names follow Serde's serialization-side `rename` and `rename_all`. A
+/// unique field may be conditionally omitted with `skip_serializing_if`,
+/// matching River Go, but cannot be flattened or unconditionally skipped.
+#[proc_macro_derive(JobArgs, attributes(river))]
 pub fn derive_job_args(input: TokenStream) -> TokenStream {
     let input = parse_macro_input!(input as DeriveInput);
     expand_job_args(&input)
@@ -25,62 +40,256 @@ pub fn derive_job_args(input: TokenStream) -> TokenStream {
         .into()
 }
 
-#[allow(clippy::too_many_lines)]
-fn expand_job_args(input: &DeriveInput) -> syn::Result<proc_macro2::TokenStream> {
-    let mut kind = None;
-    let mut aliases = Vec::new();
-    let mut max_attempts = None;
-    let mut pending = None;
-    let mut priority = None;
-    let mut queue = None;
-    let mut unique_paths = Vec::new();
+#[derive(Default)]
+struct TypeAttributes {
+    aliases: Vec<LitStr>,
+    krate: Option<syn::Path>,
+    insert_opts: Option<syn::Path>,
+    kind: Option<LitStr>,
+    max_attempts: Option<LitInt>,
+    pending: Option<LitBool>,
+    priority: Option<LitInt>,
+    queue: Option<LitStr>,
+    tags: Vec<LitStr>,
+    unique: Option<UniqueAttribute>,
+}
+
+struct UniqueAttribute {
+    by_args: bool,
+    by_args_paths: Vec<LitStr>,
+    by_period: Option<(u64, u32)>,
+    by_queue: bool,
+    by_state: Option<Vec<Ident>>,
+    exclude_kind: bool,
+}
+
+const JOB_STATES: [(&str, &str); 8] = [
+    ("available", "Available"),
+    ("cancelled", "Cancelled"),
+    ("completed", "Completed"),
+    ("discarded", "Discarded"),
+    ("pending", "Pending"),
+    ("retryable", "Retryable"),
+    ("running", "Running"),
+    ("scheduled", "Scheduled"),
+];
+
+const UNIQUE_REQUIRES_OPTION: &str =
+    "unique(...) requires at least one of by_args, by_period, by_queue, by_state, or exclude_kind";
+
+const JOB_STATES_REQUIRED_FOR_UNIQUE: [&str; 4] = ["available", "pending", "running", "scheduled"];
+
+fn parse_type_attributes(input: &DeriveInput) -> syn::Result<TypeAttributes> {
+    let mut parsed = TypeAttributes::default();
     for attribute in &input.attrs {
-        if attribute.path().is_ident("river") {
-            attribute.parse_nested_meta(|meta| {
-                if meta.path.is_ident("kind") {
-                    kind = Some(meta.value()?.parse::<LitStr>()?);
-                    return Ok(());
-                }
-                if meta.path.is_ident("aliases") {
-                    let content;
-                    parenthesized!(content in meta.input);
-                    aliases = Punctuated::<LitStr, Token![,]>::parse_terminated(&content)?
-                        .into_iter()
-                        .collect();
-                    return Ok(());
-                }
-                if meta.path.is_ident("max_attempts") {
-                    max_attempts = Some(meta.value()?.parse::<LitInt>()?);
-                    return Ok(());
-                }
-                if meta.path.is_ident("pending") {
-                    pending = Some(meta.value()?.parse::<LitBool>()?);
-                    return Ok(());
-                }
-                if meta.path.is_ident("priority") {
-                    priority = Some(meta.value()?.parse::<LitInt>()?);
-                    return Ok(());
-                }
-                if meta.path.is_ident("queue") {
-                    queue = Some(meta.value()?.parse::<LitStr>()?);
-                    return Ok(());
-                }
-                if meta.path.is_ident("unique") {
-                    let content;
-                    parenthesized!(content in meta.input);
-                    unique_paths
-                        .extend(Punctuated::<LitStr, Token![,]>::parse_terminated(&content)?);
-                    return Ok(());
-                }
-                Err(meta.error("unsupported river type attribute"))
-            })?;
+        if !attribute.path().is_ident("river") {
+            continue;
+        }
+        attribute.parse_nested_meta(|meta| {
+            if meta.path.is_ident("aliases") {
+                parsed.aliases = parse_string_list(&meta)?;
+            } else if meta.path.is_ident("crate") {
+                parsed.krate = Some(meta.value()?.parse::<LitStr>()?.parse()?);
+            } else if meta.path.is_ident("insert_opts") {
+                parsed.insert_opts = Some(meta.value()?.parse()?);
+            } else if meta.path.is_ident("kind") {
+                parsed.kind = Some(meta.value()?.parse()?);
+            } else if meta.path.is_ident("max_attempts") {
+                parsed.max_attempts = Some(meta.value()?.parse()?);
+            } else if meta.path.is_ident("pending") {
+                parsed.pending = Some(meta.value()?.parse()?);
+            } else if meta.path.is_ident("priority") {
+                parsed.priority = Some(meta.value()?.parse()?);
+            } else if meta.path.is_ident("queue") {
+                parsed.queue = Some(meta.value()?.parse()?);
+            } else if meta.path.is_ident("tags") {
+                parsed.tags = parse_string_list(&meta)?;
+            } else if meta.path.is_ident("unique") {
+                parsed.unique = Some(parse_unique(&meta)?);
+            } else {
+                return Err(meta.error("unsupported river type attribute"));
+            }
+            Ok(())
+        })?;
+    }
+    Ok(parsed)
+}
+
+fn parse_string_list(meta: &ParseNestedMeta<'_>) -> syn::Result<Vec<LitStr>> {
+    let content;
+    parenthesized!(content in meta.input);
+    Ok(Punctuated::<LitStr, Token![,]>::parse_terminated(&content)?
+        .into_iter()
+        .collect())
+}
+
+fn parse_unique(meta: &ParseNestedMeta<'_>) -> syn::Result<UniqueAttribute> {
+    let span = meta
+        .path
+        .get_ident()
+        .map_or_else(Span::call_site, Ident::span);
+    {
+        let lookahead = meta.input.fork();
+        let content;
+        parenthesized!(content in lookahead);
+        if content.peek(LitStr) {
+            return Err(content
+                .error("declare unique argument paths with `unique(by_args(\"path\", ...))`"));
+        }
+        if content.is_empty() {
+            return Err(syn::Error::new(span, UNIQUE_REQUIRES_OPTION));
         }
     }
-    let kind = kind.ok_or_else(|| {
+    let mut unique = UniqueAttribute {
+        by_args: false,
+        by_args_paths: Vec::new(),
+        by_period: None,
+        by_queue: false,
+        by_state: None,
+        exclude_kind: false,
+    };
+    meta.parse_nested_meta(|option| {
+        if option.path.is_ident("by_args") {
+            unique.by_args = true;
+            if option.input.peek(token::Paren) {
+                unique.by_args_paths = parse_string_list(&option)?;
+            }
+        } else if option.path.is_ident("by_period") {
+            let period = option.value()?.parse::<LitStr>()?;
+            let nanos = parse_go_duration(&period.value())
+                .map_err(|message| syn::Error::new_spanned(&period, message))?;
+            if nanos < 1_000_000_000 {
+                return Err(syn::Error::new_spanned(
+                    &period,
+                    "by_period must be at least one second",
+                ));
+            }
+            let seconds = u64::try_from(nanos / 1_000_000_000)
+                .map_err(|_| syn::Error::new_spanned(&period, "by_period is too large"))?;
+            let nanos = u32::try_from(nanos % 1_000_000_000).unwrap_or_default();
+            unique.by_period = Some((seconds, nanos));
+        } else if option.path.is_ident("by_queue") {
+            unique.by_queue = true;
+        } else if option.path.is_ident("by_state") {
+            let content;
+            parenthesized!(content in option.input);
+            let states = Punctuated::<Ident, Token![,]>::parse_terminated(&content)?
+                .into_iter()
+                .collect::<Vec<_>>();
+            validate_unique_states(&states, &option)?;
+            unique.by_state = Some(states);
+        } else if option.path.is_ident("exclude_kind") {
+            unique.exclude_kind = true;
+        } else {
+            return Err(option.error(
+                "unsupported unique option; expected by_args, by_period, by_queue, by_state, or exclude_kind",
+            ));
+        }
+        Ok(())
+    })?;
+    Ok(unique)
+}
+
+fn validate_unique_states(states: &[Ident], option: &ParseNestedMeta<'_>) -> syn::Result<()> {
+    let mut seen = Vec::new();
+    for state in states {
+        let name = state.to_string();
+        if !JOB_STATES.iter().any(|(known, _)| *known == name) {
+            return Err(syn::Error::new_spanned(
+                state,
+                format!(
+                    "unknown job state `{name}`; expected one of {}",
+                    JOB_STATES
+                        .iter()
+                        .map(|(known, _)| *known)
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                ),
+            ));
+        }
+        if seen.contains(&name) {
+            return Err(syn::Error::new_spanned(
+                state,
+                format!("duplicate job state `{name}`"),
+            ));
+        }
+        seen.push(name);
+    }
+    let missing = JOB_STATES_REQUIRED_FOR_UNIQUE
+        .iter()
+        .filter(|required| !seen.iter().any(|state| state == *required))
+        .copied()
+        .collect::<Vec<_>>();
+    if !missing.is_empty() {
+        return Err(option.error(format!(
+            "by_state must include available, pending, running, and scheduled; missing {}",
+            missing.join(", ")
+        )));
+    }
+    Ok(())
+}
+
+/// Parses a Go `time.ParseDuration` string without a sign, such as `1h30m`
+/// or `1.5h`, into nanoseconds.
+fn parse_go_duration(text: &str) -> Result<u128, String> {
+    let invalid = || format!("invalid duration {text:?}; expected a Go duration such as \"1h\"");
+    if text.is_empty() {
+        return Err(invalid());
+    }
+    let mut rest = text;
+    let mut total = 0_u128;
+    while !rest.is_empty() {
+        let number_end = rest
+            .find(|character: char| !(character.is_ascii_digit() || character == '.'))
+            .unwrap_or(rest.len());
+        let (number, after_number) = rest.split_at(number_end);
+        let unit_end = after_number
+            .find(|character: char| character.is_ascii_digit() || character == '.')
+            .unwrap_or(after_number.len());
+        let (unit, after_unit) = after_number.split_at(unit_end);
+        rest = after_unit;
+
+        let unit_nanos: u128 = match unit {
+            "ns" => 1,
+            "us" | "\u{b5}s" | "\u{3bc}s" => 1_000,
+            "ms" => 1_000_000,
+            "s" => 1_000_000_000,
+            "m" => 60_000_000_000,
+            "h" => 3_600_000_000_000,
+            _ => return Err(invalid()),
+        };
+        let (whole, fraction) = number.split_once('.').unwrap_or((number, ""));
+        if whole.is_empty() && fraction.is_empty() {
+            return Err(invalid());
+        }
+        let whole = if whole.is_empty() {
+            0
+        } else {
+            whole.parse::<u128>().map_err(|_| invalid())?
+        };
+        let mut value = whole.checked_mul(unit_nanos).ok_or_else(invalid)?;
+        if !fraction.is_empty() {
+            let scale = 10_u128
+                .checked_pow(u32::try_from(fraction.len()).map_err(|_| invalid())?)
+                .ok_or_else(invalid)?;
+            let fraction = fraction.parse::<u128>().map_err(|_| invalid())?;
+            value = value
+                .checked_add(fraction.checked_mul(unit_nanos).ok_or_else(invalid)? / scale)
+                .ok_or_else(invalid)?;
+        }
+        total = total.checked_add(value).ok_or_else(invalid)?;
+    }
+    Ok(total)
+}
+
+#[allow(clippy::too_many_lines)]
+fn expand_job_args(input: &DeriveInput) -> syn::Result<proc_macro2::TokenStream> {
+    let attributes = parse_type_attributes(input)?;
+    let kind = attributes.kind.clone().ok_or_else(|| {
         syn::Error::new_spanned(&input.ident, "JobArgs requires #[river(kind = \"...\")]")
     })?;
     validate_kind(&kind)?;
-    for alias in &aliases {
+    for alias in &attributes.aliases {
         validate_kind(alias)?;
         if alias.value() == kind.value() {
             return Err(syn::Error::new_spanned(
@@ -89,7 +298,11 @@ fn expand_job_args(input: &DeriveInput) -> syn::Result<proc_macro2::TokenStream>
             ));
         }
     }
-    let mut alias_values = aliases.iter().map(LitStr::value).collect::<Vec<_>>();
+    let mut alias_values = attributes
+        .aliases
+        .iter()
+        .map(LitStr::value)
+        .collect::<Vec<_>>();
     alias_values.sort_unstable();
     if alias_values.windows(2).any(|pair| pair[0] == pair[1]) {
         return Err(syn::Error::new_spanned(
@@ -97,7 +310,7 @@ fn expand_job_args(input: &DeriveInput) -> syn::Result<proc_macro2::TokenStream>
             "kind aliases must be unique",
         ));
     }
-    if let Some(max_attempts) = &max_attempts
+    if let Some(max_attempts) = &attributes.max_attempts
         && !(1..=i16::MAX as u64).contains(&max_attempts.base10_parse::<u64>()?)
     {
         return Err(syn::Error::new_spanned(
@@ -105,7 +318,7 @@ fn expand_job_args(input: &DeriveInput) -> syn::Result<proc_macro2::TokenStream>
             "max_attempts must be between 1 and 32767",
         ));
     }
-    if let Some(priority) = &priority
+    if let Some(priority) = &attributes.priority
         && !(1..=4).contains(&priority.base10_parse::<u8>()?)
     {
         return Err(syn::Error::new_spanned(
@@ -113,8 +326,11 @@ fn expand_job_args(input: &DeriveInput) -> syn::Result<proc_macro2::TokenStream>
             "priority must be between 1 and 4",
         ));
     }
-    if let Some(queue) = &queue {
+    if let Some(queue) = &attributes.queue {
         validate_queue(queue)?;
+    }
+    for tag in &attributes.tags {
+        validate_tag(tag)?;
     }
 
     let fields = match &input.data {
@@ -158,7 +374,8 @@ fn expand_job_args(input: &DeriveInput) -> syn::Result<proc_macro2::TokenStream>
                 "#[river(unique)] cannot be combined with #[serde(flatten)], #[serde(skip)], or #[serde(skip_serializing)]",
             ));
         }
-        let rust_name = field.ident.as_ref().unwrap().unraw().to_string();
+        let field_ident = field.ident.as_ref().expect("named fields have identifiers");
+        let rust_name = field_ident.unraw().to_string();
         let mut json_name = rename_all.as_ref().map_or_else(
             || Ok(rust_name.clone()),
             |rule| rename_field(&rust_name, rule),
@@ -170,48 +387,93 @@ fn expand_job_args(input: &DeriveInput) -> syn::Result<proc_macro2::TokenStream>
             available_json_fields.push(json_name.clone());
         }
         if unique {
-            unique_fields.push(LitStr::new(
-                &json_name,
-                field.ident.as_ref().unwrap().span(),
-            ));
+            if !attributes
+                .unique
+                .as_ref()
+                .is_some_and(|unique| unique.by_args)
+            {
+                return Err(syn::Error::new_spanned(
+                    field_ident,
+                    "#[river(unique)] fields are only hashed with `unique(by_args)`; add it to the type's #[river(...)] attribute",
+                ));
+            }
+            unique_fields.push(LitStr::new(&json_name, field_ident.span()));
         }
     }
-    for path in unique_paths {
-        let value = path.value();
-        let mut segments = value.split('.');
-        let first = segments.next().unwrap_or_default();
-        if first.is_empty()
-            || segments.any(str::is_empty)
-            || !available_json_fields.iter().any(|field| field == first)
-        {
-            return Err(syn::Error::new_spanned(
-                path,
-                "unique JSON path must start with a serialized field name and contain no empty segments",
-            ));
+    if let Some(unique) = &attributes.unique {
+        for path in &unique.by_args_paths {
+            let value = path.value();
+            let first = value.split('.').next().unwrap_or_default();
+            if !available_json_fields.iter().any(|field| field == first) {
+                return Err(syn::Error::new_spanned(
+                    path,
+                    "unique JSON path must start with a serialized field name",
+                ));
+            }
+            unique_fields.push(path.clone());
         }
-        unique_fields.push(path);
     }
+    validate_unique_paths(&unique_fields)?;
 
+    let krate = attributes
+        .krate
+        .clone()
+        .unwrap_or_else(|| syn::parse_quote!(::riverqueue));
     let name = &input.ident;
+    let aliases = &attributes.aliases;
     let (impl_generics, type_generics, where_clause) = input.generics.split_for_impl();
-    let set_max_attempts = max_attempts.map(|value| quote!(.with_max_attempts(#value)));
-    let set_pending = pending.map(|value| quote!(.with_pending(#value)));
-    let set_priority = priority.map(|value| quote!(.with_priority(#value)));
-    let set_queue = queue.map(|value| quote!(.with_queue(#value)));
+    let set_max_attempts = attributes
+        .max_attempts
+        .as_ref()
+        .map(|value| quote!(.with_max_attempts(#value)));
+    let set_pending = attributes
+        .pending
+        .as_ref()
+        .map(|value| quote!(.with_pending(#value)));
+    let set_priority = attributes
+        .priority
+        .as_ref()
+        .map(|value| quote!(.with_priority(#value)));
+    let set_queue = attributes
+        .queue
+        .as_ref()
+        .map(|value| quote!(.with_queue(#value)));
+    let set_tags = (!attributes.tags.is_empty()).then(|| {
+        let tags = &attributes.tags;
+        quote!(.with_tags([#(#tags),*]))
+    });
+    let set_unique = attributes
+        .unique
+        .as_ref()
+        .map(|unique| expand_unique_opts(&krate, unique));
+    // Bind the function's result with the expected type so a mismatched
+    // function is reported at its path.
+    let overlay = attributes.insert_opts.as_ref().map(|function| {
+        let call = quote_spanned!(function.span()=> #function());
+        quote! {
+            .overlay({
+                let overrides: #krate::InsertOpts = #call;
+                overrides
+            })
+        }
+    });
     Ok(quote! {
-        impl #impl_generics ::riverqueue::JobArgs for #name #type_generics #where_clause {
+        impl #impl_generics #krate::JobArgs for #name #type_generics #where_clause {
             const KIND: &'static str = #kind;
 
             fn kind_aliases() -> &'static [&'static str] {
                 &[#(#aliases),*]
             }
 
-            fn default_insert_opts() -> ::riverqueue::InsertOpts {
-                ::riverqueue::InsertOpts::default()
+            fn default_insert_opts() -> #krate::InsertOpts {
+                #krate::InsertOpts::default()
                     #set_max_attempts
                     #set_pending
                     #set_priority
                     #set_queue
+                    #set_tags
+                    #set_unique
+                    #overlay
             }
 
             fn unique_fields() -> &'static [&'static str] {
@@ -219,6 +481,84 @@ fn expand_job_args(input: &DeriveInput) -> syn::Result<proc_macro2::TokenStream>
             }
         }
     })
+}
+
+fn expand_unique_opts(krate: &syn::Path, unique: &UniqueAttribute) -> proc_macro2::TokenStream {
+    let by_args = unique.by_args.then(|| quote!(.by_args()));
+    let by_period = unique
+        .by_period
+        .map(|(seconds, nanos)| quote!(.by_period(::core::time::Duration::new(#seconds, #nanos))));
+    let by_queue = unique.by_queue.then(|| quote!(.by_queue()));
+    let by_state = unique.by_state.as_ref().map(|states| {
+        let variants = states.iter().map(|state| {
+            let variant = JOB_STATES
+                .iter()
+                .find(|(name, _)| state == name)
+                .map_or("Available", |(_, variant)| variant);
+            let variant = Ident::new(variant, state.span());
+            quote!(#krate::JobState::#variant)
+        });
+        quote!(.by_states([#(#variants),*]))
+    });
+    let exclude_kind = unique.exclude_kind.then(|| quote!(.without_kind()));
+    quote! {
+        .with_unique(
+            #krate::UniqueOpts::new()
+                #by_args
+                #by_period
+                #by_queue
+                #by_state
+                #exclude_kind
+        )
+    }
+}
+
+/// Rejects unique paths that River Go's `gjson`/`sjson` hashing interprets as
+/// something other than plain object keys.
+fn validate_unique_paths(paths: &[LitStr]) -> syn::Result<()> {
+    for path in paths {
+        let value = path.value();
+        for segment in value.split('.') {
+            let message = if segment.is_empty() {
+                Some("unique JSON path segments cannot be empty".to_owned())
+            } else if segment.starts_with(':')
+                || segment
+                    .bytes()
+                    .any(|byte| matches!(byte, b'*' | b'?' | b'|' | b'#' | b'@' | b'\\'))
+            {
+                Some(format!(
+                    "unique JSON path segment {segment:?} contains JSON path syntax that River Go cannot hash deterministically"
+                ))
+            } else if segment.bytes().all(|byte| byte.is_ascii_digit()) || segment == "-1" {
+                Some(format!(
+                    "unique JSON path segment {segment:?} would be treated as an array index"
+                ))
+            } else {
+                None
+            };
+            if let Some(message) = message {
+                return Err(syn::Error::new_spanned(path, message));
+            }
+        }
+    }
+    for path in paths {
+        let value = path.value();
+        if let Some(other) = paths.iter().find(|other| {
+            other
+                .value()
+                .strip_prefix(&value)
+                .is_some_and(|rest| rest.starts_with('.'))
+        }) {
+            return Err(syn::Error::new_spanned(
+                other,
+                format!(
+                    "unique JSON path {:?} is inside another unique path {value:?}",
+                    other.value()
+                ),
+            ));
+        }
+    }
+    Ok(())
 }
 
 #[derive(Default)]
@@ -398,12 +738,36 @@ fn validate_queue(queue: &LitStr) -> syn::Result<()> {
     Ok(())
 }
 
+/// Validates a tag with River's rules: 3 to 255 bytes of ASCII word
+/// characters and `-`, starting and ending with a word character.
+fn validate_tag(tag: &LitStr) -> syn::Result<()> {
+    let value = tag.value();
+    let is_word = |character: char| character == '_' || character.is_ascii_alphanumeric();
+    let valid = (3..=255).contains(&value.len())
+        && value.chars().next().is_some_and(is_word)
+        && value.chars().next_back().is_some_and(is_word)
+        && value
+            .chars()
+            .all(|character| is_word(character) || character == '-');
+    if !valid {
+        return Err(syn::Error::new_spanned(
+            tag,
+            "invalid River tag; tags contain 3 to 255 ASCII letters, digits, `_`, or `-`, and start and end with a letter, digit, or `_`",
+        ));
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     fn derive(source: &str) -> syn::Result<proc_macro2::TokenStream> {
         expand_job_args(&syn::parse_str(source).expect("valid Rust syntax"))
+    }
+
+    fn compact(tokens: &proc_macro2::TokenStream) -> String {
+        tokens.to_string().replace(' ', "")
     }
 
     #[test]
@@ -419,7 +783,15 @@ mod tests {
                 pending = true,
                 priority = 2,
                 queue = "email-critical",
-                unique("account.id")
+                tags("email", "outbound-mail"),
+                unique(
+                    by_args("account.id"),
+                    by_period = "1h30m",
+                    by_queue,
+                    by_state(available, pending, running, scheduled, retryable),
+                    exclude_kind
+                ),
+                insert_opts = email_insert_opts
             )]
             struct EmailArgs {
                 account: Account,
@@ -428,13 +800,21 @@ mod tests {
             }
             "#,
         )
-        .unwrap()
-        .to_string();
+        .unwrap();
+        let expanded = compact(&expanded);
 
-        assert!(expanded.contains("email.send"));
-        assert!(expanded.contains("email_send_v1"));
-        assert!(expanded.contains("messageId"));
-        assert!(expanded.contains("account.id"));
+        assert!(expanded.contains("\"email.send\""));
+        assert!(expanded.contains("\"email_send_v1\""));
+        assert!(expanded.contains(".with_tags([\"email\",\"outbound-mail\"])"));
+        assert!(expanded.contains(".by_args()"));
+        assert!(expanded.contains(".by_period(::core::time::Duration::new(5400u64,0u32))"));
+        assert!(expanded.contains(".by_queue()"));
+        assert!(expanded.contains("::riverqueue::JobState::Retryable"));
+        assert!(expanded.contains(".without_kind()"));
+        assert!(expanded.contains(
+            ".overlay({letoverrides:::riverqueue::InsertOpts=email_insert_opts();overrides})"
+        ));
+        assert!(expanded.contains("&[\"messageId\",\"account.id\"]"));
     }
 
     #[test]
@@ -442,7 +822,7 @@ mod tests {
         let expanded = derive(
             r#"
             #[serde(rename_all(serialize = "SCREAMING-KEBAB-CASE", deserialize = "camelCase"))]
-            #[river(kind = "serde_names")]
+            #[river(kind = "serde_names", unique(by_args))]
             struct SerdeNames {
                 #[river(unique)]
                 first_value: String,
@@ -464,10 +844,30 @@ mod tests {
     }
 
     #[test]
+    fn parses_go_durations() {
+        for (text, nanos) in [
+            ("1s", 1_000_000_000),
+            ("1h", 3_600_000_000_000),
+            ("1h30m", 5_400_000_000_000),
+            ("1.5h", 5_400_000_000_000),
+            ("90m", 5_400_000_000_000),
+            ("1500ms", 1_500_000_000),
+            ("2s500ms", 2_500_000_000),
+            ("1\u{b5}s", 1_000),
+            ("7ns", 7),
+        ] {
+            assert_eq!(parse_go_duration(text), Ok(nanos), "{text}");
+        }
+        for text in ["", "1", "h", "1x", "-1h", "1.h.", "."] {
+            assert!(parse_go_duration(text).is_err(), "{text}");
+        }
+    }
+
+    #[test]
     fn permits_conditionally_omitted_unique_fields() {
         let expanded = derive(
             r#"
-            #[river(kind = "optional_unique")]
+            #[river(kind = "optional_unique", unique(by_args))]
             struct OptionalUnique {
                 #[river(unique)]
                 #[serde(skip_serializing_if = "Option::is_none")]
@@ -486,7 +886,7 @@ mod tests {
         for serde_attribute in ["flatten", "skip", "skip_serializing"] {
             let source = format!(
                 r#"
-                #[river(kind = "invalid_serde")]
+                #[river(kind = "invalid_serde", unique(by_args))]
                 struct InvalidSerde {{
                     #[river(unique)]
                     #[serde({serde_attribute})]
@@ -507,7 +907,7 @@ mod tests {
         for serde_attribute in ["flatten", "skip", "skip_serializing"] {
             let source = format!(
                 r#"
-                #[river(kind = "invalid_serde_path", unique("value"))]
+                #[river(kind = "invalid_serde_path", unique(by_args("value")))]
                 struct InvalidSerdePath {{
                     #[serde({serde_attribute})]
                     value: String,
@@ -567,8 +967,68 @@ mod tests {
                 "invalid River queue name",
             ),
             (
-                r#"#[river(kind = "valid", unique("missing.id"))] struct InvalidPath { value: String }"#,
+                r#"#[river(kind = "valid", tags("x"))] struct InvalidTag { value: String }"#,
+                "invalid River tag",
+            ),
+            (
+                r#"#[river(kind = "valid", unique(by_args("missing.id")))] struct InvalidPath { value: String }"#,
                 "unique JSON path must start with a serialized field name",
+            ),
+            (
+                r#"#[river(kind = "valid", unique("value"))] struct OldPathSyntax { value: String }"#,
+                "declare unique argument paths with `unique(by_args(",
+            ),
+            (
+                r#"#[river(kind = "valid", unique())] struct EmptyUnique { value: String }"#,
+                "unique(...) requires at least one of",
+            ),
+            (
+                r#"#[river(kind = "valid", unique(by_arg))] struct UnknownUnique { value: String }"#,
+                "unsupported unique option",
+            ),
+            (
+                r#"#[river(kind = "valid", unique(by_period = "500ms"))] struct ShortPeriod { value: String }"#,
+                "by_period must be at least one second",
+            ),
+            (
+                r#"#[river(kind = "valid", unique(by_period = "1 hour"))] struct BadPeriod { value: String }"#,
+                "invalid duration",
+            ),
+            (
+                r#"#[river(kind = "valid", unique(by_state(available, running)))] struct MissingStates { value: String }"#,
+                "missing pending, scheduled",
+            ),
+            (
+                r#"#[river(kind = "valid", unique(by_state(available, pending, running, scheduled, done)))] struct UnknownState { value: String }"#,
+                "unknown job state `done`",
+            ),
+            (
+                r#"#[river(kind = "valid", unique(by_state(available, available, pending, running, scheduled)))] struct DuplicateState { value: String }"#,
+                "duplicate job state `available`",
+            ),
+            (
+                r#"#[river(kind = "valid", unique(by_queue))] struct UniqueFieldWithoutArgs { #[river(unique)] value: String }"#,
+                "#[river(unique)] fields are only hashed with `unique(by_args)`",
+            ),
+            (
+                r#"#[river(kind = "valid")] struct UniqueFieldWithoutUnique { #[river(unique)] value: String }"#,
+                "#[river(unique)] fields are only hashed with `unique(by_args)`",
+            ),
+            (
+                r#"#[river(kind = "valid", unique(by_args("value.*")))] struct WildcardPath { value: String }"#,
+                "contains JSON path syntax",
+            ),
+            (
+                r#"#[river(kind = "valid", unique(by_args("value.0")))] struct IndexPath { value: String }"#,
+                "would be treated as an array index",
+            ),
+            (
+                r#"#[river(kind = "valid", unique(by_args("value", "value.id")))] struct NestedPath { value: String }"#,
+                "is inside another unique path",
+            ),
+            (
+                r#"#[river(kind = "valid", unique(by_args))] struct DottedField { #[river(unique)] #[serde(rename = "a.")] value: String }"#,
+                "segments cannot be empty",
             ),
         ];
 
@@ -579,5 +1039,21 @@ mod tests {
                 "unexpected error for {source}: {error}"
             );
         }
+    }
+
+    #[test]
+    fn uses_configured_crate_path() {
+        let expanded = derive(
+            r#"
+            #[river(kind = "renamed", crate = "::my_app::river", unique(by_state(available, pending, running, scheduled)))]
+            struct Renamed { value: String }
+            "#,
+        )
+        .unwrap();
+        let expanded = compact(&expanded);
+
+        assert!(expanded.contains("impl::my_app::river::JobArgsforRenamed"));
+        assert!(expanded.contains("::my_app::river::JobState::Available"));
+        assert!(!expanded.contains("::riverqueue::"));
     }
 }

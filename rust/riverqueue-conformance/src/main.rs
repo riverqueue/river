@@ -416,7 +416,7 @@ struct UniqueSelectedAccount {
 #[derive(Debug, Deserialize, JobArgs, Serialize)]
 #[river(
     kind = "conformance_selected_args",
-    unique("account.id", "account.region", "label", "path/key")
+    unique(by_args("account.id", "account.region", "label", "path/key"))
 )]
 struct UniqueSelectedArgs {
     #[serde(default)]

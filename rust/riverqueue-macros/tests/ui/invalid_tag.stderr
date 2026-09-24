@@ -1,0 +1,5 @@
+error: invalid River tag; tags contain 3 to 255 ASCII letters, digits, `_`, or `-`, and start and end with a letter, digit, or `_`
+ --> tests/ui/invalid_tag.rs:5:43
+  |
+5 | #[river(kind = "invoice", tags("billing", "x"))]
+  |                                           ^^^

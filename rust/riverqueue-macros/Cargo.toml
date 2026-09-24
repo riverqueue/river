@@ -16,5 +16,10 @@ proc-macro2.workspace = true
 quote.workspace = true
 syn.workspace = true
 
+[dev-dependencies]
+riverqueue = { path = "../riverqueue" }
+serde.workspace = true
+trybuild = "1.0.121"
+
 [lints]
 workspace = true

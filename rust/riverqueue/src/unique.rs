@@ -786,7 +786,7 @@ mod tests {
     #[derive(Deserialize, JobArgsDerive, Serialize)]
     #[river(
         kind = "conformance_selected_args",
-        unique("account.id", "account.region", "label", "path/key")
+        unique(by_args("account.id", "account.region", "label", "path/key"))
     )]
     struct SelectedArgs {
         #[serde(skip_serializing_if = "SelectedAccount::is_zero")]
@@ -841,7 +841,7 @@ mod tests {
     #[derive(Deserialize, JobArgsDerive, Serialize)]
     #[river(
         kind = "conformance_selected_args",
-        unique("account.id", "account.region", "label", "path/key")
+        unique(by_args("account.id", "account.region", "label", "path/key"))
     )]
     struct SelectedNullArgs {
         #[serde(skip_serializing_if = "SelectedAccount::is_zero")]

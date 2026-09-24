@@ -1,0 +1,5 @@
+error: unique(...) requires at least one of by_args, by_period, by_queue, by_state, or exclude_kind
+ --> tests/ui/unique_empty.rs:5:27
+  |
+5 | #[river(kind = "invoice", unique())]
+  |                           ^^^^^^
