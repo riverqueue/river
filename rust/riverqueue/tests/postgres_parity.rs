@@ -252,3 +252,60 @@ async fn schema_names_are_quoted_like_go() {
     handle.shutdown().await.unwrap();
     database.cleanup().await;
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn extension_notify_many_is_transactional() {
+    use riverqueue::internal::{
+        DatabaseConfig, DatabaseConnection, NotificationTopic, notify_many,
+    };
+
+    let database = PostgresSchema::new("rpp_notify_many").await;
+    let config = DatabaseConfig::Postgres {
+        schema: database.schema.clone(),
+    };
+    let mut listener = sqlx::postgres::PgListener::connect_with(&database.pool)
+        .await
+        .unwrap();
+    listener
+        .listen(&database.schema.notification_topic("river_insert"))
+        .await
+        .unwrap();
+
+    // A rolled-back transaction delivers nothing; the committed batch that
+    // follows is therefore the first thing the listener receives.
+    let mut rolled_back = database.pool.begin().await.unwrap();
+    notify_many(
+        DatabaseConnection::Postgres(&mut rolled_back),
+        &config,
+        NotificationTopic::Insert,
+        &[r#"{"queue":"rolled_back"}"#.to_owned()],
+    )
+    .await
+    .unwrap();
+    rolled_back.rollback().await.unwrap();
+
+    let mut committed = database.pool.begin().await.unwrap();
+    notify_many(
+        DatabaseConnection::Postgres(&mut committed),
+        &config,
+        NotificationTopic::Insert,
+        &[
+            r#"{"queue":"first"}"#.to_owned(),
+            r#"{"queue":"second"}"#.to_owned(),
+        ],
+    )
+    .await
+    .unwrap();
+    committed.commit().await.unwrap();
+
+    for expected in [r#"{"queue":"first"}"#, r#"{"queue":"second"}"#] {
+        let notification = tokio::time::timeout(Duration::from_secs(5), listener.recv())
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(notification.payload(), expected);
+    }
+    // The listener holds a pooled connection that must be returned first.
+    drop(listener);
+    database.cleanup().await;
+}
