@@ -1,0 +1,5 @@
+error: #[river(unique)] fields are only hashed with `unique(by_args)`; add it to the type's #[river(...)] attribute
+ --> tests/ui/unique_field_without_by_args.rs:8:5
+  |
+8 |     invoice_number: String,
+  |     ^^^^^^^^^^^^^^

@@ -1,0 +1,5 @@
+error: invalid duration "1 hour"; expected a Go duration such as "1h"
+ --> tests/ui/unique_period_invalid.rs:5:46
+  |
+5 | #[river(kind = "invoice", unique(by_period = "1 hour"))]
+  |                                              ^^^^^^^^

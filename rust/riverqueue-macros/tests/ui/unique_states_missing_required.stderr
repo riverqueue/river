@@ -1,0 +1,5 @@
+error: by_state must include available, pending, running, and scheduled; missing pending, scheduled
+ --> tests/ui/unique_states_missing_required.rs:5:34
+  |
+5 | #[river(kind = "invoice", unique(by_state(available, running)))]
+  |                                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^

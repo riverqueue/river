@@ -1,0 +1,5 @@
+error: declare unique argument paths with `unique(by_args("path", ...))`
+ --> tests/ui/unique_path_old_syntax.rs:5:34
+  |
+5 | #[river(kind = "invoice", unique("invoice_number"))]
+  |                                  ^^^^^^^^^^^^^^^^
