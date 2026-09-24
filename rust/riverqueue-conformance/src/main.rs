@@ -446,8 +446,9 @@ async fn work_resumable_cursor(context: &WorkContext, attempt: i16) {
     // the failed step and its cursor, like Go's resumable coordinator.
     let _ = context
         .resumable_step("first", || async {
-            context.metadata_set("first_attempt", json!(attempt)).await;
-            Ok::<_, io::Error>(())
+            context
+                .metadata_set("first_attempt", attempt)
+                .map_err(io::Error::other)
         })
         .await;
     let _ = context
@@ -462,8 +463,9 @@ async fn work_resumable_cursor(context: &WorkContext, attempt: i16) {
             if cursor != 7 {
                 return Err(io::Error::other(format!("expected cursor 7, got {cursor}")));
             }
-            context.metadata_set("cursor_observed", json!(cursor)).await;
-            Ok(())
+            context
+                .metadata_set("cursor_observed", cursor)
+                .map_err(io::Error::other)
         })
         .await;
     let _ = context
@@ -491,8 +493,7 @@ impl Worker<ConformanceArgs> for ConformanceWorker {
                 self.barriers.wait(&job.args.message).await?;
                 if job.args.behavior == "barrier_output" {
                     context
-                        .record_output(&json!({"race": "worker"}))
-                        .await
+                        .record_output(json!({"race": "worker"}))
                         .map_err(io::Error::other)?;
                 }
                 Ok(WorkOutcome::Complete)
@@ -507,8 +508,7 @@ impl Worker<ConformanceArgs> for ConformanceWorker {
             "ignored_cancel" => std::future::pending().await,
             "output" => {
                 context
-                    .record_output(&json!({"message": job.args.message}))
-                    .await
+                    .record_output(json!({"message": job.args.message}))
                     .map_err(io::Error::other)?;
                 Ok(WorkOutcome::Complete)
             }
@@ -562,8 +562,8 @@ impl Worker<ConformanceArgs> for ConformanceWorker {
             }
             "transactional_complete" => {
                 context
-                    .metadata_set("transactional_completion", json!(true))
-                    .await;
+                    .metadata_set("transactional_completion", true)
+                    .map_err(io::Error::other)?;
                 let pool = self.pool.as_ref().ok_or_else(|| {
                     io::Error::other("transactional completion requires PostgreSQL")
                 })?;

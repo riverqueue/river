@@ -487,8 +487,8 @@ async fn extension_claimed_outcomes_use_canonical_completion_pipeline() {
 
     let execution_context = WorkContext::new(tokio_util::sync::CancellationToken::new());
     execution_context
-        .metadata_set("shared_completion", serde_json::json!(true))
-        .await;
+        .metadata_set("shared_completion", true)
+        .unwrap();
     let failed_job_id = rows[1].id;
     client
         .extension_persist_claimed_outcomes(
@@ -1446,8 +1446,7 @@ async fn sqlite_runs_jobs_and_persists_output() {
             let worked = Arc::clone(&worked_for_worker);
             async move {
                 context
-                    .record_output(&serde_json::json!({"doubled": job.args.value * 2}))
-                    .await
+                    .record_output(serde_json::json!({"doubled": job.args.value * 2}))
                     .unwrap();
                 worked.add_permits(1);
                 Ok::<_, Infallible>(WorkOutcome::Complete)

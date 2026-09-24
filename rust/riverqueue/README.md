@@ -15,10 +15,8 @@ Define serializable arguments, register an async function or a [`Worker`], and
 start a client:
 
 ```rust,no_run
-use std::convert::Infallible;
-
 use riverqueue::{
-    Client, Job, JobArgs, QueueConfig, WorkContext, WorkOutcome, WorkerRegistry,
+    BoxError, Client, Job, JobArgs, QueueConfig, WorkContext, WorkOutcome, WorkerRegistry,
 };
 use serde::{Deserialize, Serialize};
 use sqlx::PgPool;
@@ -32,12 +30,9 @@ struct SendEmail {
 async fn send_email(
     context: WorkContext,
     job: Job<SendEmail>,
-) -> Result<WorkOutcome, Infallible> {
+) -> Result<WorkOutcome, BoxError> {
     println!("sending email to {}", job.args.address);
-    context
-        .record_output(&serde_json::json!({"delivered": true}))
-        .await
-        .expect("static JSON is serializable");
+    context.record_output(serde_json::json!({"delivered": true}))?;
     Ok(WorkOutcome::Complete)
 }
 

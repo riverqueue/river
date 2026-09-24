@@ -170,7 +170,7 @@ pub(super) async fn execute_job(
         {
             error!(error = %handler_error, "River stuck handler failed");
         }
-        let metadata_updates = context.metadata_updates().await;
+        let metadata_updates = context.metadata_updates();
         let completion = CompletionAttempt {
             cancellation: cancellation.clone(),
             timing: CompletionTiming {

@@ -4,7 +4,7 @@ use std::{
     collections::{HashMap, HashSet},
     error::Error as StdError,
     future::Future,
-    sync::Arc,
+    sync::{Arc, Mutex as StdMutex, MutexGuard, PoisonError},
     time::Duration,
 };
 
@@ -27,7 +27,7 @@ pub struct WorkContext {
     cancellation: CancellationToken,
     client: Option<Client>,
     job_id: Option<i64>,
-    metadata_updates: Arc<Mutex<Map<String, Value>>>,
+    metadata_updates: Arc<StdMutex<Map<String, Value>>>,
     resumable: Arc<Mutex<ResumableState>>,
 }
 
@@ -40,7 +40,7 @@ impl WorkContext {
             cancellation,
             client: None,
             job_id: None,
-            metadata_updates: Arc::new(Mutex::new(Map::new())),
+            metadata_updates: Arc::new(StdMutex::new(Map::new())),
             resumable: Arc::new(Mutex::new(ResumableState::default())),
         }
     }
@@ -67,20 +67,46 @@ impl WorkContext {
     {
         let (client, job_id) = self.current_job()?;
         client
-            .job_complete_tx_with_metadata(connection, job_id, self.metadata_updates().await)
+            .job_complete_tx_with_metadata(connection, job_id, self.metadata_updates())
             .await
     }
 
-    /// Sets a metadata key to be persisted with the job result.
-    pub async fn metadata_set(&self, key: impl Into<String>, value: Value) {
-        self.metadata_updates.lock().await.insert(key.into(), value);
+    /// Sets a metadata key that River merges into the job's metadata when it
+    /// records the attempt's result. Setting a key again replaces its value.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when `value` can't be serialized to JSON.
+    pub fn metadata_set(
+        &self,
+        key: impl Into<String>,
+        value: impl Serialize,
+    ) -> Result<(), serde_json::Error> {
+        let value = serde_json::to_value(value)?;
+        self.insert_metadata(key.into(), value);
+        Ok(())
     }
 
-    /// Records typed JSON output under River's reserved output key.
-    pub async fn record_output<T: Serialize>(&self, output: &T) -> Result<(), Error> {
-        let output = serde_json::to_value(output)?;
-        self.metadata_set(crate::METADATA_KEY_OUTPUT, output).await;
-        Ok(())
+    /// Records the job's output under River's reserved output metadata key,
+    /// where [`JobRow::output`] and River UI read it.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when `output` can't be serialized to JSON.
+    pub fn record_output(&self, output: impl Serialize) -> Result<(), serde_json::Error> {
+        self.metadata_set(crate::METADATA_KEY_OUTPUT, output)
+    }
+
+    pub(crate) fn insert_metadata(&self, key: String, value: Value) {
+        self.lock_metadata().insert(key, value);
+    }
+
+    /// Metadata updates are never held across an await, and each update
+    /// leaves the map consistent, so a poisoned lock is still usable.
+    fn lock_metadata(&self) -> MutexGuard<'_, Map<String, Value>> {
+        self.metadata_updates
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
     }
 
     /// Runs a named resumable step, skipping work completed by an earlier
@@ -306,8 +332,8 @@ impl WorkContext {
     /// This exact-version seam is used by `riverqueue-test` to return an
     /// immutable result after invoking a worker directly.
     #[doc(hidden)]
-    pub async fn metadata_updates(&self) -> Map<String, Value> {
-        self.metadata_updates.lock().await.clone()
+    pub fn metadata_updates(&self) -> Map<String, Value> {
+        self.lock_metadata().clone()
     }
 
     pub(crate) fn for_job(
@@ -321,7 +347,7 @@ impl WorkContext {
             cancellation,
             client: Some(client),
             job_id: Some(job_id),
-            metadata_updates: Arc::new(Mutex::new(Map::new())),
+            metadata_updates: Arc::new(StdMutex::new(Map::new())),
             resumable: Arc::new(Mutex::new(state)),
         }
     }
@@ -362,7 +388,7 @@ impl WorkContext {
         if (worker_failed || failure.is_some())
             && let Some(completed_step) = &state.completed_step
         {
-            let mut updates = self.metadata_updates.lock().await;
+            let mut updates = self.lock_metadata();
             updates.insert(
                 crate::METADATA_KEY_RESUMABLE_STEP.to_owned(),
                 completed_step.clone().into(),
@@ -821,10 +847,7 @@ mod tests {
         if job.args.fail {
             return Err(FunctionError);
         }
-        context
-            .record_output(&json!({"function": true}))
-            .await
-            .unwrap();
+        context.record_output(json!({"function": true})).unwrap();
         Ok(WorkOutcome::Complete)
     }
 
@@ -902,7 +925,7 @@ mod tests {
         assert!(context.resumable_set_cursor(&1).await.is_err());
         assert!(context.resumable_finish(false).await.is_some());
         assert_eq!(
-            context.metadata_updates().await[crate::METADATA_KEY_RESUMABLE_STEP],
+            context.metadata_updates()[crate::METADATA_KEY_RESUMABLE_STEP],
             "first"
         );
     }
@@ -933,7 +956,7 @@ mod tests {
             source = source.source().expect("preserved suppressed source");
         }
         assert_eq!(
-            context.metadata_updates().await,
+            context.metadata_updates(),
             json!({
                 "river:resumable_step": "inner",
                 "river:resumable_cursor": {"outer": 7}
@@ -1180,6 +1203,29 @@ mod tests {
             .unwrap_err();
         assert!(matches!(&error, Error::ResumableStep { name, .. } if name == "second"));
         assert_eq!(error.source().unwrap().to_string(), "cursor step failed");
+    }
+
+    #[test]
+    fn metadata_set_and_record_output_serialize_values() {
+        #[derive(Serialize)]
+        struct Receipt {
+            delivered: bool,
+        }
+
+        let context = WorkContext::new(CancellationToken::new());
+        context.metadata_set("attempts", 3).unwrap();
+        context.metadata_set("attempts", 4).unwrap();
+        context.record_output(Receipt { delivered: true }).unwrap();
+
+        let bad_output = std::collections::BTreeMap::from([((1, 2), true)]);
+        assert!(context.record_output(&bad_output).is_err());
+        assert_eq!(
+            context.metadata_updates(),
+            json!({"attempts": 4, "output": {"delivered": true}})
+                .as_object()
+                .unwrap()
+                .clone()
+        );
     }
 
     #[test]

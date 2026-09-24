@@ -4,14 +4,13 @@ use std::{
     collections::{HashMap, HashSet},
     fmt,
     str::FromStr,
-    sync::Arc,
+    sync::{Arc, Mutex, MutexGuard, PoisonError},
     time::Duration,
 };
 
 use chrono::{DateTime, Utc};
 use cron::Schedule;
 use thiserror::Error as ThisError;
-use tokio::sync::Mutex;
 
 use crate::{Client, Error, InsertOpts, JobArgs};
 
@@ -272,16 +271,10 @@ pub struct PeriodicJobs {
 
 impl fmt::Debug for PeriodicJobs {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let mut debug = formatter.debug_struct("PeriodicJobs");
-        match self.registry.try_lock() {
-            Ok(registry) => {
-                debug.field("len", &registry.entries.len());
-            }
-            Err(_) => {
-                debug.field("state", &"locked");
-            }
-        }
-        debug.finish_non_exhaustive()
+        formatter
+            .debug_struct("PeriodicJobs")
+            .field("len", &self.lock().entries.len())
+            .finish_non_exhaustive()
     }
 }
 
@@ -297,9 +290,15 @@ impl PeriodicJobs {
         })
     }
 
+    /// Locks the registry. It's never held across an await, and every update
+    /// leaves it consistent, so a poisoned lock is still usable.
+    fn lock(&self) -> MutexGuard<'_, PeriodicRegistry> {
+        self.registry.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+
     /// Adds one periodic job and returns its removal handle.
-    pub async fn add(&self, job: PeriodicJob) -> Result<PeriodicJobHandle, Error> {
-        let mut registry = self.registry.lock().await;
+    pub fn add(&self, job: PeriodicJob) -> Result<PeriodicJobHandle, Error> {
+        let mut registry = self.lock();
         let ids = registry
             .entries
             .values()
@@ -310,8 +309,8 @@ impl PeriodicJobs {
     }
 
     /// Adds many jobs atomically after validating their identifiers.
-    pub async fn add_many(&self, jobs: Vec<PeriodicJob>) -> Result<Vec<PeriodicJobHandle>, Error> {
-        let mut registry = self.registry.lock().await;
+    pub fn add_many(&self, jobs: Vec<PeriodicJob>) -> Result<Vec<PeriodicJobHandle>, Error> {
+        let mut registry = self.lock();
         let ids = registry
             .entries
             .values()
@@ -322,26 +321,26 @@ impl PeriodicJobs {
     }
 
     /// Removes all configured periodic jobs.
-    pub async fn clear(&self) {
-        self.registry.lock().await.entries.clear();
+    pub fn clear(&self) {
+        self.lock().entries.clear();
     }
 
     /// Removes a job by handle.
-    pub async fn remove(&self, handle: PeriodicJobHandle) -> bool {
-        self.registry.lock().await.entries.remove(&handle).is_some()
+    pub fn remove(&self, handle: PeriodicJobHandle) -> bool {
+        self.lock().entries.remove(&handle).is_some()
     }
 
     /// Removes a job by identifier.
-    pub async fn remove_by_id(&self, id: &str) -> bool {
-        let mut registry = self.registry.lock().await;
+    pub fn remove_by_id(&self, id: &str) -> bool {
+        let mut registry = self.lock();
         let handle = registry.entries.iter().find_map(|(handle, entry)| {
             (entry.job.opts.id.as_deref() == Some(id)).then_some(*handle)
         });
         handle.is_some_and(|handle| registry.entries.remove(&handle).is_some())
     }
 
-    pub(crate) async fn reset_for_leadership(&self) {
-        for entry in self.registry.lock().await.entries.values_mut() {
+    pub(crate) fn reset_for_leadership(&self) {
+        for entry in self.lock().entries.values_mut() {
             entry.needs_initialization = true;
             entry.next_run = None;
         }
@@ -355,7 +354,7 @@ impl PeriodicJobs {
         }
 
         let due = {
-            let mut registry = self.registry.lock().await;
+            let mut registry = self.lock();
             let mut due = Vec::new();
             for (handle, entry) in &mut registry.entries {
                 if entry.needs_initialization {
@@ -415,7 +414,7 @@ impl PeriodicJobs {
             };
 
             if advance && let Some(handle) = due_job.advance_handle {
-                let mut registry = self.registry.lock().await;
+                let mut registry = self.lock();
                 if let Some(entry) = registry.entries.get_mut(&handle)
                     && !entry.needs_initialization
                     && entry.next_run == Some(due_job.target)
@@ -509,31 +508,24 @@ mod tests {
         )
     }
 
-    #[tokio::test]
-    async fn dynamic_registration_is_atomic_and_removable() {
+    #[test]
+    fn dynamic_registration_is_atomic_and_removable() {
         let jobs = PeriodicJobs::from_jobs(Vec::new()).unwrap();
-        let first = jobs.add(job("first")).await.unwrap();
-        let added = jobs
-            .add_many(vec![job("second"), job("third")])
-            .await
-            .unwrap();
+        let first = jobs.add(job("first")).unwrap();
+        let added = jobs.add_many(vec![job("second"), job("third")]).unwrap();
         assert_eq!(added.len(), 2);
-        assert_eq!(jobs.registry.lock().await.entries.len(), 3);
+        assert_eq!(jobs.lock().entries.len(), 3);
 
-        assert!(
-            jobs.add_many(vec![job("fourth"), job("second")])
-                .await
-                .is_err()
-        );
-        assert_eq!(jobs.registry.lock().await.entries.len(), 3);
+        assert!(jobs.add_many(vec![job("fourth"), job("second")]).is_err());
+        assert_eq!(jobs.lock().entries.len(), 3);
 
-        assert!(jobs.remove(first).await);
-        assert!(!jobs.remove(first).await);
-        assert!(jobs.remove_by_id("second").await);
-        assert!(!jobs.remove_by_id("missing").await);
+        assert!(jobs.remove(first));
+        assert!(!jobs.remove(first));
+        assert!(jobs.remove_by_id("second"));
+        assert!(!jobs.remove_by_id("missing"));
 
-        jobs.clear().await;
-        assert!(jobs.registry.lock().await.entries.is_empty());
+        jobs.clear();
+        assert!(jobs.lock().entries.is_empty());
     }
 
     #[cfg(feature = "postgres")]
@@ -560,7 +552,7 @@ mod tests {
         jobs.run_due(&client, target).await;
 
         assert_eq!(attempts.load(Ordering::SeqCst), 2);
-        let registry = jobs.registry.lock().await;
+        let registry = jobs.lock();
         assert_eq!(
             registry.entries.values().next().unwrap().next_run,
             Some(target)

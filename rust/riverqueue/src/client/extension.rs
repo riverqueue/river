@@ -156,7 +156,7 @@ impl Client {
         if outcomes.is_empty() {
             return Ok(());
         }
-        let metadata_updates = execution_context.metadata_updates().await;
+        let metadata_updates = execution_context.metadata_updates();
         let completion_sender = self
             .inner
             .completion_sender
@@ -208,7 +208,7 @@ impl Client {
             &row.metadata,
         );
         for (key, value) in metadata_updates {
-            context.metadata_set(key.clone(), value.clone()).await;
+            context.insert_metadata(key.clone(), value.clone());
         }
         let result = result.map_err(worker_failure_from_source);
         let work_result = public_work_result(&result);
@@ -245,7 +245,7 @@ impl Client {
             &row,
             &completion,
             result,
-            context.metadata_updates().await,
+            context.metadata_updates(),
             error_handler_result,
             completion_sender,
         )

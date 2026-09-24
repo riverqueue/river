@@ -38,17 +38,16 @@ struct EchoWorker;
 impl Worker<EchoArgs> for EchoWorker {
     type Error = Infallible;
 
-    async fn work(
+    fn work(
         &self,
         context: WorkContext,
         job: Job<EchoArgs>,
-    ) -> Result<WorkOutcome, Self::Error> {
+    ) -> impl Future<Output = Result<WorkOutcome, Self::Error>> + Send {
         assert!(!job.args.message.is_empty());
         context
-            .record_output(&serde_json::json!({"message": job.args.message}))
-            .await
+            .record_output(serde_json::json!({"message": job.args.message}))
             .unwrap();
-        Ok(WorkOutcome::Complete)
+        std::future::ready(Ok(WorkOutcome::Complete))
     }
 }
 
@@ -523,8 +522,8 @@ impl Worker<TransactionalArgs> for TransactionalWorker {
     ) -> Result<WorkOutcome, Self::Error> {
         assert_eq!(context.client().unwrap().id(), "rust-maintenance-client");
         context
-            .metadata_set("transactional_completion", serde_json::json!(true))
-            .await;
+            .metadata_set("transactional_completion", true)
+            .unwrap();
         let mut transaction = self.pool.begin().await?;
         let completed = context.job_complete_tx(&mut transaction).await?;
         assert_eq!(completed.state, JobState::Completed);

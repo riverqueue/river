@@ -77,7 +77,7 @@ pub(crate) async fn run_maintenance(
                         is_leader = false;
                         leadership_confirmed_until = None;
                         extension_cancel.cancel();
-                        inner.periodic_jobs.reset_for_leadership().await;
+                        inner.periodic_jobs.reset_for_leadership();
                     }
                 }
                 if matches!(
@@ -123,7 +123,7 @@ pub(crate) async fn run_maintenance(
                 }
             }
             if is_leader && !was_leader {
-                inner.periodic_jobs.reset_for_leadership().await;
+                inner.periodic_jobs.reset_for_leadership();
                 extension_cancel = CancellationToken::new();
                 for service in inner.pilot.maintenance_services() {
                     let pool = inner.pilot_database_pool();
@@ -133,7 +133,7 @@ pub(crate) async fn run_maintenance(
                         .spawn(async move { service.run(pool, database, service_cancel).await });
                 }
             } else if was_leader && !is_leader {
-                inner.periodic_jobs.reset_for_leadership().await;
+                inner.periodic_jobs.reset_for_leadership();
                 extension_cancel.cancel();
             }
         }
@@ -219,7 +219,7 @@ pub(crate) async fn run_maintenance(
     if let Err(operation_error) = resign(&inner).await {
         debug!(error = %operation_error, "River leader resignation failed during shutdown");
     }
-    inner.periodic_jobs.reset_for_leadership().await;
+    inner.periodic_jobs.reset_for_leadership();
     Ok(())
 }
 
