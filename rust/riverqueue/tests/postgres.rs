@@ -784,7 +784,9 @@ async fn extension_claim_returns_ordered_rows_and_rolls_back_decode_errors() {
     }
 
     let invalid = client.insert(FailArgs {}).await.unwrap();
-    let corrupt_sql = format!("UPDATE {table} SET errors = ARRAY['{{}}'::jsonb] WHERE id = $1");
+    // Like Go's `json.Unmarshal`, attempt errors tolerate missing fields but
+    // not a non-object element.
+    let corrupt_sql = format!("UPDATE {table} SET errors = ARRAY['[]'::jsonb] WHERE id = $1");
     sqlx::query(AssertSqlSafe(corrupt_sql))
         .bind(invalid.job.row.id)
         .execute(&pool)
@@ -801,7 +803,7 @@ async fn extension_claim_returns_ordered_rows_and_rolls_back_decode_errors() {
         })
         .await
         .unwrap_err();
-    assert!(matches!(error, riverqueue::Error::Database(_)));
+    assert!(matches!(error, riverqueue::Error::InvalidJob(_)), "{error}");
     let state_sql = format!("SELECT state::text, attempt FROM {table} WHERE id = $1");
     let (state, attempt): (String, i16) = sqlx::query_as(AssertSqlSafe(state_sql))
         .bind(invalid.job.row.id)

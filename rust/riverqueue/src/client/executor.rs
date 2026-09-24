@@ -593,7 +593,9 @@ pub(super) async fn persist_result(
                             &metadata,
                         )
                         .await
-                        .map_err(sqlite_backend_error)?,
+                        .map_err(sqlite_backend_error)?
+                        .map(|row| row.map_err(|job| Error::invalid_job(job.error)))
+                        .transpose()?,
                     }
                 }
                 CompletionAction::Handled => crate::database::sqlite::get(&mut transaction, row.id)
@@ -738,7 +740,9 @@ pub(super) async fn persist_interrupted(
                 &metadata_updates,
             )
             .await
-            .map_err(sqlite_backend_error)?,
+            .map_err(sqlite_backend_error)?
+            .map(|row| row.map_err(|job| Error::invalid_job(job.error)))
+            .transpose()?,
         };
         if let Some(updated) = &updated
             && updated.state == JobState::Available
@@ -798,6 +802,85 @@ pub(super) async fn persist_interrupted(
     Err(Error::runtime(
         "database dispatch selected no supported backend".to_owned(),
     ))
+}
+
+/// Records a failed attempt for a claimed row that could not be decoded.
+///
+/// River Go's executor records an argument decoding failure as an ordinary
+/// attempt error, so the job is retried or discarded instead of staying
+/// `running` until the rescuer. Without a decoded row, the client retry policy
+/// cannot run; River's default `attempt^4` schedule is used instead.
+pub(super) async fn record_undecodable_job(
+    inner: &ClientInner,
+    completion_sender: &mpsc::Sender<CompletionUpdate>,
+    job: UndecodableJob,
+) {
+    let Some(job_id) = job.id else {
+        error!(error = %job.error, "claimed River job row has no decodable ID; leaving it for the rescuer");
+        return;
+    };
+    error!(job_id, error = %job.error, "claimed River job row could not be decoded; recording a failed attempt");
+    let now = Utc::now();
+    let attempt = saturating_i16(job.attempt);
+    let attempt_error = AttemptError {
+        at: now,
+        attempt,
+        error: format!("River could not decode the job row: {}", job.error),
+        trace: String::new(),
+    };
+    let (state, finalized_at, scheduled_at) = if job.attempt >= job.max_attempts {
+        (JobState::Discarded, Some(now), None)
+    } else {
+        let error_count = u32::try_from(job.error_count.saturating_add(1)).unwrap_or(u32::MAX);
+        let delay = Duration::from_secs(u64::from(error_count).saturating_pow(4));
+        let state = if delay <= inner.maintenance.scheduler_interval {
+            JobState::Available
+        } else {
+            JobState::Retryable
+        };
+        (state, None, Some(scheduled_after(now, delay)))
+    };
+    let error_json = match serde_json::to_value(&attempt_error) {
+        Ok(error_json) => error_json,
+        Err(json_error) => {
+            error!(job_id, error = %json_error, "could not encode River attempt error");
+            return;
+        }
+    };
+    let update = CompletionUpdate {
+        attempt,
+        cancellation: CancellationToken::new(),
+        error_json: Some(error_json),
+        event_kind: JobEventKind::Failed,
+        finalized_at,
+        job_id,
+        metadata: Map::new(),
+        scheduled_at,
+        state,
+        timing: CompletionTiming {
+            completion_started: std::time::Instant::now(),
+            queue_wait_duration: Duration::ZERO,
+            run_duration: Duration::ZERO,
+        },
+    };
+    if completion_sender.send(update).await.is_err() {
+        error!(
+            job_id,
+            "completion batcher stopped before recording an undecodable River job"
+        );
+    }
+}
+
+/// Longest delay River schedules ahead, matching Go's `time.Duration` range.
+const MAX_SCHEDULE_DELAY: Duration = Duration::from_nanos(i64::MAX.cast_unsigned());
+
+/// Adds a snooze or retry delay to `now`, clamping out-of-range delays the way
+/// River Go's `time.Duration` arithmetic bounds them instead of failing.
+pub(super) fn scheduled_after(now: DateTime<Utc>, delay: Duration) -> DateTime<Utc> {
+    chrono::Duration::from_std(delay.min(MAX_SCHEDULE_DELAY))
+        .ok()
+        .and_then(|delay| now.checked_add_signed(delay))
+        .unwrap_or(DateTime::<Utc>::MAX_UTC)
 }
 
 pub(crate) fn default_retry_delay(row: &JobRow, now: DateTime<Utc>, seed: u64) -> Duration {

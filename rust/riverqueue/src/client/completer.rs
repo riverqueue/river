@@ -193,7 +193,7 @@ pub(super) async fn persist_completion_batch(
                 .clone()
                 .map(serde_json::from_value::<AttemptError>)
                 .transpose()?;
-            let row = crate::database::sqlite::complete(
+            let row = crate::database::sqlite::complete_decoded(
                 &mut transaction,
                 &crate::database::sqlite::CompleteJob {
                     attempt: Some(update.attempt),
@@ -208,17 +208,24 @@ pub(super) async fn persist_completion_batch(
             )
             .await
             .map_err(sqlite_backend_error)?;
-            if let Some(row) = row {
-                rows.push(row);
-            } else if let Some(row) = crate::database::sqlite::merge_metadata_if_not_running(
-                &mut transaction,
-                update.job_id,
-                &update.metadata,
-            )
-            .await
-            .map_err(sqlite_backend_error)?
-            {
-                rows.push(row);
+            let row = match row {
+                Some(row) => Some(row),
+                None => crate::database::sqlite::merge_metadata_if_not_running(
+                    &mut transaction,
+                    update.job_id,
+                    &update.metadata,
+                )
+                .await
+                .map_err(sqlite_backend_error)?,
+            };
+            match row {
+                Some(Ok(row)) => rows.push(row),
+                Some(Err(job)) => error!(
+                    job_id = update.job_id,
+                    error = %job.error,
+                    "River job row persisted by completion could not be decoded; skipping its event"
+                ),
+                None => {}
             }
         }
         transaction.commit().await?;
@@ -285,7 +292,7 @@ pub(super) async fn persist_completion_batch(
          RETURNING {}, false AS unique_skipped_as_duplicate",
             job_projection("job")
         );
-        let records = sqlx::query_as::<_, JobRecord>(AssertSqlSafe(sql))
+        let records = sqlx::query(AssertSqlSafe(sql))
             .bind(ids)
             .bind(attempts)
             .bind(errors)
@@ -299,7 +306,20 @@ pub(super) async fn persist_completion_batch(
                     .expect("PostgreSQL completion path requires a PostgreSQL pool"),
             )
             .await?;
-        return records.into_iter().map(JobRecord::into_job_row).collect();
+        return Ok(records
+            .iter()
+            .filter_map(|row| match decode_job_row(row) {
+                Ok(row) => Some(row),
+                Err(job) => {
+                    error!(
+                        job_id = job.id,
+                        error = %job.error,
+                        "River job row persisted by completion could not be decoded; skipping its event"
+                    );
+                    None
+                }
+            })
+            .collect());
     }
     #[allow(unreachable_code)]
     Err(Error::runtime(
