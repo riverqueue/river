@@ -20,8 +20,12 @@ use chrono::{DateTime, SubsecRound, Utc};
 use serde_json::{Map, Value};
 use sqlx::{AssertSqlSafe, FromRow, QueryBuilder, Sqlite, SqliteConnection};
 
+use sqlx::{Row, sqlite::SqliteRow};
+
 use crate::{
-    AttemptError, JobListOrderBy, JobRow, JobState, METADATA_KEY_UNIQUE_NONCE, Queue, SortDirection,
+    AttemptError, JobListOrderBy, JobRow, JobState, METADATA_KEY_UNIQUE_NONCE, Queue,
+    SortDirection,
+    client::{UndecodableJob, decode_attempt_error, saturating_i16},
 };
 
 const JOB_COLUMNS: &str = r#"
@@ -187,9 +191,11 @@ pub(crate) struct NotificationInput<'a> {
     pub topic: &'a str,
 }
 
+// River Go stores `attempt`, `max_attempts`, and `priority` as native
+// integers, so they decode as `i64` and saturate into `JobRow`'s fields.
 #[derive(Clone, Debug, FromRow)]
 struct JobRecord {
-    attempt: i16,
+    attempt: i64,
     attempted_at: Option<DateTime<Utc>>,
     attempted_by: Option<String>,
     created_at: DateTime<Utc>,
@@ -198,9 +204,9 @@ struct JobRecord {
     finalized_at: Option<DateTime<Utc>>,
     id: i64,
     kind: String,
-    max_attempts: i16,
+    max_attempts: i64,
     metadata: String,
-    priority: i16,
+    priority: i64,
     queue: String,
     scheduled_at: DateTime<Utc>,
     state: String,
@@ -220,17 +226,21 @@ impl JobRecord {
 
         Ok(JobRow {
             id: self.id,
-            attempt: self.attempt,
+            attempt: saturating_i16(self.attempt),
             attempted_at: self.attempted_at,
             attempted_by: decode_json_or_default(self.attempted_by.as_deref())?,
             created_at: self.created_at,
             encoded_args: serde_json::value::RawValue::from_string(self.encoded_args)?,
-            errors: decode_json_or_default(self.errors.as_deref())?,
+            errors: decode_json_or_default::<Vec<Value>>(self.errors.as_deref())?
+                .iter()
+                .map(decode_attempt_error)
+                .collect::<Result<_, _>>()
+                .map_err(|error| BackendError::InvalidRow(format!("job {}: {error}", self.id)))?,
             finalized_at: self.finalized_at,
             kind: self.kind,
-            max_attempts: self.max_attempts,
+            max_attempts: saturating_i16(self.max_attempts),
             metadata,
-            priority: self.priority,
+            priority: saturating_i16(self.priority),
             queue: self.queue,
             scheduled_at: self.scheduled_at,
             state,
@@ -239,6 +249,27 @@ impl JobRecord {
             unique_states: self.unique_states.map(decode_unique_states).transpose()?,
         })
     }
+}
+
+/// A job row decoded on its own so one malformed row cannot fail a batch.
+pub(crate) type DecodedJob = Result<JobRow, UndecodableJob>;
+
+fn decode_job_row(row: &SqliteRow) -> DecodedJob {
+    JobRecord::from_row(row)
+        .map_err(BackendError::from)
+        .and_then(JobRecord::into_job)
+        .map_err(|error| UndecodableJob {
+            attempt: row.try_get("attempt").unwrap_or_default(),
+            error: error.to_string(),
+            error_count: row
+                .try_get::<Option<String>, _>("errors")
+                .ok()
+                .flatten()
+                .and_then(|errors| serde_json::from_str::<Vec<Value>>(&errors).ok())
+                .map_or(0, |errors| errors.len()),
+            id: row.try_get("id").ok(),
+            max_attempts: row.try_get("max_attempts").unwrap_or_default(),
+        })
 }
 
 #[derive(Clone, Debug, FromRow)]
@@ -418,10 +449,13 @@ pub(crate) async fn insert(
     })
 }
 
+/// Claims due jobs. The claim commits even when a row cannot be decoded, so
+/// each row is decoded separately and the caller records a failed attempt for
+/// any undecodable row instead of stranding the whole batch as running.
 pub(crate) async fn claim(
     connection: &mut SqliteConnection,
     params: &ClaimJobs<'_>,
-) -> Result<Vec<JobRow>, BackendError> {
+) -> Result<Vec<DecodedJob>, BackendError> {
     if params.limit <= 0 {
         return Ok(Vec::new());
     }
@@ -484,11 +518,8 @@ pub(crate) async fn claim(
     query.push_bind(params.limit);
     query.push(format!(") RETURNING {JOB_COLUMNS}"));
 
-    let records = query
-        .build_query_as::<JobRecord>()
-        .fetch_all(&mut *connection)
-        .await?;
-    records.into_iter().map(JobRecord::into_job).collect()
+    let rows = query.build().fetch_all(&mut *connection).await?;
+    Ok(rows.iter().map(decode_job_row).collect())
 }
 
 /// Atomically claims due jobs matching exact-version extension filters.
@@ -582,7 +613,7 @@ pub(crate) async fn claim_selected(
     connection: &mut SqliteConnection,
     params: &ClaimJobs<'_>,
     ids: &[i64],
-) -> Result<Vec<JobRow>, BackendError> {
+) -> Result<Vec<DecodedJob>, BackendError> {
     if params.limit <= 0 || ids.is_empty() {
         return Ok(Vec::new());
     }
@@ -632,11 +663,8 @@ pub(crate) async fn claim_selected(
     }
     query.push(format!(") RETURNING {JOB_COLUMNS}"));
 
-    let records = query
-        .build_query_as::<JobRecord>()
-        .fetch_all(&mut *connection)
-        .await?;
-    records.into_iter().map(JobRecord::into_job).collect()
+    let rows = query.build().fetch_all(&mut *connection).await?;
+    Ok(rows.iter().map(decode_job_row).collect())
 }
 
 pub(crate) async fn get(
@@ -889,6 +917,18 @@ pub(crate) async fn complete(
     connection: &mut SqliteConnection,
     params: &CompleteJob<'_>,
 ) -> Result<Option<JobRow>, BackendError> {
+    complete_decoded(connection, params)
+        .await?
+        .map(|row| row.map_err(|job| BackendError::InvalidRow(job.error)))
+        .transpose()
+}
+
+/// Sets a running job's state, decoding the returned row separately so a
+/// malformed row cannot fail the surrounding completion transaction.
+pub(crate) async fn complete_decoded(
+    connection: &mut SqliteConnection,
+    params: &CompleteJob<'_>,
+) -> Result<Option<DecodedJob>, BackendError> {
     let error = params
         .error
         .map(json_text)
@@ -936,7 +976,7 @@ pub(crate) async fn complete(
         "#
     );
     let state = params.state.as_str();
-    let record = sqlx::query_as::<_, JobRecord>(AssertSqlSafe(sql))
+    let row = sqlx::query(AssertSqlSafe(sql))
         .bind(state)
         .bind(params.attempt.is_some())
         .bind(params.attempt.unwrap_or_default())
@@ -956,7 +996,7 @@ pub(crate) async fn complete(
         .bind(params.id)
         .fetch_optional(&mut *connection)
         .await?;
-    record.map(JobRecord::into_job).transpose()
+    Ok(row.as_ref().map(decode_job_row))
 }
 
 /// Applies completion metadata after another actor has already moved a job
@@ -965,7 +1005,7 @@ pub(crate) async fn merge_metadata_if_not_running(
     connection: &mut SqliteConnection,
     id: i64,
     metadata_updates: &Map<String, Value>,
-) -> Result<Option<JobRow>, BackendError> {
+) -> Result<Option<DecodedJob>, BackendError> {
     let metadata = json_text(metadata_updates)?;
     let sql = format!(
         r#"
@@ -975,13 +1015,12 @@ pub(crate) async fn merge_metadata_if_not_running(
         RETURNING {JOB_COLUMNS}
         "#
     );
-    sqlx::query_as::<_, JobRecord>(AssertSqlSafe(sql))
+    let row = sqlx::query(AssertSqlSafe(sql))
         .bind(metadata)
         .bind(id)
         .fetch_optional(&mut *connection)
-        .await?
-        .map(JobRecord::into_job)
-        .transpose()
+        .await?;
+    Ok(row.as_ref().map(decode_job_row))
 }
 
 pub(crate) async fn interrupt(
@@ -1783,7 +1822,12 @@ mod tests {
         );
 
         queue_resume(&mut connection, "default", now).await.unwrap();
-        let claimed = claim(&mut connection, &claim_params).await.unwrap();
+        let claimed = claim(&mut connection, &claim_params)
+            .await
+            .unwrap()
+            .into_iter()
+            .collect::<Result<Vec<_>, _>>()
+            .unwrap();
         assert_eq!(claimed.len(), 1);
         assert_eq!(claimed[0].attempt, 1);
         assert_eq!(claimed[0].attempted_by, ["client-1"]);
@@ -2072,6 +2116,7 @@ mod tests {
                 &Map::from_iter([("stale".to_owned(), json!(true))]),
             )
             .await
+            .unwrap()
             .unwrap()
             .unwrap();
             assert_eq!(completion.state, terminal);

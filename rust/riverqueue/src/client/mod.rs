@@ -8,7 +8,6 @@ mod extension;
 mod insert;
 mod notifier;
 mod producer;
-#[cfg(feature = "postgres")]
 mod record;
 mod run;
 #[cfg(test)]
@@ -16,8 +15,11 @@ mod tests;
 mod validate;
 
 pub use self::builder::{ClientBuilder, MaintenanceConfig, QueueConfig};
+#[cfg(feature = "sqlite")]
+pub(crate) use self::record::decode_attempt_error;
 #[cfg(feature = "postgres")]
-pub(crate) use self::record::{JobRecord, job_projection};
+pub(crate) use self::record::{JobRecord, decode_job_row, job_projection};
+pub(crate) use self::record::{UndecodableJob, saturating_i16};
 pub use self::run::RunHandle;
 #[allow(clippy::wildcard_imports, unused_imports)]
 use self::{

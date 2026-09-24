@@ -288,6 +288,10 @@ pub(super) async fn run_queue(
             }
         };
         last_fetch = tokio::time::Instant::now();
+        let FetchedJobs { rows, undecodable } = rows;
+        for job in undecodable {
+            record_undecodable_job(&inner, &completion_sender, job).await;
+        }
         for row in rows {
             let permit = Arc::clone(&permits)
                 .acquire_owned()
@@ -339,7 +343,7 @@ pub(super) async fn fetch_jobs(
     inner: &ClientInner,
     queue: &str,
     maximum: usize,
-) -> Result<Vec<JobRow>, Error> {
+) -> Result<FetchedJobs, Error> {
     let fetch_started = (!inner.hooks.is_empty()).then(std::time::Instant::now);
     let maximum = i32::try_from(maximum)
         .map_err(|_| Error::invalid_job("fetch maximum exceeds i32".to_owned()))?;
@@ -391,10 +395,11 @@ pub(super) async fn fetch_jobs(
                 .await
                 .map_err(sqlite_backend_error)?
         };
+        let fetched = FetchedJobs::from_decoded(rows);
         if let Some(fetch_started) = fetch_started {
             for metric in [
                 Metric::JobGetAvailableDuration(fetch_started.elapsed()),
-                Metric::JobGetAvailableCount(u64::try_from(rows.len()).unwrap_or(u64::MAX)),
+                Metric::JobGetAvailableCount(u64::try_from(fetched.len()).unwrap_or(u64::MAX)),
             ] {
                 for hook in &inner.hooks {
                     if let Err(hook_error) = hook.metric_emit(metric).await {
@@ -403,7 +408,7 @@ pub(super) async fn fetch_jobs(
                 }
             }
         }
-        return Ok(rows);
+        return Ok(fetched);
     }
     #[cfg(feature = "postgres")]
     {
@@ -464,7 +469,7 @@ pub(super) async fn fetch_jobs(
                 RETURNING {}, false AS unique_skipped_as_duplicate",
                     job_projection("job")
                 );
-                sqlx::query_as::<_, JobRecord>(AssertSqlSafe(sql))
+                sqlx::query(AssertSqlSafe(sql))
                     .bind(selected_ids)
                     .bind(&inner.id)
                     .bind(ATTEMPTED_BY_MAX)
@@ -487,14 +492,11 @@ pub(super) async fn fetch_jobs(
             )
             .await?
         };
-        let rows = records
-            .into_iter()
-            .map(JobRecord::into_job_row)
-            .collect::<Result<Vec<_>, _>>()?;
+        let fetched = FetchedJobs::from_decoded(records.iter().map(decode_job_row).collect());
         if let Some(fetch_started) = fetch_started {
             for metric in [
                 Metric::JobGetAvailableDuration(fetch_started.elapsed()),
-                Metric::JobGetAvailableCount(u64::try_from(rows.len()).unwrap_or(u64::MAX)),
+                Metric::JobGetAvailableCount(u64::try_from(fetched.len()).unwrap_or(u64::MAX)),
             ] {
                 for hook in &inner.hooks {
                     if let Err(hook_error) = hook.metric_emit(metric).await {
@@ -503,7 +505,7 @@ pub(super) async fn fetch_jobs(
                 }
             }
         }
-        return Ok(rows);
+        return Ok(fetched);
     }
     #[allow(unreachable_code)]
     Err(Error::runtime(
@@ -518,17 +520,48 @@ pub(super) async fn fetch_oss_records<'executor, E>(
     queue: &str,
     maximum: i32,
     client_id: &str,
-) -> Result<Vec<JobRecord>, sqlx::Error>
+) -> Result<Vec<PgRow>, sqlx::Error>
 where
     E: Executor<'executor, Database = Postgres>,
 {
-    sqlx::query_as::<_, JobRecord>(AssertSqlSafe(sql))
+    sqlx::query(AssertSqlSafe(sql))
         .bind(queue)
         .bind(maximum)
         .bind(client_id)
         .bind(ATTEMPTED_BY_MAX)
         .fetch_all(executor)
         .await
+}
+
+/// Jobs claimed by one fetch. Claims commit before rows are decoded, so rows
+/// that cannot be decoded are returned separately for failure recording
+/// instead of failing the whole fetch and stranding every claimed job.
+#[derive(Default)]
+pub(super) struct FetchedJobs {
+    pub(super) rows: Vec<JobRow>,
+    pub(super) undecodable: Vec<UndecodableJob>,
+}
+
+impl FetchedJobs {
+    pub(super) fn from_decoded(decoded: Vec<Result<JobRow, UndecodableJob>>) -> Self {
+        let mut fetched = Self::default();
+        for row in decoded {
+            match row {
+                Ok(row) => fetched.rows.push(row),
+                Err(undecodable) => fetched.undecodable.push(undecodable),
+            }
+        }
+        fetched
+    }
+
+    pub(super) fn extend(&mut self, other: Self) {
+        self.rows.extend(other.rows);
+        self.undecodable.extend(other.undecodable);
+    }
+
+    pub(super) fn len(&self) -> usize {
+        self.rows.len() + self.undecodable.len()
+    }
 }
 
 pub(super) fn sort_claimed_jobs(rows: &mut [JobRow]) {
