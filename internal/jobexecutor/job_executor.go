@@ -115,7 +115,15 @@ type JobExecutor struct {
 	PluginLookupByJob        *pluginlookup.JobPluginLookup
 	PluginLookupGlobal       *pluginlookup.PluginLookup
 	JobRow                   *rivertype.JobRow
-	ProducerCallbacks        struct {
+
+	// JobRowDecodeErr is set for a locked job whose row couldn't be fully
+	// decoded, in which case JobRow contains only the fields that could be.
+	// The job isn't worked. Instead, its attempt fails with an error
+	// describing the decode failure, and it's retried or discarded like any
+	// other failed attempt.
+	JobRowDecodeErr error
+
+	ProducerCallbacks struct {
 		JobDone func(jobRow *rivertype.JobRow)
 		Stuck   func(ctx context.Context, jobRow *rivertype.JobRow)
 		Unstuck func()
@@ -210,6 +218,15 @@ func (e *JobExecutor) execute(ctx context.Context) (res *jobExecutorResult) {
 		}
 		e.stats.RunDuration = e.Time.Now().Sub(e.start)
 	}()
+
+	if e.JobRowDecodeErr != nil {
+		e.Logger.ErrorContext(ctx, e.Name+": Job row couldn't be decoded; failing attempt without working it",
+			slog.String("error", e.JobRowDecodeErr.Error()),
+			slog.Int64("job_id", e.JobRow.ID),
+			slog.String("kind", e.JobRow.Kind),
+		)
+		return &jobExecutorResult{Err: fmt.Errorf("job row couldn't be decoded: %w", e.JobRowDecodeErr), MetadataUpdates: metadataUpdates}
+	}
 
 	if e.WorkUnit == nil {
 		e.Logger.ErrorContext(ctx, e.Name+": Unhandled job kind",

@@ -159,13 +159,14 @@ func TestJobExecutor_Execute(t *testing.T) {
 		require.NoError(t, err)
 
 		// Fetch the job to make sure it's marked as running:
-		jobs, err := exec.JobGetAvailable(ctx, &riverdriver.JobGetAvailableParams{
+		res, err := exec.JobGetAvailable(ctx, &riverdriver.JobGetAvailableParams{
 			MaxToLock: 1,
 			Now:       new(now),
 			Queue:     rivercommon.QueueDefault,
 		})
 		require.NoError(t, err)
 
+		jobs := res.Jobs
 		require.Len(t, jobs, 1)
 		require.Equal(t, results[0].Job.ID, jobs[0].ID)
 		job := jobs[0]
@@ -562,6 +563,71 @@ func TestJobExecutor_Execute(t *testing.T) {
 		require.False(t, workCalled)
 	})
 
+	// A job whose row couldn't be decoded isn't worked. Its attempt fails with
+	// the decode error and goes through normal error handling.
+	t.Run("JobRowDecodeErrFailsAttemptWithoutWorking", func(t *testing.T) {
+		t.Parallel()
+
+		executor, bundle := setup(t)
+		executor.ClientRetryPolicy = &retrypolicytest.RetryPolicyCustom{}
+
+		var workCalled bool
+		executor.WorkUnit = &customizableWorkUnit{
+			work: func() error {
+				workCalled = true
+				return nil
+			},
+		}
+
+		decodeErr := errors.New("error unmarshaling `tags`")
+		executor.JobRowDecodeErr = decodeErr
+
+		bundle.errorHandler.HandleErrorFunc = func(ctx context.Context, job *rivertype.JobRow, err error) *ErrorHandlerResult {
+			require.ErrorIs(t, err, decodeErr)
+			return nil
+		}
+
+		expectedRetryAt := executor.ClientRetryPolicy.NextRetry(bundle.jobRow)
+
+		executor.Execute(ctx)
+		jobUpdates := riversharedtest.WaitOrTimeout(t, bundle.updateCh)
+		require.Len(t, jobUpdates, 1)
+		require.Equal(t, riverdriver.JobSetStateReasonFailed, jobUpdates[0].Reason)
+
+		job, err := bundle.exec.JobGetByID(ctx, &riverdriver.JobGetByIDParams{
+			ID:     bundle.jobRow.ID,
+			Schema: "",
+		})
+		require.NoError(t, err)
+		require.Equal(t, rivertype.JobStateRetryable, job.State)
+		require.Len(t, job.Errors, 1)
+		require.Equal(t, bundle.jobRow.Attempt, job.Errors[0].Attempt)
+		require.Equal(t, "job row couldn't be decoded: error unmarshaling `tags`", job.Errors[0].Error)
+		require.WithinDuration(t, expectedRetryAt, job.ScheduledAt, time.Microsecond)
+		require.True(t, bundle.errorHandler.HandleErrorCalled)
+		require.False(t, workCalled)
+	})
+
+	t.Run("JobRowDecodeErrDiscardsJobAfterTooManyAttempts", func(t *testing.T) {
+		t.Parallel()
+
+		executor, bundle := setup(t)
+
+		bundle.jobRow.Attempt = bundle.jobRow.MaxAttempts
+		executor.JobRowDecodeErr = errors.New("error unmarshaling `tags`")
+
+		executor.Execute(ctx)
+		riversharedtest.WaitOrTimeout(t, bundle.updateCh)
+
+		job, err := bundle.exec.JobGetByID(ctx, &riverdriver.JobGetByIDParams{
+			ID:     bundle.jobRow.ID,
+			Schema: "",
+		})
+		require.NoError(t, err)
+		require.Equal(t, rivertype.JobStateDiscarded, job.State)
+		require.Equal(t, "job row couldn't be decoded: error unmarshaling `tags`", job.Errors[0].Error)
+	})
+
 	t.Run("InvalidNextRetryAt", func(t *testing.T) {
 		t.Parallel()
 
@@ -676,8 +742,8 @@ func TestJobExecutor_Execute(t *testing.T) {
 				Queue:     rivercommon.QueueDefault,
 			})
 			require.NoError(t, err)
-			require.Len(t, locked, 3)
-			return locked
+			require.Len(t, locked.Jobs, 3)
+			return locked.Jobs
 		}
 
 		t.Run("AllJobsShareSameNormalError", func(t *testing.T) {

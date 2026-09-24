@@ -17,12 +17,12 @@ type StandardPilot struct {
 
 func (p *StandardPilot) JobCleanerQueuesExcluded() []string { return nil }
 
-func (p *StandardPilot) JobGetAvailable(ctx context.Context, exec riverdriver.Executor, state ProducerState, params *riverdriver.JobGetAvailableParams) ([]*rivertype.JobRow, error) {
+func (p *StandardPilot) JobGetAvailable(ctx context.Context, exec riverdriver.Executor, state ProducerState, params *riverdriver.JobGetAvailableParams) (*riverdriver.JobGetAvailableResult, error) {
 	if params.MaxToLock <= 0 {
-		return nil, nil
+		return &riverdriver.JobGetAvailableResult{}, nil
 	}
 
-	return timeoututil.WithTimeoutV(ctx, rivercommon.HotOperationTimeout, "StandardPilot.JobGetAvailable", func(ctx context.Context) ([]*rivertype.JobRow, error) {
+	return timeoututil.WithTimeoutV(ctx, rivercommon.HotOperationTimeout, "StandardPilot.JobGetAvailable", func(ctx context.Context) (*riverdriver.JobGetAvailableResult, error) {
 		return exec.JobGetAvailable(ctx, params)
 	})
 }

@@ -231,11 +231,24 @@ type Executor interface {
 	JobDelete(ctx context.Context, params *JobDeleteParams) (*rivertype.JobRow, error)
 	JobDeleteBefore(ctx context.Context, params *JobDeleteBeforeParams) (int, error)
 	JobDeleteMany(ctx context.Context, params *JobDeleteManyParams) ([]*rivertype.JobRow, error)
-	JobGetAvailable(ctx context.Context, params *JobGetAvailableParams) ([]*rivertype.JobRow, error)
+
+	// JobGetAvailable locks available jobs for work, moving them to `running`.
+	// A locked job whose row can't be fully decoded doesn't fail the call.
+	// It's instead returned in the result's UndecodableJobs so that the caller
+	// can fail the attempt, since it's been moved to `running` along with the
+	// others.
+	JobGetAvailable(ctx context.Context, params *JobGetAvailableParams) (*JobGetAvailableResult, error)
+
 	JobGetByID(ctx context.Context, params *JobGetByIDParams) (*rivertype.JobRow, error)
 	JobGetByIDMany(ctx context.Context, params *JobGetByIDManyParams) ([]*rivertype.JobRow, error)
 	JobGetByKindMany(ctx context.Context, params *JobGetByKindManyParams) ([]*rivertype.JobRow, error)
+
+	// JobGetStuck gets jobs that have been running since before a horizon. A
+	// job row that can't be fully decoded is returned with the fields that
+	// couldn't be decoded left empty so that one bad row can't prevent stuck
+	// jobs from being rescued.
 	JobGetStuck(ctx context.Context, params *JobGetStuckParams) ([]*rivertype.JobRow, error)
+
 	JobInsertFastMany(ctx context.Context, params *JobInsertFastManyParams) ([]*JobInsertFastResult, error)
 	JobInsertFastManyNoReturning(ctx context.Context, params *JobInsertFastManyParams) (int, error)
 	JobInsertFull(ctx context.Context, params *JobInsertFullParams) (*rivertype.JobRow, error)
@@ -245,7 +258,13 @@ type Executor interface {
 	JobRescueMany(ctx context.Context, params *JobRescueManyParams) (*struct{}, error)
 	JobRetry(ctx context.Context, params *JobRetryParams) (*rivertype.JobRow, error)
 	JobSchedule(ctx context.Context, params *JobScheduleParams) ([]*JobScheduleResult, error)
+
+	// JobSetStateIfRunningMany sets the state of running jobs, returning the
+	// resulting rows. A job row that can't be fully decoded is returned with
+	// the fields that couldn't be decoded left empty so that the state of an
+	// undecodable job can be set without failing the other jobs set with it.
 	JobSetStateIfRunningMany(ctx context.Context, params *JobSetStateIfRunningManyParams) ([]*rivertype.JobRow, error)
+
 	JobUpdate(ctx context.Context, params *JobUpdateParams) (*rivertype.JobRow, error)
 	JobUpdateFull(ctx context.Context, params *JobUpdateFullParams) (*rivertype.JobRow, error)
 	LeaderAttemptElect(ctx context.Context, params *LeaderElectParams) (*Leader, error)
@@ -430,6 +449,17 @@ type JobGetAvailableParams struct {
 	ProducerID     int64
 	Queue          string
 	Schema         string
+}
+
+// JobGetAvailableResult is the result of JobGetAvailable.
+type JobGetAvailableResult struct {
+	// Jobs are the locked jobs that were decoded successfully.
+	Jobs []*rivertype.JobRow
+
+	// UndecodableJobs are locked jobs whose rows couldn't be fully decoded.
+	// They've been moved to `running` like Jobs, so the caller should fail
+	// their attempt rather than leave them for the rescuer.
+	UndecodableJobs []*UndecodableJob
 }
 
 type JobGetByIDParams struct {
@@ -946,6 +976,18 @@ type TableExistsParams struct {
 type TableTruncateParams struct {
 	Schema string
 	Table  []string
+}
+
+// UndecodableJob is a job that was locked by JobGetAvailable, but whose row
+// couldn't be fully decoded, like when one of its JSON columns has been
+// changed to a shape that doesn't match its JobRow field.
+type UndecodableJob struct {
+	// DecodeErr describes why the job row couldn't be decoded.
+	DecodeErr error
+
+	// Job is the job row with every field that could be decoded. Fields that
+	// couldn't be decoded are left empty.
+	Job *rivertype.JobRow
 }
 
 // MigrationLineMainTruncateTables is a shared helper that produces tables to

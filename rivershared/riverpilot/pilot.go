@@ -28,12 +28,15 @@ type Pilot interface {
 	// conceivably be changed.)
 	JobCleanerQueuesExcluded() []string
 
+	// JobGetAvailable locks available jobs for work. Locked jobs whose rows
+	// couldn't be fully decoded are returned in the result's UndecodableJobs
+	// and should have their attempt failed by the caller.
 	JobGetAvailable(
 		ctx context.Context,
 		exec riverdriver.Executor,
 		state ProducerState,
 		params *riverdriver.JobGetAvailableParams,
-	) ([]*rivertype.JobRow, error)
+	) (*riverdriver.JobGetAvailableResult, error)
 
 	JobInsertMany(
 		ctx context.Context,

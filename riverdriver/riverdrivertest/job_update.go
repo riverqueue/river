@@ -16,6 +16,7 @@ import (
 	"github.com/riverqueue/river/riverdriver"
 	"github.com/riverqueue/river/rivershared/testfactory"
 	"github.com/riverqueue/river/rivershared/uniquestates"
+	"github.com/riverqueue/river/rivershared/util/sliceutil"
 	"github.com/riverqueue/river/rivertype"
 )
 
@@ -359,7 +360,7 @@ func exerciseJobUpdate[TTx any](ctx context.Context, t *testing.T, executorWithT
 				require.Len(t, releasedJobs, 1)
 				require.Equal(t, rivertype.JobStateAvailable, releasedJobs[0].State)
 
-				claimedJobs, err := exec.JobGetAvailable(ctx, &riverdriver.JobGetAvailableParams{
+				claimRes, err := exec.JobGetAvailable(ctx, &riverdriver.JobGetAvailableParams{
 					ClientID:       "new-worker",
 					MaxAttemptedBy: 10,
 					MaxToLock:      1,
@@ -367,6 +368,7 @@ func exerciseJobUpdate[TTx any](ctx context.Context, t *testing.T, executorWithT
 					Queue:          job.Queue,
 				})
 				require.NoError(t, err)
+				claimedJobs := claimRes.Jobs
 				require.Len(t, claimedJobs, 1)
 				require.Equal(t, job.ID, claimedJobs[0].ID)
 				require.Equal(t, rivertype.JobStateRunning, claimedJobs[0].State)
@@ -889,6 +891,29 @@ func exerciseJobUpdate[TTx any](ctx context.Context, t *testing.T, executorWithT
 			require.Equal(t, "foo.go:123\nbar.go:456", jobAfter.Errors[0].Trace)
 		})
 
+		// SQLite only: a non-array `errors` value is wrapped in an array so that
+		// the new error can be appended without losing the existing value.
+		t.Run("NonArrayErrorsWrappedToAppend", func(t *testing.T) {
+			t.Parallel()
+
+			exec, bundle := setup(ctx, t)
+			if bundle.driver.DatabaseName() != riverdriver.DatabaseNameSQLite {
+				t.Skip("only SQLite's JSON columns can hold a non-array errors value")
+			}
+
+			now := precisionTestTime
+
+			job := testfactory.Job(ctx, t, exec, &testfactory.JobOpts{State: new(rivertype.JobStateRunning)})
+			sqliteSetJobJSONColumn(ctx, t, exec, job.ID, "errors", `{"error":"existing value"}`)
+
+			jobsAfter, err := exec.JobSetStateIfRunningMany(ctx, setStateManyParams(riverdriver.JobSetStateErrorRetryable(job.ID, now, makeErrPayload(t, now), nil)))
+			require.NoError(t, err)
+			require.Len(t, jobsAfter, 1)
+			require.Equal(t, rivertype.JobStateRetryable, jobsAfter[0].State)
+			require.Equal(t, []string{"existing value", "fake error"},
+				sliceutil.Map(jobsAfter[0].Errors, func(e rivertype.AttemptError) string { return e.Error }))
+		})
+
 		t.Run("SetsAnInterruptedRunningJobToAvailableWithUpdatedAttempt", func(t *testing.T) {
 			t.Parallel()
 
@@ -945,6 +970,40 @@ func exerciseJobUpdate[TTx any](ctx context.Context, t *testing.T, executorWithT
 			require.NoError(t, err)
 			require.Equal(t, rivertype.JobStateRetryable, jobUpdated.State)
 			require.WithinDuration(t, job.ScheduledAt, jobAfter.ScheduledAt, time.Microsecond)
+		})
+
+		// A job whose row can't be fully decoded still has its state set, and
+		// doesn't prevent setting the state of other jobs in the same batch.
+		t.Run("UndecodableJobSetAlongsideOthers", func(t *testing.T) {
+			t.Parallel()
+
+			exec, bundle := setup(ctx, t)
+			if bundle.driver.DatabaseName() != riverdriver.DatabaseNameSQLite {
+				t.Skip("only SQLite's JSON columns can hold values that don't decode")
+			}
+
+			now := precisionTestTime
+
+			job1 := testfactory.Job(ctx, t, exec, &testfactory.JobOpts{State: new(rivertype.JobStateRunning)})
+			job2 := testfactory.Job(ctx, t, exec, &testfactory.JobOpts{State: new(rivertype.JobStateRunning)})
+			sqliteSetJobJSONColumn(ctx, t, exec, job2.ID, "tags", `{"not":"an array"}`)
+
+			jobsAfter, err := exec.JobSetStateIfRunningMany(ctx, setStateManyParams(
+				riverdriver.JobSetStateErrorRetryable(job1.ID, now, makeErrPayload(t, now), nil),
+				riverdriver.JobSetStateErrorRetryable(job2.ID, now, makeErrPayload(t, now), nil),
+			))
+			require.NoError(t, err)
+			require.Len(t, jobsAfter, 2)
+			for _, jobAfter := range jobsAfter {
+				require.Equal(t, rivertype.JobStateRetryable, jobAfter.State)
+				require.Len(t, jobAfter.Errors, 1)
+			}
+			require.Equal(t, job2.ID, jobsAfter[1].ID)
+			require.Nil(t, jobsAfter[1].Tags)
+
+			// The undecodable value is left as it was.
+			_, err = exec.JobGetByID(ctx, &riverdriver.JobGetByIDParams{ID: job2.ID})
+			require.ErrorContains(t, err, "error unmarshaling `tags`")
 		})
 
 		t.Run("UpdatesOnlyMetadataForAlreadyRetryableJobs", func(t *testing.T) {
