@@ -60,6 +60,10 @@ name = "events"
 required-features = ["postgres"]
 
 [[example]]
+name = "mixed_go_rust"
+required-features = ["postgres"]
+
+[[example]]
 name = "periodic"
 required-features = ["postgres"]
 
