@@ -957,7 +957,6 @@ dependencies = [
  "base64",
  "chrono",
  "cron",
- "futures-util",
  "riverqueue-internal",
  "riverqueue-macros",
  "riverqueue-migrate",
@@ -969,6 +968,18 @@ dependencies = [
  "tokio",
  "tokio-util",
  "tracing",
+]
+
+[[package]]
+name = "riverqueue-cli"
+version = "0.47.0-alpha.1"
+dependencies = [
+ "riverqueue",
+ "riverqueue-migrate",
+ "serde",
+ "sqlx",
+ "tokio",
+ "tokio-util",
 ]
 
 [[package]]

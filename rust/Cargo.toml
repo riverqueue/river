@@ -1,6 +1,7 @@
 [workspace]
 members = [
     "riverqueue",
+    "riverqueue-cli",
     "riverqueue-conformance",
     "riverqueue-internal",
     "riverqueue-macros",
@@ -23,16 +24,15 @@ async-trait = "0.1.92"
 base64 = "0.22.1"
 chrono = { version = "0.4.45", features = ["serde"] }
 cron = "0.17.0"
-futures-util = "0.3.34"
 proc-macro2 = "1.0.107"
 quote = "1.0.47"
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = { version = "1.0.151", features = ["arbitrary_precision", "preserve_order", "raw_value"] }
 sha2 = "0.11.0"
-sqlx = { version = "0.9.0", default-features = false, features = ["chrono", "derive", "json", "runtime-tokio", "tls-rustls"] }
+sqlx = { version = "0.9.0", default-features = false, features = ["chrono", "derive", "json", "runtime-tokio"] }
 syn = { version = "2.0", features = ["full"] }
 thiserror = "2.0.20"
-tokio = { version = "1.53.1", features = ["macros", "rt-multi-thread", "signal", "sync", "time"] }
+tokio = { version = "1.53.1", features = ["macros", "rt", "sync", "time"] }
 tokio-util = { version = "0.7.19", features = ["rt"] }
 tracing = "0.1.44"
 

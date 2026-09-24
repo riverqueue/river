@@ -1,8 +1,7 @@
-//! River's Rust command-line utilities.
+//! The destructive `bench` command.
 
 use std::{
     convert::Infallible,
-    env,
     error::Error as StdError,
     io,
     sync::{
@@ -30,7 +29,7 @@ const DEFAULT_MAX_CONNECTIONS: u32 = 50;
 const DEFAULT_MAX_WORKERS: usize = 2_000;
 const ITERATION_PERIOD: Duration = Duration::from_secs(2);
 
-const HELP: &str = r"River for Rust command-line utilities
+pub(crate) const HELP: &str = r"Benchmark River's Rust worker runtime
 
 Usage:
   riverqueue bench [options]
@@ -50,7 +49,6 @@ Options:
       --max-workers COUNT      Concurrent workers (default: 2000)
       --skip-vacuum            Truncate without VACUUM FULL
   -h, --help                   Print help
-  -V, --version                Print version
 
 With neither --duration nor --num-total-jobs, the benchmark runs until Ctrl-C.
 The two stopping options are mutually exclusive.
@@ -92,7 +90,6 @@ struct BenchOptions {
 enum Command {
     Bench(BenchOptions),
     Help,
-    Version,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -172,12 +169,14 @@ impl BenchmarkProgress {
     }
 }
 
-#[tokio::main]
-async fn main() -> Result<(), Box<dyn StdError + Send + Sync>> {
-    match parse_command(env::args().skip(1), env::var("DATABASE_URL").ok())? {
+/// Runs the `bench` command with the arguments that follow it.
+pub(crate) async fn run(
+    arguments: impl IntoIterator<Item = String>,
+    database_url_env: Option<String>,
+) -> Result<(), Box<dyn StdError + Send + Sync>> {
+    match parse_command(arguments, database_url_env)? {
         Command::Bench(options) => run_benchmark(options).await?,
         Command::Help => print!("{HELP}"),
-        Command::Version => println!("riverqueue {}", env!("CARGO_PKG_VERSION")),
     }
     Ok(())
 }
@@ -187,20 +186,6 @@ fn parse_command(
     database_url_env: Option<String>,
 ) -> Result<Command, io::Error> {
     let mut arguments = arguments.into_iter();
-    let Some(command) = arguments.next() else {
-        return Ok(Command::Help);
-    };
-    if matches!(command.as_str(), "-h" | "--help") {
-        return Ok(Command::Help);
-    }
-    if matches!(command.as_str(), "-V" | "--version") {
-        return Ok(Command::Version);
-    }
-    if command != "bench" {
-        return Err(invalid_input(format!(
-            "unknown command {command:?}\n\n{HELP}"
-        )));
-    }
 
     let mut backlog = DEFAULT_BACKLOG;
     let mut batch_size = DEFAULT_BATCH_SIZE;
@@ -215,7 +200,6 @@ fn parse_command(
     while let Some(argument) = arguments.next() {
         match argument.as_str() {
             "-h" | "--help" => return Ok(Command::Help),
-            "-V" | "--version" => return Ok(Command::Version),
             "--backlog" => {
                 backlog = parse_positive(&take_value(&mut arguments, "--backlog")?, "backlog")?;
             }
@@ -496,7 +480,7 @@ fn postgres_connect_options(database_url: &str) -> Result<PgConnectOptions, sqlx
     if !database_url_has_userinfo(database_url)
         && let Some(username) = ["PGUSER", "USER", "LOGNAME"]
             .into_iter()
-            .find_map(|name| env::var(name).ok().filter(|value| !value.is_empty()))
+            .find_map(|name| std::env::var(name).ok().filter(|value| !value.is_empty()))
     {
         options = options.username(&username);
     }
@@ -718,7 +702,6 @@ mod tests {
     fn parses_bench_options_and_composite_duration() {
         let command = parse_command(
             [
-                "bench",
                 "--database-url",
                 "postgres://localhost/river_bench",
                 "--duration",
@@ -743,7 +726,7 @@ mod tests {
     #[test]
     fn rejects_conflicting_stopping_options() {
         let error = parse_command(
-            ["bench", "--duration", "1s", "--num-total-jobs", "10"]
+            ["--duration", "1s", "--num-total-jobs", "10"]
                 .into_iter()
                 .map(str::to_owned),
             Some("postgres://localhost/river_bench".to_owned()),

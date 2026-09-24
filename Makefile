@@ -164,7 +164,7 @@ $(foreach mod,$(submodules),$(eval $(call bench-target,$(mod))))
 
 .PHONY: bench/rust
 bench/rust: ## Run the destructive Rust PostgreSQL throughput benchmark
-	cd rust && cargo run --release --locked -p riverqueue --bin riverqueue -- bench $(if $(DATABASE_URL),--database-url "$(DATABASE_URL)") $(RUST_BENCH_ARGS)
+	cd rust && cargo run --release --locked -p riverqueue-cli --bin riverqueue -- bench $(if $(DATABASE_URL),--database-url "$(DATABASE_URL)") $(RUST_BENCH_ARGS)
 
 .PHONY: tidy
 tidy:: ## Run `go mod tidy` for all submodules

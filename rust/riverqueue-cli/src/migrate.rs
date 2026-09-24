@@ -1,11 +1,9 @@
-//! Command-line interface for River's canonical migration line.
+//! Migration commands for River's canonical migration line.
 
-#![forbid(unsafe_code)]
-
-use std::{env, error::Error};
+use std::error::Error;
 
 #[cfg(feature = "postgres")]
-use riverqueue_internal::SchemaName;
+use riverqueue::database::SchemaName;
 #[cfg(feature = "postgres")]
 use riverqueue_migrate::PostgresMigrator;
 #[cfg(feature = "sqlite")]
@@ -69,16 +67,16 @@ impl CommandMigrator {
     }
 }
 
-#[tokio::main]
-async fn main() {
-    if let Err(error) = run().await {
-        eprintln!("riverqueue-migrate: {error}");
-        std::process::exit(1);
-    }
-}
-
-async fn run() -> Result<(), Box<dyn Error>> {
-    let args = parse_args()?;
+/// Runs a migration command with the arguments that follow it.
+pub(crate) async fn run(
+    command: String,
+    arguments: impl IntoIterator<Item = String>,
+    database_url_env: Option<String>,
+) -> Result<(), Box<dyn Error + Send + Sync>> {
+    let Some(args) = parse_args(command, arguments, database_url_env)? else {
+        println!("{}", usage());
+        return Ok(());
+    };
     let migrator = if args.database_url.starts_with("sqlite:") {
         #[cfg(not(feature = "sqlite"))]
         return Err("SQLite support requires the `sqlite` feature".into());
@@ -106,22 +104,22 @@ async fn run() -> Result<(), Box<dyn Error>> {
     };
 
     match args.command.as_str() {
-        "down" | "migrate-down" => {
+        "migrate-down" => {
             print_migrations(
                 migrator
                     .migrate(Direction::Down, migrate_opts(&args))
                     .await?,
             );
         }
-        "list" | "migrate-list" => {
+        "migrate-list" => {
             for version in migrator.existing_versions().await? {
                 println!("{version:03}");
             }
         }
-        "up" | "migrate-up" => {
+        "migrate-up" => {
             print_migrations(migrator.migrate(Direction::Up, migrate_opts(&args)).await?);
         }
-        "validate" | "migrate-validate" => {
+        "validate" => {
             let result = migrator.validate(args.target_version).await?;
             if !result.ok {
                 for message in result.messages {
@@ -147,15 +145,12 @@ fn migrate_opts(args: &Args) -> MigrateOpts {
     opts
 }
 
-fn parse_args() -> Result<Args, Box<dyn Error>> {
-    let mut raw = env::args().skip(1);
-    let Some(command) = raw.next() else {
-        return Err(usage().into());
-    };
-    if matches!(command.as_str(), "-h" | "--help") {
-        println!("{}", usage());
-        std::process::exit(0);
-    }
+fn parse_args(
+    command: String,
+    arguments: impl IntoIterator<Item = String>,
+    database_url_env: Option<String>,
+) -> Result<Option<Args>, Box<dyn Error + Send + Sync>> {
+    let mut raw = arguments.into_iter();
     let mut args = Args {
         command,
         ..Args::default()
@@ -177,18 +172,14 @@ fn parse_args() -> Result<Args, Box<dyn Error>> {
                         .parse()?,
                 );
             }
-            "-h" | "--help" => {
-                println!("{}", usage());
-                std::process::exit(0);
-            }
+            "-h" | "--help" => return Ok(None),
             _ => return Err(format!("unknown argument {argument:?}\n{}", usage()).into()),
         }
     }
     if args.database_url.is_empty() {
-        args.database_url =
-            env::var("DATABASE_URL").map_err(|_| "--database-url or DATABASE_URL is required")?;
+        args.database_url = database_url_env.ok_or("--database-url or DATABASE_URL is required")?;
     }
-    Ok(args)
+    Ok(Some(args))
 }
 
 fn print_migrations(result: MigrateResult) {
@@ -204,5 +195,5 @@ fn print_migrations(result: MigrateResult) {
 }
 
 fn usage() -> &'static str {
-    "usage: riverqueue-migrate <up|down|list|validate> [--database-url URL] [--schema NAME] [--target-version N] [--max-steps N] [--dry-run]"
+    "usage: riverqueue <migrate-up|migrate-down|migrate-list|validate> [--database-url URL] [--schema NAME] [--target-version N] [--max-steps N] [--dry-run]"
 }

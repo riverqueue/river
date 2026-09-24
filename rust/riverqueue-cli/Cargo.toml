@@ -1,0 +1,34 @@
+[package]
+name = "riverqueue-cli"
+description = "Command-line tools for River's Rust client: migrations and benchmarks"
+keywords = ["background", "jobs", "migrations", "postgres", "queue"]
+categories = ["command-line-utilities", "database"]
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+readme = "README.md"
+repository.workspace = true
+homepage.workspace = true
+
+[features]
+default = ["postgres", "sqlite"]
+postgres = ["riverqueue/postgres", "riverqueue-migrate/postgres", "sqlx/postgres"]
+sqlite = ["riverqueue/sqlite", "riverqueue-migrate/sqlite", "sqlx/sqlite"]
+
+[[bin]]
+name = "riverqueue"
+path = "src/main.rs"
+# The binary shares the library crate's name, so its docs would collide.
+doc = false
+
+[dependencies]
+riverqueue = { path = "../riverqueue", version = "=0.47.0-alpha.1", default-features = false }
+riverqueue-migrate = { path = "../riverqueue-migrate", version = "=0.47.0-alpha.1", default-features = false }
+serde.workspace = true
+sqlx = { workspace = true, features = ["tls-rustls"] }
+tokio = { workspace = true, features = ["macros", "rt-multi-thread", "signal"] }
+tokio-util.workspace = true
+
+[lints]
+workspace = true

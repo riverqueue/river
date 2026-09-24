@@ -16,7 +16,9 @@ unfinished. Shared cross-language fixtures live in
 - `riverqueue`: typed client, worker runtime, CRUD, queues, events, extensions,
   periodic/resumable jobs, and maintenance.
 - `riverqueue-macros`: `#[derive(JobArgs)]`.
-- `riverqueue-migrate`: canonical River migration line and CLI.
+- `riverqueue-migrate`: canonical River migration lines.
+- `riverqueue-cli`: the `riverqueue` command-line program for migrations and
+  benchmarks.
 - `riverqueue-test`: typed fixtures and worker-test helpers.
 - `riverqueue-internal`: published exact-version dependency plumbing and
   unstable extension SPI; applications should not use it directly.
@@ -57,8 +59,8 @@ make doc/rust
 make check/rust/package
 ```
 
-For basic end-to-end performance figures, the packaged `riverqueue` binary has
-the Rust equivalent of `river bench`. It truncates the selected River job table,
+For basic end-to-end performance figures, the `riverqueue` binary from
+`riverqueue-cli` has the Rust equivalent of `river bench`. It truncates the selected River job table,
 so use a disposable database:
 
 ```sh
