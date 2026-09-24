@@ -16,15 +16,12 @@ env:
 jobs:
   quality:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 20
 
     steps:
       - uses: actions/checkout@v6
         with:
           fetch-depth: 0
-      - uses: actions/setup-go@v6
-        with:
-          go-version: "1.27"
       - uses: dtolnay/rust-toolchain@stable
         id: rust
         with:
@@ -46,10 +43,7 @@ jobs:
         with:
           tool: cargo-semver-checks@0.49.0
 
-      - name: Verify generated compatibility artifacts
-        run: make verify/conformance verify/rust-migrations
-
-      - name: Lint
+      - name: Lint, including PostgreSQL-only and SQLite-only builds
         run: make lint/rust
 
       - name: Documentation and examples
@@ -61,12 +55,15 @@ jobs:
       - name: Package archives
         run: make check/rust/package
 
+      # Compare with the latest published Rust release tag, which the full
+      # checkout above includes. Before the first release there is no
+      # baseline and the step reports that instead of failing.
       - name: Public API compatibility
         run: make check/rust/semver
 
   msrv:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 20
     strategy:
       fail-fast: false
       matrix:
@@ -88,15 +85,22 @@ jobs:
             rust/target
           key: rust-v1-${{ runner.os }}-${{ runner.arch }}-${{ github.job }}-${{ steps.rust.outputs.cachekey }}-${{ hashFiles('rust/**/Cargo.toml', 'rust/Cargo.lock') }}
           restore-keys: rust-v1-${{ runner.os }}-${{ runner.arch }}-${{ github.job }}-${{ steps.rust.outputs.cachekey }}-
-      - name: Check workspace
+      - name: Check every target and feature
         run: cargo check --manifest-path rust/Cargo.toml --workspace --all-targets --all-features --locked
+      - name: Unit, doc, and SQLite tests
+        run: make test/rust/sqlite
 
-  backend-features:
+  sqlite-conformance:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 20
+    env:
+      RIVER_CONFORMANCE_REQUIRED: "1"
 
     steps:
       - uses: actions/checkout@v6
+      - uses: actions/setup-go@v6
+        with:
+          go-version: "1.27"
       - uses: dtolnay/rust-toolchain@stable
         id: rust
       - name: Cache Rust dependencies and build artifacts
@@ -109,29 +113,19 @@ jobs:
             rust/target
           key: rust-v1-${{ runner.os }}-${{ runner.arch }}-${{ github.job }}-${{ steps.rust.outputs.cachekey }}-${{ hashFiles('rust/**/Cargo.toml', 'rust/Cargo.lock') }}
           restore-keys: rust-v1-${{ runner.os }}-${{ runner.arch }}-${{ github.job }}-${{ steps.rust.outputs.cachekey }}-
-      - name: PostgreSQL defaults
-        run: cargo check --manifest-path rust/Cargo.toml -p riverqueue -p riverqueue-migrate -p riverqueue-cli --all-targets --locked
-      - name: SQLite only
-        run: cargo check --manifest-path rust/Cargo.toml -p riverqueue -p riverqueue-migrate -p riverqueue-cli --all-targets --no-default-features --features sqlite --locked
-      - name: PostgreSQL and SQLite
-        run: cargo check --manifest-path rust/Cargo.toml -p riverqueue -p riverqueue-migrate -p riverqueue-cli --all-targets --features sqlite --locked
-
-      - uses: actions/setup-go@v6
-        with:
-          go-version: "1.27"
       - name: SQLite storage and runtime conformance
         run: make test/conformance/sqlite
 
   postgres-conformance:
     runs-on: ubuntu-latest
-    timeout-minutes: 25
+    timeout-minutes: 45
     strategy:
       fail-fast: false
       matrix:
         postgres-version: [14, 15, 16, 17, 18]
     env:
       RIVER_CONFORMANCE_DATABASE_URL: postgres://postgres:postgres@localhost:5432/river_rust_test?sslmode=disable
-      RIVER_CONFORMANCE_PERFORMANCE: "1"
+      RIVER_CONFORMANCE_REQUIRED: "1"
       RIVER_CONFORMANCE_SOAK_DURATION: 10m
       RIVER_RUST_DATABASE_URL: postgres://postgres:postgres@localhost:5432/river_rust_test?sslmode=disable
 
@@ -167,11 +161,19 @@ jobs:
           restore-keys: rust-v1-${{ runner.os }}-${{ runner.arch }}-${{ github.job }}-${{ steps.rust.outputs.cachekey }}-
       - name: Create test database
         run: PGPASSWORD=postgres createdb -h localhost -U postgres river_rust_test
-      - name: Rust PostgreSQL suite
-        run: make test/rust/postgres
+      - name: Rust unit, SQLite, and PostgreSQL tests
+        run: make test/rust
       - name: Mixed correctness and chaos
         run: make test/conformance
-      - name: Release performance
-        run: make test/conformance/performance
+      - name: Insert-only profile
+        run: make test/conformance/insert-only
       - name: Ten-minute mixed soak
         run: make test/conformance/soak
+      # Shared runners are too noisy to gate every pull request on timing.
+      # This run reports regressions; the release candidate workflow gates.
+      - name: Release performance (advisory)
+        if: matrix.postgres-version == 18
+        continue-on-error: true
+        env:
+          RIVER_CONFORMANCE_PERFORMANCE: "1"
+        run: make test/conformance/performance

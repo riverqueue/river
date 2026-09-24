@@ -330,6 +330,23 @@ jobs:
       - name: Run lint
         run: make lint
 
+  conformance_artifacts:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-go@v6
+        with:
+          go-version: "1.27"
+
+      # Fails when a Go feature, migration, or protocol value changes
+      # without its conformance fixture, Rust mirror, or feature inventory
+      # classification being updated.
+      - name: Verify conformance fixtures, feature inventory, and Rust migrations
+        run: make verify/conformance verify/feature-inventory verify/rust-migrations
+
   migration_and_sqlc_verify:
     runs-on: ubuntu-latest
     timeout-minutes: 2
