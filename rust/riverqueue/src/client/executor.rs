@@ -34,7 +34,7 @@ pub(super) async fn execute_job(
         let worker_context = context.clone();
         let worker_inner = Arc::clone(&inner);
         let (timeout_sender, timeout_receiver) = oneshot::channel();
-        let mut worker_task = tokio::spawn(async move {
+        let mut worker_task = AbortOnDrop(tokio::spawn(async move {
             worker_context.resumable_validate().await?;
             for hook in &worker_inner.hooks {
                 hook.work_begin(&worker_context, &mut worker_row)
@@ -64,7 +64,7 @@ pub(super) async fn execute_job(
                     .map_err(boxed_extension_error)?;
             }
             result
-        });
+        }));
 
         // The worker reports its timeout after decoding the job's arguments,
         // following any hooks and middleware, so the timeout covers the work
@@ -84,21 +84,28 @@ pub(super) async fn execute_job(
         let mut cancellation_cause = None;
         let work_started = std::time::Instant::now();
         let result = tokio::select! {
-            result = &mut worker_task => worker_join_result(result),
+            result = &mut worker_task.0 => Some(worker_join_result(result)),
             () = cancellation.cancelled() => {
                 cancellation_cause = Some(if hard_cancel.is_cancelled() {
                     CancellationCause::Shutdown
                 } else {
                     CancellationCause::Remote
                 });
-                cancellation.cancel();
-                finish_cancelled_task(&mut worker_task, inner.job_stuck_threshold).await
+                finish_cancelled_task(&inner, &row, &mut worker_task.0, &hard_cancel).await
             }
             () = timeout_elapsed => {
                 cancellation_cause = Some(CancellationCause::Timeout);
                 cancellation.cancel();
-                finish_cancelled_task(&mut worker_task, inner.job_stuck_threshold).await
+                finish_cancelled_task(&inner, &row, &mut worker_task.0, &hard_cancel).await
             }
+        };
+        let Some(result) = result else {
+            // The task outlived its abort during shutdown and may still be
+            // running. Leave the row `running` for the rescuer rather than
+            // making it available to run concurrently with the original.
+            drop(worker_permit);
+            remove_running_attempt(&inner.running, row.id, &cancellation);
+            return;
         };
 
         // A cooperative worker can observe cancellation and return before this
@@ -114,9 +121,6 @@ pub(super) async fn execute_job(
 
         let run_duration = work_started.elapsed();
         let mut result = result;
-        let was_aborted = result
-            .as_ref()
-            .is_err_and(|failure| matches!(failure.kind, WorkerFailureKind::Aborted));
         if let Some(resumable_failure) = context.resumable_finish(result.is_err()).await
             && result.is_ok()
         {
@@ -164,12 +168,6 @@ pub(super) async fn execute_job(
                     error!(error = %handler_error, "River error handler failed");
                 }
             }
-        }
-        if was_aborted
-            && let Some(error_handler) = &inner.error_handler
-            && let Err(handler_error) = error_handler.handle_stuck(&row).await
-        {
-            error!(error = %handler_error, "River stuck handler failed");
         }
         let metadata_updates = context.metadata_updates();
         let completion = CompletionAttempt {
@@ -250,33 +248,70 @@ pub(super) enum CancellationCause {
     Timeout,
 }
 
+/// Aborts a spawned worker task when the executor that owns it is dropped, so
+/// a stopped client never leaves work running detached from its runtime.
+pub(super) struct AbortOnDrop<T>(pub(super) tokio::task::JoinHandle<T>);
+
+impl<T> Drop for AbortOnDrop<T> {
+    fn drop(&mut self) {
+        self.0.abort();
+    }
+}
+
+/// How long shutdown waits for an aborted task before abandoning it.
+const ABORT_GRACE_DURING_SHUTDOWN: Duration = Duration::from_millis(100);
+
+/// Waits for a cancelled job to return, then treats it as stuck.
+///
+/// After `job_stuck_threshold`, the stuck handler runs and the task is
+/// aborted. Tokio abort only takes effect at the task's next `.await`, so a
+/// task blocked in synchronous code keeps its worker slot until it actually
+/// ends: the queue never exceeds `max_workers`, and the job is not persisted
+/// (and so cannot be fetched again) while the original may still be running.
+/// During shutdown the executor gives up after a short grace period and
+/// returns `None`, leaving the row `running` for the rescuer.
 pub(super) async fn finish_cancelled_task(
+    inner: &ClientInner,
+    row: &JobRow,
     worker_task: &mut tokio::task::JoinHandle<Result<WorkOutcome, WorkError>>,
-    stuck_threshold: Duration,
-) -> WorkerResult {
+    hard_cancel: &CancellationToken,
+) -> Option<WorkerResult> {
+    let stuck_threshold = inner.job_stuck_threshold;
     if let Ok(result) = tokio::time::timeout(stuck_threshold, &mut *worker_task).await {
-        return worker_join_result(result);
+        return Some(worker_join_result(result));
     }
     warn!(
         ?stuck_threshold,
-        "River job remained active after cancellation; aborting task"
+        "River job remained active after cancellation; treating it as stuck and aborting its task"
     );
+    if let Some(error_handler) = &inner.error_handler
+        && let Err(handler_error) = error_handler.handle_stuck(row).await
+    {
+        error!(error = %handler_error, "River stuck handler failed");
+    }
     worker_task.abort();
-    match tokio::time::timeout(Duration::from_millis(100), &mut *worker_task).await {
-        Ok(Err(join_error)) if join_error.is_cancelled() => Err(WorkerFailure {
+    let result = tokio::select! {
+        result = &mut *worker_task => Some(result),
+        () = async {
+            hard_cancel.cancelled().await;
+            tokio::time::sleep(ABORT_GRACE_DURING_SHUTDOWN).await;
+        } => None,
+    };
+    let Some(result) = result else {
+        error!(
+            "River job remained stuck after its task was aborted during shutdown; leaving it running for the rescuer"
+        );
+        return None;
+    };
+    Some(match result {
+        Err(join_error) if join_error.is_cancelled() => Err(WorkerFailure {
             error: "job aborted after ignoring cancellation".to_owned(),
             kind: WorkerFailureKind::Aborted,
             source: None,
             trace: String::new(),
         }),
-        Ok(result) => worker_join_result(result),
-        Err(_) => Err(WorkerFailure {
-            error: "job remained stuck after Tokio task abort".to_owned(),
-            kind: WorkerFailureKind::Aborted,
-            source: None,
-            trace: String::new(),
-        }),
-    }
+        result => worker_join_result(result),
+    })
 }
 
 /// Whether a failure during hard shutdown is the job stopping because the
