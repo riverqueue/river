@@ -1,6 +1,7 @@
 package harness_test
 
 const (
+	scenarioOwnerMaintenance            = "TestMaintenanceConformance"
 	scenarioOwnerMixed                  = "TestMixedConformance"
 	scenarioOwnerPerformance            = "TestPerformanceGate"
 	scenarioOwnerResilience             = "TestResilienceConformance"
@@ -35,6 +36,7 @@ var scenarioRegistry = map[string]scenarioBinding{ //nolint:gochecknoglobals // 
 	"completion_transient_failure_retry":                                   {owner: scenarioOwnerResilience, tier: "chaos"},
 	"cooperative_remote_cancellation":                                      {owner: scenarioOwnerMixed, tier: "runtime"},
 	"copy_from_both_implementations":                                       {owner: scenarioOwnerMixed, tier: "storage"},
+	"cron_schedule_goldens":                                                {owner: scenarioOwnerMaintenance, tier: "codec"},
 	"cross_language_unique_conflict":                                       {owner: scenarioOwnerMixed, tier: "codec"},
 	"custom_schema_candidate_migrate_reference_work":                       {owner: scenarioOwnerMixed, tier: "mixed"},
 	"custom_schema_reference_migrate_candidate_work":                       {owner: scenarioOwnerMixed, tier: "mixed"},
@@ -51,8 +53,16 @@ var scenarioRegistry = map[string]scenarioBinding{ //nolint:gochecknoglobals // 
 	"historical_migration_down_up":                                         {owner: scenarioOwnerMixed, tier: "storage"},
 	"ignored_cancellation_hard_abort":                                      {owner: scenarioOwnerMixed, tier: "chaos"},
 	"job_row_round_trip_all_fields":                                        {owner: scenarioOwnerMixed, tier: "codec"},
+	"leadership_renewal_under_slow_maintenance":                            {owner: scenarioOwnerMaintenance, tier: "runtime"},
+	"leadership_same_client_id_term_replacement":                           {owner: scenarioOwnerMaintenance, tier: "runtime"},
 	"listener_backend_disconnect_reconnect":                                {owner: scenarioOwnerMixed, tier: "chaos"},
 	"lost_notification_poll_recovery":                                      {owner: scenarioOwnerMixed, tier: "chaos"},
+	"maintenance_job_cleaner_retention":                                    {owner: scenarioOwnerMaintenance, tier: "runtime"},
+	"maintenance_queue_cleaner_keeps_active_queues":                        {owner: scenarioOwnerMaintenance, tier: "runtime"},
+	"maintenance_reindexer_skips_artifacts":                                {owner: scenarioOwnerMaintenance, tier: "runtime"},
+	"maintenance_rescuer_full_batch_of_unexpired_jobs":                     {owner: scenarioOwnerMaintenance, tier: "runtime"},
+	"maintenance_rescuer_stale_selection":                                  {owner: scenarioOwnerMaintenance, tier: "runtime"},
+	"migration_mixed_case_schema":                                          {owner: scenarioOwnerMaintenance, tier: "storage"},
 	"mixed_connection_pool_bound":                                          {owner: scenarioOwnerSoak, tier: "performance"},
 	"mixed_leader_failover_both_directions":                                {owner: scenarioOwnerMixed, tier: "mixed"},
 	"mixed_request_resign_terms":                                           {owner: scenarioOwnerMixed, tier: "mixed"},
@@ -64,6 +74,7 @@ var scenarioRegistry = map[string]scenarioBinding{ //nolint:gochecknoglobals // 
 	"pause_resume_notification":                                            {owner: scenarioOwnerMixed, tier: "mixed"},
 	"periodic_run_on_start":                                                {owner: scenarioOwnerMixed, tier: "runtime"},
 	"process_kill_restart_and_rescue":                                      {owner: scenarioOwnerMixed, tier: "chaos"},
+	"queue_names_and_unknown_queue_control":                                {owner: scenarioOwnerMaintenance, tier: "storage"},
 	"reference_insert_candidate_work":                                      {owner: scenarioOwnerMixed, tier: "mixed"},
 	"reference_migrator_candidate_runtime":                                 {owner: scenarioOwnerMixed, tier: "storage"},
 	"refetched_attempt_cancellation":                                       {owner: scenarioOwnerMixed, tier: "runtime"},
@@ -78,7 +89,6 @@ var scenarioRegistry = map[string]scenarioBinding{ //nolint:gochecknoglobals // 
 	"shutdown_after_cancel_attempt":                                        {owner: scenarioOwnerResilience, tier: "runtime"},
 	"single_implementation_worker_outcomes":                                {owner: scenarioOwnerMixed, tier: "runtime"},
 	"snooze_once_metadata_transition":                                      {owner: scenarioOwnerMixed, tier: "runtime"},
-	"timeout_cancellation":                                                 {owner: scenarioOwnerMixed, tier: "runtime"},
 	"three_engine_competition":                                             {owner: scenarioOwnerThreeEngine, tier: "mixed"},
 	"three_engine_cross_engine_process_kill_rescue_failover":               {owner: scenarioOwnerThreeEngine, tier: "chaos"},
 	"three_engine_directed_javascript_rust_work_notification_cancellation": {owner: scenarioOwnerThreeEngine, tier: "mixed"},
@@ -88,6 +98,7 @@ var scenarioRegistry = map[string]scenarioBinding{ //nolint:gochecknoglobals // 
 	"three_engine_resource_bound":                                          {owner: scenarioOwnerThreeEngine, tier: "performance"},
 	"three_engine_resumable_cursor":                                        {owner: scenarioOwnerThreeEngine, tier: "mixed"},
 	"three_engine_soak":                                                    {owner: scenarioOwnerThreeEngineSoak, tier: "performance"},
+	"timeout_cancellation":                                                 {owner: scenarioOwnerMixed, tier: "runtime"},
 	"transaction_abort_rollback_visibility":                                {owner: scenarioOwnerMixed, tier: "storage"},
 	"transaction_commit_visibility":                                        {owner: scenarioOwnerMixed, tier: "storage"},
 	"transaction_rollback_visibility":                                      {owner: scenarioOwnerMixed, tier: "storage"},
