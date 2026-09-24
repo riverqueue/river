@@ -130,6 +130,7 @@ var capabilities = []string{ //nolint:gochecknoglobals
 	"reset",
 	"resumable_jobs",
 	"retry",
+	"scheduler",
 	"subscriptions",
 	"transactions",
 	"unique_jobs",

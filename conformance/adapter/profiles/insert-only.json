@@ -1,0 +1,24 @@
+{
+  "$schema": "../../schema/adapter-profile.schema.json",
+  "backend": "postgres",
+  "capabilities": [
+    "insert",
+    "lifecycle",
+    "transactions",
+    "unique_jobs"
+  ],
+  "description": "Insert-only clients that enqueue jobs, alone or in batches and caller-managed transactions, with Go-compatible unique keys, for other implementations to work.",
+  "methods": [
+    "handshake",
+    "insert",
+    "insert_many",
+    "tx_begin",
+    "tx_commit",
+    "tx_insert",
+    "tx_insert_many",
+    "tx_rollback",
+    "unique_key"
+  ],
+  "name": "insert-only-v1",
+  "protocol_revision": 1
+}

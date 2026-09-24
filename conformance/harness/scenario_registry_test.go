@@ -1,6 +1,7 @@
 package harness_test
 
 const (
+	scenarioOwnerInsertOnly             = "TestInsertOnlyConformance"
 	scenarioOwnerMaintenance            = "TestMaintenanceConformance"
 	scenarioOwnerMixed                  = "TestMixedConformance"
 	scenarioOwnerMultiEngine            = "TestMultiEngineConformance"
@@ -124,6 +125,13 @@ var scenarioRegistry = map[string]scenarioBinding{ //nolint:gochecknoglobals // 
 	"typed_batch_insertion":                                          {owner: scenarioOwnerMixed, tier: "storage"},
 	"unique_hash_goldens":                                            {owner: scenarioOwnerMixed, tier: "codec"},
 	"unsafe_int64_job_ids_rpc_list_cursors":                          {owner: scenarioOwnerMixed, tier: "codec"},
+	"insert_only_insert_notification":                                {owner: scenarioOwnerInsertOnly, profile: "insert-only-v1", tier: "mixed"},
+	"insert_only_insert_reference_work":                              {owner: scenarioOwnerInsertOnly, profile: "insert-only-v1", tier: "mixed"},
+	"insert_only_profile_handshake":                                  {owner: scenarioOwnerInsertOnly, profile: "insert-only-v1", tier: "codec"},
+	"insert_only_transactional_insert":                               {owner: scenarioOwnerInsertOnly, profile: "insert-only-v1", tier: "storage"},
+	"insert_only_typed_batch":                                        {owner: scenarioOwnerInsertOnly, profile: "insert-only-v1", tier: "storage"},
+	"insert_only_unique_insert":                                      {owner: scenarioOwnerInsertOnly, profile: "insert-only-v1", tier: "codec"},
+	"multi_engine_sqlite_candidate_pairs":                            {owner: scenarioOwnerMultiEngineSQLite, profile: "sqlite-runtime-v1", tier: "mixed"},
 	"sqlite_batch_atomicity":                                         {owner: scenarioOwnerSQLiteStorage, profile: "portable-storage-v1", tier: "storage"},
 	"sqlite_deterministic_retry_unique":                              {owner: scenarioOwnerSQLiteStorage, profile: "portable-storage-v1", tier: "codec"},
 	"sqlite_insert_get_unique_cross_language":                        {owner: scenarioOwnerSQLiteStorage, profile: "portable-storage-v1", tier: "mixed"},

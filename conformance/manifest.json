@@ -22,6 +22,7 @@
     "reset": "complete",
     "resumable_jobs": "complete",
     "retry": "complete",
+    "scheduler": "complete",
     "subscriber_lag": "planned",
     "subscriptions": "complete",
     "transactions": "complete",

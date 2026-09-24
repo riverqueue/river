@@ -1,0 +1,12 @@
+{
+  "$schema": "../schema/scenarios.schema.json",
+  "protocol_revision": 1,
+  "scenarios": [
+    { "evidence": [{ "path": "conformance/harness/coordination_scenarios_test.go", "symbol": "verifyInsertNotificationWakeup" }], "name": "insert_only_insert_notification", "tier": "mixed" },
+    { "evidence": [{ "path": "conformance/harness/insert_only_test.go", "symbol": "verifyInsertOnlyInsert" }], "name": "insert_only_insert_reference_work", "tier": "mixed" },
+    { "evidence": [{ "path": "conformance/harness/insert_only_test.go", "symbol": "verifyInsertOnlyHandshake" }], "name": "insert_only_profile_handshake", "tier": "codec" },
+    { "evidence": [{ "path": "conformance/harness/insert_only_test.go", "symbol": "verifyInsertOnlyTransactions" }], "name": "insert_only_transactional_insert", "tier": "storage" },
+    { "evidence": [{ "path": "conformance/harness/insert_only_test.go", "symbol": "verifyInsertOnlyBatch" }], "name": "insert_only_typed_batch", "tier": "storage" },
+    { "evidence": [{ "path": "conformance/harness/insert_only_test.go", "symbol": "verifyInsertOnlyUnique" }], "name": "insert_only_unique_insert", "tier": "codec" }
+  ]
+}

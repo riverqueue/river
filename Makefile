@@ -106,6 +106,10 @@ test/rust/postgres: ## Run all Rust tests, including PostgreSQL integration test
 test/conformance: ## Run Go and configured candidate conformance (requires database URL)
 	go test -tags riverconformance ./conformance/harness -run '^Test(Maintenance|Mixed|Resilience)Conformance$$' -count=1 -timeout 30m
 
+.PHONY: test/conformance/insert-only
+test/conformance/insert-only: ## Run the insert-only-v1 profile against the configured candidate (requires database URL)
+	go test -tags riverconformance ./conformance/harness -run '^TestInsertOnlyConformance$$' -count=1
+
 .PHONY: test/conformance/sqlite
 test/conformance/sqlite: ## Run candidate-neutral SQLite storage and runtime conformance
 	go test -tags riverconformance ./conformance/harness -run '^Test(MixedSQLite|MixedSQLiteRuntime|ResilienceSQLite)Conformance$$' -count=1

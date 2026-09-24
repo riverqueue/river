@@ -95,6 +95,25 @@ lifecycle behavior. PostgreSQL-specific schemas,
 reindexing, rescuer/cleaner maintenance, performance, and soak remain outside
 that profile.
 
+## Insert-only clients
+
+The `insert-only-v1` profile (`profiles/insert-only.json`) is for clients that
+only enqueue jobs, such as producer libraries in languages without a River
+worker runtime. Its methods are `handshake`, `insert`, `insert_many`,
+`tx_begin`, `tx_insert`, `tx_insert_many`, `tx_commit`, `tx_rollback`, and
+`unique_key`, served over PostgreSQL with `RIVER_CONFORMANCE_PROFILE` set to
+`insert-only-v1`. The Go reference migrates, observes, and works every job, so
+the adapter needs no migrator, reader, or runtime. `TestInsertOnlyConformance`
+compares each insert with the reference's own insert field by field, checks
+batch order and duplicate reporting, requires transactional inserts to become
+visible and notify only on commit, checks unique keys against the goldens and
+against reference inserts in both orders, and requires a candidate insert to
+wake a reference worker. A descriptor opts in by listing `insert-only-v1` in
+`profiles`; full implementations can serve it as a subset.
+
+`profiles/postgres-full.json` names the complete PostgreSQL profile: every
+method in `contract.json` and every complete manifest capability.
+
 ## Params, results, and errors
 
 `contract.json` gives every method a `params` and a `result` JSON Schema
