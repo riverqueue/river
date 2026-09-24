@@ -49,6 +49,15 @@ pub use queue::{Queue, QueueListParams};
 pub use riverqueue_internal as internal;
 pub(crate) use riverqueue_internal::SchemaName;
 pub use riverqueue_macros::JobArgs;
+/// The SQLx version River's pools and transactions come from.
+///
+/// River accepts SQLx pools and transactions directly, so applications must
+/// use the same SQLx major version. Depend on SQLx through this re-export, or
+/// pin the same version, to avoid mismatched `PgPool`/`SqlitePool` types. River
+/// doesn't choose a TLS implementation; enable one of SQLx's TLS features, such
+/// as `tls-rustls` or `tls-native-tls`, in your own dependency on SQLx if your
+/// database connections use TLS.
+pub use sqlx;
 pub use unique::{UniqueKeyInput, build_unique_key};
 pub use worker::{WorkContext, WorkOutcome, Worker, WorkerRegistry, WorkerTimeout};
 

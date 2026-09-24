@@ -64,7 +64,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 }
 ```
 
-Run the matching `riverqueue-migrate` migrations before starting a producer or
+Run River's migrations (with `riverqueue-migrate` or `riverqueue migrate-up`) before starting a producer or
 worker. `Client::start` must run inside a Tokio runtime. Keep its `RunHandle`
 and await `shutdown`, `shutdown_now`, or `wait`; dropping it requests immediate
 cancellation, while `detach` explicitly leaves the runtime unsupervised.
@@ -221,11 +221,11 @@ crate's rustdoc and examples.
 
 ## Benchmarking
 
-Installing this crate also provides `riverqueue bench`, a destructive
-development-database benchmark analogous to Go's `river bench`. It truncates
-the selected River job table and reports periodic throughput plus final
-throughput and p95 latency. Run `riverqueue bench --help` and use a disposable
-database.
+The [`riverqueue-cli`](https://docs.rs/riverqueue-cli) crate provides
+`riverqueue bench`, a destructive development-database benchmark analogous to
+Go's `river bench`. It truncates the selected River job table and reports
+periodic throughput plus final throughput and p95 latency. Run
+`riverqueue bench --help` and use a disposable database.
 
 [`Client::start`]: crate::Client::start
 [`Worker`]: crate::Worker

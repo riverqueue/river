@@ -1,7 +1,8 @@
 # riverqueue-migrate
 
-River's canonical PostgreSQL and SQLite migration lines for Rust, including
-the `riverqueue-migrate` command-line program. Migration contents are mirrored
+River's canonical PostgreSQL and SQLite migration lines for Rust. The
+`riverqueue` command-line program from the `riverqueue-cli` crate runs the same
+migrations from a shell. Migration contents are mirrored
 from River Go; both backends are verified byte-for-byte and by hashes in the
 shared compatibility artifacts.
 

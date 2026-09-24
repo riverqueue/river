@@ -110,11 +110,11 @@ jobs:
           key: rust-v1-${{ runner.os }}-${{ runner.arch }}-${{ github.job }}-${{ steps.rust.outputs.cachekey }}-${{ hashFiles('rust/**/Cargo.toml', 'rust/Cargo.lock') }}
           restore-keys: rust-v1-${{ runner.os }}-${{ runner.arch }}-${{ github.job }}-${{ steps.rust.outputs.cachekey }}-
       - name: PostgreSQL defaults
-        run: cargo check --manifest-path rust/Cargo.toml -p riverqueue -p riverqueue-migrate --all-targets --locked
+        run: cargo check --manifest-path rust/Cargo.toml -p riverqueue -p riverqueue-migrate -p riverqueue-cli --all-targets --locked
       - name: SQLite only
-        run: cargo check --manifest-path rust/Cargo.toml -p riverqueue -p riverqueue-migrate --all-targets --no-default-features --features sqlite --locked
+        run: cargo check --manifest-path rust/Cargo.toml -p riverqueue -p riverqueue-migrate -p riverqueue-cli --all-targets --no-default-features --features sqlite --locked
       - name: PostgreSQL and SQLite
-        run: cargo check --manifest-path rust/Cargo.toml -p riverqueue -p riverqueue-migrate --all-targets --features sqlite --locked
+        run: cargo check --manifest-path rust/Cargo.toml -p riverqueue -p riverqueue-migrate -p riverqueue-cli --all-targets --features sqlite --locked
 
       - uses: actions/setup-go@v6
         with:
