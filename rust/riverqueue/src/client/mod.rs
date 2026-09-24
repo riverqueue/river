@@ -20,9 +20,11 @@ pub use self::extension::ExtensionClient;
 pub use self::insert::{
     InsertBatchRequest, InsertManyFastRequest, InsertManyItem, InsertManyRequest, InsertRequest,
 };
+#[cfg(feature = "sqlite")]
+pub(crate) use self::record::FieldErrors;
+pub(crate) use self::record::{DecodedJob, UndecodableJob, saturating_i16, tolerant_row};
 #[cfg(feature = "postgres")]
 pub(crate) use self::record::{JobRecord, decode_job_row, job_projection};
-pub(crate) use self::record::{UndecodableJob, saturating_i16};
 pub use self::run::{RunHandle, Stopper};
 #[allow(clippy::wildcard_imports, unused_imports)]
 use self::{
@@ -54,7 +56,7 @@ use sqlx::AssertSqlSafe;
 use sqlx::SqlitePool;
 #[cfg(feature = "postgres")]
 use sqlx::{
-    Executor, FromRow, PgConnection, PgPool, Postgres, Row,
+    Executor, PgConnection, PgPool, Postgres,
     postgres::{PgListener, PgRow},
     types::Json,
 };

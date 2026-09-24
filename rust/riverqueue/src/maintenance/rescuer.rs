@@ -12,7 +12,7 @@ use crate::__private::{
 };
 
 #[cfg(feature = "postgres")]
-use crate::client::{JobRecord, job_projection};
+use crate::client::{JobRecord, job_projection, tolerant_row};
 #[cfg(feature = "sqlite")]
 use crate::database::sqlite;
 use crate::{AttemptError, Error, JobRow, JobState, WorkerTimeout, client::ClientInner};
@@ -282,10 +282,13 @@ async fn rescue_batch_postgres(
             .await?
         }
     };
+    // Like River Go's `JobGetStuck`, a row that can't be fully decoded is
+    // still returned with its undecodable fields left empty, so a job
+    // stranded by such a row can be rescued.
     let rows = records
         .into_iter()
-        .map(JobRecord::into_job_row)
-        .collect::<Result<Vec<_>, _>>()?;
+        .filter_map(|record| tolerant_row(record.decode()))
+        .collect::<Vec<_>>();
     let batch = Batch {
         last_id: rows.last().map(|row| row.id),
         selected: rows.len(),

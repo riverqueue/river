@@ -431,10 +431,22 @@ pub(super) async fn run_queue(
         };
         last_fetch = tokio::time::Instant::now();
         let FetchedJobs { rows, undecodable } = rows;
-        for job in undecodable {
-            record_undecodable_job(&inner, &completion_sender, job).await;
-        }
-        for row in rows {
+        // Like River Go, a claimed job whose row couldn't be fully decoded
+        // gets an executor that fails its attempt with the decode error
+        // instead of working it, so it's retried or discarded rather than
+        // left running.
+        let claimed = rows.into_iter().map(|row| (row, None)).chain(
+            undecodable
+                .into_iter()
+                .filter_map(|UndecodableJob { error, row }| {
+                    let Some(row) = row else {
+                        error!(%error, "claimed River job row couldn't be identified; leaving it for the rescuer");
+                        return None;
+                    };
+                    Some((*row, Some(error)))
+                }),
+        );
+        for (row, decode_error) in claimed {
             let permit = Arc::clone(&permits)
                 .acquire_owned()
                 .await
@@ -453,6 +465,7 @@ pub(super) async fn run_queue(
                 execute_job(
                     inner,
                     row,
+                    decode_error,
                     hard_cancel,
                     cancellation,
                     completion_sender,
@@ -515,7 +528,7 @@ fn extension_fetch_params(inner: &ClientInner, queue: &str, maximum: i32) -> Fet
 async fn finish_fetch(
     inner: &ClientInner,
     fetch_started: Option<std::time::Instant>,
-    rows: Vec<Result<JobRow, UndecodableJob>>,
+    rows: Vec<DecodedJob>,
 ) -> FetchedJobs {
     let fetched = FetchedJobs::from_decoded(rows);
     if let Some(fetch_started) = fetch_started {
@@ -731,8 +744,8 @@ where
 }
 
 /// Jobs claimed by one fetch. Claims commit before rows are decoded, so rows
-/// that cannot be decoded are returned separately for failure recording
-/// instead of failing the whole fetch and stranding every claimed job.
+/// that can't be fully decoded are returned separately to have their attempts
+/// failed, instead of failing the whole fetch and stranding every claimed job.
 #[derive(Default)]
 pub(super) struct FetchedJobs {
     pub(super) rows: Vec<JobRow>,
@@ -740,7 +753,7 @@ pub(super) struct FetchedJobs {
 }
 
 impl FetchedJobs {
-    pub(super) fn from_decoded(decoded: Vec<Result<JobRow, UndecodableJob>>) -> Self {
+    pub(super) fn from_decoded(decoded: Vec<DecodedJob>) -> Self {
         let mut fetched = Self::default();
         for row in decoded {
             match row {

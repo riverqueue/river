@@ -510,15 +510,7 @@ pub(super) async fn persist_completion_batch(
                 .await
                 .map_err(sqlite_backend_error)?,
             };
-            match row {
-                Some(Ok(row)) => rows.push(row),
-                Some(Err(job)) => error!(
-                    job_id = update.job_id,
-                    error = %job.error,
-                    "River job row persisted by completion could not be decoded; skipping its event"
-                ),
-                None => {}
-            }
+            rows.extend(row.and_then(tolerant_row));
         }
         let interrupted_queues = rows
             .iter()
@@ -665,23 +657,15 @@ pub(super) async fn persist_completion_batch(
     ))
 }
 
-/// Decodes rows returned by a completion, skipping (and logging) any row that
-/// cannot be decoded since its state is already persisted.
+/// Decodes rows returned by a completion. Like River Go's
+/// `JobSetStateIfRunningMany`, a row that can't be fully decoded is still
+/// returned with its undecodable fields left empty, so its state change is
+/// reported like any other.
 #[cfg(feature = "postgres")]
 fn decode_completion_rows(records: &[PgRow]) -> Vec<JobRow> {
     records
         .iter()
-        .filter_map(|row| match decode_job_row(row) {
-            Ok(row) => Some(row),
-            Err(job) => {
-                error!(
-                    job_id = job.id,
-                    error = %job.error,
-                    "River job row persisted by completion could not be decoded; skipping its event"
-                );
-                None
-            }
-        })
+        .filter_map(|row| tolerant_row(decode_job_row(row)))
         .collect()
 }
 

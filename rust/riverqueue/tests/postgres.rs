@@ -795,7 +795,7 @@ async fn extension_claim_returns_ordered_rows_and_rolls_back_decode_errors() {
         .execute(&pool)
         .await
         .unwrap();
-    let error = ExtensionClient::new(&client)
+    let claimed = ExtensionClient::new(&client)
         .claim_jobs(ExtensionClaimParams {
             excluded_job_id: 0,
             kind: FailArgs::KIND.to_owned(),
@@ -804,9 +804,13 @@ async fn extension_claim_returns_ordered_rows_and_rolls_back_decode_errors() {
             metadata_updates: serde_json::Map::new(),
             queue: "default".to_owned(),
         })
-        .await
-        .unwrap_err();
+        .await;
+    let error = claimed.unwrap_err();
     assert!(matches!(error, riverqueue::Error::InvalidJob(_)), "{error}");
+    assert!(
+        error.to_string().contains("error unmarshaling `tags`"),
+        "{error}"
+    );
     let state_sql = format!("SELECT state::text, attempt FROM {table} WHERE id = $1");
     let (state, attempt): (String, i16) = sqlx::query_as(AssertSqlSafe(state_sql))
         .bind(invalid.job.row.id)

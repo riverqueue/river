@@ -13,9 +13,11 @@ use std::{
     time::Duration,
 };
 
+use chrono::{DateTime, Utc};
 use riverqueue::{
-    AttemptError, Client, InsertOpts, Job, JobArgs, JobState, MaintenanceConfig, QueueConfig,
-    UniqueOpts, WorkCancelled, WorkContext, WorkOutcome, WorkerRegistry,
+    AttemptError, BoxError, Client, ErrorHandler, ErrorHandlerDecision, EventKind, InsertOpts, Job,
+    JobArgs, JobEventKind, JobRow, JobState, MaintenanceConfig, QueueConfig, RetryPolicy,
+    UniqueOpts, WorkCancelled, WorkContext, WorkOutcome, WorkResult, WorkerRegistry,
 };
 use riverqueue_migrate::SqliteMigrator;
 use serde::{Deserialize, Serialize};
@@ -206,17 +208,68 @@ async fn job_state(pool: &SqlitePool, id: i64) -> String {
         .unwrap()
 }
 
+/// Records every failed attempt the error handler sees.
+#[derive(Clone, Default)]
+struct RecordingErrorHandler(Arc<std::sync::Mutex<Vec<(JobRow, String)>>>);
+
+#[allow(
+    clippy::unused_async_trait_impl,
+    reason = "these extensions only record state synchronously"
+)]
+impl ErrorHandler for RecordingErrorHandler {
+    async fn handle_error(
+        &self,
+        _context: &WorkContext,
+        job: &JobRow,
+        result: &WorkResult,
+    ) -> Result<ErrorHandlerDecision, BoxError> {
+        let error = match result {
+            WorkResult::Failed(error) => error.to_string(),
+            other => format!("{other:?}"),
+        };
+        self.0.lock().unwrap().push((job.clone(), error));
+        Ok(ErrorHandlerDecision::Continue)
+    }
+}
+
+/// Schedules every retry an hour out so a failed job stays `retryable`.
+struct RetryAnHourLater;
+
+impl RetryPolicy for RetryAnHourLater {
+    fn next_retry(&self, _job: &JobRow, _error: &str, _now: DateTime<Utc>) -> Duration {
+        Duration::from_hours(1)
+    }
+}
+
+async fn set_json_column(pool: &SqlitePool, id: i64, column: &str, json: &str) {
+    sqlx::query(sqlx::AssertSqlSafe(format!(
+        "UPDATE river_job SET {column} = jsonb(?) WHERE id = ?"
+    )))
+    .bind(json)
+    .bind(id)
+    .execute(pool)
+    .await
+    .unwrap();
+}
+
 #[tokio::test(flavor = "multi_thread")]
+#[allow(clippy::too_many_lines)]
 async fn claimed_rows_decode_individually_and_accept_go_integer_ranges() {
     let database = TestDatabase::new(Duration::from_secs(5)).await;
+    let error_handler = RecordingErrorHandler::default();
     let client = Client::builder(database.pool.clone())
         .id("sqlite-resilience-decode")
         .maintenance(
             MaintenanceConfig::default().with_scheduler_interval(Duration::from_millis(50)),
         )
+        .error_handler(error_handler.clone())
+        .retry_policy(RetryAnHourLater)
         .workers(completing_workers())
         .queue("default", fast_queue())
         .build()
+        .unwrap();
+    let mut events = client
+        .subscribe(&[EventKind::JobCompleted, EventKind::JobFailed])
         .unwrap();
 
     // River Go stores native integers on SQLite, so `max_attempts` can exceed
@@ -230,63 +283,69 @@ async fn claimed_rows_decode_individually_and_accept_go_integer_ranges() {
     // Attempt errors in a shape River doesn't write decode leniently like
     // River Go's, so the job is still worked.
     let odd_errors = client.insert(ResilienceArgs {}).await.unwrap();
-    sqlx::query(
-        r#"UPDATE river_job SET errors = jsonb('[{"attempt": "1", "error": {"message": "boom"}}, 42]') WHERE id = ?"#,
+    set_json_column(
+        &database.pool,
+        odd_errors.job.row.id,
+        "errors",
+        r#"[{"attempt": "1", "error": {"message": "boom"}}, 42]"#,
     )
-    .bind(odd_errors.job.row.id)
-    .execute(&database.pool)
-    .await
-    .unwrap();
-    // A row whose tags are not an array cannot become a `JobRow`. Claiming it
-    // with the others must record a failure for it alone.
-    let malformed = client
+    .await;
+    // A row whose tags aren't an array can't become a `JobRow`. Claimed with
+    // the others, such a job isn't worked, and its attempt fails like any
+    // other: retried with the client's retry policy, or discarded at its
+    // maximum attempts. An `errors` value that isn't an array is wrapped in
+    // one so the attempt error can still be appended.
+    let malformed_retried = client.insert(ResilienceArgs {}).await.unwrap();
+    set_json_column(
+        &database.pool,
+        malformed_retried.job.row.id,
+        "errors",
+        r#"{"not":"an array"}"#,
+    )
+    .await;
+    let malformed_discarded = client
         .insert(ResilienceArgs {})
         .opts(InsertOpts::default().with_max_attempts(1))
         .await
         .unwrap();
-    sqlx::query("UPDATE river_job SET tags = jsonb('{}') WHERE id = ?")
-        .bind(malformed.job.row.id)
-        .execute(&database.pool)
-        .await
-        .unwrap();
+    let malformed_ids = [malformed_retried.job.row.id, malformed_discarded.job.row.id];
+    for id in malformed_ids {
+        set_json_column(&database.pool, id, "tags", r#"{"not":"an array"}"#).await;
+    }
     let ordinary = client.insert(ResilienceArgs {}).await.unwrap();
+    let decodable_ids = [wide.job.row.id, odd_errors.job.row.id, ordinary.job.row.id];
 
     let mut run = client.start().unwrap();
     run.wait_ready().await.unwrap();
-    for id in [wide.job.row.id, odd_errors.job.row.id, ordinary.job.row.id] {
-        wait_until(
-            Duration::from_secs(10),
-            "decodable job completion",
-            || async { job_state(&database.pool, id).await == "completed" },
-        )
-        .await;
+    let mut events_by_id = std::collections::HashMap::new();
+    while events_by_id.len() < decodable_ids.len() + malformed_ids.len() {
+        let event = tokio::time::timeout(Duration::from_secs(10), events.recv())
+            .await
+            .expect("job events")
+            .unwrap();
+        let event = event.as_job().unwrap().clone();
+        events_by_id.insert(event.job.id, event);
     }
-    wait_until(Duration::from_secs(10), "malformed job failure", || async {
-        job_state(&database.pool, malformed.job.row.id).await == "discarded"
-    })
-    .await;
     run.shutdown().await.unwrap();
 
-    let (max_attempts, errors): (i64, String) =
+    for id in decodable_ids {
+        assert_eq!(events_by_id[&id].kind, JobEventKind::Completed);
+    }
+    let (max_attempts, errors): (i64, Option<String>) =
         sqlx::query_as("SELECT max_attempts, json(errors) FROM river_job WHERE id = ?")
             .bind(wide.job.row.id)
             .fetch_one(&database.pool)
             .await
-            .map(|(max_attempts, errors): (i64, Option<String>)| {
-                (max_attempts, errors.unwrap_or_default())
-            })
             .unwrap();
     assert_eq!(
         max_attempts, 40_000,
         "decoding must not rewrite the stored value"
     );
-    assert!(errors.is_empty());
+    assert!(errors.is_none());
     let wide = client.job_get(wide.job.row.id).await.unwrap();
-    assert_eq!(wide.state, JobState::Completed);
     assert_eq!(wide.max_attempts, i16::MAX);
 
     let odd_errors = client.job_get(odd_errors.job.row.id).await.unwrap();
-    assert_eq!(odd_errors.state, JobState::Completed);
     let zero_time = "0001-01-01T00:00:00Z".parse().unwrap();
     assert_eq!(
         odd_errors.errors,
@@ -296,23 +355,113 @@ async fn claimed_rows_decode_individually_and_accept_go_integer_ranges() {
         ]
     );
 
-    let (attempt, errors): (i64, String) =
-        sqlx::query_as("SELECT attempt, json(errors) FROM river_job WHERE id = ?")
-            .bind(malformed.job.row.id)
-            .fetch_one(&database.pool)
-            .await
-            .unwrap();
-    assert_eq!(attempt, 1);
-    let errors: Vec<serde_json::Value> = serde_json::from_str(&errors).unwrap();
-    assert_eq!(errors.len(), 1);
-    assert_eq!(errors[0]["attempt"], 1);
-    assert!(
-        errors[0]["error"]
-            .as_str()
-            .unwrap()
-            .starts_with("River could not decode the job row"),
-        "{errors:?}"
-    );
+    // Failed events and the error handler carry the fields that could be
+    // decoded, with the others left empty.
+    let handled = error_handler.0.lock().unwrap().clone();
+    assert_eq!(handled.len(), malformed_ids.len());
+    for (id, state) in [
+        (malformed_retried.job.row.id, JobState::Retryable),
+        (malformed_discarded.job.row.id, JobState::Discarded),
+    ] {
+        let event = &events_by_id[&id];
+        assert_eq!(event.kind, JobEventKind::Failed);
+        assert_eq!(event.job.state, state);
+        assert_eq!(event.job.kind, ResilienceArgs::KIND);
+        assert!(event.job.tags.is_empty());
+
+        let (job, error) = handled.iter().find(|(job, _)| job.id == id).unwrap();
+        assert_eq!(job.attempt, 1);
+        assert!(job.tags.is_empty());
+        assert!(
+            error.starts_with("job row couldn't be decoded: "),
+            "{error}"
+        );
+        assert!(error.contains("error unmarshaling `tags`: "), "{error}");
+
+        // The attempt error is appended without rewriting the undecodable
+        // tags, and the undecodable row still can't be read.
+        assert!(client.job_get(id).await.is_err());
+        let (stored_state, attempt, errors, tags, scheduled_at): (
+            String,
+            i64,
+            String,
+            String,
+            DateTime<Utc>,
+        ) = sqlx::query_as(
+            "SELECT state, attempt, json(errors), json(tags), scheduled_at FROM river_job WHERE id = ?",
+        )
+        .bind(id)
+        .fetch_one(&database.pool)
+        .await
+        .unwrap();
+        assert_eq!(stored_state, state.as_str());
+        assert_eq!(attempt, 1);
+        assert_eq!(tags, r#"{"not":"an array"}"#);
+        let errors: Vec<serde_json::Value> = serde_json::from_str(&errors).unwrap();
+        let appended = errors.last().unwrap();
+        assert_eq!(appended["attempt"], 1);
+        assert_eq!(appended["error"], error.as_str());
+        if state == JobState::Retryable {
+            assert_eq!(errors[0], serde_json::json!({"not": "an array"}));
+            assert!(
+                scheduled_at > Utc::now() + chrono::Duration::minutes(50),
+                "the client retry policy wasn't used: {scheduled_at}"
+            );
+        } else {
+            assert_eq!(errors.len(), 1);
+        }
+    }
+}
+
+// Like River Go's `JobGetStuck`, the rescuer reads a stuck job whose row
+// can't be fully decoded, so it can recover it along with the others.
+#[tokio::test(flavor = "multi_thread")]
+async fn rescuer_recovers_undecodable_stuck_jobs() {
+    let database = TestDatabase::new(Duration::from_secs(5)).await;
+    let client = Client::builder(database.pool.clone())
+        .id("sqlite-resilience-rescue")
+        .job_timeout(Some(Duration::from_millis(100)))
+        .maintenance(
+            MaintenanceConfig::default()
+                .with_elect_interval(Duration::from_millis(20))
+                .with_rescue_after(Duration::from_millis(100))
+                .with_rescuer_interval(Duration::from_millis(20)),
+        )
+        .retry_policy(RetryAnHourLater)
+        .workers(completing_workers())
+        .queue("default", fast_queue())
+        .build()
+        .unwrap();
+    let mut stuck = Vec::new();
+    for _ in 0..2 {
+        let job = client.insert(ResilienceArgs {}).await.unwrap();
+        sqlx::query(
+            "UPDATE river_job SET state = 'running', attempt = 1, \
+             attempted_at = datetime('now', '-1 hour') WHERE id = ?",
+        )
+        .bind(job.job.row.id)
+        .execute(&database.pool)
+        .await
+        .unwrap();
+        stuck.push(job.job.row.id);
+    }
+    set_json_column(&database.pool, stuck[0], "tags", r#"{"not":"an array"}"#).await;
+
+    let mut run = client.start().unwrap();
+    for id in &stuck {
+        wait_until(Duration::from_secs(10), "stuck job rescue", || async {
+            job_state(&database.pool, *id).await == "retryable"
+        })
+        .await;
+    }
+    run.shutdown().await.unwrap();
+
+    let tags: String = sqlx::query_scalar("SELECT json(tags) FROM river_job WHERE id = ?")
+        .bind(stuck[0])
+        .fetch_one(&database.pool)
+        .await
+        .unwrap();
+    assert_eq!(tags, r#"{"not":"an array"}"#);
 }
 
 #[tokio::test(flavor = "multi_thread")]

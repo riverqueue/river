@@ -989,7 +989,10 @@ async fn sqlite_extension_claim_returns_ordered_rows_and_rolls_back_decode_error
         })
         .await
         .unwrap_err();
-    assert!(error.to_string().contains("SQLite River JSON failed"));
+    assert!(
+        error.to_string().contains("error unmarshaling `tags`"),
+        "{error}"
+    );
     let (state, attempt): (String, i16) =
         sqlx::query_as("SELECT state, attempt FROM river_job WHERE id = ?")
             .bind(invalid.job.row.id)

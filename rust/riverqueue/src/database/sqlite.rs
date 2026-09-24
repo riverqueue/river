@@ -20,12 +20,12 @@ use chrono::{DateTime, SubsecRound, Utc};
 use serde_json::{Map, Value};
 use sqlx::{AssertSqlSafe, FromRow, QueryBuilder, Sqlite, SqliteConnection};
 
-use sqlx::{Row, sqlite::SqliteRow};
+use sqlx::sqlite::SqliteRow;
 
 use crate::{
     AttemptError, JobListOrderBy, JobRow, JobState, METADATA_KEY_UNIQUE_NONCE, Queue,
     SortDirection,
-    client::{UndecodableJob, go_time_json, saturating_i16},
+    client::{DecodedJob, FieldErrors, UndecodableJob, go_time_json, saturating_i16, tolerant_row},
 };
 
 pub(crate) const JOB_COLUMNS: &str = r#"
@@ -220,22 +220,58 @@ struct JobRecord {
 }
 
 impl JobRecord {
+    /// Decodes the row, failing if any field can't be decoded.
     fn into_job(self) -> Result<JobRow, BackendError> {
-        let state = JobState::try_from(self.state.as_str())
-            .map_err(|error| BackendError::InvalidRow(error.to_string()))?;
-        let metadata: Value = serde_json::from_str(&self.metadata)?;
-        let metadata = metadata.as_object().cloned().ok_or_else(|| {
-            BackendError::InvalidRow(format!("job {} metadata is not an object", self.id))
-        })?;
+        let id = self.id;
+        self.decode()
+            .map_err(|job| BackendError::InvalidRow(format!("job {id}: {}", job.error)))
+    }
 
-        Ok(JobRow {
+    /// Decodes the row, keeping the fields that can be decoded when others
+    /// can't, like River Go. JSON columns can be changed to any shape, so
+    /// each decodes on its own. River Go reads the metadata as raw JSON, but a
+    /// [`JobRow`] can only represent an object.
+    fn decode(self) -> DecodedJob {
+        let unidentifiable = |error: String| UndecodableJob {
+            error: format!("job {}: {error}", self.id),
+            row: None,
+        };
+        let state = JobState::try_from(self.state.as_str())
+            .map_err(|error| unidentifiable(error.to_string()))?;
+        let encoded_args = serde_json::value::RawValue::from_string(self.encoded_args)
+            .map_err(|error| unidentifiable(format!("error decoding `args`: {error}")))?;
+
+        let mut errors = FieldErrors::default();
+        let attempted_by = errors.field(
+            "attempted_by",
+            decode_json_strings(self.attempted_by.as_deref()),
+        );
+        let attempt_errors = errors.field(
+            "errors",
+            decode_json_or_default::<Option<Vec<AttemptError>>>(self.errors.as_deref()),
+        );
+        let metadata = errors.field(
+            "metadata",
+            serde_json::from_str::<Value>(&self.metadata)
+                .map_err(|error| error.to_string())
+                .and_then(|metadata| match metadata {
+                    Value::Object(metadata) => Ok(metadata),
+                    _ => Err("not a JSON object".to_owned()),
+                }),
+        );
+        let tags = errors.field("tags", decode_json_strings(Some(&self.tags)));
+        let unique_states = errors.field(
+            "unique_states",
+            self.unique_states.map(decode_unique_states).transpose(),
+        );
+        errors.finish(JobRow {
             id: self.id,
             attempt: saturating_i16(self.attempt),
             attempted_at: self.attempted_at,
-            attempted_by: decode_json_or_default(self.attempted_by.as_deref())?,
+            attempted_by,
             created_at: self.created_at,
-            encoded_args: serde_json::value::RawValue::from_string(self.encoded_args)?,
-            errors: decode_json_or_default(self.errors.as_deref())?,
+            encoded_args,
+            errors: attempt_errors.unwrap_or_default(),
             finalized_at: self.finalized_at,
             kind: self.kind,
             max_attempts: saturating_i16(self.max_attempts),
@@ -244,32 +280,21 @@ impl JobRecord {
             queue: self.queue,
             scheduled_at: self.scheduled_at,
             state,
-            tags: serde_json::from_str(&self.tags)?,
+            tags,
             unique_key: self.unique_key,
-            unique_states: self.unique_states.map(decode_unique_states).transpose()?,
+            unique_states,
         })
     }
 }
 
-/// A job row decoded on its own so one malformed row cannot fail a batch.
-pub(crate) type DecodedJob = Result<JobRow, UndecodableJob>;
-
+/// Decodes a row selected with [`JOB_COLUMNS`] on its own.
 pub(crate) fn decode_job_row(row: &SqliteRow) -> DecodedJob {
     JobRecord::from_row(row)
-        .map_err(BackendError::from)
-        .and_then(JobRecord::into_job)
         .map_err(|error| UndecodableJob {
-            attempt: row.try_get("attempt").unwrap_or_default(),
             error: error.to_string(),
-            error_count: row
-                .try_get::<Option<String>, _>("errors")
-                .ok()
-                .flatten()
-                .and_then(|errors| serde_json::from_str::<Vec<Value>>(&errors).ok())
-                .map_or(0, |errors| errors.len()),
-            id: row.try_get("id").ok(),
-            max_attempts: row.try_get("max_attempts").unwrap_or_default(),
-        })
+            row: None,
+        })?
+        .decode()
 }
 
 #[derive(Clone, Debug, FromRow)]
@@ -340,10 +365,20 @@ where
     encoded.map_or_else(|| Ok(T::default()), serde_json::from_str)
 }
 
-fn decode_unique_states(bits: i64) -> Result<Vec<JobState>, BackendError> {
-    let bits = u8::try_from(bits).map_err(|_| {
-        BackendError::InvalidRow(format!("unique state bit mask {bits} is outside 0..=255"))
-    })?;
+/// Decodes a JSON array of strings like Go's `encoding/json` decodes a
+/// `[]string`: `null` is empty, as is a `null` element.
+fn decode_json_strings(encoded: Option<&str>) -> Result<Vec<String>, serde_json::Error> {
+    Ok(
+        decode_json_or_default::<Option<Vec<Option<String>>>>(encoded)?
+            .unwrap_or_default()
+            .into_iter()
+            .map(Option::unwrap_or_default)
+            .collect(),
+    )
+}
+
+fn decode_unique_states(bits: i64) -> Result<Vec<JobState>, String> {
+    let bits = u8::try_from(bits).map_err(|_| format!("value out of range for byte: {bits}"))?;
     Ok(JobState::ALL
         .into_iter()
         .filter(|state| bits & state.unique_bit() != 0)
@@ -956,7 +991,12 @@ pub(crate) async fn complete_decoded(
                 WHEN NOT {should_cancel} AND ? THEN ?
                 ELSE attempt
             END,
+            -- `errors` is always an array unless it's been changed out of
+            -- band. Like River Go, wrap any other value in an array so the
+            -- new error is still appended without losing it.
             errors = CASE
+                WHEN ? AND coalesce(json_type(errors), 'array') <> 'array'
+                    THEN jsonb(json_array(json(errors), json(?)))
                 WHEN ? THEN jsonb(json_insert(
                     json(coalesce(errors, jsonb('[]'))), '$[#]', json(?)
                 ))
@@ -986,7 +1026,9 @@ pub(crate) async fn complete_decoded(
         .bind(params.attempt.is_some())
         .bind(params.attempt.unwrap_or_default())
         .bind(params.error.is_some())
-        .bind(error)
+        .bind(&error)
+        .bind(params.error.is_some())
+        .bind(&error)
         .bind(state)
         .bind(sqlite_time(params.now))
         .bind(params.finalized_at.is_some())
@@ -1387,13 +1429,13 @@ pub(crate) async fn stuck_jobs(
         LIMIT ?
         "#
     );
-    let records = sqlx::query_as::<_, JobRecord>(AssertSqlSafe(sql))
+    let records = sqlx::query(AssertSqlSafe(sql))
         .bind(after_id)
         .bind(sqlite_time(attempted_before))
         .bind(limit)
         .fetch_all(&mut *connection)
         .await?;
-    records.into_iter().map(JobRecord::into_job).collect()
+    Ok(tolerant_rows(&records))
 }
 
 /// Loads exactly the rescue candidates selected by an exact-version
@@ -1415,11 +1457,17 @@ pub(crate) async fn jobs_by_ids(
         }
     }
     query.push(") ORDER BY id ASC");
-    let records = query
-        .build_query_as::<JobRecord>()
-        .fetch_all(&mut *connection)
-        .await?;
-    records.into_iter().map(JobRecord::into_job).collect()
+    let records = query.build().fetch_all(&mut *connection).await?;
+    Ok(tolerant_rows(&records))
+}
+
+/// Decodes rows for the rescuer, which like River Go's `JobGetStuck`
+/// tolerates undecodable fields so a job stranded by one can be rescued.
+fn tolerant_rows(records: &[SqliteRow]) -> Vec<JobRow> {
+    records
+        .iter()
+        .filter_map(|record| tolerant_row(decode_job_row(record)))
+        .collect()
 }
 
 pub(crate) async fn rescue(
@@ -1452,7 +1500,7 @@ pub(crate) async fn rescue(
         RETURNING {JOB_COLUMNS}
         "#
     );
-    sqlx::query_as::<_, JobRecord>(AssertSqlSafe(sql))
+    let row = sqlx::query(AssertSqlSafe(sql))
         .bind(error)
         .bind(sqlite_time_optional(params.finalized_at))
         .bind(sqlite_time(params.scheduled_at))
@@ -1460,9 +1508,12 @@ pub(crate) async fn rescue(
         .bind(params.id)
         .bind(sqlite_time(params.stuck_horizon))
         .fetch_optional(&mut *connection)
-        .await?
-        .map(JobRecord::into_job)
-        .transpose()
+        .await?;
+    // Like River Go, a rescued job whose row can't be fully decoded is still
+    // rescued rather than failing the rescuer's transaction.
+    Ok(row
+        .as_ref()
+        .and_then(|row| tolerant_row(decode_job_row(row))))
 }
 
 pub(crate) async fn cleanup_jobs(
@@ -2054,6 +2105,221 @@ mod tests {
         }
         let row = get(&mut connection, inserted.id).await.unwrap().unwrap();
         assert_eq!(row.attempted_by, ["three", "four", "five"]);
+    }
+
+    /// Inserts a job for the undecodable row tests.
+    async fn insert_test_job(
+        connection: &mut SqliteConnection,
+        state: JobState,
+        now: DateTime<Utc>,
+    ) -> JobRow {
+        let running = state == JobState::Running;
+        insert(
+            connection,
+            &InsertJob {
+                attempt: i16::from(running),
+                attempted_at: running.then_some(now - TimeDelta::hours(2)),
+                attempted_by: &[],
+                created_at: now,
+                encoded_args: &serde_json::value::to_raw_value(&json!({})).unwrap(),
+                errors: &[],
+                finalized_at: None,
+                id: None,
+                kind: "undecodable",
+                max_attempts: 25,
+                metadata: &Map::new(),
+                priority: 1,
+                queue: "default",
+                scheduled_at: now,
+                state,
+                tags: &["tag".to_owned()],
+                unique_key: None,
+                unique_nonce: None,
+                unique_states: None,
+            },
+        )
+        .await
+        .unwrap()
+        .job
+    }
+
+    /// Overwrites a JSON column the way a row changed out of band would be,
+    /// into a shape River can't decode.
+    async fn set_json_column(connection: &mut SqliteConnection, id: i64, column: &str, json: &str) {
+        sqlx::query(AssertSqlSafe(format!(
+            "UPDATE river_job SET {column} = jsonb(?) WHERE id = ?"
+        )))
+        .bind(json)
+        .bind(id)
+        .execute(&mut *connection)
+        .await
+        .unwrap();
+    }
+
+    fn retryable_completion(id: i64, error: &AttemptError, now: DateTime<Utc>) -> CompleteJob<'_> {
+        CompleteJob {
+            attempt: None,
+            error: Some(error),
+            finalized_at: None,
+            id,
+            metadata_updates: None,
+            now,
+            scheduled_at: Some(now + TimeDelta::hours(1)),
+            state: JobState::Retryable,
+        }
+    }
+
+    // A claimed job whose row can't be decoded is returned separately with the
+    // fields that could be decoded, without failing the others.
+    #[tokio::test]
+    async fn claim_returns_undecodable_rows_separately() {
+        let pool = setup().await;
+        let mut connection = pool.acquire().await.unwrap();
+        let now = Utc.with_ymd_and_hms(2026, 1, 2, 3, 4, 5).unwrap();
+        let job1 = insert_test_job(&mut connection, JobState::Available, now).await;
+        let job2 = insert_test_job(&mut connection, JobState::Available, now).await;
+        let job3 = insert_test_job(&mut connection, JobState::Available, now).await;
+        set_json_column(&mut connection, job2.id, "errors", r#"{"not":"an array"}"#).await;
+        set_json_column(&mut connection, job2.id, "tags", r#"{"not":"an array"}"#).await;
+
+        let claimed = claim(
+            &mut connection,
+            &ClaimJobs {
+                client_id: "client",
+                limit: 10,
+                max_attempted_by: 100,
+                now,
+                queue: "default",
+            },
+        )
+        .await
+        .unwrap();
+        assert_eq!(claimed.len(), 3);
+        let decoded = claimed
+            .iter()
+            .filter_map(|job| job.as_ref().ok().map(|job| job.id))
+            .collect::<Vec<_>>();
+        assert_eq!(decoded, [job1.id, job3.id]);
+
+        let undecodable = claimed
+            .into_iter()
+            .find_map(Result::err)
+            .expect("undecodable job");
+        assert!(
+            undecodable.error.contains("error unmarshaling `errors`"),
+            "{}",
+            undecodable.error
+        );
+        assert!(
+            undecodable.error.contains("error unmarshaling `tags`"),
+            "{}",
+            undecodable.error
+        );
+        let row = undecodable.row.expect("partially decoded row");
+        assert_eq!(row.id, job2.id);
+        assert_eq!(row.attempt, 1);
+        assert_eq!(row.attempted_by, ["client"]);
+        assert_eq!(row.kind, "undecodable");
+        assert_eq!(row.state, JobState::Running);
+        assert!(row.errors.is_empty());
+        assert!(row.tags.is_empty());
+    }
+
+    // A job whose row can't be fully decoded still has its state set and is
+    // returned with the fields that could be decoded, so it doesn't fail the
+    // other jobs completed in the same transaction. The undecodable value is
+    // left as it was.
+    #[tokio::test]
+    async fn complete_returns_undecodable_rows_partially() {
+        let pool = setup().await;
+        let mut connection = pool.acquire().await.unwrap();
+        let now = Utc.with_ymd_and_hms(2026, 1, 2, 3, 4, 5).unwrap();
+        let job1 = insert_test_job(&mut connection, JobState::Running, now).await;
+        let job2 = insert_test_job(&mut connection, JobState::Running, now).await;
+        set_json_column(&mut connection, job2.id, "tags", r#"{"not":"an array"}"#).await;
+        let error = AttemptError::new(now, 1, "fake error");
+
+        let row1 = complete_decoded(&mut connection, &retryable_completion(job1.id, &error, now))
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap();
+        assert_eq!(row1.state, JobState::Retryable);
+        let undecodable =
+            complete_decoded(&mut connection, &retryable_completion(job2.id, &error, now))
+                .await
+                .unwrap()
+                .unwrap()
+                .unwrap_err();
+        let row2 = undecodable.row.expect("partially decoded row");
+        assert_eq!(row2.id, job2.id);
+        assert_eq!(row2.state, JobState::Retryable);
+        assert_eq!(row2.errors, [error]);
+        assert!(row2.tags.is_empty());
+
+        let strict = get(&mut connection, job2.id).await.unwrap_err();
+        assert!(
+            strict.to_string().contains("error unmarshaling `tags`"),
+            "{strict}"
+        );
+        let tags: String = sqlx::query_scalar("SELECT json(tags) FROM river_job WHERE id = ?")
+            .bind(job2.id)
+            .fetch_one(&mut *connection)
+            .await
+            .unwrap();
+        assert_eq!(tags, r#"{"not":"an array"}"#);
+    }
+
+    // `errors` that isn't an array is wrapped in one so the new error can be
+    // appended without losing the existing value, like River Go.
+    #[tokio::test]
+    async fn complete_wraps_a_non_array_errors_value() {
+        let pool = setup().await;
+        let mut connection = pool.acquire().await.unwrap();
+        let now = Utc.with_ymd_and_hms(2026, 1, 2, 3, 4, 5).unwrap();
+        let job = insert_test_job(&mut connection, JobState::Running, now).await;
+        set_json_column(
+            &mut connection,
+            job.id,
+            "errors",
+            r#"{"error":"existing value"}"#,
+        )
+        .await;
+        let error = AttemptError::new(now, 1, "fake error");
+
+        let row = complete_decoded(&mut connection, &retryable_completion(job.id, &error, now))
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap();
+        assert_eq!(row.state, JobState::Retryable);
+        assert_eq!(
+            row.errors
+                .iter()
+                .map(|error| error.error.as_str())
+                .collect::<Vec<_>>(),
+            ["existing value", "fake error"]
+        );
+    }
+
+    // A stuck job whose row can't be fully decoded is still returned so that
+    // it can be rescued.
+    #[tokio::test]
+    async fn stuck_jobs_include_undecodable_rows() {
+        let pool = setup().await;
+        let mut connection = pool.acquire().await.unwrap();
+        let now = Utc.with_ymd_and_hms(2026, 1, 2, 3, 4, 5).unwrap();
+        let job1 = insert_test_job(&mut connection, JobState::Running, now).await;
+        let job2 = insert_test_job(&mut connection, JobState::Running, now).await;
+        set_json_column(&mut connection, job1.id, "tags", r#"{"not":"an array"}"#).await;
+
+        let stuck = stuck_jobs(&mut connection, 0, now, 10).await.unwrap();
+        assert_eq!(
+            stuck.iter().map(|job| job.id).collect::<Vec<_>>(),
+            [job1.id, job2.id]
+        );
+        assert!(stuck[0].tags.is_empty());
+        assert_eq!(stuck[1].tags, ["tag"]);
     }
 
     #[tokio::test]
