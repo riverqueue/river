@@ -23,6 +23,7 @@ import (
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/robfig/cron/v3"
 	_ "modernc.org/sqlite"
 
 	"github.com/riverqueue/river"
@@ -34,7 +35,7 @@ import (
 )
 
 const (
-	adapterVersion        = 12
+	adapterVersion        = 13
 	implementationVersion = "0.47.0"
 	protocolRevision      = 1
 )
@@ -46,6 +47,7 @@ var adapterMethods = []string{ //nolint:gochecknoglobals
 	"cancel",
 	"clock_set",
 	"connection_count",
+	"cron_next",
 	"delete",
 	"delete_many",
 	"fault_disconnect_application",
@@ -137,6 +139,7 @@ var capabilities = []string{ //nolint:gochecknoglobals
 var sqliteAdapterMethods = []string{ //nolint:gochecknoglobals
 	"cancel",
 	"clock_set",
+	"cron_next",
 	"delete",
 	"delete_many",
 	"get",
@@ -193,7 +196,7 @@ var sqliteRuntimeCapabilities = []string{ //nolint:gochecknoglobals
 }
 
 var sqliteRuntimeMethods = []string{ //nolint:gochecknoglobals
-	"barrier_create", "barrier_release", "cancel", "clock_set", "delete", "delete_many", "get",
+	"barrier_create", "barrier_release", "cancel", "clock_set", "cron_next", "delete", "delete_many", "get",
 	"handshake", "insert", "insert_many", "insert_many_fast", "leader", "list", "migrate",
 	"queue_add", "queue_get", "queue_list", "queue_pause", "queue_remove", "queue_resume",
 	"queue_update", "raw_finalize", "raw_insert_exact_json", "raw_insert_no_notify", "raw_job_exact_json", "raw_job_timestamps", "request_resign", "reset", "retry", "retry_delay",
@@ -1021,6 +1024,9 @@ func (s *adapterState) handle(ctx context.Context, req *request) (any, error) {
 		s.rngSeed = params.Seed
 		return map[string]any{}, nil
 
+	case "cron_next":
+		return handleCronNext(req.Params)
+
 	case "retry_delay":
 		if s.clock == nil {
 			return nil, errors.New("clock_set is required before retry_delay")
@@ -1549,6 +1555,8 @@ func (s *adapterState) handle(ctx context.Context, req *request) (any, error) {
 			return nil, errors.New("client already running")
 		}
 		var params struct {
+			maintenanceParams
+
 			ClientID            string  `json:"client_id"`
 			ErrorHandlerCancel  bool    `json:"error_handler_cancel"`
 			FetchPollIntervalMS *uint64 `json:"fetch_poll_interval_ms"`
@@ -1579,6 +1587,7 @@ func (s *adapterState) handle(ctx context.Context, req *request) (any, error) {
 			instrumented:        params.Instrumented,
 			jobStuckThresholdMS: params.JobStuckThresholdMS,
 			jobTimeoutMS:        params.JobTimeoutMS,
+			maintenance:         params.maintenanceParams,
 			maxWorkers:          params.MaxWorkers,
 			periodicRunOnStart:  params.PeriodicRunOnStart,
 			pollOnly:            params.PollOnly,
@@ -2116,6 +2125,9 @@ func (s *sqliteAdapterState) handle(ctx context.Context, req *request) (any, err
 		s.rngSeed = params.Seed
 		return map[string]any{}, nil
 
+	case "cron_next":
+		return handleCronNext(req.Params)
+
 	case "retry_delay":
 		if s.clock == nil {
 			return nil, errors.New("clock_set is required before retry_delay")
@@ -2488,6 +2500,8 @@ func (s *sqliteAdapterState) handle(ctx context.Context, req *request) (any, err
 			return nil, errors.New("client already running")
 		}
 		var params struct {
+			maintenanceParams
+
 			ClientID            string  `json:"client_id"`
 			ErrorHandlerCancel  bool    `json:"error_handler_cancel"`
 			FetchPollIntervalMS *uint64 `json:"fetch_poll_interval_ms"`
@@ -2514,7 +2528,7 @@ func (s *sqliteAdapterState) handle(ctx context.Context, req *request) (any, err
 			errorHandlerCancel: params.ErrorHandlerCancel, fetchPollIntervalMS: params.FetchPollIntervalMS,
 			id: params.ClientID, instrumented: params.Instrumented,
 			jobStuckThresholdMS: params.JobStuckThresholdMS, jobTimeoutMS: params.JobTimeoutMS,
-			maxWorkers: params.MaxWorkers, periodicRunOnStart: params.PeriodicRunOnStart,
+			maintenance: params.maintenanceParams, maxWorkers: params.MaxWorkers, periodicRunOnStart: params.PeriodicRunOnStart,
 			pollOnly: params.PollOnly, probe: probe, queue: params.Queue, retryDelayMS: params.RetryDelayMS,
 		})
 		if err != nil {
@@ -2934,6 +2948,7 @@ type workerClientConfig struct {
 	instrumented        bool
 	jobStuckThresholdMS *uint64
 	jobTimeoutMS        *uint64
+	maintenance         maintenanceParams
 	maxWorkers          int
 	periodicRunOnStart  bool
 	pollOnly            bool
@@ -2941,6 +2956,98 @@ type workerClientConfig struct {
 	queue               string
 	retryDelayMS        *uint64
 	schema              string
+}
+
+// maintenanceParams are optional `start` parameters that tune leader-owned
+// maintenance. Parameters River Go does not expose, such as elect or cleaner
+// intervals, are accepted by other adapters and ignored here because Go runs
+// each service once as soon as it gains leadership.
+type maintenanceParams struct {
+	CancelledJobRetentionMS *int64   `json:"cancelled_job_retention_ms"`
+	CompletedJobRetentionMS *int64   `json:"completed_job_retention_ms"`
+	DiscardedJobRetentionMS *int64   `json:"discarded_job_retention_ms"`
+	JobTimeoutDisabled      bool     `json:"job_timeout_disabled"`
+	ReindexerIndexNames     []string `json:"reindexer_index_names"`
+	ReindexerIntervalMS     *uint64  `json:"reindexer_interval_ms"`
+	RescueAfterMS           *uint64  `json:"rescue_after_ms"`
+}
+
+func (p maintenanceParams) apply(config *river.Config) error {
+	retention := func(milliseconds *int64, target *time.Duration) error {
+		switch {
+		case milliseconds == nil:
+			return nil
+		case *milliseconds == -1:
+			*target = -1
+			return nil
+		case *milliseconds < 0:
+			return errors.New("job retention must be -1 or non-negative")
+		default:
+			duration, err := durationFromMilliseconds(uint64(*milliseconds))
+			*target = duration
+			return err
+		}
+	}
+	if err := retention(p.CancelledJobRetentionMS, &config.CancelledJobRetentionPeriod); err != nil {
+		return err
+	}
+	if err := retention(p.CompletedJobRetentionMS, &config.CompletedJobRetentionPeriod); err != nil {
+		return err
+	}
+	if err := retention(p.DiscardedJobRetentionMS, &config.DiscardedJobRetentionPeriod); err != nil {
+		return err
+	}
+	if p.JobTimeoutDisabled {
+		config.JobTimeout = -1
+	}
+	if p.ReindexerIndexNames != nil {
+		config.ReindexerIndexNames = p.ReindexerIndexNames
+	}
+	if p.ReindexerIntervalMS != nil {
+		interval, err := durationFromMilliseconds(*p.ReindexerIntervalMS)
+		if err != nil {
+			return err
+		}
+		config.ReindexerSchedule = river.PeriodicInterval(interval)
+	}
+	if p.RescueAfterMS != nil {
+		rescueAfter, err := durationFromMilliseconds(*p.RescueAfterMS)
+		if err != nil {
+			return err
+		}
+		config.RescueStuckJobsAfter = rescueAfter
+	}
+	return nil
+}
+
+// handleCronNext evaluates River Go's documented cron syntax, robfig/cron's
+// `ParseStandard`, from a reference time in that time's own offset.
+func handleCronNext(rawParams json.RawMessage) (any, error) {
+	var params struct {
+		Count      int       `json:"count"`
+		Expression string    `json:"expression"`
+		From       time.Time `json:"from"`
+	}
+	if err := json.Unmarshal(rawParams, &params); err != nil {
+		return nil, err
+	}
+	if params.Count < 1 {
+		return nil, errors.New("count must be positive")
+	}
+	schedule, err := cron.ParseStandard(params.Expression)
+	if err != nil {
+		return nil, err
+	}
+	next := make([]string, 0, params.Count)
+	current := params.From
+	for range params.Count {
+		current = schedule.Next(current)
+		if current.IsZero() {
+			break
+		}
+		next = append(next, current.Format(time.RFC3339Nano))
+	}
+	return map[string]any{"next": next}, nil
 }
 
 func newWorkerClient(pool *pgxpool.Pool, barriers *barrierRegistry, config workerClientConfig) (*river.Client[pgx.Tx], error) {
@@ -3004,6 +3111,9 @@ func newWorkerConfig(pool *pgxpool.Pool, barriers *barrierRegistry, config worke
 			return nil, err
 		}
 		riverConfig.JobTimeout = duration
+	}
+	if err := config.maintenance.apply(riverConfig); err != nil {
+		return nil, err
 	}
 	if config.periodicRunOnStart {
 		riverConfig.PeriodicJobs = []*river.PeriodicJob{river.NewPeriodicJob(
