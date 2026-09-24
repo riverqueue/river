@@ -6,15 +6,12 @@ import (
 	"bufio"
 	"bytes"
 	"context"
-	"crypto/sha256"
 	"database/sql"
-	"encoding/binary"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
-	"math"
 	"os"
 	"slices"
 	"strconv"
@@ -30,6 +27,7 @@ import (
 
 	"github.com/riverqueue/river"
 	"github.com/riverqueue/river/internal/dbunique"
+	"github.com/riverqueue/river/internal/retrypolicy"
 	"github.com/riverqueue/river/riverdriver/riverpgxv5"
 	"github.com/riverqueue/river/riverdriver/riversqlite"
 	"github.com/riverqueue/river/rivermigrate"
@@ -1242,8 +1240,7 @@ func (s *adapterState) handle(ctx context.Context, req *request) (any, error) {
 		if params.ErrorCount < 1 {
 			return nil, errors.New("error_count must be positive")
 		}
-		delay := deterministicRetryDelay(*s.clock, params.JobID, params.ErrorCount, s.rngSeed)
-		return map[string]any{"delay_ns": delay.Nanoseconds()}, nil
+		return map[string]any{"delay_ns": defaultRetryDelay(*s.clock, params.JobID, params.ErrorCount).Nanoseconds()}, nil
 
 	case "unique_key":
 		return handleUniqueKey(req.Params)
@@ -2360,8 +2357,7 @@ func (s *sqliteAdapterState) handle(ctx context.Context, req *request) (any, err
 		if params.ErrorCount < 1 {
 			return nil, errors.New("error_count must be positive")
 		}
-		delay := deterministicRetryDelay(*s.clock, params.JobID, params.ErrorCount, s.rngSeed)
-		return map[string]any{"delay_ns": delay.Nanoseconds()}, nil
+		return map[string]any{"delay_ns": defaultRetryDelay(*s.clock, params.JobID, params.ErrorCount).Nanoseconds()}, nil
 
 	case "unique_key":
 		return handleUniqueKey(req.Params)
@@ -3121,31 +3117,12 @@ func (s *sqliteAdapterState) client() *river.Client[*sql.Tx] {
 	return client
 }
 
-func deterministicRetryDelay(now time.Time, jobID int64, errorCount uint32, seed uint64) time.Duration {
-	const maxRetryNanos = int64(math.MaxInt64)
-	baseSeconds := math.Pow(float64(errorCount), 4)
-	if baseSeconds*float64(time.Second) >= float64(maxRetryNanos) {
-		return time.Duration(maxRetryNanos)
-	}
-	base := time.Duration(baseSeconds * float64(time.Second))
-	var seedBytes [8]byte
-	var jobIDBytes [8]byte
-	var errorCountBytes [4]byte
-	var nowBytes [8]byte
-	binary.BigEndian.PutUint64(seedBytes[:], seed)
-	jobIDUint, _ := strconv.ParseUint(strconv.FormatInt(jobID, 10), 10, 64)
-	binary.BigEndian.PutUint64(jobIDBytes[:], jobIDUint)
-	binary.BigEndian.PutUint32(errorCountBytes[:], errorCount)
-	binary.BigEndian.PutUint64(nowBytes[:], uint64(now.UnixNano()))
-	hash := sha256.New()
-	_, _ = hash.Write(seedBytes[:])
-	_, _ = hash.Write(jobIDBytes[:])
-	_, _ = hash.Write(errorCountBytes[:])
-	_, _ = hash.Write(nowBytes[:])
-	sum := hash.Sum(nil)
-	sample := binary.BigEndian.Uint32(sum[:4])
-	ratio := float64(sample) / float64(math.MaxUint32)
-	return time.Duration(math.Round(float64(base) * (0.9 + ratio*0.2)))
+// defaultRetryDelay evaluates River's production default retry policy for a
+// job with errorCount-1 recorded errors. Its jitter is process-random, so
+// the rng_seed control does not apply to the Go reference.
+func defaultRetryDelay(now time.Time, jobID int64, errorCount uint32) time.Duration {
+	job := &rivertype.JobRow{ID: jobID, Errors: make([]rivertype.AttemptError, errorCount-1)}
+	return retrypolicy.NextRetryAt(now, job).Sub(now)
 }
 
 func durationFromMilliseconds(milliseconds uint64) (time.Duration, error) {

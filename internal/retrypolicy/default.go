@@ -39,6 +39,19 @@ func NextRetryAt(now time.Time, job *rivertype.JobRow) time.Time {
 	return now.Add(secondsAsCappedDuration(retrySeconds(errorCount)))
 }
 
+// DelayBounds returns the smallest and largest delay NextRetryAt schedules
+// for a job with errorCount-1 recorded errors. Delays are errorCount^4
+// seconds with up to 10% jitter either way, capped at the maximum
+// time.Duration.
+func DelayBounds(errorCount int) (time.Duration, time.Duration) {
+	base := retrySecondsWithoutJitter(errorCount)
+	if base == maxDurationSeconds {
+		return maxDuration, maxDuration
+	}
+	return secondsAsCappedDuration(base - base*jitterFraction),
+		secondsAsCappedDuration(min(base+base*jitterFraction, maxDurationSeconds))
+}
+
 // secondsAsCappedDuration converts seconds to a duration, returning the
 // maximum duration for values at or above it. Converting an out-of-range
 // float to an integer is implementation-specific in Go and yields the minimum
@@ -53,6 +66,10 @@ func secondsAsCappedDuration(seconds float64) time.Duration {
 
 // The maximum value of a duration before it overflows. About 292 years.
 const maxDuration time.Duration = 1<<63 - 1
+
+// jitterFraction is the largest fraction of a retry delay that jitter adds
+// or removes.
+const jitterFraction = 0.1
 
 // Same as the above, but changed to a float represented in seconds.
 var maxDurationSeconds = maxDuration.Seconds() //nolint:gochecknoglobals
@@ -71,7 +88,7 @@ func retrySeconds(attempt int) float64 {
 	}
 
 	// Jitter number of seconds +/- 10%.
-	retrySeconds += retrySeconds * (rand.Float64()*0.2 - 0.1)
+	retrySeconds += retrySeconds * (rand.Float64()*2*jitterFraction - jitterFraction)
 
 	// Cap retrySeconds once more in case adding random jitter pushed it over
 	// maxDurationSeconds. (This should never realistically happen, but protect

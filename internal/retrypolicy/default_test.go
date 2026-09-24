@@ -85,6 +85,27 @@ func TestDefault_NextRetry(t *testing.T) {
 	})
 }
 
+func TestDelayBounds(t *testing.T) {
+	t.Parallel()
+
+	now := time.Now().UTC()
+	for _, errorCount := range []int{1, 2, 11, 309, 310, 1_000} {
+		minDelay, maxDelay := DelayBounds(errorCount)
+		require.LessOrEqual(t, minDelay, maxDelay)
+		for range 20 {
+			delay := NextRetryAt(now, &rivertype.JobRow{Errors: make([]rivertype.AttemptError, errorCount-1)}).Sub(now)
+			require.GreaterOrEqual(t, delay, minDelay, "error count %d", errorCount)
+			require.LessOrEqual(t, delay, maxDelay, "error count %d", errorCount)
+		}
+	}
+	minDelay, maxDelay := DelayBounds(1)
+	require.Equal(t, 900*time.Millisecond, minDelay)
+	require.Equal(t, 1100*time.Millisecond, maxDelay)
+	minDelay, maxDelay = DelayBounds(310)
+	require.Equal(t, time.Duration(math.MaxInt64), minDelay)
+	require.Equal(t, time.Duration(math.MaxInt64), maxDelay)
+}
+
 func TestRetrySeconds(t *testing.T) {
 	t.Parallel()
 

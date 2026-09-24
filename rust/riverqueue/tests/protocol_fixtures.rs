@@ -33,8 +33,9 @@ struct NotificationFixture {
 #[derive(Deserialize)]
 struct RetryFixture {
     error_count: usize,
-    expected_delay_ns: u64,
     job_id: i64,
+    max_delay_ns: u64,
+    min_delay_ns: u64,
     now: DateTime<Utc>,
     seed: u64,
 }
@@ -91,7 +92,13 @@ fn go_protocol_values_match_rust() {
             "fixture failure",
             test_case.now,
         );
-        assert_eq!(delay.as_nanos(), u128::from(test_case.expected_delay_ns));
+        let delay = delay.as_nanos();
+        assert!(
+            (u128::from(test_case.min_delay_ns)..=u128::from(test_case.max_delay_ns))
+                .contains(&delay),
+            "error count {} delay {delay}ns outside Go's bounds",
+            test_case.error_count
+        );
     }
 }
 

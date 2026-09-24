@@ -4,21 +4,22 @@ package main
 
 import (
 	"bytes"
-	"crypto/sha256"
-	"encoding/binary"
 	"encoding/hex"
 	"encoding/json"
 	"flag"
 	"fmt"
+	"maps"
 	"math"
 	"os"
 	"path/filepath"
-	"strconv"
+	"slices"
+	"strings"
 	"time"
 
 	"github.com/riverqueue/river/internal/dbunique"
 	"github.com/riverqueue/river/internal/leadership"
 	"github.com/riverqueue/river/internal/notifier"
+	"github.com/riverqueue/river/internal/retrypolicy"
 	"github.com/riverqueue/river/internal/rivercommon"
 	"github.com/riverqueue/river/rivershared/uniquestates"
 	"github.com/riverqueue/river/rivertype"
@@ -220,17 +221,23 @@ type protocolFixture struct {
 }
 
 type protocolNotification struct {
+	Fields  []jsonField     `json:"fields"`
 	Name    string          `json:"name"`
 	Payload json.RawMessage `json:"payload"`
+	Source  string          `json:"source"`
 	Topic   string          `json:"topic"`
 }
 
+// protocolRetryCase bounds the delay River's default retry policy schedules
+// after error_count failures, from internal/retrypolicy.DelayBounds.
+// Implementations with seedable jitter may use seed; the bounds hold for any.
 type protocolRetryCase struct {
-	ErrorCount      uint32    `json:"error_count"`
-	ExpectedDelayNS int64     `json:"expected_delay_ns"`
-	JobID           int64     `json:"job_id"`
-	Now             time.Time `json:"now"`
-	Seed            uint64    `json:"seed"`
+	ErrorCount uint32    `json:"error_count"`
+	JobID      int64     `json:"job_id"`
+	MaxDelayNS int64     `json:"max_delay_ns"`
+	MinDelayNS int64     `json:"min_delay_ns"`
+	Now        time.Time `json:"now"`
+	Seed       uint64    `json:"seed"`
 }
 
 type protocolState struct {
@@ -496,33 +503,6 @@ func main() {
 	writeGenerated(*check, maintenanceFixturePath, makeMaintenanceFixture())
 }
 
-func deterministicRetryDelay(now time.Time, jobID int64, errorCount uint32, seed uint64) time.Duration {
-	const maxRetryNanos = int64(math.MaxInt64)
-	baseSeconds := math.Pow(float64(errorCount), 4)
-	if baseSeconds*float64(time.Second) >= float64(maxRetryNanos) {
-		return time.Duration(maxRetryNanos)
-	}
-	base := time.Duration(baseSeconds * float64(time.Second))
-	var seedBytes [8]byte
-	var jobIDBytes [8]byte
-	var errorCountBytes [4]byte
-	var nowBytes [8]byte
-	binary.BigEndian.PutUint64(seedBytes[:], seed)
-	jobIDUint, _ := strconv.ParseUint(strconv.FormatInt(jobID, 10), 10, 64)
-	binary.BigEndian.PutUint64(jobIDBytes[:], jobIDUint)
-	binary.BigEndian.PutUint32(errorCountBytes[:], errorCount)
-	binary.BigEndian.PutUint64(nowBytes[:], uint64(now.UnixNano()))
-	hash := sha256.New()
-	_, _ = hash.Write(seedBytes[:])
-	_, _ = hash.Write(jobIDBytes[:])
-	_, _ = hash.Write(errorCountBytes[:])
-	_, _ = hash.Write(nowBytes[:])
-	sum := hash.Sum(nil)
-	sample := binary.BigEndian.Uint32(sum[:4])
-	ratio := float64(sample) / float64(math.MaxUint32)
-	return time.Duration(math.Round(float64(base) * (0.9 + ratio*0.2)))
-}
-
 func makeProtocolFixture(now time.Time) protocolFixture {
 	states := rivertype.JobStates()
 	fixture := protocolFixture{
@@ -554,29 +534,11 @@ func makeProtocolFixture(now time.Time) protocolFixture {
 			State: state,
 		})
 	}
-	for _, notification := range []struct {
-		name    string
-		payload any
-		topic   notifier.NotificationTopic
-	}{
-		{name: "cancel", payload: map[string]any{"action": "cancel", "job_id": 42, "queue": "priority"}, topic: notifier.NotificationTopicControl},
-		{name: "insert", payload: map[string]any{"queue": "priority"}, topic: notifier.NotificationTopicInsert},
-		{name: "metadata_changed", payload: map[string]any{"action": "metadata_changed", "metadata": map[string]any{"owner": "candidate"}, "queue": "priority"}, topic: notifier.NotificationTopicControl},
-		{name: "pause", payload: map[string]any{"action": "pause", "queue": "priority"}, topic: notifier.NotificationTopicControl},
-		{name: "request_resign", payload: leadership.DBNotification{Action: leadership.DBNotificationKindRequestResign}, topic: notifier.NotificationTopicLeadership},
-		{name: "resigned", payload: leadership.DBNotification{Action: leadership.DBNotificationKindResigned, LeaderID: "client-1"}, topic: notifier.NotificationTopicLeadership},
-		{name: "resume", payload: map[string]any{"action": "resume", "queue": "priority"}, topic: notifier.NotificationTopicControl},
-	} {
-		payload, err := json.Marshal(notification.payload)
-		if err != nil {
-			fatal(err)
-		}
-		fixture.Notifications = append(fixture.Notifications, protocolNotification{
-			Name:    notification.name,
-			Payload: payload,
-			Topic:   string(notification.topic),
-		})
+	notifications, err := makeProtocolNotifications()
+	if err != nil {
+		fatal(err)
 	}
+	fixture.Notifications = notifications
 	for _, testCase := range []struct {
 		errorCount uint32
 		jobID      int64
@@ -586,17 +548,152 @@ func makeProtocolFixture(now time.Time) protocolFixture {
 		{errorCount: 2, jobID: 42, seed: 123},
 		{errorCount: 3, jobID: 9_007_199_254_740_991, seed: math.MaxUint64},
 		{errorCount: 11, jobID: 1, seed: 456},
+		{errorCount: 309, jobID: 42, seed: 789},
 		{errorCount: 310, jobID: 42, seed: 123},
 	} {
+		minDelay, maxDelay := retrypolicy.DelayBounds(int(testCase.errorCount))
 		fixture.RetryCases = append(fixture.RetryCases, protocolRetryCase{
-			ErrorCount:      testCase.errorCount,
-			ExpectedDelayNS: deterministicRetryDelay(now, testCase.jobID, testCase.errorCount, testCase.seed).Nanoseconds(),
-			JobID:           testCase.jobID,
-			Now:             now,
-			Seed:            testCase.seed,
+			ErrorCount: testCase.errorCount,
+			JobID:      testCase.jobID,
+			MaxDelayNS: maxDelay.Nanoseconds(),
+			MinDelayNS: minDelay.Nanoseconds(),
+			Now:        now,
+			Seed:       testCase.seed,
 		})
 	}
 	return fixture
+}
+
+// makeProtocolNotifications derives notification payload goldens from the Go
+// payload structs and action constants, and checks that the payloads the SQL
+// queries build use the same keys.
+func makeProtocolNotifications() ([]protocolNotification, error) {
+	controlFields, err := sourceStructJSONFields("producer.go", "controlEventPayload")
+	if err != nil {
+		return nil, err
+	}
+	insertFields, err := sourceStructJSONFields("producer.go", "insertPayload")
+	if err != nil {
+		return nil, err
+	}
+	leadershipFields, err := sourceStructJSONFields("internal/leadership/elector.go", "DBNotification")
+	if err != nil {
+		return nil, err
+	}
+	controlActions, err := sourceStringConstants("producer.go", "controlAction")
+	if err != nil {
+		return nil, err
+	}
+	leadershipActions, err := sourceStringConstants("internal/leadership/elector.go", "DBNotificationKind")
+	if err != nil {
+		return nil, err
+	}
+	examples := map[string]any{
+		"job_id":    42,
+		"leader_id": "client-1",
+		"metadata":  map[string]any{"owner": "candidate"},
+		"queue":     "priority",
+	}
+	var notifications []protocolNotification
+	for _, constant := range slices.Sorted(maps.Keys(controlActions)) {
+		action := controlActions[constant]
+		values := map[string]any{"action": action, "queue": examples["queue"]}
+		switch action {
+		case "cancel":
+			values["job_id"] = examples["job_id"]
+		case "metadata_changed":
+			values["metadata"] = examples["metadata"]
+		}
+		notification, err := newProtocolNotification(action, string(notifier.NotificationTopicControl), "producer.go:controlEventPayload", controlFields, values)
+		if err != nil {
+			return nil, err
+		}
+		notifications = append(notifications, notification)
+	}
+	insert, err := newProtocolNotification("insert", string(notifier.NotificationTopicInsert), "producer.go:insertPayload", insertFields, map[string]any{"queue": examples["queue"]})
+	if err != nil {
+		return nil, err
+	}
+	notifications = append(notifications, insert)
+	for _, constant := range slices.Sorted(maps.Keys(leadershipActions)) {
+		action := leadershipActions[constant]
+		leaderID := ""
+		if action == string(leadership.DBNotificationKindResigned) {
+			leaderID = "client-1"
+		}
+		notification, err := newProtocolNotification(action, string(notifier.NotificationTopicLeadership), "internal/leadership/elector.go:DBNotification", leadershipFields, map[string]any{"action": action, "leader_id": leaderID})
+		if err != nil {
+			return nil, err
+		}
+		notifications = append(notifications, notification)
+	}
+
+	// Some notifications are built in SQL rather than Go. Their keys must
+	// match the payload structs consumers decode them into.
+	for _, check := range []struct {
+		name  string
+		path  string
+		query string
+	}{
+		{name: "cancel", path: "riverdriver/riverpgxv5/internal/dbsqlc/river_job.sql", query: "JobCancel"},
+		{name: "resigned", path: "riverdriver/riverpgxv5/internal/dbsqlc/river_leader.sql", query: "LeaderResign"},
+	} {
+		keys, err := sqlNotificationKeys(check.path, check.query)
+		if err != nil {
+			return nil, err
+		}
+		index := slices.IndexFunc(notifications, func(notification protocolNotification) bool { return notification.Name == check.name })
+		if index < 0 {
+			return nil, fmt.Errorf("no %s notification to compare with %s", check.name, check.query)
+		}
+		var payload map[string]any
+		if err := json.Unmarshal(notifications[index].Payload, &payload); err != nil {
+			return nil, err
+		}
+		if expected := slices.Sorted(maps.Keys(payload)); !slices.Equal(expected, keys) {
+			return nil, fmt.Errorf("%s notification keys %v from %s differ from the Go payload keys %v", check.name, keys, check.query, expected)
+		}
+		notifications[index].Source += "; " + check.path + ":" + check.query
+	}
+	slices.SortFunc(notifications, func(a, b protocolNotification) int { return strings.Compare(a.Name, b.Name) })
+	return notifications, nil
+}
+
+// newProtocolNotification encodes values in the struct's field order,
+// omitting empty omitempty fields as encoding/json does.
+func newProtocolNotification(name, topic, source string, fields []jsonField, values map[string]any) (protocolNotification, error) {
+	var payload bytes.Buffer
+	payload.WriteByte('{')
+	for _, field := range fields {
+		value, ok := values[field.Name]
+		if !ok && !field.OmitEmpty {
+			return protocolNotification{}, fmt.Errorf("%s notification has no value for required field %s", name, field.Name)
+		}
+		if !ok {
+			continue
+		}
+		encoded, err := json.Marshal(value)
+		if err != nil {
+			return protocolNotification{}, err
+		}
+		if payload.Len() > 1 {
+			payload.WriteByte(',')
+		}
+		key, err := json.Marshal(field.Name)
+		if err != nil {
+			return protocolNotification{}, err
+		}
+		payload.Write(key)
+		payload.WriteByte(':')
+		payload.Write(encoded)
+	}
+	payload.WriteByte('}')
+	for key := range values {
+		if !slices.ContainsFunc(fields, func(field jsonField) bool { return field.Name == key }) {
+			return protocolNotification{}, fmt.Errorf("%s notification value %s is not a payload field", name, key)
+		}
+	}
+	return protocolNotification{Fields: fields, Name: name, Payload: payload.Bytes(), Source: source, Topic: topic}, nil
 }
 
 func writeGenerated(check bool, path string, value any) {
