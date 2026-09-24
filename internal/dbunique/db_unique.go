@@ -114,7 +114,12 @@ func buildUniqueKeyString(timeGen rivertype.TimeGenerator, uniqueOpts *UniqueOpt
 	}
 
 	if uniqueOpts.ByPeriod != time.Duration(0) {
-		lowerPeriodBound := ptrutil.ValOrDefaultFunc(params.ScheduledAt, timeGen.Now).Truncate(uniqueOpts.ByPeriod)
+		// Format the period bound in UTC. RFC 3339 formatting includes the
+		// time's location, so without normalization the same period produces
+		// different keys for processes or callers in different time zones.
+		// Truncation operates on absolute time, so the bound itself is
+		// independent of location.
+		lowerPeriodBound := ptrutil.ValOrDefaultFunc(params.ScheduledAt, timeGen.Now).Truncate(uniqueOpts.ByPeriod).UTC()
 		sb.WriteString("&period=" + lowerPeriodBound.Format(time.RFC3339))
 	}
 

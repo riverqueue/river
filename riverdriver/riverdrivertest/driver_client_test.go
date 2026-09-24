@@ -418,6 +418,53 @@ func ExerciseClient[TTx any](ctx context.Context, t *testing.T,
 		require.Equal(t, rivertype.JobStateCancelled, event.Job.State)
 	})
 
+	t.Run("InsertUniqueByPeriod", func(t *testing.T) {
+		t.Parallel()
+
+		client, bundle := setup(t)
+
+		type JobArgs struct {
+			testutil.JobArgsReflectKind[JobArgs]
+		}
+
+		river.AddWorker(bundle.config.Workers, river.WorkFunc(func(ctx context.Context, job *river.Job[JobArgs]) error {
+			return nil
+		}))
+
+		var (
+			chicago = time.FixedZone("CDT", -5*60*60)
+
+			// Far enough in the future that the test can't cross a period
+			// boundary while it runs.
+			scheduledAt = time.Now().UTC().Add(72 * time.Hour).Truncate(24 * time.Hour).Add(9 * time.Hour)
+			uniqueOpts  = river.UniqueOpts{ByPeriod: 24 * time.Hour}
+		)
+
+		insertRes0, err := client.Insert(ctx, &JobArgs{}, &river.InsertOpts{
+			ScheduledAt: scheduledAt.In(chicago),
+			UniqueOpts:  uniqueOpts,
+		})
+		require.NoError(t, err)
+		require.False(t, insertRes0.UniqueSkippedAsDuplicate)
+
+		// Same UTC period expressed in UTC is a duplicate.
+		insertRes1, err := client.Insert(ctx, &JobArgs{}, &river.InsertOpts{
+			ScheduledAt: scheduledAt.Add(10 * time.Hour),
+			UniqueOpts:  uniqueOpts,
+		})
+		require.NoError(t, err)
+		require.True(t, insertRes1.UniqueSkippedAsDuplicate)
+		require.Equal(t, insertRes0.Job.ID, insertRes1.Job.ID)
+
+		// The next period is not.
+		insertRes2, err := client.Insert(ctx, &JobArgs{}, &river.InsertOpts{
+			ScheduledAt: scheduledAt.Add(24 * time.Hour),
+			UniqueOpts:  uniqueOpts,
+		})
+		require.NoError(t, err)
+		require.False(t, insertRes2.UniqueSkippedAsDuplicate)
+	})
+
 	t.Run("JobDelete", func(t *testing.T) {
 		t.Parallel()
 

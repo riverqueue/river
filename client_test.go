@@ -2,6 +2,7 @@ package river
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -9531,6 +9532,75 @@ func TestInsertParamsFromJobArgsAndOptions(t *testing.T) {
 		require.Equal(t, internalUniqueOpts.StateBitmask(), params.UniqueStates)
 	})
 
+	t.Run("UniqueOptsPeriodIgnoresTimeZone", func(t *testing.T) {
+		t.Parallel()
+
+		var (
+			chicago    = time.FixedZone("CDT", -5*60*60)
+			now        = time.Date(2026, time.August, 12, 12, 34, 56, 0, time.UTC)
+			uniqueOpts = UniqueOpts{ByPeriod: time.Hour}
+			wantKey    = sha256.Sum256([]byte("&kind=noOp&period=2026-08-12T12:00:00Z"))
+		)
+
+		utcArchetype := riversharedtest.BaseServiceArchetype(t)
+		utcArchetype.Time.StubNow(now)
+
+		utcParams, err := insertParamsFromConfigArgsAndOptions(utcArchetype, config, noOpArgs{}, &InsertOpts{UniqueOpts: uniqueOpts})
+		require.NoError(t, err)
+		require.Equal(t, wantKey[:], utcParams.UniqueKey)
+
+		zonedArchetype := riversharedtest.BaseServiceArchetype(t)
+		zonedArchetype.Time.StubNow(now.In(chicago))
+
+		zonedParams, err := insertParamsFromConfigArgsAndOptions(zonedArchetype, config, noOpArgs{}, &InsertOpts{UniqueOpts: uniqueOpts})
+		require.NoError(t, err)
+		require.Equal(t, wantKey[:], zonedParams.UniqueKey)
+
+		scheduledParams, err := insertParamsFromConfigArgsAndOptions(utcArchetype, config, noOpArgs{}, &InsertOpts{
+			ScheduledAt: now.Add(10 * time.Minute).In(chicago),
+			UniqueOpts:  uniqueOpts,
+		})
+		require.NoError(t, err)
+		require.Equal(t, wantKey[:], scheduledParams.UniqueKey)
+	})
+
+	t.Run("UniqueOptsPeriodUsesScheduledAt", func(t *testing.T) {
+		t.Parallel()
+
+		archetype := riversharedtest.BaseServiceArchetype(t)
+		now := time.Date(2026, time.August, 12, 12, 34, 56, 0, time.UTC)
+		archetype.Time.StubNow(now)
+		uniqueOpts := UniqueOpts{ByPeriod: 24 * time.Hour}
+
+		params, err := insertParamsFromConfigArgsAndOptions(archetype, config, noOpArgs{}, &InsertOpts{
+			ScheduledAt: now.Add(48*time.Hour + 5*time.Minute),
+			UniqueOpts:  uniqueOpts,
+		})
+		require.NoError(t, err)
+
+		// The period comes from the scheduled time rather than insertion time.
+		wantKey := sha256.Sum256([]byte("&kind=noOp&period=2026-08-14T00:00:00Z"))
+		require.Equal(t, wantKey[:], params.UniqueKey)
+
+		// A job scheduled later in the same period gets the same key even when
+		// it's inserted at a different time.
+		archetype.Time.StubNow(now.Add(20 * time.Hour))
+		laterParams, err := insertParamsFromConfigArgsAndOptions(archetype, config, noOpArgs{}, &InsertOpts{
+			ScheduledAt: now.Add(48*time.Hour + 9*time.Hour),
+			UniqueOpts:  uniqueOpts,
+		})
+		require.NoError(t, err)
+		require.Equal(t, wantKey[:], laterParams.UniqueKey)
+
+		// An unscheduled job uses the insertion time's period.
+		unscheduledParams, err := insertParamsFromConfigArgsAndOptions(archetype, config, noOpArgs{}, &InsertOpts{
+			UniqueOpts: uniqueOpts,
+		})
+		require.NoError(t, err)
+		unscheduledKey := sha256.Sum256([]byte("&kind=noOp&period=2026-08-13T00:00:00Z"))
+		require.Equal(t, unscheduledKey[:], unscheduledParams.UniqueKey)
+	})
+
 	t.Run("UniqueOptsWithPartialArgs", func(t *testing.T) {
 		t.Parallel()
 
@@ -9848,6 +9918,81 @@ func TestUniqueOpts(t *testing.T) {
 
 		// Expect the same job to come back.
 		require.Equal(t, insertRes0.Job.ID, insertRes1.Job.ID)
+	})
+
+	t.Run("DeduplicatesAcrossTimeZones", func(t *testing.T) {
+		t.Parallel()
+
+		client, _ := setup(t)
+
+		var (
+			chicago     = time.FixedZone("CDT", -5*60*60)
+			scheduledAt = client.baseService.Time.Now().Add(48 * time.Hour).Truncate(24 * time.Hour).Add(9 * time.Hour)
+			uniqueOpts  = UniqueOpts{ByPeriod: 24 * time.Hour}
+		)
+
+		insertRes0, err := client.Insert(ctx, noOpArgs{}, &InsertOpts{
+			ScheduledAt: scheduledAt.UTC(),
+			UniqueOpts:  uniqueOpts,
+		})
+		require.NoError(t, err)
+		require.False(t, insertRes0.UniqueSkippedAsDuplicate)
+
+		// The same UTC period expressed in another zone is a duplicate, and so
+		// is an insert from a process whose clock is in another zone.
+		client.baseService.Time.StubNow(client.baseService.Time.Now().In(chicago))
+		insertRes1, err := client.Insert(ctx, noOpArgs{}, &InsertOpts{
+			ScheduledAt: scheduledAt.Add(time.Hour).In(chicago),
+			UniqueOpts:  uniqueOpts,
+		})
+		require.NoError(t, err)
+		require.True(t, insertRes1.UniqueSkippedAsDuplicate)
+		require.Equal(t, insertRes0.Job.ID, insertRes1.Job.ID)
+	})
+
+	t.Run("DeduplicatesScheduledJobsByScheduledPeriod", func(t *testing.T) {
+		t.Parallel()
+
+		client, _ := setup(t)
+
+		var (
+			now         = client.baseService.Time.Now()
+			scheduledAt = now.Add(48 * time.Hour).Truncate(24 * time.Hour).Add(9 * time.Hour)
+			uniqueOpts  = UniqueOpts{ByPeriod: 24 * time.Hour}
+		)
+
+		insertRes0, err := client.Insert(ctx, noOpArgs{}, &InsertOpts{
+			ScheduledAt: scheduledAt,
+			UniqueOpts:  uniqueOpts,
+		})
+		require.NoError(t, err)
+		require.False(t, insertRes0.UniqueSkippedAsDuplicate)
+
+		// Inserting at a different time for the same scheduled period is a
+		// duplicate even though the insertion times fall in different periods.
+		client.baseService.Time.StubNow(now.Add(24 * time.Hour))
+		insertRes1, err := client.Insert(ctx, noOpArgs{}, &InsertOpts{
+			ScheduledAt: scheduledAt.Add(6 * time.Hour),
+			UniqueOpts:  uniqueOpts,
+		})
+		require.NoError(t, err)
+		require.True(t, insertRes1.UniqueSkippedAsDuplicate)
+		require.Equal(t, insertRes0.Job.ID, insertRes1.Job.ID)
+
+		// Neither a job scheduled in the next period nor an unscheduled job in
+		// the current period conflicts with the scheduled job.
+		insertRes2, err := client.Insert(ctx, noOpArgs{}, &InsertOpts{
+			ScheduledAt: scheduledAt.Add(24 * time.Hour),
+			UniqueOpts:  uniqueOpts,
+		})
+		require.NoError(t, err)
+		require.False(t, insertRes2.UniqueSkippedAsDuplicate)
+
+		insertRes3, err := client.Insert(ctx, noOpArgs{}, &InsertOpts{
+			UniqueOpts: uniqueOpts,
+		})
+		require.NoError(t, err)
+		require.False(t, insertRes3.UniqueSkippedAsDuplicate)
 	})
 
 	t.Run("UniqueByCustomStates", func(t *testing.T) {
