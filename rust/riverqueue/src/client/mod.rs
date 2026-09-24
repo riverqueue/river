@@ -7,6 +7,7 @@ mod completer;
 mod executor;
 mod extension;
 mod insert;
+mod jobs;
 mod notifier;
 mod producer;
 mod record;
@@ -20,6 +21,10 @@ pub use self::builder::{ClientBuilder, MaintenanceConfig, QueueConfig};
 pub use self::extension::ExtensionClient;
 pub use self::insert::{
     InsertBatchRequest, InsertManyFastRequest, InsertManyItem, InsertManyRequest, InsertRequest,
+};
+pub use self::jobs::{
+    JobCancelRequest, JobCompleteRequest, JobCompleteTxRequest, JobDeleteManyRequest,
+    JobDeleteRequest, JobGetRequest, JobListRequest, JobRetryRequest, JobUpdateRequest, Jobs,
 };
 #[cfg(feature = "sqlite")]
 pub(crate) use self::record::FieldErrors;
@@ -500,38 +505,6 @@ impl Client {
 }
 
 impl Client {
-    /// Cancels a job and returns its current row.
-    pub async fn job_cancel(&self, id: i64) -> Result<JobRow, Error> {
-        let mut session = crate::storage::Session::begin(
-            &self.inner.database,
-            crate::storage::Access::Transaction,
-        )
-        .await?;
-        let row = session.storage(&self.inner).job_cancel(id).await?;
-        session.commit().await?;
-        if !self.inner.database.supports_listener() {
-            signal_running_attempt(
-                &self.inner.running,
-                &self.inner.pending_cancellations,
-                &self.inner.fetch_registration_windows,
-                id,
-            );
-        }
-        Ok(row)
-    }
-
-    /// Cancels a job inside a caller-managed transaction. The notification is
-    /// delivered only if the caller commits.
-    pub async fn job_cancel_tx<'executor, E>(&self, connection: E, id: i64) -> Result<JobRow, Error>
-    where
-        E: DatabaseTransactionExecutor<'executor>,
-    {
-        let connection = self.inner.transaction_connection(connection)?;
-        crate::storage::Storage::new(&self.inner, connection)
-            .job_cancel(id)
-            .await
-    }
-
     /// Requests that the current leader resign after committing an internal
     /// transaction.
     pub async fn request_resign(&self) -> Result<(), Error> {

@@ -25,10 +25,23 @@ pub struct JobListCursor {
 
 impl JobListCursor {
     /// Builds a cursor from a returned row and the parameters used to list it.
+    ///
+    /// [`JobListResult::last_cursor`] already holds the cursor after a page's
+    /// last job.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`JobListCursorError::InvalidListParams`] when `params` are
+    /// invalid.
     pub fn from_job(job: &JobRow, params: &JobListParams) -> Result<Self, JobListCursorError> {
         params
             .validate()
             .map_err(JobListCursorError::InvalidListParams)?;
+        Ok(Self::after_job(job, params))
+    }
+
+    /// Builds the cursor after `job` for already validated parameters.
+    pub(crate) fn after_job(job: &JobRow, params: &JobListParams) -> Self {
         let sort_time = match params.order_by {
             JobListOrderBy::Id => None,
             JobListOrderBy::FinalizedAt => job.finalized_at,
@@ -45,13 +58,13 @@ impl JobListCursor {
                 }
             },
         };
-        Ok(Self {
+        Self {
             id: job.id,
             kind: job.kind.clone(),
             order_by: params.order_by,
             queue: job.queue.clone(),
             sort_time,
-        })
+        }
     }
 
     /// Decodes an opaque cursor emitted by either matched implementation.
@@ -238,6 +251,17 @@ impl JobDeleteManyParams {
     pub const fn filter(&self) -> &JobListParams {
         &self.filter
     }
+}
+
+/// A page of jobs returned by [`Jobs::list`](crate::Jobs::list).
+#[derive(Clone, Debug)]
+#[non_exhaustive]
+pub struct JobListResult {
+    /// Jobs in the requested order.
+    pub jobs: Vec<JobRow>,
+    /// Cursor after the last job, to request the next page with the same
+    /// parameters. `None` when the page is empty.
+    pub last_cursor: Option<JobListCursor>,
 }
 
 /// Filters and pagination for listing jobs.

@@ -121,11 +121,13 @@ async fn job_delete_many() {
     // A row locked by another transaction is skipped rather than waited on.
     let deleted = tokio::time::timeout(
         std::time::Duration::from_secs(5),
-        client.job_delete_many(&riverqueue::JobDeleteManyParams::matching(
-            riverqueue::JobListParams::default()
-                .with_ids([running, first, locked, last])
-                .with_limit(2),
-        )),
+        client
+            .jobs()
+            .delete_many(riverqueue::JobDeleteManyParams::matching(
+                riverqueue::JobListParams::default()
+                    .with_ids([running, first, locked, last])
+                    .with_limit(2),
+            )),
     )
     .await
     .expect("bulk delete must skip locked rows instead of blocking")
@@ -137,7 +139,8 @@ async fn job_delete_many() {
     blocker.rollback().await.unwrap();
 
     let remaining = client
-        .job_delete_many(&riverqueue::JobDeleteManyParams::all())
+        .jobs()
+        .delete_many(riverqueue::JobDeleteManyParams::all())
         .await
         .unwrap();
     assert_eq!(
@@ -145,7 +148,7 @@ async fn job_delete_many() {
         vec![locked]
     );
     assert_eq!(
-        client.job_get(running).await.unwrap().state,
+        client.jobs().get(running).await.unwrap().state,
         riverqueue::JobState::Running
     );
 
@@ -173,17 +176,18 @@ async fn job_list_single_finalized_state_by_time() {
             .with_limit(2);
         params.states = vec![JobState::Completed];
         params.direction = direction;
-        let first_page = client.job_list(&params).await.unwrap();
+        let first_page = client.jobs().list(params.clone()).await.unwrap();
         assert_eq!(
-            first_page.iter().map(|job| job.id).collect::<Vec<_>>(),
+            first_page.jobs.iter().map(|job| job.id).collect::<Vec<_>>(),
             expected[..2]
         );
-        let cursor =
-            riverqueue::JobListCursor::from_job(first_page.last().unwrap(), &params).unwrap();
+        let cursor = first_page.last_cursor.unwrap();
         let second_page = client
-            .job_list(&params.clone().with_after(cursor))
+            .jobs()
+            .list(params.clone().with_after(cursor))
             .await
-            .unwrap();
+            .unwrap()
+            .jobs;
         assert_eq!(
             second_page.iter().map(|job| job.id).collect::<Vec<_>>(),
             expected[2..]
@@ -193,7 +197,7 @@ async fn job_list_single_finalized_state_by_time() {
     // Multiple states keep the generic predicate and still filter correctly.
     let mut params = JobListParams::default().with_order_by(JobListOrderBy::FinalizedAt);
     params.states = vec![JobState::Completed, JobState::Discarded];
-    let both = client.job_list(&params).await.unwrap();
+    let both = client.jobs().list(params).await.unwrap().jobs;
     assert_eq!(both.len(), 4);
 
     database.cleanup().await;
@@ -216,7 +220,7 @@ fn noop_workers() -> WorkerRegistry {
 async fn wait_for_job_state(client: &Client, id: i64, state: JobState) -> riverqueue::JobRow {
     tokio::time::timeout(Duration::from_secs(10), async {
         loop {
-            let row = client.job_get(id).await.unwrap();
+            let row = client.jobs().get(id).await.unwrap();
             if row.state == state {
                 return row;
             }

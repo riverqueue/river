@@ -589,17 +589,8 @@ impl crate::Client {
         operation(&mut session.storage(&self.inner)).await
     }
 
-    /// Completes a running job inside a caller-managed transaction. If this is
-    /// called from its worker, the normal completer observes that the row is no
-    /// longer running and leaves the transactional result unchanged.
-    pub async fn job_complete_tx<'executor, E>(&self, executor: E, id: i64) -> Result<JobRow, Error>
-    where
-        E: crate::database::DatabaseTransactionExecutor<'executor>,
-    {
-        self.job_complete_tx_with_metadata(executor, id, Map::new())
-            .await
-    }
-
+    /// Completes a running job in a caller-managed transaction, merging
+    /// metadata recorded on a work context.
     pub(crate) async fn job_complete_tx_with_metadata<'executor, E>(
         &self,
         executor: E,
@@ -615,114 +606,9 @@ impl crate::Client {
         .await
     }
 
-    /// Deletes a non-running job and returns its former row.
-    pub async fn job_delete(&self, id: i64) -> Result<JobRow, Error> {
-        self.with_pool(Access::Transaction, async |storage| {
-            storage.job_delete(id).await
-        })
-        .await
-    }
-
-    /// Deletes a non-running job inside a caller-managed transaction.
-    pub async fn job_delete_tx<'executor, E>(&self, executor: E, id: i64) -> Result<JobRow, Error>
-    where
-        E: crate::database::DatabaseTransactionExecutor<'executor>,
-    {
-        self.with_transaction(executor, async |storage| storage.job_delete(id).await)
-            .await
-    }
-
-    /// Deletes matching non-running jobs with an explicit safety guard.
-    pub async fn job_delete_many(
-        &self,
-        params: &JobDeleteManyParams,
-    ) -> Result<Vec<JobRow>, Error> {
-        self.with_pool(Access::Transaction, async |storage| {
-            storage.job_delete_many(params).await
-        })
-        .await
-    }
-
-    /// Deletes matching non-running jobs inside a caller-managed transaction.
-    pub async fn job_delete_many_tx<'executor, E>(
-        &self,
-        executor: E,
-        params: &JobDeleteManyParams,
-    ) -> Result<Vec<JobRow>, Error>
-    where
-        E: crate::database::DatabaseTransactionExecutor<'executor>,
-    {
-        self.with_transaction(executor, async |storage| {
-            storage.job_delete_many(params).await
-        })
-        .await
-    }
-
-    /// Gets one job by ID.
-    pub async fn job_get(&self, id: i64) -> Result<JobRow, Error> {
-        self.with_pool(Access::Autocommit, async |storage| {
-            storage.job_get(id).await
-        })
-        .await
-    }
-
-    /// Gets one job inside a caller-managed transaction.
-    pub async fn job_get_tx<'executor, E>(&self, executor: E, id: i64) -> Result<JobRow, Error>
-    where
-        E: crate::database::DatabaseTransactionExecutor<'executor>,
-    {
-        self.with_transaction(executor, async |storage| storage.job_get(id).await)
-            .await
-    }
-
-    /// Lists jobs matching the supplied filters, ordering, and cursor.
-    pub async fn job_list(&self, params: &JobListParams) -> Result<Vec<JobRow>, Error> {
-        self.with_pool(Access::Autocommit, async |storage| {
-            storage.job_list(params).await
-        })
-        .await
-    }
-
-    /// Lists jobs inside a caller-managed transaction.
-    pub async fn job_list_tx<'executor, E>(
-        &self,
-        executor: E,
-        params: &JobListParams,
-    ) -> Result<Vec<JobRow>, Error>
-    where
-        E: crate::database::DatabaseTransactionExecutor<'executor>,
-    {
-        self.with_transaction(executor, async |storage| storage.job_list(params).await)
-            .await
-    }
-
-    /// Makes a non-running job immediately available for another attempt.
-    pub async fn job_retry(&self, id: i64) -> Result<JobRow, Error> {
-        self.with_pool(Access::Transaction, async |storage| {
-            storage.job_retry(id).await
-        })
-        .await
-    }
-
-    /// Retries a job inside a caller-managed transaction.
-    pub async fn job_retry_tx<'executor, E>(&self, executor: E, id: i64) -> Result<JobRow, Error>
-    where
-        E: crate::database::DatabaseTransactionExecutor<'executor>,
-    {
-        self.with_transaction(executor, async |storage| storage.job_retry(id).await)
-            .await
-    }
-
-    /// Merges job metadata and optionally sets recorded output.
-    pub async fn job_update(&self, id: i64, params: JobUpdateParams) -> Result<JobRow, Error> {
-        self.with_pool(Access::Autocommit, async |storage| {
-            storage.job_update(id, params).await
-        })
-        .await
-    }
-
-    /// Updates a job inside a caller-managed transaction.
-    pub async fn job_update_tx<'executor, E>(
+    /// Updates a job in a caller-managed transaction for a work context,
+    /// whose generic executor can't be reborrowed into a request.
+    pub(crate) async fn job_update_tx<'executor, E>(
         &self,
         executor: E,
         id: i64,

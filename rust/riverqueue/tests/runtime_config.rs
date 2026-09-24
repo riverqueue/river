@@ -461,7 +461,7 @@ async fn extension_claimed_outcomes_use_postgres_completion_batcher() {
     .execute(&pool)
     .await
     .unwrap();
-    let row = client.job_get(inserted.job.row.id).await.unwrap();
+    let row = client.jobs().get(inserted.job.row.id).await.unwrap();
     let context = riverqueue::__private::work_context(CancellationToken::new());
     context.metadata_set("shared_completion", true).unwrap();
     riverqueue::__private::ExtensionClient::new(&client)
@@ -572,7 +572,7 @@ async fn external_terminal_state_wins_worker_completion_race() {
         assert_eq!(event.job.state, external_state);
         assert_eq!(event.job.metadata["worker_completion"], true);
 
-        let row = client.job_get(inserted.job.row.id).await.unwrap();
+        let row = client.jobs().get(inserted.job.row.id).await.unwrap();
         assert_eq!(row.state, external_state);
         assert_eq!(row.metadata["external_terminal"], true);
         assert_eq!(row.metadata["worker_completion"], true);
@@ -627,7 +627,7 @@ async fn remote_cancellation_overrides_worker_snooze() {
     run_handle.wait_ready().await.unwrap();
     let inserted = client.insert(CancelSnoozeArgs {}).await.unwrap();
     started.acquire().await.unwrap().forget();
-    client.job_cancel(inserted.job.row.id).await.unwrap();
+    client.jobs().cancel(inserted.job.row.id).await.unwrap();
 
     let event = tokio::time::timeout(Duration::from_secs(5), cancelled_events.recv())
         .await
@@ -722,7 +722,8 @@ async fn shutdown_waits_for_active_work_and_soft_stop_escalates() {
         .unwrap();
     assert_eq!(
         graceful_client
-            .job_get(active.job.row.id)
+            .jobs()
+            .get(active.job.row.id)
             .await
             .unwrap()
             .state,
@@ -730,7 +731,8 @@ async fn shutdown_waits_for_active_work_and_soft_stop_escalates() {
     );
     assert_eq!(
         graceful_client
-            .job_get(unfetched.job.row.id)
+            .jobs()
+            .get(unfetched.job.row.id)
             .await
             .unwrap()
             .state,
@@ -779,7 +781,11 @@ async fn shutdown_waits_for_active_work_and_soft_stop_escalates() {
         .unwrap()
         .unwrap();
     assert!(shutdown_started.elapsed() >= Duration::from_millis(50));
-    let interrupted = escalation_client.job_get(stuck.job.row.id).await.unwrap();
+    let interrupted = escalation_client
+        .jobs()
+        .get(stuck.job.row.id)
+        .await
+        .unwrap();
     assert_eq!(interrupted.attempt, 0);
     assert_eq!(interrupted.state, JobState::Available);
     assert!(interrupted.errors.is_empty());
@@ -895,7 +901,7 @@ async fn poll_only_and_subscription_configuration() {
 
     run_handle.shutdown().await.unwrap();
     assert_eq!(
-        client.job_get(inserted.job.row.id).await.unwrap().state,
+        client.jobs().get(inserted.job.row.id).await.unwrap().state,
         JobState::Completed
     );
 }

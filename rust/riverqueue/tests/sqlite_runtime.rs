@@ -471,7 +471,7 @@ async fn extension_claimed_outcomes_use_canonical_completion_pipeline() {
         .execute(&pool)
         .await
         .unwrap();
-        rows.push(client.job_get(inserted.job.row.id).await.unwrap());
+        rows.push(client.jobs().get(inserted.job.row.id).await.unwrap());
     }
     // Finalized now, so the job cleaner doesn't delete the row before the
     // outcome is persisted.
@@ -585,7 +585,7 @@ async fn extension_claimed_outcomes_retry_after_interception_error() {
         .execute(&pool)
         .await
         .unwrap();
-        rows.push(client.job_get(inserted.job.row.id).await.unwrap());
+        rows.push(client.jobs().get(inserted.job.row.id).await.unwrap());
     }
     let context = riverqueue::__private::work_context(tokio_util::sync::CancellationToken::new());
     ExtensionClient::new(&client)
@@ -611,7 +611,7 @@ async fn extension_claimed_outcomes_retry_after_interception_error() {
     assert_eq!(completed, [rows[0].id, rows[1].id]);
     for row in &rows {
         assert_eq!(
-            client.job_get(row.id).await.unwrap().state,
+            client.jobs().get(row.id).await.unwrap().state,
             JobState::Completed
         );
         let effects: i64 = sqlx::query_scalar(
@@ -667,7 +667,7 @@ async fn sqlite_pilot_completion_continue_and_mark_are_atomic() {
             Some(inserted.job.row.id)
         );
 
-        let row = client.job_get(inserted.job.row.id).await.unwrap();
+        let row = client.jobs().get(inserted.job.row.id).await.unwrap();
         assert_eq!(row.state, JobState::Completed);
         assert_eq!(
             row.metadata
@@ -733,7 +733,7 @@ async fn sqlite_pilot_completion_error_rolls_back_side_effects() {
     .unwrap();
     assert_eq!(effects, 0);
     assert_eq!(
-        client.job_get(inserted.job.row.id).await.unwrap().state,
+        client.jobs().get(inserted.job.row.id).await.unwrap().state,
         JobState::Running
     );
 
@@ -775,7 +775,7 @@ async fn sqlite_pilot_fetch_error_rolls_back_selection_side_effects() {
             .unwrap();
     assert_eq!(effects, 0);
     assert_eq!(
-        client.job_get(inserted.job.row.id).await.unwrap().state,
+        client.jobs().get(inserted.job.row.id).await.unwrap().state,
         JobState::Available
     );
 
@@ -810,7 +810,7 @@ async fn sqlite_pilot_fetch_transient_error_retries_without_stopping_the_queue()
         .unwrap()
         .forget();
     tokio::time::timeout(Duration::from_secs(5), async {
-        while client.job_get(inserted.job.row.id).await.unwrap().state != JobState::Completed {
+        while client.jobs().get(inserted.job.row.id).await.unwrap().state != JobState::Completed {
             tokio::task::yield_now().await;
         }
     })
@@ -859,7 +859,7 @@ async fn sqlite_queue_start_retries_transient_write_contention() {
         .unwrap()
         .forget();
     tokio::time::timeout(Duration::from_secs(5), async {
-        while client.job_get(inserted.job.row.id).await.unwrap().state != JobState::Completed {
+        while client.jobs().get(inserted.job.row.id).await.unwrap().state != JobState::Completed {
             tokio::task::yield_now().await;
         }
     })
@@ -968,7 +968,7 @@ async fn sqlite_extension_claim_returns_ordered_rows_and_rolls_back_decode_error
         assert_eq!(row.metadata["claim"], "leader-50");
     }
     assert_eq!(
-        client.job_get(leader.job.row.id).await.unwrap().state,
+        client.jobs().get(leader.job.row.id).await.unwrap().state,
         JobState::Available
     );
 
@@ -1305,16 +1305,20 @@ async fn sqlite_pilot_rescue_selection_and_update_share_a_transaction() {
     let mut run = client.start().unwrap();
     run.wait_ready().await.unwrap();
 
-    tokio::time::timeout(Duration::from_secs(5), async {
+    // Wait for the rescue's recorded error rather than the `retryable` state,
+    // which the scheduler ends about a second later and a loaded poll can miss.
+    let rescued = tokio::time::timeout(Duration::from_secs(5), async {
         loop {
-            if client.job_get(inserted.job.row.id).await.unwrap().state == JobState::Retryable {
-                break;
+            let row = client.jobs().get(inserted.job.row.id).await.unwrap();
+            if !row.errors.is_empty() {
+                break row;
             }
             tokio::time::sleep(Duration::from_millis(10)).await;
         }
     })
     .await
     .unwrap();
+    assert_eq!(rescued.errors[0].error, "Stuck job rescued by JobRescuer");
     let effects: i64 = sqlx::query_scalar(
         "SELECT count(*) FROM pilot_effect WHERE operation = 'rescue' AND job_id = ?",
     )
@@ -1377,7 +1381,7 @@ async fn sqlite_pilot_rescue_error_rolls_back_selection_side_effects() {
     .unwrap();
     assert_eq!(effects, 0);
     assert_eq!(
-        client.job_get(inserted.job.row.id).await.unwrap().state,
+        client.jobs().get(inserted.job.row.id).await.unwrap().state,
         JobState::Running
     );
 
@@ -1494,7 +1498,7 @@ async fn sqlite_runs_jobs_and_persists_output() {
         event.as_job().map(|job_event| job_event.job.id),
         Some(inserted.job.row.id)
     );
-    let row = client.job_get(inserted.job.row.id).await.unwrap();
+    let row = client.jobs().get(inserted.job.row.id).await.unwrap();
     assert_eq!(row.state, JobState::Completed);
     assert_eq!(row.output(), Some(&serde_json::json!({"doubled": 42})));
 
@@ -1513,7 +1517,7 @@ async fn sqlite_transaction_insert_respects_rollback() {
         .unwrap();
     transaction.rollback().await.unwrap();
 
-    let error = client.job_get(inserted.job.row.id).await.unwrap_err();
+    let error = client.jobs().get(inserted.job.row.id).await.unwrap_err();
     assert!(matches!(error, riverqueue::Error::NotFound));
 }
 
@@ -1664,9 +1668,9 @@ async fn sqlite_outbox_cancels_work_from_another_client() {
         .unwrap()
         .unwrap()
         .forget();
-    let running = worker_client.job_get(inserted.job.row.id).await.unwrap();
+    let running = worker_client.jobs().get(inserted.job.row.id).await.unwrap();
     assert_eq!(running.state, JobState::Running);
-    cancelling_client.job_cancel(running.id).await.unwrap();
+    cancelling_client.jobs().cancel(running.id).await.unwrap();
     let event = tokio::time::timeout(Duration::from_secs(5), cancelled.recv())
         .await
         .unwrap()
@@ -1676,7 +1680,7 @@ async fn sqlite_outbox_cancels_work_from_another_client() {
         Some(running.id)
     );
     assert_eq!(
-        worker_client.job_get(running.id).await.unwrap().state,
+        worker_client.jobs().get(running.id).await.unwrap().state,
         JobState::Cancelled
     );
 
@@ -1774,7 +1778,7 @@ async fn sqlite_fetches_and_discards_unregistered_kinds() {
 
     tokio::time::timeout(Duration::from_secs(5), async {
         loop {
-            if worker.job_get(inserted.job.row.id).await.unwrap().state == JobState::Discarded {
+            if worker.jobs().get(inserted.job.row.id).await.unwrap().state == JobState::Discarded {
                 break;
             }
             tokio::time::sleep(Duration::from_millis(10)).await;
