@@ -224,6 +224,7 @@ func TestCompatibilityArtifacts(t *testing.T) {
 			"conformance/adapter/contract.json",
 			"conformance/adapter/profiles/sqlite-runtime.json",
 			"conformance/adapter/profiles/sqlite.json",
+			"conformance/fixtures/maintenance_values.json",
 			"conformance/fixtures/protocol_values.json",
 			"conformance/fixtures/unique_keys.json",
 			"conformance/manifest.json",

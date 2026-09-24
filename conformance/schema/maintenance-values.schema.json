@@ -1,0 +1,41 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "$schema": { "type": "string" },
+    "cron_cases": {
+      "items": {
+        "additionalProperties": false,
+        "properties": {
+          "expression": { "type": "string" },
+          "from": { "format": "date-time", "type": "string" },
+          "name": { "type": "string" },
+          "next": { "items": { "format": "date-time", "type": "string" }, "type": "array" }
+        },
+        "required": ["expression", "from", "name", "next"],
+        "type": "object"
+      },
+      "minItems": 1,
+      "type": "array"
+    },
+    "cron_invalid": { "items": { "type": "string" }, "minItems": 1, "type": "array" },
+    "protocol_revision": { "minimum": 1, "type": "integer" },
+    "snooze_counters": {
+      "items": {
+        "additionalProperties": false,
+        "properties": {
+          "expected_snoozes": { "type": "integer" },
+          "metadata": { "type": "object" },
+          "name": { "type": "string" }
+        },
+        "required": ["expected_snoozes", "metadata", "name"],
+        "type": "object"
+      },
+      "minItems": 1,
+      "type": "array"
+    }
+  },
+  "required": ["$schema", "cron_cases", "cron_invalid", "protocol_revision", "snooze_counters"],
+  "title": "River maintenance protocol values",
+  "type": "object"
+}
