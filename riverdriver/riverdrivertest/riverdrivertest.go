@@ -110,6 +110,37 @@ func requireMissingRelation(t *testing.T, err error, schema, missingRelation str
 	}
 }
 
+// sqliteJobJSONColumns are the columns of a SQLite job row that hold JSON.
+//
+//nolint:gochecknoglobals
+var sqliteJobJSONColumns = []string{"args", "attempted_by", "errors", "metadata", "tags"}
+
+// sqliteMalformedValue is text that isn't valid JSON. Stored in one of a SQLite
+// job row's JSON columns, it's rejected with a "malformed JSON" error by any of
+// SQLite's JSON functions that touch it.
+const sqliteMalformedValue = "not json"
+
+// sqliteJobColumnText returns a column of a SQLite job row cast to text, which
+// can be used to check that a value that isn't valid JSON (and so can't be
+// read through the driver) was left in place.
+func sqliteJobColumnText(ctx context.Context, t *testing.T, exec riverdriver.Executor, jobID int64, column string) string {
+	t.Helper()
+
+	var value string
+	require.NoError(t, exec.QueryRow(ctx, "SELECT cast("+column+" AS text) FROM river_job WHERE id = ?", jobID).Scan(&value))
+	return value
+}
+
+// sqliteSetJobColumnMalformed overwrites a column of a SQLite job row with
+// sqliteMalformedValue as text, simulating a JSON column changed out of band to
+// a value that isn't valid JSON. Postgres' column types don't allow the
+// equivalent.
+func sqliteSetJobColumnMalformed(ctx context.Context, t *testing.T, exec riverdriver.Executor, jobID int64, column string) {
+	t.Helper()
+
+	require.NoError(t, exec.Exec(ctx, "UPDATE river_job SET "+column+" = ? WHERE id = ?", sqliteMalformedValue, jobID))
+}
+
 // sqliteSetJobJSONColumn overwrites a JSON column of a SQLite job row with the
 // given JSON, simulating a row changed out of band into a shape that River
 // can't decode. Postgres' column types don't allow the equivalent.

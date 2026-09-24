@@ -9,6 +9,7 @@ import (
 	"context"
 	"database/sql"
 	"strings"
+	"time"
 )
 
 const jobCancel = `-- name: JobCancel :one
@@ -352,7 +353,25 @@ WHERE id IN (
         id ASC
     LIMIT ?3
 )
-RETURNING id, json(args), attempt, attempted_at, json(attempted_by), created_at, json(errors), finalized_at, kind, max_attempts, json(metadata), priority, queue, state, scheduled_at, json(tags), unique_key, unique_states
+RETURNING
+    id,
+    cast(CASE WHEN typeof(args) = 'text' AND NOT json_valid(args) THEN args ELSE json(args) END AS blob) AS args,
+    attempt,
+    attempted_at,
+    cast(CASE WHEN typeof(attempted_by) = 'text' AND NOT json_valid(attempted_by) THEN attempted_by ELSE json(attempted_by) END AS blob) AS attempted_by,
+    created_at,
+    cast(CASE WHEN typeof(errors) = 'text' AND NOT json_valid(errors) THEN errors ELSE json(errors) END AS blob) AS errors,
+    finalized_at,
+    kind,
+    max_attempts,
+    cast(CASE WHEN typeof(metadata) = 'text' AND NOT json_valid(metadata) THEN metadata ELSE json(metadata) END AS blob) AS metadata,
+    priority,
+    queue,
+    state,
+    scheduled_at,
+    cast(CASE WHEN typeof(tags) = 'text' AND NOT json_valid(tags) THEN tags ELSE json(tags) END AS blob) AS tags,
+    unique_key,
+    unique_states
 `
 
 type JobGetAvailableParams struct {
@@ -361,35 +380,68 @@ type JobGetAvailableParams struct {
 	MaxToLock int64
 }
 
+type JobGetAvailableRow struct {
+	ID           int64
+	Column2      []byte
+	Attempt      int64
+	AttemptedAt  *time.Time
+	Column5      []byte
+	CreatedAt    time.Time
+	Column7      []byte
+	FinalizedAt  *time.Time
+	Kind         string
+	MaxAttempts  int64
+	Column11     []byte
+	Priority     int64
+	Queue        string
+	State        string
+	ScheduledAt  time.Time
+	Column16     []byte
+	UniqueKey    []byte
+	UniqueStates *int64
+}
+
 // Differs from the Postgres version in that we don't have `FOR UPDATE SKIP
 // LOCKED`. It doesn't exist in SQLite, but more aptly, there's only one writer
 // on SQLite at a time, so nothing else has the rows locked.
-func (q *Queries) JobGetAvailable(ctx context.Context, db DBTX, arg *JobGetAvailableParams) ([]*RiverJob, error) {
+//
+// JSON columns can be changed out of band to text that isn't valid JSON, which
+// makes SQLite's JSON functions fail with "malformed JSON", including the
+// `json()` sqlc wraps each JSON column in when expanding `RETURNING *`. One
+// such job would fail every fetch from its queue, so the columns are listed
+// out instead, returning any value that isn't valid JSON as is, which the
+// driver then reports as undecodable so the job's attempt can be failed.
+// River writes these columns as JSONB blobs, so only text values are checked
+// with `json_valid` (its flags for checking JSONB aren't supported by every
+// SQLite implementation River runs on). Queries that handle jobs of any state,
+// like completion and rescue, do the same, and leave invalid values in place
+// rather than update them.
+func (q *Queries) JobGetAvailable(ctx context.Context, db DBTX, arg *JobGetAvailableParams) ([]*JobGetAvailableRow, error) {
 	rows, err := db.QueryContext(ctx, jobGetAvailable, arg.Now, arg.Queue, arg.MaxToLock)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	var items []*RiverJob
+	var items []*JobGetAvailableRow
 	for rows.Next() {
-		var i RiverJob
+		var i JobGetAvailableRow
 		if err := rows.Scan(
 			&i.ID,
-			&i.Args,
+			&i.Column2,
 			&i.Attempt,
 			&i.AttemptedAt,
-			&i.AttemptedBy,
+			&i.Column5,
 			&i.CreatedAt,
-			&i.Errors,
+			&i.Column7,
 			&i.FinalizedAt,
 			&i.Kind,
 			&i.MaxAttempts,
-			&i.Metadata,
+			&i.Column11,
 			&i.Priority,
 			&i.Queue,
 			&i.State,
 			&i.ScheduledAt,
-			&i.Tags,
+			&i.Column16,
 			&i.UniqueKey,
 			&i.UniqueStates,
 		); err != nil {
@@ -558,7 +610,25 @@ func (q *Queries) JobGetByKindMany(ctx context.Context, db DBTX, kind []string) 
 }
 
 const jobGetStuck = `-- name: JobGetStuck :many
-SELECT id, json(args), attempt, attempted_at, json(attempted_by), created_at, json(errors), finalized_at, kind, max_attempts, json(metadata), priority, queue, state, scheduled_at, json(tags), unique_key, unique_states
+SELECT
+    id,
+    cast(CASE WHEN typeof(args) = 'text' AND NOT json_valid(args) THEN args ELSE json(args) END AS blob) AS args,
+    attempt,
+    attempted_at,
+    cast(CASE WHEN typeof(attempted_by) = 'text' AND NOT json_valid(attempted_by) THEN attempted_by ELSE json(attempted_by) END AS blob) AS attempted_by,
+    created_at,
+    cast(CASE WHEN typeof(errors) = 'text' AND NOT json_valid(errors) THEN errors ELSE json(errors) END AS blob) AS errors,
+    finalized_at,
+    kind,
+    max_attempts,
+    cast(CASE WHEN typeof(metadata) = 'text' AND NOT json_valid(metadata) THEN metadata ELSE json(metadata) END AS blob) AS metadata,
+    priority,
+    queue,
+    state,
+    scheduled_at,
+    cast(CASE WHEN typeof(tags) = 'text' AND NOT json_valid(tags) THEN tags ELSE json(tags) END AS blob) AS tags,
+    unique_key,
+    unique_states
 FROM /* TEMPLATE: schema */river_job
 WHERE state = 'running'
     AND id > ?1
@@ -573,15 +643,38 @@ type JobGetStuckParams struct {
 	Max          int64
 }
 
-func (q *Queries) JobGetStuck(ctx context.Context, db DBTX, arg *JobGetStuckParams) ([]*RiverJob, error) {
+type JobGetStuckRow struct {
+	ID           int64
+	Args         []byte
+	Attempt      int64
+	AttemptedAt  *time.Time
+	AttemptedBy  []byte
+	CreatedAt    time.Time
+	Errors       []byte
+	FinalizedAt  *time.Time
+	Kind         string
+	MaxAttempts  int64
+	Metadata     []byte
+	Priority     int64
+	Queue        string
+	State        string
+	ScheduledAt  time.Time
+	Tags         []byte
+	UniqueKey    []byte
+	UniqueStates *int64
+}
+
+// Lists columns out to tolerate values that aren't valid JSON. See
+// JobGetAvailable.
+func (q *Queries) JobGetStuck(ctx context.Context, db DBTX, arg *JobGetStuckParams) ([]*JobGetStuckRow, error) {
 	rows, err := db.QueryContext(ctx, jobGetStuck, arg.AfterID, arg.StuckHorizon, arg.Max)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	var items []*RiverJob
+	var items []*JobGetStuckRow
 	for rows.Next() {
-		var i RiverJob
+		var i JobGetStuckRow
 		if err := rows.Scan(
 			&i.ID,
 			&i.Args,
@@ -1243,20 +1336,26 @@ func (q *Queries) JobList(ctx context.Context, db DBTX, max int64) ([]*RiverJob,
 const jobRescue = `-- name: JobRescue :exec
 UPDATE /* TEMPLATE: schema */river_job
 SET
-    errors = jsonb(json_insert(json(coalesce(errors, jsonb('[]'))), '$[#]', json(?1))),
+    errors = CASE WHEN typeof(errors) = 'text' AND NOT json_valid(errors)
+                  THEN jsonb(json_array(errors, json(?1)))
+                  WHEN coalesce(json_type(errors), 'array') <> 'array'
+                  THEN jsonb(json_array(json(errors), json(?1)))
+                  ELSE jsonb(json_insert(json(coalesce(errors, jsonb('[]'))), '$[#]', json(?1))) END,
     finalized_at = cast(?2 as text),
     scheduled_at = cast(?3 AS text),
-    metadata = jsonb_set(
-        metadata,
-        '$."river:rescue_count"',
-        coalesce(
-            CASE json_type(metadata, '$."river:rescue_count"')
-                WHEN 'integer' THEN json_extract(metadata, '$."river:rescue_count"')
-                WHEN 'real' THEN json_extract(metadata, '$."river:rescue_count"')
-            END,
-            0
-        ) + 1
-    ),
+    metadata = CASE WHEN typeof(metadata) = 'text' AND NOT json_valid(metadata)
+                    THEN metadata
+                    ELSE jsonb_set(
+                        metadata,
+                        '$."river:rescue_count"',
+                        coalesce(
+                            CASE json_type(metadata, '$."river:rescue_count"')
+                                WHEN 'integer' THEN json_extract(metadata, '$."river:rescue_count"')
+                                WHEN 'real' THEN json_extract(metadata, '$."river:rescue_count"')
+                            END,
+                            0
+                        ) + 1
+                    ) END,
     state = ?4
 WHERE id = ?5
     AND state = 'running'
@@ -1282,6 +1381,10 @@ type JobRescueParams struct {
 // fixable in the future. Because SQLite targets will often be local and with a
 // very minimal round trip compared to a network, looping over operations is
 // probably okay performance-wise.
+//
+// As in JobSetStateIfRunning, an errors value that's been changed out of band
+// is wrapped in an array so the rescue error is still appended, and metadata
+// that isn't valid JSON is left in place.
 func (q *Queries) JobRescue(ctx context.Context, db DBTX, arg *JobRescueParams) error {
 	_, err := db.ExecContext(ctx, jobRescue,
 		arg.Error,
@@ -1595,10 +1698,30 @@ func (q *Queries) JobScheduleSetDiscarded(ctx context.Context, db DBTX, arg *Job
 
 const jobSetMetadataIfNotRunning = `-- name: JobSetMetadataIfNotRunning :one
 UPDATE /* TEMPLATE: schema */river_job
-SET metadata = jsonb_patch(json(metadata), json(?1))
+SET metadata = CASE WHEN typeof(metadata) <> 'text' OR json_valid(metadata)
+                    THEN jsonb_patch(json(metadata), json(?1))
+                    ELSE metadata END
 WHERE id = ?2
     AND state != 'running'
-RETURNING id, json(args), attempt, attempted_at, json(attempted_by), created_at, json(errors), finalized_at, kind, max_attempts, json(metadata), priority, queue, state, scheduled_at, json(tags), unique_key, unique_states
+RETURNING
+    id,
+    cast(CASE WHEN typeof(args) = 'text' AND NOT json_valid(args) THEN args ELSE json(args) END AS blob) AS args,
+    attempt,
+    attempted_at,
+    cast(CASE WHEN typeof(attempted_by) = 'text' AND NOT json_valid(attempted_by) THEN attempted_by ELSE json(attempted_by) END AS blob) AS attempted_by,
+    created_at,
+    cast(CASE WHEN typeof(errors) = 'text' AND NOT json_valid(errors) THEN errors ELSE json(errors) END AS blob) AS errors,
+    finalized_at,
+    kind,
+    max_attempts,
+    cast(CASE WHEN typeof(metadata) = 'text' AND NOT json_valid(metadata) THEN metadata ELSE json(metadata) END AS blob) AS metadata,
+    priority,
+    queue,
+    state,
+    scheduled_at,
+    cast(CASE WHEN typeof(tags) = 'text' AND NOT json_valid(tags) THEN tags ELSE json(tags) END AS blob) AS tags,
+    unique_key,
+    unique_states
 `
 
 type JobSetMetadataIfNotRunningParams struct {
@@ -1606,28 +1729,51 @@ type JobSetMetadataIfNotRunningParams struct {
 	ID              int64
 }
 
+type JobSetMetadataIfNotRunningRow struct {
+	ID           int64
+	Column2      []byte
+	Attempt      int64
+	AttemptedAt  *time.Time
+	Column5      []byte
+	CreatedAt    time.Time
+	Column7      []byte
+	FinalizedAt  *time.Time
+	Kind         string
+	MaxAttempts  int64
+	Column11     []byte
+	Priority     int64
+	Queue        string
+	State        string
+	ScheduledAt  time.Time
+	Column16     []byte
+	UniqueKey    []byte
+	UniqueStates *int64
+}
+
 // This doesn't exist under the Postgres driver, but needed as an extra query
 // for JobSetStateIfRunning to use when falling back to non-running jobs.
-func (q *Queries) JobSetMetadataIfNotRunning(ctx context.Context, db DBTX, arg *JobSetMetadataIfNotRunningParams) (*RiverJob, error) {
+// Metadata that isn't valid JSON is left in place, and columns are listed out
+// to tolerate values that aren't valid JSON. See JobGetAvailable.
+func (q *Queries) JobSetMetadataIfNotRunning(ctx context.Context, db DBTX, arg *JobSetMetadataIfNotRunningParams) (*JobSetMetadataIfNotRunningRow, error) {
 	row := db.QueryRowContext(ctx, jobSetMetadataIfNotRunning, arg.MetadataUpdates, arg.ID)
-	var i RiverJob
+	var i JobSetMetadataIfNotRunningRow
 	err := row.Scan(
 		&i.ID,
-		&i.Args,
+		&i.Column2,
 		&i.Attempt,
 		&i.AttemptedAt,
-		&i.AttemptedBy,
+		&i.Column5,
 		&i.CreatedAt,
-		&i.Errors,
+		&i.Column7,
 		&i.FinalizedAt,
 		&i.Kind,
 		&i.MaxAttempts,
-		&i.Metadata,
+		&i.Column11,
 		&i.Priority,
 		&i.Queue,
 		&i.State,
 		&i.ScheduledAt,
-		&i.Tags,
+		&i.Column16,
 		&i.UniqueKey,
 		&i.UniqueStates,
 	)
@@ -1640,34 +1786,54 @@ SET
     -- should_cancel: (job_input.state IN ('available', 'retryable', 'scheduled') AND river_job.metadata ? 'cancel_attempted_at')
     --
     -- or inverted:   (cast(@state AS text) <> 'available' AND @state <> 'retryable' AND @state <> 'scheduled' OR NOT (metadata -> 'cancel_attempted_at'))
-    attempt      = CASE WHEN /* NOT should_cancel */(cast(?1 AS text) <> 'available' AND ?1 <> 'retryable' AND ?1 <> 'scheduled' OR (metadata -> 'cancel_attempted_at') IS NULL) AND cast(?2 AS boolean)
+    attempt      = CASE WHEN /* NOT should_cancel */(cast(?1 AS text) <> 'available' AND ?1 <> 'retryable' AND ?1 <> 'scheduled' OR (CASE WHEN typeof(metadata) <> 'text' OR json_valid(metadata) THEN metadata -> 'cancel_attempted_at' END) IS NULL) AND cast(?2 AS boolean)
                         THEN ?3
                         ELSE attempt END,
     -- The errors column is always an array unless it's been changed out of
-    -- band. If it has, wrap its value in an array so that the new error is
-    -- still appended without losing it.
-    errors       = CASE WHEN cast(?4 AS boolean) AND coalesce(json_type(errors), 'array') <> 'array'
+    -- band. If it has, wrap its value in an array (as a string if it's not
+    -- valid JSON) so that the new error is still appended without losing it.
+    errors       = CASE WHEN cast(?4 AS boolean) AND typeof(errors) = 'text' AND NOT json_valid(errors)
+                        THEN jsonb(json_array(errors, json(?5)))
+                        WHEN cast(?4 AS boolean) AND coalesce(json_type(errors), 'array') <> 'array'
                         THEN jsonb(json_array(json(errors), json(?5)))
                         WHEN cast(?4 AS boolean)
                         THEN jsonb(json_insert(json(coalesce(errors, jsonb('[]'))), '$[#]', json(?5)))
                         ELSE errors END,
-    finalized_at = CASE WHEN /* should_cancel */((?1 = 'available' OR ?1 = 'retryable' OR ?1 = 'scheduled') AND (metadata -> 'cancel_attempted_at') IS NOT NULL)
+    finalized_at = CASE WHEN /* should_cancel */((?1 = 'available' OR ?1 = 'retryable' OR ?1 = 'scheduled') AND (CASE WHEN typeof(metadata) <> 'text' OR json_valid(metadata) THEN metadata -> 'cancel_attempted_at' END) IS NOT NULL)
                         THEN coalesce(cast(?6 AS text), datetime('now', 'subsec'))
                         WHEN cast(?7 AS boolean)
                         THEN cast(?8 AS text)
                         ELSE finalized_at END,
-    metadata     = CASE WHEN cast(?9 AS boolean)
+    metadata     = CASE WHEN cast(?9 AS boolean) AND (typeof(metadata) <> 'text' OR json_valid(metadata))
                         THEN jsonb_patch(json(metadata), json(?10))
                         ELSE metadata END,
-    scheduled_at = CASE WHEN /* NOT should_cancel */(cast(?1 AS text) <> 'available' AND ?1 <> 'retryable' AND ?1 <> 'scheduled' OR (metadata -> 'cancel_attempted_at') IS NULL) AND cast(?11 AS boolean)
+    scheduled_at = CASE WHEN /* NOT should_cancel */(cast(?1 AS text) <> 'available' AND ?1 <> 'retryable' AND ?1 <> 'scheduled' OR (CASE WHEN typeof(metadata) <> 'text' OR json_valid(metadata) THEN metadata -> 'cancel_attempted_at' END) IS NULL) AND cast(?11 AS boolean)
                         THEN cast(?12 AS text)
                         ELSE scheduled_at END,
-    state        = CASE WHEN /* should_cancel */((?1 = 'available' OR ?1 = 'retryable' OR ?1 = 'scheduled') AND (metadata -> 'cancel_attempted_at') IS NOT NULL)
+    state        = CASE WHEN /* should_cancel */((?1 = 'available' OR ?1 = 'retryable' OR ?1 = 'scheduled') AND (CASE WHEN typeof(metadata) <> 'text' OR json_valid(metadata) THEN metadata -> 'cancel_attempted_at' END) IS NOT NULL)
                         THEN 'cancelled'
                         ELSE ?1 END
 WHERE id = ?13
     AND state = 'running'
-RETURNING id, json(args), attempt, attempted_at, json(attempted_by), created_at, json(errors), finalized_at, kind, max_attempts, json(metadata), priority, queue, state, scheduled_at, json(tags), unique_key, unique_states
+RETURNING
+    id,
+    cast(CASE WHEN typeof(args) = 'text' AND NOT json_valid(args) THEN args ELSE json(args) END AS blob) AS args,
+    attempt,
+    attempted_at,
+    cast(CASE WHEN typeof(attempted_by) = 'text' AND NOT json_valid(attempted_by) THEN attempted_by ELSE json(attempted_by) END AS blob) AS attempted_by,
+    created_at,
+    cast(CASE WHEN typeof(errors) = 'text' AND NOT json_valid(errors) THEN errors ELSE json(errors) END AS blob) AS errors,
+    finalized_at,
+    kind,
+    max_attempts,
+    cast(CASE WHEN typeof(metadata) = 'text' AND NOT json_valid(metadata) THEN metadata ELSE json(metadata) END AS blob) AS metadata,
+    priority,
+    queue,
+    state,
+    scheduled_at,
+    cast(CASE WHEN typeof(tags) = 'text' AND NOT json_valid(tags) THEN tags ELSE json(tags) END AS blob) AS tags,
+    unique_key,
+    unique_states
 `
 
 type JobSetStateIfRunningParams struct {
@@ -1686,10 +1852,36 @@ type JobSetStateIfRunningParams struct {
 	ID                  int64
 }
 
+type JobSetStateIfRunningRow struct {
+	ID           int64
+	Column2      []byte
+	Attempt      int64
+	AttemptedAt  *time.Time
+	Column5      []byte
+	CreatedAt    time.Time
+	Column7      []byte
+	FinalizedAt  *time.Time
+	Kind         string
+	MaxAttempts  int64
+	Column11     []byte
+	Priority     int64
+	Queue        string
+	State        string
+	ScheduledAt  time.Time
+	Column16     []byte
+	UniqueKey    []byte
+	UniqueStates *int64
+}
+
 // Differs significantly from the Postgres version in that it can't do a bulk
 // update, and since sqlc doesn't support `UPDATE` in CTEs, we need separate
 // queries like JobSetMetadataIfNotRunning to do the fallback work.
-func (q *Queries) JobSetStateIfRunning(ctx context.Context, db DBTX, arg *JobSetStateIfRunningParams) (*RiverJob, error) {
+//
+// Metadata that isn't valid JSON is treated as not having
+// `cancel_attempted_at`, and is left in place instead of being merged into.
+// Columns are listed out to tolerate values that aren't valid JSON. See
+// JobGetAvailable.
+func (q *Queries) JobSetStateIfRunning(ctx context.Context, db DBTX, arg *JobSetStateIfRunningParams) (*JobSetStateIfRunningRow, error) {
 	row := db.QueryRowContext(ctx, jobSetStateIfRunning,
 		arg.State,
 		arg.AttemptDoUpdate,
@@ -1705,24 +1897,24 @@ func (q *Queries) JobSetStateIfRunning(ctx context.Context, db DBTX, arg *JobSet
 		arg.ScheduledAt,
 		arg.ID,
 	)
-	var i RiverJob
+	var i JobSetStateIfRunningRow
 	err := row.Scan(
 		&i.ID,
-		&i.Args,
+		&i.Column2,
 		&i.Attempt,
 		&i.AttemptedAt,
-		&i.AttemptedBy,
+		&i.Column5,
 		&i.CreatedAt,
-		&i.Errors,
+		&i.Column7,
 		&i.FinalizedAt,
 		&i.Kind,
 		&i.MaxAttempts,
-		&i.Metadata,
+		&i.Column11,
 		&i.Priority,
 		&i.Queue,
 		&i.State,
 		&i.ScheduledAt,
-		&i.Tags,
+		&i.Column16,
 		&i.UniqueKey,
 		&i.UniqueStates,
 	)

@@ -1433,6 +1433,89 @@ func ExerciseClient[TTx any](ctx context.Context, t *testing.T,
 		require.JSONEq(t, `{}`, string(fetchedQueue.Metadata))
 	})
 
+	// SQLite only: a job with a JSON column that holds invalid JSON doesn't
+	// stall its queue. Its attempt is failed like any undecodable job's (and
+	// it's retried or discarded) with the invalid value left in place, and the
+	// jobs locked alongside it are worked.
+	t.Run("InvalidJSONJobFailedWithoutBlockingOthers", func(t *testing.T) {
+		t.Parallel()
+
+		config, bundle := setupConfig(t)
+		if bundle.driver.DatabaseName() != riverdriver.DatabaseNameSQLite {
+			t.Skip("only SQLite's JSON columns can hold invalid JSON")
+		}
+		config.RetryPolicy = &retryPolicyAnHourLater{}
+
+		client, err := river.NewClient(bundle.driver, config)
+		require.NoError(t, err)
+
+		goodJob1 := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{Kind: new(noOpArgs{}.Kind()), Schema: bundle.schema})
+
+		invalidJobIDs := make(map[string]int64, len(sqliteJobJSONColumns))
+		for _, column := range sqliteJobJSONColumns {
+			job := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{Kind: new(noOpArgs{}.Kind()), Schema: bundle.schema})
+			sqliteSetJobColumnMalformed(ctx, t, bundle.exec, job.ID, column)
+			invalidJobIDs[column] = job.ID
+		}
+
+		discardedJob := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{Kind: new(noOpArgs{}.Kind()), MaxAttempts: new(1), Schema: bundle.schema})
+		sqliteSetJobColumnMalformed(ctx, t, bundle.exec, discardedJob.ID, "tags")
+
+		goodJob2 := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{Kind: new(noOpArgs{}.Kind()), Schema: bundle.schema})
+
+		subscribeChan := subscribe(t, client)
+		startClient(ctx, t, client)
+
+		eventsByJobID := make(map[int64]*river.Event)
+		for range len(sqliteJobJSONColumns) + 3 {
+			event := riversharedtest.WaitOrTimeout(t, subscribeChan)
+			eventsByJobID[event.Job.ID] = event
+		}
+
+		require.Equal(t, river.EventKindJobCompleted, eventsByJobID[goodJob1.ID].Kind)
+		require.Equal(t, river.EventKindJobCompleted, eventsByJobID[goodJob2.ID].Kind)
+
+		require.Equal(t, river.EventKindJobFailed, eventsByJobID[discardedJob.ID].Kind)
+		require.Equal(t, rivertype.JobStateDiscarded, eventsByJobID[discardedJob.ID].Job.State)
+
+		// Repair values for all but `errors`, which has the new attempt error
+		// appended to its invalid value instead of being left in place.
+		repairedValues := map[string]string{
+			"args":         `{}`,
+			"attempted_by": `[]`,
+			"metadata":     `{}`,
+			"tags":         `[]`,
+		}
+
+		for _, column := range sqliteJobJSONColumns {
+			jobID := invalidJobIDs[column]
+			require.Equal(t, river.EventKindJobFailed, eventsByJobID[jobID].Kind, "expected job with invalid %s to fail", column)
+			require.Equal(t, rivertype.JobStateRetryable, eventsByJobID[jobID].Job.State)
+
+			if repairedValue, ok := repairedValues[column]; ok {
+				// The invalid value is left in place, and once repaired, the job
+				// shows the failed attempt.
+				require.Equal(t, sqliteMalformedValue, sqliteJobColumnText(ctx, t, bundle.exec, jobID, column))
+				sqliteSetJobJSONColumn(ctx, t, bundle.exec, jobID, column, repairedValue)
+			}
+
+			job, err := client.JobGet(ctx, jobID)
+			require.NoError(t, err)
+			require.Equal(t, 1, job.Attempt)
+			require.Equal(t, rivertype.JobStateRetryable, job.State)
+
+			if column == "errors" {
+				require.Len(t, job.Errors, 2)
+				require.Equal(t, sqliteMalformedValue, job.Errors[0].Error)
+			} else {
+				require.Len(t, job.Errors, 1)
+			}
+			attemptErr := job.Errors[len(job.Errors)-1]
+			require.Equal(t, 1, attemptErr.Attempt)
+			require.Contains(t, attemptErr.Error, "job row couldn't be decoded: error unmarshaling `"+column+"`")
+		}
+	})
+
 	// A locked job whose row can't be decoded has its attempt failed (and is
 	// retried or discarded like any other failed job) without preventing the
 	// jobs locked alongside it from being worked.

@@ -319,6 +319,48 @@ func exerciseJobUpdate[TTx any](ctx context.Context, t *testing.T, executorWithT
 		}
 	})
 
+	// SQLite only: stuck jobs with JSON columns that hold invalid JSON are
+	// rescued. An invalid `errors` value is wrapped in an array as a string so
+	// that the rescue error can be appended to it, and other invalid values are
+	// left in place.
+	t.Run("JobRescueMany_InvalidJSON", func(t *testing.T) {
+		t.Parallel()
+
+		exec, bundle := setup(ctx, t)
+		if bundle.driver.DatabaseName() != riverdriver.DatabaseNameSQLite {
+			t.Skip("only SQLite's JSON columns can hold invalid JSON")
+		}
+
+		now := precisionTestTime
+
+		var (
+			invalidErrorsJob   = testfactory.Job(ctx, t, exec, &testfactory.JobOpts{AttemptedAt: new(now.Add(-time.Hour)), State: new(rivertype.JobStateRunning)})
+			invalidMetadataJob = testfactory.Job(ctx, t, exec, &testfactory.JobOpts{AttemptedAt: new(now.Add(-time.Hour)), State: new(rivertype.JobStateRunning)})
+		)
+		sqliteSetJobColumnMalformed(ctx, t, exec, invalidErrorsJob.ID, "errors")
+		sqliteSetJobColumnMalformed(ctx, t, exec, invalidMetadataJob.ID, "metadata")
+
+		_, err := exec.JobRescueMany(ctx, &riverdriver.JobRescueManyParams{
+			ID:           []int64{invalidErrorsJob.ID, invalidMetadataJob.ID},
+			Error:        [][]byte{[]byte(`{"error": "message1"}`), []byte(`{"error": "message2"}`)},
+			FinalizedAt:  []*time.Time{nil, &now},
+			ScheduledAt:  []time.Time{now, now},
+			State:        []string{string(rivertype.JobStateAvailable), string(rivertype.JobStateDiscarded)},
+			StuckHorizon: now,
+		})
+		require.NoError(t, err)
+
+		updatedJob1, err := exec.JobGetByID(ctx, &riverdriver.JobGetByIDParams{ID: invalidErrorsJob.ID})
+		require.NoError(t, err)
+		require.Equal(t, rivertype.JobStateAvailable, updatedJob1.State)
+		require.Equal(t, []string{sqliteMalformedValue, "message1"},
+			sliceutil.Map(updatedJob1.Errors, func(e rivertype.AttemptError) string { return e.Error }))
+		require.JSONEq(t, `{"river:rescue_count": 1}`, string(updatedJob1.Metadata))
+
+		require.Equal(t, string(rivertype.JobStateDiscarded), sqliteJobColumnText(ctx, t, exec, invalidMetadataJob.ID, "state"))
+		require.Equal(t, sqliteMalformedValue, sqliteJobColumnText(ctx, t, exec, invalidMetadataJob.ID, "metadata"))
+	})
+
 	t.Run("JobRescueMany_ReclaimedAfterFetch", func(t *testing.T) {
 		t.Parallel()
 
@@ -950,6 +992,81 @@ func exerciseJobUpdate[TTx any](ctx context.Context, t *testing.T, executorWithT
 			require.Equal(t, 1, jobAfter.Errors[0].Attempt)
 			require.Equal(t, "fake error", jobAfter.Errors[0].Error)
 			require.Equal(t, "foo.go:123\nbar.go:456", jobAfter.Errors[0].Trace)
+		})
+
+		// SQLite only: an `errors` value that isn't valid JSON is wrapped in an
+		// array as a string so that the new error can be appended without
+		// losing the existing value.
+		t.Run("InvalidJSONErrorsWrappedToAppend", func(t *testing.T) {
+			t.Parallel()
+
+			exec, bundle := setup(ctx, t)
+			if bundle.driver.DatabaseName() != riverdriver.DatabaseNameSQLite {
+				t.Skip("only SQLite's JSON columns can hold invalid JSON")
+			}
+
+			now := precisionTestTime
+
+			job := testfactory.Job(ctx, t, exec, &testfactory.JobOpts{State: new(rivertype.JobStateRunning)})
+			sqliteSetJobColumnMalformed(ctx, t, exec, job.ID, "errors")
+
+			jobsAfter, err := exec.JobSetStateIfRunningMany(ctx, setStateManyParams(riverdriver.JobSetStateErrorRetryable(job.ID, now, makeErrPayload(t, now), nil)))
+			require.NoError(t, err)
+			require.Len(t, jobsAfter, 1)
+			require.Equal(t, rivertype.JobStateRetryable, jobsAfter[0].State)
+			require.Equal(t, []string{sqliteMalformedValue, "fake error"},
+				sliceutil.Map(jobsAfter[0].Errors, func(e rivertype.AttemptError) string { return e.Error }))
+		})
+
+		// SQLite only: a job with JSON columns that hold invalid JSON still has
+		// its state set with the invalid values left in place, and doesn't
+		// prevent setting the state of other jobs in the same batch, including
+		// when it's no longer running and only its metadata would be updated.
+		t.Run("InvalidJSONJobSetAlongsideOthers", func(t *testing.T) {
+			t.Parallel()
+
+			exec, bundle := setup(ctx, t)
+			if bundle.driver.DatabaseName() != riverdriver.DatabaseNameSQLite {
+				t.Skip("only SQLite's JSON columns can hold invalid JSON")
+			}
+
+			now := precisionTestTime
+
+			var (
+				goodJob       = testfactory.Job(ctx, t, exec, &testfactory.JobOpts{State: new(rivertype.JobStateRunning)})
+				invalidJob    = testfactory.Job(ctx, t, exec, &testfactory.JobOpts{State: new(rivertype.JobStateRunning)})
+				notRunningJob = testfactory.Job(ctx, t, exec, &testfactory.JobOpts{ScheduledAt: new(now.Add(time.Hour)), State: new(rivertype.JobStateRetryable)})
+			)
+			for _, column := range []string{"args", "attempted_by", "metadata", "tags"} {
+				sqliteSetJobColumnMalformed(ctx, t, exec, invalidJob.ID, column)
+			}
+			sqliteSetJobColumnMalformed(ctx, t, exec, notRunningJob.ID, "metadata")
+
+			metadataUpdates := []byte(`{"foo":"bar"}`)
+			jobsAfter, err := exec.JobSetStateIfRunningMany(ctx, setStateManyParams(
+				riverdriver.JobSetStateErrorRetryable(goodJob.ID, now, makeErrPayload(t, now), metadataUpdates),
+				riverdriver.JobSetStateErrorRetryable(invalidJob.ID, now, makeErrPayload(t, now), metadataUpdates),
+				riverdriver.JobSetStateErrorRetryable(notRunningJob.ID, now, makeErrPayload(t, now), metadataUpdates),
+			))
+			require.NoError(t, err)
+			require.Equal(t, []int64{goodJob.ID, invalidJob.ID, notRunningJob.ID},
+				sliceutil.Map(jobsAfter, func(j *rivertype.JobRow) int64 { return j.ID }))
+			for _, jobAfter := range jobsAfter {
+				require.Equal(t, rivertype.JobStateRetryable, jobAfter.State)
+			}
+
+			require.JSONEq(t, `{"foo":"bar"}`, string(jobsAfter[0].Metadata))
+			require.Len(t, jobsAfter[0].Errors, 1)
+
+			require.Len(t, jobsAfter[1].Errors, 1)
+			require.Equal(t, "fake error", jobsAfter[1].Errors[0].Error)
+			require.Nil(t, jobsAfter[1].Tags)
+			for _, column := range []string{"args", "attempted_by", "metadata", "tags"} {
+				require.Equal(t, sqliteMalformedValue, sqliteJobColumnText(ctx, t, exec, invalidJob.ID, column))
+			}
+
+			require.Empty(t, jobsAfter[2].Errors)
+			require.Equal(t, sqliteMalformedValue, sqliteJobColumnText(ctx, t, exec, notRunningJob.ID, "metadata"))
 		})
 
 		// SQLite only: a non-array `errors` value is wrapped in an array so that
