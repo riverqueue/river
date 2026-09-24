@@ -1556,37 +1556,44 @@ async fn migrates_inserts_and_works_a_job() {
         .unwrap();
     assert_eq!(event.as_job().unwrap().job.id, interrupted.job.row.id);
 
-    let queue = client.queue_get("default").await.unwrap();
+    let queue = client.queues().get("default").await.unwrap();
     assert_eq!(queue.name, "default");
     assert!(queue.paused_at.is_none());
-    client.queue_pause("default").await.unwrap();
+    client.queues().pause("default").await.unwrap();
     assert!(
         client
-            .queue_get("default")
+            .queues()
+            .get("default")
             .await
             .unwrap()
             .paused_at
             .is_some()
     );
-    client.queue_resume("default").await.unwrap();
+    client.queues().resume("default").await.unwrap();
     assert!(
         client
-            .queue_get("default")
+            .queues()
+            .get("default")
             .await
             .unwrap()
             .paused_at
             .is_none()
     );
     let queue = client
-        .queue_update(
+        .queues()
+        .update(
             "default",
-            serde_json::Map::from_iter([("owner".to_owned(), serde_json::json!("rust"))]),
+            riverqueue::QueueUpdateParams::new().metadata(serde_json::Map::from_iter([(
+                "owner".to_owned(),
+                serde_json::json!("rust"),
+            )])),
         )
         .await
         .unwrap();
     assert_eq!(queue.metadata["owner"], "rust");
     let queues = client
-        .queue_list(&QueueListParams::default())
+        .queues()
+        .list(QueueListParams::default())
         .await
         .unwrap();
     assert_eq!(queues.len(), 3);

@@ -329,15 +329,17 @@ impl Backend for PostgresBackend<'_> {
     async fn queue_update(
         &mut self,
         name: &str,
-        metadata: &Map<String, Value>,
+        metadata: Option<&Map<String, Value>>,
     ) -> Result<Option<Queue>, Error> {
         let table = self.schema.qualify("river_queue");
         let sql = format!(
-            "UPDATE {table} SET metadata = $2, updated_at = now() WHERE name = $1 RETURNING *"
+            "UPDATE {table} SET metadata = CASE WHEN $2::boolean THEN $3::jsonb ELSE metadata END, \
+             updated_at = now() WHERE name = $1 RETURNING *"
         );
         sqlx::query_as::<_, QueueRecord>(AssertSqlSafe(sql))
             .bind(name)
-            .bind(Json(metadata))
+            .bind(metadata.is_some())
+            .bind(metadata.map(Json))
             .fetch_optional(&mut *self.connection)
             .await?
             .map(QueueRecord::into_queue)

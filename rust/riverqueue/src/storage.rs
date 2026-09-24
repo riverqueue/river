@@ -100,11 +100,12 @@ pub(crate) trait Backend {
     /// Creates a queue record or refreshes its `updated_at`.
     async fn queue_touch(&mut self, name: &str) -> Result<Queue, Error>;
 
-    /// Replaces a queue's metadata. `None` means the queue doesn't exist.
+    /// Refreshes a queue's `updated_at`, replacing its metadata when given.
+    /// `None` means the queue doesn't exist.
     async fn queue_update(
         &mut self,
         name: &str,
-        metadata: &Map<String, Value>,
+        metadata: Option<&Map<String, Value>>,
     ) -> Result<Option<Queue>, Error>;
 }
 
@@ -209,7 +210,7 @@ impl Backend for AnyBackend<'_> {
     async fn queue_update(
         &mut self,
         name: &str,
-        metadata: &Map<String, Value>,
+        metadata: Option<&Map<String, Value>>,
     ) -> Result<Option<Queue>, Error> {
         dispatch!(self, backend => backend.queue_update(name, metadata).await)
     }
@@ -380,26 +381,29 @@ impl<'c> Storage<'c> {
         self.backend.queue_touch(name).await
     }
 
-    /// Replaces a queue's metadata and notifies clients when the transaction
-    /// commits.
+    /// Updates a queue, refreshing its `updated_at`, and notifies clients of
+    /// new metadata when the transaction commits.
     pub(crate) async fn queue_update(
         &mut self,
         name: &str,
-        metadata: &Map<String, Value>,
+        metadata: Option<&Map<String, Value>>,
     ) -> Result<Queue, Error> {
         let queue = self
             .backend
             .queue_update(name, metadata)
             .await?
             .ok_or(Error::NotFound)?;
-        let payload = serde_json::json!({
-            "action": "metadata_changed",
-            "metadata": metadata,
-            "queue": name,
-        });
-        self.backend
-            .notify(crate::NOTIFICATION_TOPIC_CONTROL, &payload.to_string())
-            .await?;
+        // Like Go, only a metadata change notifies clients.
+        if let Some(metadata) = metadata {
+            let payload = serde_json::json!({
+                "action": "metadata_changed",
+                "metadata": metadata,
+                "queue": name,
+            });
+            self.backend
+                .notify(crate::NOTIFICATION_TOPIC_CONTROL, &payload.to_string())
+                .await?;
+        }
         Ok(queue)
     }
 
@@ -563,34 +567,11 @@ pub(crate) async fn load_queue(inner: &ClientInner, name: &str) -> Result<Option
     session.storage(inner).queue_get(name).await
 }
 
+/// Transactional job operations for a [`WorkContext`](crate::WorkContext),
+/// whose generic executor can't be reborrowed into a request builder.
 impl crate::Client {
-    /// Runs one storage operation on the client's own pool.
-    async fn with_pool<T>(
-        &self,
-        access: Access,
-        operation: impl AsyncFnOnce(&mut Storage<'_>) -> Result<T, Error>,
-    ) -> Result<T, Error> {
-        let mut session = Session::begin(&self.inner.database, access).await?;
-        let result = operation(&mut session.storage(&self.inner)).await?;
-        session.commit().await?;
-        Ok(result)
-    }
-
-    /// Runs one storage operation on a caller-managed transaction.
-    async fn with_transaction<'executor, E, T>(
-        &self,
-        executor: E,
-        operation: impl AsyncFnOnce(&mut Storage<'_>) -> Result<T, Error>,
-    ) -> Result<T, Error>
-    where
-        E: crate::database::DatabaseTransactionExecutor<'executor>,
-    {
-        let mut session = Session::caller(self.inner.transaction_connection(executor)?);
-        operation(&mut session.storage(&self.inner)).await
-    }
-
     /// Completes a running job in a caller-managed transaction, merging
-    /// metadata recorded on a work context.
+    /// metadata recorded on the work context.
     pub(crate) async fn job_complete_tx_with_metadata<'executor, E>(
         &self,
         executor: E,
@@ -600,14 +581,13 @@ impl crate::Client {
     where
         E: crate::database::DatabaseTransactionExecutor<'executor>,
     {
-        self.with_transaction(executor, async |storage| {
-            storage.job_complete(id, &metadata_updates).await
-        })
-        .await
+        let connection = self.inner.transaction_connection(executor)?;
+        Storage::new(&self.inner, connection)
+            .job_complete(id, &metadata_updates)
+            .await
     }
 
-    /// Updates a job in a caller-managed transaction for a work context,
-    /// whose generic executor can't be reborrowed into a request.
+    /// Updates a job in a caller-managed transaction.
     pub(crate) async fn job_update_tx<'executor, E>(
         &self,
         executor: E,
@@ -617,123 +597,9 @@ impl crate::Client {
     where
         E: crate::database::DatabaseTransactionExecutor<'executor>,
     {
-        self.with_transaction(executor, async |storage| {
-            storage.job_update(id, params).await
-        })
-        .await
-    }
-
-    /// Gets one active queue record.
-    pub async fn queue_get(&self, name: &str) -> Result<Queue, Error> {
-        self.with_pool(Access::Autocommit, async |storage| {
-            storage.queue_get(name).await?.ok_or(Error::NotFound)
-        })
-        .await
-    }
-
-    /// Gets one queue inside a caller-managed transaction.
-    pub async fn queue_get_tx<'executor, E>(&self, executor: E, name: &str) -> Result<Queue, Error>
-    where
-        E: crate::database::DatabaseTransactionExecutor<'executor>,
-    {
-        self.with_transaction(executor, async |storage| {
-            storage.queue_get(name).await?.ok_or(Error::NotFound)
-        })
-        .await
-    }
-
-    /// Lists active queues by name.
-    pub async fn queue_list(&self, params: &QueueListParams) -> Result<Vec<Queue>, Error> {
-        self.with_pool(Access::Autocommit, async |storage| {
-            storage.queue_list(params).await
-        })
-        .await
-    }
-
-    /// Lists queues inside a caller-managed transaction.
-    pub async fn queue_list_tx<'executor, E>(
-        &self,
-        executor: E,
-        params: &QueueListParams,
-    ) -> Result<Vec<Queue>, Error>
-    where
-        E: crate::database::DatabaseTransactionExecutor<'executor>,
-    {
-        self.with_transaction(executor, async |storage| storage.queue_list(params).await)
+        let connection = self.inner.transaction_connection(executor)?;
+        Storage::new(&self.inner, connection)
+            .job_update(id, params)
             .await
-    }
-
-    /// Pauses one queue, or every known queue when passed `"*"`.
-    ///
-    /// Returns [`Error::NotFound`] when a named queue has no persisted record.
-    pub async fn queue_pause(&self, name: &str) -> Result<(), Error> {
-        self.with_pool(Access::Transaction, async |storage| {
-            storage.queue_set_paused(name, true).await
-        })
-        .await?;
-        self.signal_queue_control(name);
-        Ok(())
-    }
-
-    /// Pauses queues inside a caller-managed transaction.
-    pub async fn queue_pause_tx<'executor, E>(&self, executor: E, name: &str) -> Result<(), Error>
-    where
-        E: crate::database::DatabaseTransactionExecutor<'executor>,
-    {
-        self.with_transaction(executor, async |storage| {
-            storage.queue_set_paused(name, true).await
-        })
-        .await
-    }
-
-    /// Resumes one queue, or every known queue when passed `"*"`.
-    ///
-    /// Returns [`Error::NotFound`] when a named queue has no persisted record.
-    pub async fn queue_resume(&self, name: &str) -> Result<(), Error> {
-        self.with_pool(Access::Transaction, async |storage| {
-            storage.queue_set_paused(name, false).await
-        })
-        .await?;
-        self.signal_queue_control(name);
-        Ok(())
-    }
-
-    /// Resumes queues inside a caller-managed transaction.
-    pub async fn queue_resume_tx<'executor, E>(&self, executor: E, name: &str) -> Result<(), Error>
-    where
-        E: crate::database::DatabaseTransactionExecutor<'executor>,
-    {
-        self.with_transaction(executor, async |storage| {
-            storage.queue_set_paused(name, false).await
-        })
-        .await
-    }
-
-    /// Replaces a queue's metadata object.
-    pub async fn queue_update(
-        &self,
-        name: &str,
-        metadata: Map<String, Value>,
-    ) -> Result<Queue, Error> {
-        self.with_pool(Access::Transaction, async |storage| {
-            storage.queue_update(name, &metadata).await
-        })
-        .await
-    }
-
-    /// Updates queue metadata inside a caller-managed transaction.
-    pub async fn queue_update_tx<'executor, E>(
-        &self,
-        executor: E,
-        name: &str,
-        metadata: Map<String, Value>,
-    ) -> Result<Queue, Error>
-    where
-        E: crate::database::DatabaseTransactionExecutor<'executor>,
-    {
-        self.with_transaction(executor, async |storage| {
-            storage.queue_update(name, &metadata).await
-        })
-        .await
     }
 }

@@ -1,7 +1,8 @@
 use chrono::{DateTime, Duration, SubsecRound, Utc};
 use riverqueue::{
     Client, Error, InsertBatch, JobArgs, JobDeleteManyParams, JobListCursor, JobListOrderBy,
-    JobListParams, JobState, JobUpdateParams, QueueListParams, SortDirection,
+    JobListParams, JobState, JobUpdateParams, QueueListParams, QueueSelector, QueueUpdateParams,
+    SortDirection,
 };
 use riverqueue_migrate::SqliteMigrator;
 use serde::{Deserialize, Serialize};
@@ -373,10 +374,11 @@ async fn queue_crud_and_notifications_share_the_caller_transaction() {
     insert_queue(&pool, "alpha").await;
     insert_queue(&pool, "beta").await;
 
-    assert_eq!(client.queue_get("alpha").await.unwrap().name, "alpha");
+    assert_eq!(client.queues().get("alpha").await.unwrap().name, "alpha");
     assert_eq!(
         client
-            .queue_list(&QueueListParams::default())
+            .queues()
+            .list(QueueListParams::default())
             .await
             .unwrap()
             .iter()
@@ -385,40 +387,62 @@ async fn queue_crud_and_notifications_share_the_caller_transaction() {
         ["alpha", "beta"]
     );
 
-    client.queue_pause("alpha").await.unwrap();
-    assert!(client.queue_get("alpha").await.unwrap().paused_at.is_some());
+    client.queues().pause("alpha").await.unwrap();
+    assert!(
+        client
+            .queues()
+            .get("alpha")
+            .await
+            .unwrap()
+            .paused_at
+            .is_some()
+    );
     let initial_notification_count = notification_count(&pool).await;
 
     let mut transaction = pool.begin().await.unwrap();
     client
-        .queue_resume_tx(&mut transaction, "alpha")
+        .queues()
+        .resume("alpha")
+        .tx(&mut transaction)
         .await
         .unwrap();
     assert!(
         client
-            .queue_get_tx(&mut transaction, "alpha")
+            .queues()
+            .get("alpha")
+            .tx(&mut transaction)
             .await
             .unwrap()
             .paused_at
             .is_none()
     );
     transaction.rollback().await.unwrap();
-    assert!(client.queue_get("alpha").await.unwrap().paused_at.is_some());
+    assert!(
+        client
+            .queues()
+            .get("alpha")
+            .await
+            .unwrap()
+            .paused_at
+            .is_some()
+    );
     assert_eq!(notification_count(&pool).await, initial_notification_count);
 
     let mut transaction = pool.begin().await.unwrap();
     let updated = client
-        .queue_update_tx(
-            &mut transaction,
+        .queues()
+        .update(
             "alpha",
-            Map::from_iter([("owner".to_owned(), json!("rust"))]),
+            QueueUpdateParams::new()
+                .metadata(Map::from_iter([("owner".to_owned(), json!("rust"))])),
         )
+        .tx(&mut transaction)
         .await
         .unwrap();
     assert_eq!(updated.metadata["owner"], "rust");
     transaction.commit().await.unwrap();
     assert_eq!(
-        client.queue_get("alpha").await.unwrap().metadata["owner"],
+        client.queues().get("alpha").await.unwrap().metadata["owner"],
         "rust"
     );
     assert_eq!(
@@ -426,11 +450,12 @@ async fn queue_crud_and_notifications_share_the_caller_transaction() {
         initial_notification_count + 1
     );
 
-    client.queue_resume("alpha").await.unwrap();
-    client.queue_pause("*").await.unwrap();
+    client.queues().resume("alpha").await.unwrap();
+    client.queues().pause(QueueSelector::All).await.unwrap();
     assert!(
         client
-            .queue_list(&QueueListParams::default())
+            .queues()
+            .list(QueueListParams::default())
             .await
             .unwrap()
             .iter()

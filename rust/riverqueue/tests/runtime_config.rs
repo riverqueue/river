@@ -866,7 +866,7 @@ async fn poll_only_and_subscription_configuration() {
     let mut transitions = client
         .subscribe(&[EventKind::QueuePaused, EventKind::QueueResumed])
         .unwrap();
-    client.queue_pause("default").await.unwrap();
+    client.queues().pause("default").await.unwrap();
     assert_eq!(
         tokio::time::timeout(Duration::from_secs(2), transitions.recv())
             .await
@@ -875,7 +875,7 @@ async fn poll_only_and_subscription_configuration() {
             .kind(),
         EventKind::QueuePaused
     );
-    client.queue_resume("default").await.unwrap();
+    client.queues().resume("default").await.unwrap();
     assert_eq!(
         tokio::time::timeout(Duration::from_secs(2), transitions.recv())
             .await
@@ -884,7 +884,7 @@ async fn poll_only_and_subscription_configuration() {
             .kind(),
         EventKind::QueueResumed
     );
-    client.queue_pause("default").await.unwrap();
+    client.queues().pause("default").await.unwrap();
     assert_eq!(
         tokio::time::timeout(Duration::from_secs(2), transitions.recv())
             .await

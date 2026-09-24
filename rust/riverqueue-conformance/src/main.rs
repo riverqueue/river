@@ -19,9 +19,9 @@ use riverqueue::{
     InsertMiddleware, InsertNext, InsertOpts, InsertResult, InsertedJobs, IntervalSchedule, Job,
     JobArgs, JobDeleteManyParams, JobListCursor, JobListParams, JobListResult, JobRow, JobState,
     JobUpdateParams, MaintenanceConfig, PeriodicJob, PeriodicJobOpts, PeriodicJobs, Plugin, Queue,
-    QueueConfig, QueueListParams, RetryPolicy, RunHandle, SortDirection, SubscribeConfig,
-    UniqueOpts, WorkCancelled, WorkContext, WorkMiddleware, WorkOutcome, WorkResult, Worker,
-    WorkerRegistry,
+    QueueConfig, QueueListParams, QueueSelector, QueueUpdateParams, RetryPolicy, RunHandle,
+    SortDirection, SubscribeConfig, UniqueOpts, WorkCancelled, WorkContext, WorkMiddleware,
+    WorkOutcome, WorkResult, Worker, WorkerRegistry,
     database::{PostgresDatabase, PostgresReindexConfig, PostgresReindexSchedule, SqliteDatabase},
     encoding::encode_args,
     protocol::{UniqueKeyInput, unique_key, unique_states_bitmask},
@@ -1598,7 +1598,8 @@ impl Adapter {
             "queue_get" => {
                 let queue = self
                     .client()?
-                    .queue_get(&required_string(&params, "name")?)
+                    .queues()
+                    .get(required_string(&params, "name")?)
                     .await?;
                 Ok(normalize_queue(&queue))
             }
@@ -1606,7 +1607,8 @@ impl Adapter {
                 let limit = optional_i64(&params, "limit").unwrap_or(100);
                 let queues = self
                     .client()?
-                    .queue_list(&queue_list_params(i32::try_from(limit)?))
+                    .queues()
+                    .list(queue_list_params(i32::try_from(limit)?))
                     .await?;
                 Ok(json!({
                     "queues": queues.iter().map(normalize_queue).collect::<Vec<_>>()
@@ -1616,9 +1618,9 @@ impl Adapter {
                 let name = required_string(&params, "name")?;
                 let client = self.client()?;
                 if method == "queue_pause" {
-                    client.queue_pause(&name).await?;
+                    client.queues().pause(queue_selector(name)).await?;
                 } else {
-                    client.queue_resume(&name).await?;
+                    client.queues().resume(queue_selector(name)).await?;
                 }
                 Ok(json!({}))
             }
@@ -1641,7 +1643,11 @@ impl Adapter {
                     .map(serde_json::from_value)
                     .transpose()?
                     .unwrap_or_default();
-                let queue = self.client()?.queue_update(&name, metadata).await?;
+                let queue = self
+                    .client()?
+                    .queues()
+                    .update(name, QueueUpdateParams::new().metadata(metadata))
+                    .await?;
                 Ok(normalize_queue(&queue))
             }
             "request_resign" => {
@@ -2137,7 +2143,7 @@ impl Adapter {
                     AdapterError::not_found(format!("transaction {handle:?} not found"))
                 })?;
                 Ok(normalize_queue(
-                    &client.queue_get_tx(transaction, &name).await?,
+                    &client.queues().get(name).tx(transaction).await?,
                 ))
             }
             "tx_queue_list" => {
@@ -2148,7 +2154,9 @@ impl Adapter {
                     AdapterError::not_found(format!("transaction {handle:?} not found"))
                 })?;
                 let queues = client
-                    .queue_list_tx(transaction, &queue_list_params(i32::try_from(limit)?))
+                    .queues()
+                    .list(queue_list_params(i32::try_from(limit)?))
+                    .tx(transaction)
                     .await?;
                 Ok(json!({
                     "queues": queues.iter().map(normalize_queue).collect::<Vec<_>>()
@@ -2162,9 +2170,17 @@ impl Adapter {
                     AdapterError::not_found(format!("transaction {handle:?} not found"))
                 })?;
                 if method == "tx_queue_pause" {
-                    client.queue_pause_tx(transaction, &name).await?;
+                    client
+                        .queues()
+                        .pause(queue_selector(name))
+                        .tx(transaction)
+                        .await?;
                 } else {
-                    client.queue_resume_tx(transaction, &name).await?;
+                    client
+                        .queues()
+                        .resume(queue_selector(name))
+                        .tx(transaction)
+                        .await?;
                 }
                 Ok(json!({}))
             }
@@ -2182,7 +2198,11 @@ impl Adapter {
                     AdapterError::not_found(format!("transaction {handle:?} not found"))
                 })?;
                 Ok(normalize_queue(
-                    &client.queue_update_tx(transaction, &name, metadata).await?,
+                    &client
+                        .queues()
+                        .update(name, QueueUpdateParams::new().metadata(metadata))
+                        .tx(transaction)
+                        .await?,
                 ))
             }
             "tx_fail" => {
@@ -2576,7 +2596,8 @@ impl SqliteAdapter {
             "queue_get" => {
                 let queue = self
                     .client()?
-                    .queue_get(&required_string(&params, "name")?)
+                    .queues()
+                    .get(required_string(&params, "name")?)
                     .await?;
                 Ok(normalize_queue(&queue))
             }
@@ -2584,7 +2605,8 @@ impl SqliteAdapter {
                 let limit = optional_i64(&params, "limit").unwrap_or(100);
                 let queues = self
                     .client()?
-                    .queue_list(&queue_list_params(i32::try_from(limit)?))
+                    .queues()
+                    .list(queue_list_params(i32::try_from(limit)?))
                     .await?;
                 Ok(json!({
                     "queues": queues.iter().map(normalize_queue).collect::<Vec<_>>()
@@ -2594,9 +2616,9 @@ impl SqliteAdapter {
                 let name = required_string(&params, "name")?;
                 let client = self.client()?;
                 if method == "queue_pause" {
-                    client.queue_pause(&name).await?;
+                    client.queues().pause(queue_selector(name)).await?;
                 } else {
-                    client.queue_resume(&name).await?;
+                    client.queues().resume(queue_selector(name)).await?;
                 }
                 Ok(json!({}))
             }
@@ -2619,7 +2641,11 @@ impl SqliteAdapter {
                     .map(serde_json::from_value)
                     .transpose()?
                     .unwrap_or_default();
-                let queue = self.client()?.queue_update(&name, metadata).await?;
+                let queue = self
+                    .client()?
+                    .queues()
+                    .update(name, QueueUpdateParams::new().metadata(metadata))
+                    .await?;
                 Ok(normalize_queue(&queue))
             }
             "leader" => {
@@ -2958,7 +2984,7 @@ impl SqliteAdapter {
                     AdapterError::not_found(format!("transaction {handle:?} not found"))
                 })?;
                 Ok(normalize_queue(
-                    &client.queue_get_tx(transaction, &name).await?,
+                    &client.queues().get(name).tx(transaction).await?,
                 ))
             }
             "tx_queue_list" => {
@@ -2969,7 +2995,9 @@ impl SqliteAdapter {
                     AdapterError::not_found(format!("transaction {handle:?} not found"))
                 })?;
                 let queues = client
-                    .queue_list_tx(transaction, &queue_list_params(i32::try_from(limit)?))
+                    .queues()
+                    .list(queue_list_params(i32::try_from(limit)?))
+                    .tx(transaction)
                     .await?;
                 Ok(json!({
                     "queues": queues.iter().map(normalize_queue).collect::<Vec<_>>()
@@ -2983,9 +3011,17 @@ impl SqliteAdapter {
                     AdapterError::not_found(format!("transaction {handle:?} not found"))
                 })?;
                 if method == "tx_queue_pause" {
-                    client.queue_pause_tx(transaction, &name).await?;
+                    client
+                        .queues()
+                        .pause(queue_selector(name))
+                        .tx(transaction)
+                        .await?;
                 } else {
-                    client.queue_resume_tx(transaction, &name).await?;
+                    client
+                        .queues()
+                        .resume(queue_selector(name))
+                        .tx(transaction)
+                        .await?;
                 }
                 Ok(json!({}))
             }
@@ -3003,7 +3039,11 @@ impl SqliteAdapter {
                     AdapterError::not_found(format!("transaction {handle:?} not found"))
                 })?;
                 Ok(normalize_queue(
-                    &client.queue_update_tx(transaction, &name, metadata).await?,
+                    &client
+                        .queues()
+                        .update(name, QueueUpdateParams::new().metadata(metadata))
+                        .tx(transaction)
+                        .await?,
                 ))
             }
             "tx_commit" | "tx_rollback" => {
@@ -3169,6 +3209,15 @@ fn job_update_params(metadata: Map<String, Value>, output: Option<Value>) -> Job
     match output {
         Some(output) => params.with_output(output),
         None => params,
+    }
+}
+
+/// Maps a protocol queue name to a selector: `*` selects every queue.
+fn queue_selector(name: String) -> QueueSelector {
+    if name == "*" {
+        QueueSelector::All
+    } else {
+        QueueSelector::Named(name)
     }
 }
 
