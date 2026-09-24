@@ -16,9 +16,10 @@ use std::{
     time::Duration,
 };
 
+use async_trait::async_trait;
 use riverqueue::{
-    Client, InsertOpts, Job, JobArgs, JobState, QueueConfig, WorkCancelled, WorkContext,
-    WorkOutcome, WorkerRegistry,
+    Client, ErrorHandler, InsertOpts, Job, JobArgs, JobRow, JobState, QueueConfig, WorkCancelled,
+    WorkContext, WorkOutcome, WorkerRegistry,
     database::{PostgresDatabase, SchemaName},
 };
 use riverqueue_migrate::PostgresMigrator;
@@ -47,6 +48,68 @@ enum ShutdownError {
     Cancelled(#[source] WorkCancelled),
     #[error("real failure during shutdown")]
     Real,
+}
+
+/// A job that blocks its thread without yielding, so Tokio cannot abort it
+/// until the blocking section ends.
+#[derive(Clone, Debug, Deserialize, JobArgs, Serialize)]
+#[river(kind = "rust_postgres_resilience_blocking")]
+struct BlockingArgs {
+    block_ms: u64,
+}
+
+/// Records when blocking work finished and when later work started.
+#[derive(Default)]
+struct BlockingTimeline {
+    blocking_finished: std::sync::Mutex<Option<std::time::Instant>>,
+    later_started: std::sync::Mutex<Option<std::time::Instant>>,
+}
+
+/// Signals every stuck job.
+#[derive(Clone)]
+struct StuckSignal(Arc<Semaphore>);
+
+#[async_trait]
+impl ErrorHandler for StuckSignal {
+    async fn handle_stuck(&self, _job: &JobRow) -> Result<(), riverqueue::Error> {
+        self.0.add_permits(1);
+        Ok(())
+    }
+}
+
+fn blocking_workers(gate: &Gate, timeline: &Arc<BlockingTimeline>) -> WorkerRegistry {
+    let mut workers = WorkerRegistry::new();
+    let blocking_gate = gate.clone();
+    let blocking_timeline = Arc::clone(timeline);
+    workers
+        .register_fn(move |_context: WorkContext, job: Job<BlockingArgs>| {
+            let gate = blocking_gate.clone();
+            let timeline = Arc::clone(&blocking_timeline);
+            async move {
+                gate.started.add_permits(1);
+                // Deliberately ignore cancellation without an await point.
+                std::thread::sleep(Duration::from_millis(job.args.block_ms));
+                *timeline.blocking_finished.lock().unwrap() = Some(std::time::Instant::now());
+                tokio::task::yield_now().await;
+                Ok::<_, Infallible>(WorkOutcome::Complete)
+            }
+        })
+        .unwrap();
+    let later_timeline = Arc::clone(timeline);
+    workers
+        .register_fn(move |_context: WorkContext, _job: Job<ResilienceArgs>| {
+            let timeline = Arc::clone(&later_timeline);
+            async move {
+                timeline
+                    .later_started
+                    .lock()
+                    .unwrap()
+                    .get_or_insert_with(std::time::Instant::now);
+                Ok::<_, Infallible>(WorkOutcome::Complete)
+            }
+        })
+        .unwrap();
+    workers
 }
 
 /// Lets a test hold a gated job inside its worker until released.
@@ -537,6 +600,101 @@ async fn hard_shutdown_interrupts_only_cooperative_cancellations() {
         assert_eq!(job.errors.len(), 1);
         assert!(job.errors[0].error.contains(error), "{:?}", job.errors);
     }
+
+    schema.drop().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn stuck_job_keeps_its_worker_slot_until_it_ends() {
+    let schema = TestSchema::new("stuck").await;
+    let gate = Gate::default();
+    let timeline = Arc::new(BlockingTimeline::default());
+    let stuck = StuckSignal(Arc::new(Semaphore::new(0)));
+    let client = Client::builder(schema.database())
+        .id("postgres-resilience-stuck")
+        .error_handler(stuck.clone())
+        .job_stuck_threshold(Duration::from_millis(50))
+        .job_timeout(Some(Duration::from_millis(100)))
+        .without_notifications()
+        .workers(blocking_workers(&gate, &timeline))
+        .queue(
+            "default",
+            QueueConfig::new(1)
+                .with_fetch_cooldown(Duration::from_millis(1))
+                .with_fetch_poll_interval(Duration::from_millis(20)),
+        )
+        .build()
+        .unwrap();
+    let blocked = client
+        .insert(BlockingArgs { block_ms: 1_500 })
+        .await
+        .unwrap();
+    let later = client
+        .insert_with(ResilienceArgs {}, InsertOpts::default().with_priority(2))
+        .await
+        .unwrap();
+
+    let run = client.start().unwrap();
+    gate.wait_started().await;
+    tokio::time::timeout(Duration::from_secs(5), stuck.0.acquire())
+        .await
+        .expect("stuck handler was not invoked")
+        .unwrap()
+        .forget();
+    // The aborted task is still blocking its thread, so its row must stay
+    // `running` rather than becoming retryable while the original runs.
+    assert_eq!(schema.job_state(blocked.job.row.id).await, "running");
+    wait_until(Duration::from_secs(10), "the later job", || async {
+        schema.job_state(later.job.row.id).await == "completed"
+    })
+    .await;
+    run.shutdown().await.unwrap();
+
+    let blocking_finished = timeline.blocking_finished.lock().unwrap().unwrap();
+    let later_started = timeline.later_started.lock().unwrap().unwrap();
+    assert!(
+        later_started >= blocking_finished,
+        "the stuck job's worker slot was released while it still ran"
+    );
+    let blocked = client.job_get(blocked.job.row.id).await.unwrap();
+    assert_eq!(blocked.attempt, 1);
+    assert_eq!(blocked.errors.len(), 1);
+    assert_eq!(
+        blocked.errors[0].error,
+        "job aborted after ignoring cancellation"
+    );
+
+    schema.drop().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn shutdown_leaves_a_job_still_stuck_after_abort_running() {
+    let schema = TestSchema::new("abandon").await;
+    let gate = Gate::default();
+    let timeline = Arc::new(BlockingTimeline::default());
+    let client = Client::builder(schema.database())
+        .id("postgres-resilience-abandon")
+        .job_stuck_threshold(Duration::from_millis(50))
+        .without_notifications()
+        .workers(blocking_workers(&gate, &timeline))
+        .queue("default", fast_queue())
+        .build()
+        .unwrap();
+    let blocked = client
+        .insert(BlockingArgs { block_ms: 1_500 })
+        .await
+        .unwrap();
+
+    let run = client.start().unwrap();
+    gate.wait_started().await;
+    let started = std::time::Instant::now();
+    tokio::time::timeout(Duration::from_secs(1), run.shutdown_now())
+        .await
+        .expect("shutdown waited for a task that cannot be aborted")
+        .unwrap();
+    assert!(started.elapsed() < Duration::from_secs(1));
+    assert!(timeline.blocking_finished.lock().unwrap().is_none());
+    assert_eq!(schema.job_state(blocked.job.row.id).await, "running");
 
     schema.drop().await;
 }
