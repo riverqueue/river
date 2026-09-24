@@ -448,12 +448,7 @@ pub(super) async fn persist_result(
                     JobState::Scheduled
                 };
                 let mut metadata = metadata_updates;
-                let snoozes = row
-                    .metadata
-                    .get("snoozes")
-                    .and_then(Value::as_i64)
-                    .unwrap_or(0)
-                    + 1;
+                let snoozes = go_json_int(row.metadata.get("snoozes")).wrapping_add(1);
                 metadata.insert("snoozes".to_owned(), Value::from(snoozes));
                 (
                     state,
@@ -651,4 +646,91 @@ pub(crate) fn default_retry_delay(row: &JobRow, now: DateTime<Utc>, seed: u64) -
     let sample = u32::from_be_bytes(hash[..4].try_into().unwrap());
     let ratio = f64::from(sample) / f64::from(u32::MAX);
     base.mul_f64(0.9 + ratio * 0.2)
+}
+
+/// Coerces a metadata value to an integer exactly like Go's `gjson.Int`, which
+/// the Go executor uses to read the `snoozes` counter. Numbers truncate toward
+/// zero, numeric strings of optional sign and digits parse, `true` is one, and
+/// everything else is zero.
+fn go_json_int(value: Option<&Value>) -> i64 {
+    fn parse_digits(text: &str) -> Option<i64> {
+        let (negative, digits) = text
+            .strip_prefix('-')
+            .map_or((false, text), |digits| (true, digits));
+        if digits.is_empty() {
+            return None;
+        }
+        let mut number = 0_i64;
+        for byte in digits.bytes() {
+            if !byte.is_ascii_digit() {
+                return None;
+            }
+            number = number.wrapping_mul(10).wrapping_add(i64::from(byte - b'0'));
+        }
+        Some(if negative {
+            number.wrapping_neg()
+        } else {
+            number
+        })
+    }
+
+    const MAX_SAFE_INTEGER: f64 = 9_007_199_254_740_991.0;
+    match value {
+        Some(Value::Bool(true)) => 1,
+        Some(Value::String(text)) => parse_digits(text).unwrap_or(0),
+        Some(Value::Number(number)) => {
+            let raw = number.to_string();
+            let float = raw.parse::<f64>().unwrap_or(0.0);
+            if (-MAX_SAFE_INTEGER..=MAX_SAFE_INTEGER).contains(&float) {
+                #[expect(
+                    clippy::cast_possible_truncation,
+                    reason = "Go truncates safe floats toward zero"
+                )]
+                return float as i64;
+            }
+            #[expect(
+                clippy::cast_possible_truncation,
+                reason = "Go falls back to a float conversion for huge numbers"
+            )]
+            parse_digits(&raw).unwrap_or(float as i64)
+        }
+        _ => 0,
+    }
+}
+
+#[cfg(test)]
+mod go_json_int_tests {
+    use serde::Deserialize;
+    use serde_json::{Map, Value};
+
+    use super::go_json_int;
+
+    #[derive(Deserialize)]
+    struct Fixture {
+        snooze_counters: Vec<SnoozeCounter>,
+    }
+
+    #[derive(Deserialize)]
+    struct SnoozeCounter {
+        expected_snoozes: i64,
+        metadata: Map<String, Value>,
+        name: String,
+    }
+
+    #[test]
+    fn snooze_counter_matches_go_fixture() {
+        let fixture: Fixture = serde_json::from_str(include_str!(
+            "../../../../conformance/fixtures/maintenance_values.json"
+        ))
+        .unwrap();
+        assert!(!fixture.snooze_counters.is_empty());
+        for case in fixture.snooze_counters {
+            assert_eq!(
+                go_json_int(case.metadata.get("snoozes")).wrapping_add(1),
+                case.expected_snoozes,
+                "{}",
+                case.name
+            );
+        }
+    }
 }

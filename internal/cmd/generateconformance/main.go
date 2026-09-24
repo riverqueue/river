@@ -493,6 +493,7 @@ func main() {
 
 	writeGenerated(*check, uniqueFixturePath, generated)
 	writeGenerated(*check, protocolFixturePath, makeProtocolFixture(now))
+	writeGenerated(*check, maintenanceFixturePath, makeMaintenanceFixture())
 }
 
 func deterministicRetryDelay(now time.Time, jobID int64, errorCount uint32, seed uint64) time.Duration {
