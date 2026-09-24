@@ -101,7 +101,12 @@ that profile.
 The built-in `conformance_echo` job accepts `message`, `behavior`, and
 `duration_ms`. Behaviors cover success, retryable error, panic, worker cancel,
 discard, one-time snooze, recorded output, barrier waiting, timed work,
-cooperative remote cancellation, and intentionally ignored cancellation. The
+cooperative remote cancellation, and intentionally ignored cancellation.
+`cooperative_cancel` waits for its job context to be cancelled and returns the
+implementation's cancellation error (Go's `context.Canceled`, Rust's
+`WorkCancelled`), while `cancel_error` and `cancel_panic` wait the same way and
+then return an ordinary error or panic, so shutdown can distinguish a
+cooperative stop from a genuine failure. The
 suite also covers a snoozed job that is immediately refetched and then
 cancelled, which exercises cancellation registration and stale-attempt cleanup
 in both directions. The last behavior is only run in a disposable adapter
