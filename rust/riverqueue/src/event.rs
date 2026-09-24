@@ -52,14 +52,6 @@ pub enum Event {
 }
 
 impl Event {
-    pub(crate) fn job(kind: JobEventKind, job: JobRow) -> Self {
-        Self::Job(JobEvent {
-            job,
-            kind,
-            statistics: None,
-        })
-    }
-
     pub(crate) fn queue(kind: QueueEventKind, queue: Queue) -> Self {
         Self::Queue(QueueEvent { kind, queue })
     }

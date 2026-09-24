@@ -28,7 +28,8 @@ use self::{
     notifier::*, producer::*, run::*, validate::*,
 };
 pub(crate) use self::{
-    executor::default_retry_delay, notifier::RuntimeNotification, validate::validate_queue,
+    completer::after_jobs_set_state, executor::default_retry_delay, notifier::RuntimeNotification,
+    validate::validate_queue,
 };
 
 use std::{
@@ -65,11 +66,11 @@ use tokio_util::sync::CancellationToken;
 use tracing::{Instrument, debug, error, info_span, warn};
 
 use riverqueue_internal::{
-    CompletionAction, CompletionParams, DatabaseConnection as PilotDatabaseConnection, FetchParams,
-    JobInsertParams as PilotJobInsertParams,
+    DatabaseConfig as PilotDatabaseConfig, DatabasePool as PilotDatabasePool, NoopPilot, Pilot,
 };
 use riverqueue_internal::{
-    DatabaseConfig as PilotDatabaseConfig, DatabasePool as PilotDatabasePool, NoopPilot, Pilot,
+    DatabaseConnection as PilotDatabaseConnection, FetchParams,
+    JobInsertParams as PilotJobInsertParams, JobSetStateParams, JobSetStateRow,
 };
 
 use crate::{

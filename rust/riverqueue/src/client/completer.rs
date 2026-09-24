@@ -83,11 +83,6 @@ pub(super) struct CompletionTiming {
     pub(super) run_duration: Duration,
 }
 
-pub(super) enum PersistResult {
-    Enqueued,
-    Finished(Option<Box<Event>>),
-}
-
 /// Persists completions until every sender is dropped and all accepted
 /// updates were written or abandoned.
 pub(super) async fn run_completion_batcher(
@@ -100,7 +95,7 @@ pub(super) async fn run_completion_batcher(
 
 type BatchOutcome = (Vec<CompletionUpdate>, Result<Vec<JobRow>, Error>);
 
-struct CompletionBatcher {
+pub(super) struct CompletionBatcher {
     /// Updates accepted while a batch containing the same job is in flight.
     /// They replace the in-flight update's successor once it finishes.
     deferred: HashMap<i64, CompletionUpdate>,
@@ -119,12 +114,19 @@ struct CompletionBatcher {
 }
 
 impl CompletionBatcher {
-    fn new(inner: Arc<ClientInner>) -> Self {
-        let max_concurrency = match inner.database.kind() {
+    pub(super) fn new(inner: Arc<ClientInner>) -> Self {
+        let backend_concurrency = match inner.database.kind() {
             #[cfg(feature = "postgres")]
             DatabaseKind::Postgres => COMPLETION_POSTGRES_CONCURRENCY,
             #[cfg(feature = "sqlite")]
             DatabaseKind::Sqlite => 1,
+        };
+        // Like River Go's `completionConcurrency`, an intercepting extension
+        // can only lower the backend's limit.
+        let max_concurrency = if inner.pilot.intercepts_job_set_state() {
+            backend_concurrency.min(inner.pilot.job_set_state_concurrency().max(1))
+        } else {
+            backend_concurrency
         };
         Self {
             deferred: HashMap::new(),
@@ -337,7 +339,7 @@ impl CompletionBatcher {
         }
     }
 
-    fn concurrency(&self) -> usize {
+    pub(super) const fn concurrency(&self) -> usize {
         self.max_concurrency
     }
 }
@@ -540,6 +542,14 @@ pub(super) async fn persist_completion_batch(
             .await
             .map_err(sqlite_backend_error)?;
         }
+        if inner.pilot.intercepts_job_set_state() {
+            after_jobs_set_state(
+                inner,
+                PilotDatabaseConnection::Sqlite(&mut transaction),
+                &rows,
+            )
+            .await?;
+        }
         transaction.commit().await?;
         return Ok(rows);
     }
@@ -622,7 +632,7 @@ pub(super) async fn persist_completion_batch(
              SELECT {projection}, false AS unique_skipped_as_duplicate FROM updated AS job",
             projection = job_projection("job"),
         );
-        let records = sqlx::query(AssertSqlSafe(sql))
+        let query = sqlx::query(AssertSqlSafe(sql))
             .bind(ids)
             .bind(attempt_do_update)
             .bind(attempts)
@@ -631,32 +641,100 @@ pub(super) async fn persist_completion_batch(
             .bind(metadata_do_merge)
             .bind(metadata)
             .bind(scheduled_at)
-            .bind(states)
-            .fetch_all(
-                inner
-                    .postgres_pool()
-                    .expect("PostgreSQL completion path requires a PostgreSQL pool"),
+            .bind(states);
+        let pool = inner
+            .postgres_pool()
+            .expect("PostgreSQL completion path requires a PostgreSQL pool");
+        if inner.pilot.intercepts_job_set_state() {
+            let mut transaction = pool.begin().await?;
+            let rows = decode_completion_rows(&query.fetch_all(&mut *transaction).await?);
+            after_jobs_set_state(
+                inner,
+                PilotDatabaseConnection::Postgres(&mut transaction),
+                &rows,
             )
             .await?;
-        return Ok(records
-            .iter()
-            .filter_map(|row| match decode_job_row(row) {
-                Ok(row) => Some(row),
-                Err(job) => {
-                    error!(
-                        job_id = job.id,
-                        error = %job.error,
-                        "River job row persisted by completion could not be decoded; skipping its event"
-                    );
-                    None
-                }
-            })
-            .collect());
+            transaction.commit().await?;
+            return Ok(rows);
+        }
+        return Ok(decode_completion_rows(&query.fetch_all(pool).await?));
     }
     #[allow(unreachable_code)]
     Err(Error::runtime(
         "database dispatch selected no supported backend".to_owned(),
     ))
+}
+
+/// Decodes rows returned by a completion, skipping (and logging) any row that
+/// cannot be decoded since its state is already persisted.
+#[cfg(feature = "postgres")]
+fn decode_completion_rows(records: &[PgRow]) -> Vec<JobRow> {
+    records
+        .iter()
+        .filter_map(|row| match decode_job_row(row) {
+            Ok(row) => Some(row),
+            Err(job) => {
+                error!(
+                    job_id = job.id,
+                    error = %job.error,
+                    "River job row persisted by completion could not be decoded; skipping its event"
+                );
+                None
+            }
+        })
+        .collect()
+}
+
+/// Calls the extension hook for rows updated in the current transaction.
+pub(crate) async fn after_jobs_set_state(
+    inner: &ClientInner,
+    connection: PilotDatabaseConnection<'_>,
+    rows: &[JobRow],
+) -> Result<(), Error> {
+    let params = JobSetStateParams {
+        database: inner.pilot_database_config(),
+        jobs: rows.iter().map(job_set_state_row).collect(),
+    };
+    inner
+        .pilot
+        .after_jobs_set_state(connection, &params)
+        .await
+        .map_err(|source| Error::Extension {
+            phase: "job set state",
+            source,
+        })
+}
+
+fn job_set_state_row(row: &JobRow) -> JobSetStateRow {
+    JobSetStateRow {
+        id: row.id,
+        attempt: row.attempt,
+        attempted_at: row.attempted_at,
+        attempted_by: row.attempted_by.clone(),
+        created_at: row.created_at,
+        encoded_args: row.encoded_args.clone(),
+        errors: row
+            .errors
+            .iter()
+            .map(|error| serde_json::to_value(error).unwrap_or(Value::Null))
+            .collect(),
+        finalized_at: row.finalized_at,
+        kind: row.kind.clone(),
+        max_attempts: row.max_attempts,
+        metadata: row.metadata.clone(),
+        priority: row.priority,
+        queue: row.queue.clone(),
+        scheduled_at: row.scheduled_at,
+        state: row.state.as_str().to_owned(),
+        tags: row.tags.clone(),
+        unique_key: row.unique_key.clone(),
+        unique_states: row.unique_states.as_ref().map(|states| {
+            states
+                .iter()
+                .map(|state| state.as_str().to_owned())
+                .collect()
+        }),
+    }
 }
 
 pub(super) fn finish_batched_completion(

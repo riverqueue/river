@@ -6,6 +6,7 @@ use serde_json::{Map, Value};
 #[cfg(feature = "postgres")]
 use sqlx::{AssertSqlSafe, Executor, FromRow, PgConnection, Postgres, types::Json};
 
+use crate::client::after_jobs_set_state;
 #[cfg(feature = "sqlite")]
 use crate::database::sqlite;
 use crate::{
@@ -19,7 +20,7 @@ use crate::{
     JobListOrderBy, SortDirection,
     client::{JobRecord, job_projection},
 };
-use riverqueue_internal::{CompletionAction, CompletionParams, DatabaseConnection};
+use riverqueue_internal::DatabaseConnection;
 
 impl Client {
     /// Completes a running job inside a caller-managed transaction. If this is
@@ -95,50 +96,22 @@ impl Client {
              RETURNING {}, false AS unique_skipped_as_duplicate",
             job_projection("job")
         );
-        let completion_action = if self.inner.pilot.intercepts_completion() {
-            self.inner
-                .pilot
-                .before_job_completion(
-                    DatabaseConnection::Postgres(&mut *connection),
-                    &CompletionParams {
-                        database: self.inner.pilot_database_config(),
-                        job_id: id,
-                        metadata_updates: metadata_updates.clone(),
-                        state: JobState::Completed.as_str().to_owned(),
-                    },
-                )
-                .await
-                .map_err(|source| Error::Extension {
-                    phase: "job completion",
-                    source,
-                })?
-        } else {
-            CompletionAction::Continue
-        };
-        let record = match completion_action {
-            CompletionAction::Continue => {
-                sqlx::query_as::<_, JobRecord>(AssertSqlSafe(sql))
-                    .bind(id)
-                    .bind(Json(metadata_updates))
-                    .fetch_optional(&mut *connection)
-                    .await?
-            }
-            CompletionAction::Handled => {
-                let sql = format!(
-                    "SELECT {}, false AS unique_skipped_as_duplicate FROM {table} AS job \
-                     WHERE id = $1 LIMIT 1",
-                    job_projection("job")
-                );
-                sqlx::query_as::<_, JobRecord>(AssertSqlSafe(sql))
-                    .bind(id)
-                    .fetch_optional(&mut *connection)
-                    .await?
-            }
-        };
-        if let Some(record) = record {
-            return record.into_job_row();
+        let row = sqlx::query_as::<_, JobRecord>(AssertSqlSafe(sql))
+            .bind(id)
+            .bind(Json(metadata_updates))
+            .fetch_optional(&mut *connection)
+            .await?
+            .ok_or(Error::NotFound)?
+            .into_job_row()?;
+        if self.inner.pilot.intercepts_job_set_state() {
+            after_jobs_set_state(
+                &self.inner,
+                DatabaseConnection::Postgres(&mut *connection),
+                std::slice::from_ref(&row),
+            )
+            .await?;
         }
-        Err(Error::NotFound)
+        Ok(row)
     }
 
     #[cfg(feature = "sqlite")]
@@ -161,48 +134,31 @@ impl Client {
             ));
         }
         let now = Utc::now();
-        let completion_action = if self.inner.pilot.intercepts_completion() {
-            self.inner
-                .pilot
-                .before_job_completion(
-                    DatabaseConnection::Sqlite(connection),
-                    &CompletionParams {
-                        database: self.inner.pilot_database_config(),
-                        job_id: id,
-                        metadata_updates: metadata_updates.clone(),
-                        state: JobState::Completed.as_str().to_owned(),
-                    },
-                )
-                .await
-                .map_err(|source| Error::Extension {
-                    phase: "job completion",
-                    source,
-                })?
-        } else {
-            CompletionAction::Continue
-        };
-        match completion_action {
-            CompletionAction::Continue => sqlite::complete(
-                connection,
-                &sqlite::CompleteJob {
-                    attempt: None,
-                    error: None,
-                    finalized_at: Some(now),
-                    id,
-                    metadata_updates: Some(metadata_updates),
-                    now,
-                    scheduled_at: None,
-                    state: JobState::Completed,
-                },
+        let row = sqlite::complete(
+            connection,
+            &sqlite::CompleteJob {
+                attempt: None,
+                error: None,
+                finalized_at: Some(now),
+                id,
+                metadata_updates: Some(metadata_updates),
+                now,
+                scheduled_at: None,
+                state: JobState::Completed,
+            },
+        )
+        .await
+        .map_err(database_error)?
+        .ok_or(Error::NotFound)?;
+        if self.inner.pilot.intercepts_job_set_state() {
+            after_jobs_set_state(
+                &self.inner,
+                DatabaseConnection::Sqlite(connection),
+                std::slice::from_ref(&row),
             )
-            .await
-            .map_err(database_error)?
-            .ok_or(Error::NotFound),
-            CompletionAction::Handled => sqlite::get(connection, id)
-                .await
-                .map_err(database_error)?
-                .ok_or(Error::NotFound),
+            .await?;
         }
+        Ok(row)
     }
 
     /// Deletes a non-running job and returns its former row.
