@@ -109,3 +109,12 @@ func requireMissingRelation(t *testing.T, err error, schema, missingRelation str
 		require.Regexp(t, fmt.Sprintf(`(pq: relation "%s\.%s" does not exist|no such table: %s\.%s|no such database: %s)`, schema, missingRelation, schema, missingRelation, schema), err.Error())
 	}
 }
+
+// sqliteSetJobJSONColumn overwrites a JSON column of a SQLite job row with the
+// given JSON, simulating a row changed out of band into a shape that River
+// can't decode. Postgres' column types don't allow the equivalent.
+func sqliteSetJobJSONColumn(ctx context.Context, t *testing.T, exec riverdriver.Executor, jobID int64, column, jsonValue string) {
+	t.Helper()
+
+	require.NoError(t, exec.Exec(ctx, "UPDATE river_job SET "+column+" = jsonb(?) WHERE id = ?", jsonValue, jobID))
+}

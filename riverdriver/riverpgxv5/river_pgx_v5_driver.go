@@ -316,7 +316,7 @@ func (e *Executor) JobDeleteMany(ctx context.Context, params *riverdriver.JobDel
 	return sliceutil.MapError(jobs, jobRowFromInternal)
 }
 
-func (e *Executor) JobGetAvailable(ctx context.Context, params *riverdriver.JobGetAvailableParams) ([]*rivertype.JobRow, error) {
+func (e *Executor) JobGetAvailable(ctx context.Context, params *riverdriver.JobGetAvailableParams) (*riverdriver.JobGetAvailableResult, error) {
 	jobs, err := dbsqlc.New().JobGetAvailable(schemaTemplateParam(ctx, params.Schema), e.dbtx, &dbsqlc.JobGetAvailableParams{
 		AttemptedBy:    params.ClientID,
 		MaxAttemptedBy: int32(min(params.MaxAttemptedBy, math.MaxInt32)), //nolint:gosec
@@ -327,7 +327,7 @@ func (e *Executor) JobGetAvailable(ctx context.Context, params *riverdriver.JobG
 	if err != nil {
 		return nil, interpretError(err)
 	}
-	return sliceutil.MapError(jobs, jobRowFromInternal)
+	return jobGetAvailableResultFromInternal(jobs), nil
 }
 
 func (e *Executor) JobGetByID(ctx context.Context, params *riverdriver.JobGetByIDParams) (*rivertype.JobRow, error) {
@@ -363,7 +363,7 @@ func (e *Executor) JobGetStuck(ctx context.Context, params *riverdriver.JobGetSt
 	if err != nil {
 		return nil, interpretError(err)
 	}
-	return sliceutil.MapError(jobs, jobRowFromInternal)
+	return jobRowsFromInternalPartial(jobs), nil
 }
 
 func (e *Executor) JobInsertFastMany(ctx context.Context, params *riverdriver.JobInsertFastManyParams) ([]*riverdriver.JobInsertFastResult, error) {
@@ -670,7 +670,7 @@ func (e *Executor) JobSetStateIfRunningMany(ctx context.Context, params *riverdr
 	if err != nil {
 		return nil, interpretError(err)
 	}
-	return sliceutil.MapError(jobs, jobRowFromInternal)
+	return jobRowsFromInternalPartial(jobs), nil
 }
 
 func (e *Executor) JobUpdate(ctx context.Context, params *riverdriver.JobUpdateParams) (*rivertype.JobRow, error) {
@@ -1239,17 +1239,49 @@ func interpretError(err error) error {
 	return err
 }
 
+// jobGetAvailableResultFromInternal decodes the job rows locked by
+// JobGetAvailable, separating out any that can't be decoded rather than
+// failing all of them, because they've all been moved to `running`.
+func jobGetAvailableResultFromInternal(jobs []*dbsqlc.RiverJob) *riverdriver.JobGetAvailableResult {
+	res := &riverdriver.JobGetAvailableResult{Jobs: make([]*rivertype.JobRow, 0, len(jobs))}
+	for _, internal := range jobs {
+		job, err := jobRowFromInternalPartial(internal)
+		if err != nil {
+			res.UndecodableJobs = append(res.UndecodableJobs, &riverdriver.UndecodableJob{DecodeErr: err, Job: job})
+			continue
+		}
+		res.Jobs = append(res.Jobs, job)
+	}
+	return res
+}
+
+// jobRowFromInternal decodes a job row, returning an error if any of its
+// fields can't be decoded.
 func jobRowFromInternal(internal *dbsqlc.RiverJob) (*rivertype.JobRow, error) {
+	job, err := jobRowFromInternalPartial(internal)
+	if err != nil {
+		return nil, err
+	}
+	return job, nil
+}
+
+// jobRowFromInternalPartial decodes a job row. A row is always returned, even
+// along with an error, in which case the fields that couldn't be decoded are
+// left empty.
+func jobRowFromInternalPartial(internal *dbsqlc.RiverJob) (*rivertype.JobRow, error) {
 	var attemptedAt *time.Time
 	if internal.AttemptedAt != nil {
 		t := internal.AttemptedAt.UTC()
 		attemptedAt = &t
 	}
 
+	var decodeErr error
 	errors := make([]rivertype.AttemptError, len(internal.Errors))
 	for i, rawError := range internal.Errors {
 		if err := json.Unmarshal(rawError, &errors[i]); err != nil {
-			return nil, err
+			decodeErr = fmt.Errorf("error unmarshaling `errors`: %w", err)
+			errors = nil
+			break
 		}
 	}
 
@@ -1283,7 +1315,17 @@ func jobRowFromInternal(internal *dbsqlc.RiverJob) (*rivertype.JobRow, error) {
 		Tags:         internal.Tags,
 		UniqueKey:    internal.UniqueKey,
 		UniqueStates: uniquestates.UniqueBitmaskToStates(uniqueStatesByte),
-	}, nil
+	}, decodeErr
+}
+
+// jobRowsFromInternalPartial decodes job rows with jobRowFromInternalPartial,
+// ignoring decode errors so that one bad row doesn't prevent returning the
+// others.
+func jobRowsFromInternalPartial(jobs []*dbsqlc.RiverJob) []*rivertype.JobRow {
+	return sliceutil.Map(jobs, func(internal *dbsqlc.RiverJob) *rivertype.JobRow {
+		job, _ := jobRowFromInternalPartial(internal)
+		return job
+	})
 }
 
 func leaderFromInternal(internal *dbsqlc.RiverLeader) *riverdriver.Leader {

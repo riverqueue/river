@@ -3,6 +3,7 @@ package river
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"slices"
 	"sync/atomic"
@@ -45,12 +46,45 @@ func (p *beforeJobGetAvailablePilot) JobGetAvailable(
 	exec riverdriver.Executor,
 	state riverpilot.ProducerState,
 	params *riverdriver.JobGetAvailableParams,
-) ([]*rivertype.JobRow, error) {
+) (*riverdriver.JobGetAvailableResult, error) {
 	if p.beforeJobGetAvailableFunc != nil {
 		p.beforeJobGetAvailableFunc(params)
 	}
 
 	return p.Pilot.JobGetAvailable(ctx, exec, state, params)
+}
+
+// undecodableKindPilot reports locked jobs of one kind as undecodable. Postgres'
+// column types don't allow a job row that can't be decoded, so this simulates
+// one.
+type undecodableKindPilot struct {
+	riverpilot.Pilot
+
+	kind string
+}
+
+func (p *undecodableKindPilot) JobGetAvailable(
+	ctx context.Context,
+	exec riverdriver.Executor,
+	state riverpilot.ProducerState,
+	params *riverdriver.JobGetAvailableParams,
+) (*riverdriver.JobGetAvailableResult, error) {
+	res, err := p.Pilot.JobGetAvailable(ctx, exec, state, params)
+	if err != nil {
+		return nil, err
+	}
+
+	jobs := make([]*rivertype.JobRow, 0, len(res.Jobs))
+	for _, job := range res.Jobs {
+		if job.Kind == p.kind {
+			res.UndecodableJobs = append(res.UndecodableJobs, &riverdriver.UndecodableJob{DecodeErr: errors.New("fake decode error"), Job: job})
+			continue
+		}
+		jobs = append(jobs, job)
+	}
+	res.Jobs = jobs
+
+	return res, nil
 }
 
 func TestProducer_MetricEmitHook(t *testing.T) {
@@ -455,6 +489,50 @@ func testProducer(t *testing.T, makeProducer func(ctx context.Context, t *testin
 		{
 			job := findJob((&noOpArgs{}).Kind())
 			require.Equal(t, rivertype.JobStateCompleted, job.State)
+		}
+	})
+
+	// A locked job whose row can't be decoded isn't worked. Its attempt fails
+	// with the decode error, and the other jobs locked with it are worked
+	// normally.
+	t.Run("UndecodableJob", func(t *testing.T) {
+		t.Parallel()
+
+		producer, bundle := setup(t)
+
+		type JobArgs struct {
+			testutil.JobArgsReflectKind[JobArgs]
+		}
+
+		AddWorker(bundle.workers, &noOpWorker{})
+		AddWorker(bundle.workers, WorkFunc(func(ctx context.Context, job *Job[JobArgs]) error {
+			t.Error("undecodable job shouldn't be worked") // not FailNow because this runs outside the test goroutine
+			return nil
+		}))
+
+		producer.pilot = &undecodableKindPilot{
+			Pilot: producer.pilot,
+			kind:  (&JobArgs{}).Kind(),
+		}
+
+		mustInsert(ctx, t, producer, bundle, &noOpArgs{})
+		mustInsert(ctx, t, producer, bundle, &JobArgs{})
+		mustInsert(ctx, t, producer, bundle, &noOpArgs{})
+
+		startProducer(t, ctx, ctx, producer)
+
+		updates := riversharedtest.WaitOrTimeoutN(t, bundle.jobUpdates, 3)
+
+		for _, update := range updates {
+			if update.Job.Kind == (&JobArgs{}).Kind() {
+				require.Equal(t, rivertype.JobStateRetryable, update.Job.State)
+				require.Len(t, update.Job.Errors, 1)
+				require.Equal(t, 1, update.Job.Errors[0].Attempt)
+				require.Equal(t, "job row couldn't be decoded: fake decode error", update.Job.Errors[0].Error)
+				continue
+			}
+
+			require.Equal(t, rivertype.JobStateCompleted, update.Job.State)
 		}
 	})
 

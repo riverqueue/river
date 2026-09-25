@@ -1643,7 +1643,12 @@ SET
     attempt      = CASE WHEN /* NOT should_cancel */(cast(?1 AS text) <> 'available' AND ?1 <> 'retryable' AND ?1 <> 'scheduled' OR (metadata -> 'cancel_attempted_at') IS NULL) AND cast(?2 AS boolean)
                         THEN ?3
                         ELSE attempt END,
-    errors       = CASE WHEN cast(?4 AS boolean)
+    -- The errors column is always an array unless it's been changed out of
+    -- band. If it has, wrap its value in an array so that the new error is
+    -- still appended without losing it.
+    errors       = CASE WHEN cast(?4 AS boolean) AND coalesce(json_type(errors), 'array') <> 'array'
+                        THEN jsonb(json_array(json(errors), json(?5)))
+                        WHEN cast(?4 AS boolean)
                         THEN jsonb(json_insert(json(coalesce(errors, jsonb('[]'))), '$[#]', json(?5)))
                         ELSE errors END,
     finalized_at = CASE WHEN /* should_cancel */((?1 = 'available' OR ?1 = 'retryable' OR ?1 = 'scheduled') AND (metadata -> 'cancel_attempted_at') IS NOT NULL)

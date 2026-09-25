@@ -259,10 +259,11 @@ func Benchmark[TTx any](ctx context.Context, b *testing.B,
 				b.ResetTimer()
 
 				for range b.N {
-					jobs, err := exec.JobGetAvailable(ctx, getAvailableParams)
+					res, err := exec.JobGetAvailable(ctx, getAvailableParams)
 					if err != nil {
 						b.Fatalf("failed to fetch benchmark job: %v", err)
 					}
+					jobs := res.Jobs
 					if len(jobs) != 1 {
 						b.Fatalf("expected exactly one fetched job, got %d", len(jobs))
 					}

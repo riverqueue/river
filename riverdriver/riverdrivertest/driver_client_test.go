@@ -265,6 +265,14 @@ func newTestConfig(t *testing.T, schema string) *river.Config {
 	}
 }
 
+// retryPolicyAnHourLater schedules every retry an hour out so that a failed job
+// stays `retryable` for the rest of a test.
+type retryPolicyAnHourLater struct{}
+
+func (*retryPolicyAnHourLater) NextRetry(job *rivertype.JobRow) time.Time {
+	return time.Now().Add(time.Hour)
+}
+
 // Try to keep this helper close to the one found in the top-level package so we
 // can copy/paste between them reasonably easily.
 func startClient[TTx any](ctx context.Context, t *testing.T, client *river.Client[TTx]) {
@@ -1253,6 +1261,32 @@ func ExerciseClient[TTx any](ctx context.Context, t *testing.T,
 		require.Equal(t, job.ID, listRes.Jobs[0].ID)
 	})
 
+	// Attempt errors in an unexpected shape are decoded leniently, so the job
+	// is still worked.
+	t.Run("JobWithUnexpectedAttemptErrorsWorked", func(t *testing.T) {
+		t.Parallel()
+
+		client, bundle := setup(t)
+
+		job := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{
+			Errors: [][]byte{
+				[]byte(`{"at":"2024-01-02 03:04:05+00","attempt":"1","error":{"message":"boom"},"trace":["frame"]}`),
+			},
+			Kind:   new(noOpArgs{}.Kind()),
+			Schema: bundle.schema,
+		})
+
+		subscribeChan := subscribe(t, client)
+		startClient(ctx, t, client)
+
+		event := riversharedtest.WaitOrTimeout(t, subscribeChan)
+		require.Equal(t, river.EventKindJobCompleted, event.Kind)
+		require.Equal(t, job.ID, event.Job.ID)
+		require.Len(t, event.Job.Errors, 1)
+		require.Equal(t, 1, event.Job.Errors[0].Attempt)
+		require.JSONEq(t, `{"message":"boom"}`, event.Job.Errors[0].Error)
+	})
+
 	t.Run("QueueGet", func(t *testing.T) {
 		t.Parallel()
 
@@ -1397,5 +1431,64 @@ func ExerciseClient[TTx any](ctx context.Context, t *testing.T,
 		fetchedQueue, err := client.QueueGet(ctx, queue.Name)
 		require.NoError(t, err)
 		require.JSONEq(t, `{}`, string(fetchedQueue.Metadata))
+	})
+
+	// A locked job whose row can't be decoded has its attempt failed (and is
+	// retried or discarded like any other failed job) without preventing the
+	// jobs locked alongside it from being worked.
+	t.Run("UndecodableJobFailedWithoutBlockingOthers", func(t *testing.T) {
+		t.Parallel()
+
+		config, bundle := setupConfig(t)
+		if bundle.driver.DatabaseName() != riverdriver.DatabaseNameSQLite {
+			t.Skip("only SQLite's JSON columns can hold values that don't decode")
+		}
+		config.RetryPolicy = &retryPolicyAnHourLater{}
+
+		client, err := river.NewClient(bundle.driver, config)
+		require.NoError(t, err)
+
+		var (
+			goodJob1         = testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{Kind: new(noOpArgs{}.Kind()), Schema: bundle.schema})
+			undecodableJob1  = testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{Kind: new(noOpArgs{}.Kind()), Schema: bundle.schema, Tags: []string{"tag"}})
+			undecodableJob2  = testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{Kind: new(noOpArgs{}.Kind()), MaxAttempts: new(1), Schema: bundle.schema})
+			goodJob2         = testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{Kind: new(noOpArgs{}.Kind()), Schema: bundle.schema})
+			undecodableValue = `{"not":"an array"}`
+		)
+		sqliteSetJobJSONColumn(ctx, t, bundle.exec, undecodableJob1.ID, "tags", undecodableValue)
+		sqliteSetJobJSONColumn(ctx, t, bundle.exec, undecodableJob2.ID, "tags", undecodableValue)
+
+		subscribeChan := subscribe(t, client)
+		startClient(ctx, t, client)
+
+		eventsByJobID := make(map[int64]*river.Event)
+		for range 4 {
+			event := riversharedtest.WaitOrTimeout(t, subscribeChan)
+			eventsByJobID[event.Job.ID] = event
+		}
+
+		require.Equal(t, river.EventKindJobCompleted, eventsByJobID[goodJob1.ID].Kind)
+		require.Equal(t, river.EventKindJobCompleted, eventsByJobID[goodJob2.ID].Kind)
+
+		// Events for undecodable jobs carry the fields that could be decoded.
+		require.Equal(t, river.EventKindJobFailed, eventsByJobID[undecodableJob1.ID].Kind)
+		require.Equal(t, rivertype.JobStateRetryable, eventsByJobID[undecodableJob1.ID].Job.State)
+		require.Nil(t, eventsByJobID[undecodableJob1.ID].Job.Tags)
+		require.Equal(t, river.EventKindJobFailed, eventsByJobID[undecodableJob2.ID].Kind)
+		require.Equal(t, rivertype.JobStateDiscarded, eventsByJobID[undecodableJob2.ID].Job.State)
+
+		// The undecodable value is left as it was.
+		_, err = client.JobGet(ctx, undecodableJob1.ID)
+		require.ErrorContains(t, err, "error unmarshaling `tags`")
+
+		// Once repaired, the job shows the failed attempt.
+		sqliteSetJobJSONColumn(ctx, t, bundle.exec, undecodableJob1.ID, "tags", `["tag"]`)
+		job, err := client.JobGet(ctx, undecodableJob1.ID)
+		require.NoError(t, err)
+		require.Equal(t, 1, job.Attempt)
+		require.Equal(t, rivertype.JobStateRetryable, job.State)
+		require.Len(t, job.Errors, 1)
+		require.Equal(t, 1, job.Errors[0].Attempt)
+		require.Contains(t, job.Errors[0].Error, "job row couldn't be decoded: error unmarshaling `tags`")
 	})
 }

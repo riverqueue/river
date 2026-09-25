@@ -16,6 +16,7 @@ import (
 	"github.com/riverqueue/river/riverdriver"
 	"github.com/riverqueue/river/rivershared/testfactory"
 	"github.com/riverqueue/river/rivershared/uniquestates"
+	"github.com/riverqueue/river/rivershared/util/sliceutil"
 	"github.com/riverqueue/river/rivertype"
 )
 
@@ -359,7 +360,7 @@ func exerciseJobUpdate[TTx any](ctx context.Context, t *testing.T, executorWithT
 				require.Len(t, releasedJobs, 1)
 				require.Equal(t, rivertype.JobStateAvailable, releasedJobs[0].State)
 
-				claimedJobs, err := exec.JobGetAvailable(ctx, &riverdriver.JobGetAvailableParams{
+				claimRes, err := exec.JobGetAvailable(ctx, &riverdriver.JobGetAvailableParams{
 					ClientID:       "new-worker",
 					MaxAttemptedBy: 10,
 					MaxToLock:      1,
@@ -367,6 +368,7 @@ func exerciseJobUpdate[TTx any](ctx context.Context, t *testing.T, executorWithT
 					Queue:          job.Queue,
 				})
 				require.NoError(t, err)
+				claimedJobs := claimRes.Jobs
 				require.Len(t, claimedJobs, 1)
 				require.Equal(t, job.ID, claimedJobs[0].ID)
 				require.Equal(t, rivertype.JobStateRunning, claimedJobs[0].State)
@@ -710,6 +712,67 @@ func exerciseJobUpdate[TTx any](ctx context.Context, t *testing.T, executorWithT
 			require.False(t, gjson.GetBytes(updatedJob3.Metadata, "unique_key_conflict").Exists())
 		})
 
+		// SQLite only: jobs whose rows can't be decoded are scheduled (or
+		// discarded for a unique conflict) without failing the rest of the
+		// batch, and the undecodable values are left in place.
+		t.Run("UndecodableJobsScheduled", func(t *testing.T) {
+			t.Parallel()
+
+			exec, bundle := setup(ctx, t)
+			if bundle.driver.DatabaseName() != riverdriver.DatabaseNameSQLite {
+				t.Skip("only SQLite's JSON columns can hold values that don't decode")
+			}
+
+			var (
+				horizon       = time.Now()
+				beforeHorizon = horizon.Add(-1 * time.Minute)
+				uniqueStates  = uniquestates.UniqueStatesToBitmask([]rivertype.JobState{rivertype.JobStateAvailable, rivertype.JobStateRunning})
+			)
+
+			var (
+				goodJob           = testfactory.Job(ctx, t, exec, &testfactory.JobOpts{ScheduledAt: &beforeHorizon, State: new(rivertype.JobStateRetryable)})
+				undecodableJob    = testfactory.Job(ctx, t, exec, &testfactory.JobOpts{ScheduledAt: &beforeHorizon, State: new(rivertype.JobStateRetryable)})
+				conflictingJob    = testfactory.Job(ctx, t, exec, &testfactory.JobOpts{ScheduledAt: &beforeHorizon, State: new(rivertype.JobStateRetryable), UniqueKey: []byte("unique-key"), UniqueStates: uniqueStates})
+				scheduledJob      = testfactory.Job(ctx, t, exec, &testfactory.JobOpts{ScheduledAt: &beforeHorizon, State: new(rivertype.JobStateScheduled)})
+				undecodableValue  = `{"not":"an array"}`
+				expectedJobIDs    = []int64{goodJob.ID, undecodableJob.ID, conflictingJob.ID, scheduledJob.ID}
+				undecodableJobIDs = []int64{undecodableJob.ID, conflictingJob.ID, scheduledJob.ID}
+			)
+			for _, jobID := range undecodableJobIDs {
+				sqliteSetJobJSONColumn(ctx, t, exec, jobID, "tags", undecodableValue)
+			}
+
+			// Conflicts with conflictingJob, which is discarded instead of scheduled.
+			_ = testfactory.Job(ctx, t, exec, &testfactory.JobOpts{
+				State:        new(rivertype.JobStateRunning),
+				UniqueKey:    []byte("unique-key"),
+				UniqueStates: uniqueStates,
+			})
+
+			result, err := exec.JobSchedule(ctx, &riverdriver.JobScheduleParams{
+				Max: 100,
+				Now: &horizon,
+			})
+			require.NoError(t, err)
+			require.Equal(t, expectedJobIDs,
+				sliceutil.Map(result, func(r *riverdriver.JobScheduleResult) int64 { return r.Job.ID }))
+			require.Equal(t, []rivertype.JobState{rivertype.JobStateAvailable, rivertype.JobStateAvailable, rivertype.JobStateDiscarded, rivertype.JobStateAvailable},
+				sliceutil.Map(result, func(r *riverdriver.JobScheduleResult) rivertype.JobState { return r.Job.State }))
+			require.Equal(t, []bool{false, false, true, false},
+				sliceutil.Map(result, func(r *riverdriver.JobScheduleResult) bool { return r.ConflictDiscarded }))
+
+			// Fields that could be decoded are set, while the others are empty.
+			require.Equal(t, []string{}, result[0].Job.Tags)
+			require.Nil(t, result[1].Job.Tags)
+			require.Equal(t, conflictingJob.Kind, result[2].Job.Kind)
+
+			// The undecodable values are left as they were.
+			for _, jobID := range undecodableJobIDs {
+				_, err = exec.JobGetByID(ctx, &riverdriver.JobGetByIDParams{ID: jobID})
+				require.ErrorContains(t, err, "error unmarshaling `tags`")
+			}
+		})
+
 		t.Run("SchedulingTwoRetryableJobsThatWillConflictWithEachOther", func(t *testing.T) {
 			t.Parallel()
 
@@ -889,6 +952,29 @@ func exerciseJobUpdate[TTx any](ctx context.Context, t *testing.T, executorWithT
 			require.Equal(t, "foo.go:123\nbar.go:456", jobAfter.Errors[0].Trace)
 		})
 
+		// SQLite only: a non-array `errors` value is wrapped in an array so that
+		// the new error can be appended without losing the existing value.
+		t.Run("NonArrayErrorsWrappedToAppend", func(t *testing.T) {
+			t.Parallel()
+
+			exec, bundle := setup(ctx, t)
+			if bundle.driver.DatabaseName() != riverdriver.DatabaseNameSQLite {
+				t.Skip("only SQLite's JSON columns can hold a non-array errors value")
+			}
+
+			now := precisionTestTime
+
+			job := testfactory.Job(ctx, t, exec, &testfactory.JobOpts{State: new(rivertype.JobStateRunning)})
+			sqliteSetJobJSONColumn(ctx, t, exec, job.ID, "errors", `{"error":"existing value"}`)
+
+			jobsAfter, err := exec.JobSetStateIfRunningMany(ctx, setStateManyParams(riverdriver.JobSetStateErrorRetryable(job.ID, now, makeErrPayload(t, now), nil)))
+			require.NoError(t, err)
+			require.Len(t, jobsAfter, 1)
+			require.Equal(t, rivertype.JobStateRetryable, jobsAfter[0].State)
+			require.Equal(t, []string{"existing value", "fake error"},
+				sliceutil.Map(jobsAfter[0].Errors, func(e rivertype.AttemptError) string { return e.Error }))
+		})
+
 		t.Run("SetsAnInterruptedRunningJobToAvailableWithUpdatedAttempt", func(t *testing.T) {
 			t.Parallel()
 
@@ -945,6 +1031,40 @@ func exerciseJobUpdate[TTx any](ctx context.Context, t *testing.T, executorWithT
 			require.NoError(t, err)
 			require.Equal(t, rivertype.JobStateRetryable, jobUpdated.State)
 			require.WithinDuration(t, job.ScheduledAt, jobAfter.ScheduledAt, time.Microsecond)
+		})
+
+		// A job whose row can't be fully decoded still has its state set, and
+		// doesn't prevent setting the state of other jobs in the same batch.
+		t.Run("UndecodableJobSetAlongsideOthers", func(t *testing.T) {
+			t.Parallel()
+
+			exec, bundle := setup(ctx, t)
+			if bundle.driver.DatabaseName() != riverdriver.DatabaseNameSQLite {
+				t.Skip("only SQLite's JSON columns can hold values that don't decode")
+			}
+
+			now := precisionTestTime
+
+			job1 := testfactory.Job(ctx, t, exec, &testfactory.JobOpts{State: new(rivertype.JobStateRunning)})
+			job2 := testfactory.Job(ctx, t, exec, &testfactory.JobOpts{State: new(rivertype.JobStateRunning)})
+			sqliteSetJobJSONColumn(ctx, t, exec, job2.ID, "tags", `{"not":"an array"}`)
+
+			jobsAfter, err := exec.JobSetStateIfRunningMany(ctx, setStateManyParams(
+				riverdriver.JobSetStateErrorRetryable(job1.ID, now, makeErrPayload(t, now), nil),
+				riverdriver.JobSetStateErrorRetryable(job2.ID, now, makeErrPayload(t, now), nil),
+			))
+			require.NoError(t, err)
+			require.Len(t, jobsAfter, 2)
+			for _, jobAfter := range jobsAfter {
+				require.Equal(t, rivertype.JobStateRetryable, jobAfter.State)
+				require.Len(t, jobAfter.Errors, 1)
+			}
+			require.Equal(t, job2.ID, jobsAfter[1].ID)
+			require.Nil(t, jobsAfter[1].Tags)
+
+			// The undecodable value is left as it was.
+			_, err = exec.JobGetByID(ctx, &riverdriver.JobGetByIDParams{ID: job2.ID})
+			require.ErrorContains(t, err, "error unmarshaling `tags`")
 		})
 
 		t.Run("UpdatesOnlyMetadataForAlreadyRetryableJobs", func(t *testing.T) {

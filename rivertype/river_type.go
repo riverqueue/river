@@ -4,9 +4,12 @@
 package rivertype
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
+	"math"
+	"strings"
 	"time"
 )
 
@@ -278,6 +281,135 @@ type AttemptError struct {
 	// In the case of a non-panic or an error produced as a stuck job was
 	// rescued, this value will be an empty string.
 	Trace string `json:"trace"`
+}
+
+// UnmarshalJSON decodes an attempt error. River always persists attempt errors
+// in the shape produced by encoding this type with encoding/json, and those
+// decode exactly as they would with encoding/json's defaults. Elements written
+// by other tools or edited by hand might not match that shape though, and
+// because a job row can't be read or worked unless all of its attempt errors
+// decode, any element that's valid JSON is decoded on a best effort basis
+// instead of producing an error:
+//
+//   - `at` accepts RFC 3339 timestamps, along with timestamps that use a
+//     space instead of `T`, a numeric UTC offset without a colon or minutes
+//     (as in Postgres' text output), or no offset at all (taken to be UTC).
+//     Any other value leaves At as the zero time.
+//   - `attempt` accepts integers, numbers with an integral value, and strings
+//     containing an integer. Any other value leaves Attempt as zero.
+//   - `error` and `trace` accept strings. Any other non-null value is kept as
+//     its JSON text.
+//   - An element that's a JSON string instead of an object is used as Error.
+//     Any other element that isn't an object is kept as its JSON text in
+//     Error.
+//
+// Only data that isn't valid JSON returns an error.
+func (e *AttemptError) UnmarshalJSON(data []byte) error {
+	// Fast path for the common case where the element has the expected shape.
+	// An alias type without this method gets encoding/json's default behavior.
+	type attemptErrorAlias AttemptError
+	if err := json.Unmarshal(data, (*attemptErrorAlias)(e)); err == nil {
+		return nil
+	}
+
+	if !json.Valid(data) {
+		return errors.New("attempt error is not valid JSON")
+	}
+
+	data = bytes.TrimSpace(data)
+	if data[0] != '{' {
+		// Valid JSON, but not an object.
+		*e = AttemptError{Error: attemptErrorLenientString(data)}
+		return nil
+	}
+
+	var fields struct {
+		At      json.RawMessage `json:"at"`
+		Attempt json.RawMessage `json:"attempt"`
+		Error   json.RawMessage `json:"error"`
+		Trace   json.RawMessage `json:"trace"`
+	}
+	if err := json.Unmarshal(data, &fields); err != nil {
+		return err
+	}
+
+	*e = AttemptError{
+		At:      attemptErrorLenientTime(fields.At),
+		Attempt: attemptErrorLenientInt(fields.Attempt),
+		Error:   attemptErrorLenientString(fields.Error),
+		Trace:   attemptErrorLenientString(fields.Trace),
+	}
+	return nil
+}
+
+// Layouts accepted for AttemptError.At in addition to RFC 3339. A fractional
+// second is optional in all of them.
+//
+//nolint:gochecknoglobals
+var attemptErrorTimeLayouts = []string{
+	"2006-01-02T15:04:05.999999999Z07:00",
+	"2006-01-02T15:04:05.999999999Z0700",
+	"2006-01-02T15:04:05.999999999Z07",
+	"2006-01-02T15:04:05.999999999",
+	"2006-01-02 15:04:05.999999999Z07:00",
+	"2006-01-02 15:04:05.999999999Z0700",
+	"2006-01-02 15:04:05.999999999Z07",
+	"2006-01-02 15:04:05.999999999",
+}
+
+func attemptErrorLenientInt(data json.RawMessage) int {
+	var num json.Number
+	if err := json.Unmarshal(data, &num); err != nil {
+		var str string
+		if err := json.Unmarshal(data, &str); err != nil {
+			return 0
+		}
+		num = json.Number(strings.TrimSpace(str))
+	}
+
+	if i, err := num.Int64(); err == nil {
+		return int(i)
+	}
+	// Floats are only accepted when they represent an integer exactly.
+	if f, err := num.Float64(); err == nil && f == math.Trunc(f) && math.Abs(f) <= 1<<53 {
+		return int(f)
+	}
+	return 0
+}
+
+func attemptErrorLenientString(data json.RawMessage) string {
+	if len(data) == 0 {
+		return ""
+	}
+
+	var str *string
+	if err := json.Unmarshal(data, &str); err == nil {
+		if str == nil { // JSON null
+			return ""
+		}
+		return *str
+	}
+
+	var compacted bytes.Buffer
+	if err := json.Compact(&compacted, data); err != nil {
+		return string(data)
+	}
+	return compacted.String()
+}
+
+func attemptErrorLenientTime(data json.RawMessage) time.Time {
+	var str string
+	if err := json.Unmarshal(data, &str); err != nil {
+		return time.Time{}
+	}
+
+	str = strings.TrimSpace(str)
+	for _, layout := range attemptErrorTimeLayouts {
+		if t, err := time.Parse(layout, str); err == nil {
+			return t
+		}
+	}
+	return time.Time{}
 }
 
 type JobInsertParams struct {
