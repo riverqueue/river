@@ -1,7 +1,17 @@
+//! Cancels a running job from outside its worker.
+//!
+//! ```sh
+//! DATABASE_URL=postgres://localhost/river_example cargo run -p riverqueue --example cancellation
+//! ```
+//!
+//! Cancelling a running job triggers its worker's cancellation token, on
+//! whichever client is working it.
+
 use std::{convert::Infallible, error::Error, time::Duration};
 
 use riverqueue::{
     Client, Job, JobArgs, QueueConfig, WorkContext, WorkOutcome, Worker, WorkerRegistry,
+    migrate::PostgresMigrator,
 };
 use serde::{Deserialize, Serialize};
 use sqlx::PgPool;
@@ -35,6 +45,7 @@ impl Worker<CancellableReport> for CancellableReportWorker {
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn Error>> {
     let pool = PgPool::connect(&std::env::var("DATABASE_URL")?).await?;
+    PostgresMigrator::new(pool.clone()).migrate_up().await?;
     let mut workers = WorkerRegistry::new();
     workers.register::<CancellableReport, _>(CancellableReportWorker)?;
     let client = Client::builder(pool)
