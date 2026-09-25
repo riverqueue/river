@@ -234,8 +234,8 @@ pub trait Hook: Send + Sync + 'static {
         std::future::ready(Ok(()))
     }
 
-    /// Observes a runtime metric. Failures are logged and don't affect the
-    /// operation that produced the metric.
+    /// Observes a runtime metric. Failures and panics are logged and don't
+    /// affect the operation that produced the metric.
     fn metric_emit(&self, metric: Metric) -> impl Future<Output = Result<(), BoxError>> + Send {
         let _ = metric;
         std::future::ready(Ok(()))
@@ -335,11 +335,11 @@ impl<H: Hook> DynHook for H {
     }
 
     fn metric_emit(&self, metric: Metric) -> BoxFuture<'_, Result<(), Error>> {
-        Box::pin(async move {
-            Hook::metric_emit(self, metric)
-                .await
-                .map_err(hook_error("metric hook"))
-        })
+        // A panicking metric hook would otherwise unwind the queue's producer
+        // and abort every job it's working.
+        Box::pin(recover_extension_panic("metric hook", async move {
+            Hook::metric_emit(self, metric).await
+        }))
     }
 
     fn periodic_jobs_start<'a>(
@@ -730,22 +730,23 @@ impl<H: ErrorHandler> DynErrorHandler for H {
         job: &'a JobRow,
         result: &'a WorkResult,
     ) -> BoxFuture<'a, Result<ErrorHandlerDecision, Error>> {
-        Box::pin(recover_handler_panic("error handler", async move {
+        Box::pin(recover_extension_panic("error handler", async move {
             ErrorHandler::handle_error(self, context, job, result).await
         }))
     }
 
     fn handle_stuck<'a>(&'a self, job: &'a JobRow) -> BoxFuture<'a, Result<(), Error>> {
-        Box::pin(recover_handler_panic("stuck job handler", async move {
+        Box::pin(recover_extension_panic("stuck job handler", async move {
             ErrorHandler::handle_stuck(self, job).await
         }))
     }
 }
 
-/// Awaits an error handler, treating a panic like a returned error, as Go's
-/// `invokeErrorHandler` recovers one. The job's result is still persisted,
-/// rather than the panic unwinding the executor and leaving the job running.
-async fn recover_handler_panic<T>(
+/// Awaits an extension whose failures River only logs, treating a panic
+/// like a returned error. For error handlers this matches Go's
+/// `invokeErrorHandler`: the job's result is still persisted rather than the
+/// panic unwinding the executor and leaving the job running.
+async fn recover_extension_panic<T>(
     phase: &'static str,
     handler: impl Future<Output = Result<T, BoxError>>,
 ) -> Result<T, Error> {

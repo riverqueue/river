@@ -16,7 +16,7 @@ use std::{
 
 use riverqueue::{
     Client, ErrorHandler, ErrorHandlerDecision, EventKind, Hook, InsertOpts, Job, JobArgs, JobRow,
-    JobState, QueueConfig, WorkContext, WorkError, WorkMiddleware, WorkNext, WorkOutcome,
+    JobState, Metric, QueueConfig, WorkContext, WorkError, WorkMiddleware, WorkNext, WorkOutcome,
     WorkerRegistry,
 };
 use riverqueue_migrate::SqliteMigrator;
@@ -152,6 +152,15 @@ impl Hook for TracingHook {
             }
             result => result,
         }
+    }
+}
+
+/// Panics on every metric, like a buggy metrics integration.
+struct PanickingMetricHook;
+
+impl Hook for PanickingMetricHook {
+    async fn metric_emit(&self, _metric: Metric) -> Result<(), riverqueue::BoxError> {
+        panic!("metric hook panicked on purpose");
     }
 }
 
@@ -319,6 +328,28 @@ async fn panicking_error_handlers_still_persist_the_result() {
         client.jobs().get(job.id()).await.unwrap().state,
         JobState::Discarded
     );
+    database.close().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn panicking_metric_hooks_dont_stop_the_queue() {
+    let database = TestDatabase::new().await;
+    let trace = Trace::default();
+    let client = Client::builder(database.pool.clone())
+        .queue(
+            "default",
+            QueueConfig::new(1)
+                .with_fetch_cooldown(Duration::from_millis(1))
+                .with_fetch_poll_interval(Duration::from_millis(10)),
+        )
+        .workers(workers(&trace))
+        .hook(PanickingMetricHook)
+        .build()
+        .unwrap();
+    let job = client.insert(ExtensionArgs { fail: false }).await.unwrap();
+    let completed = work_until(&client, EventKind::JobCompleted, job.id()).await;
+
+    assert_eq!(completed.state, JobState::Completed);
     database.close().await;
 }
 
