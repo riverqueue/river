@@ -2,6 +2,8 @@
 
 use std::collections::HashSet;
 
+use crate::__private::ClaimedJob;
+
 #[allow(clippy::wildcard_imports)]
 use super::*;
 
@@ -576,7 +578,7 @@ pub(super) async fn fetch_jobs(
         let rows = if inner.pilot.intercepts_fetch() {
             let mut transaction = crate::database::begin_sqlite_write(pool).await?;
             let fetch_params = extension_fetch_params(inner, queue, maximum);
-            if let Some(claimed) = inner
+            let claimed = inner
                 .pilot
                 .claim_jobs(
                     PilotDatabaseConnection::Sqlite(&mut transaction),
@@ -586,38 +588,38 @@ pub(super) async fn fetch_jobs(
                 .map_err(|source| Error::Extension {
                     phase: "fetch claim",
                     source,
-                })?
-            {
-                transaction.commit().await?;
-                return Ok(finish_fetch(
-                    inner,
-                    fetch_started,
-                    claimed
-                        .into_iter()
-                        .map(crate::__private::ClaimedJob::into_decoded)
-                        .collect(),
-                )
-                .await);
-            }
-            let selected_ids = inner
-                .pilot
-                .select_job_ids(
-                    PilotDatabaseConnection::Sqlite(&mut transaction),
-                    &fetch_params,
-                )
-                .await
-                .map_err(|source| Error::Extension {
-                    phase: "fetch selection",
-                    source,
                 })?;
-            let rows = match selected_ids {
-                Some(ids) => {
-                    crate::database::sqlite::claim_selected(&mut transaction, &params, &ids).await
+            let (rows, extension_ids) = if let Some(claimed) = claimed {
+                let ids = claimed.iter().filter_map(ClaimedJob::id).collect();
+                let rows = claimed.into_iter().map(ClaimedJob::into_decoded).collect();
+                (rows, Some(ids))
+            } else {
+                let selected_ids = inner
+                    .pilot
+                    .select_job_ids(
+                        PilotDatabaseConnection::Sqlite(&mut transaction),
+                        &fetch_params,
+                    )
+                    .await
+                    .map_err(|source| Error::Extension {
+                        phase: "fetch selection",
+                        source,
+                    })?;
+                let rows = match &selected_ids {
+                    Some(ids) => {
+                        crate::database::sqlite::claim_selected(&mut transaction, &params, ids)
+                            .await
+                    }
+                    None => crate::database::sqlite::claim(&mut transaction, &params).await,
                 }
-                None => crate::database::sqlite::claim(&mut transaction, &params).await,
-            }
-            .map_err(sqlite_backend_error)?;
-            transaction.commit().await?;
+                .map_err(sqlite_backend_error);
+                (
+                    rollback_extension_claims(inner, &fetch_params, selected_ids.as_deref(), rows)?,
+                    selected_ids,
+                )
+            };
+            let committed = transaction.commit().await.map_err(Error::from);
+            rollback_extension_claims(inner, &fetch_params, extension_ids.as_deref(), committed)?;
             rows
         } else {
             let mut connection = pool.acquire().await?;
@@ -646,7 +648,7 @@ pub(super) async fn fetch_jobs(
             RETURNING {}, false AS unique_skipped_as_duplicate",
             job_projection("job")
         );
-        let records = if inner.pilot.intercepts_fetch() {
+        let rows = if inner.pilot.intercepts_fetch() {
             let mut transaction = crate::database::begin_postgres(
                 inner
                     .postgres_pool()
@@ -654,7 +656,7 @@ pub(super) async fn fetch_jobs(
             )
             .await?;
             let fetch_params = extension_fetch_params(inner, queue, maximum);
-            if let Some(claimed) = inner
+            let claimed = inner
                 .pilot
                 .claim_jobs(
                     PilotDatabaseConnection::Postgres(&mut transaction),
@@ -664,52 +666,55 @@ pub(super) async fn fetch_jobs(
                 .map_err(|source| Error::Extension {
                     phase: "fetch claim",
                     source,
-                })?
-            {
-                transaction.commit().await?;
-                return Ok(finish_fetch(
-                    inner,
-                    fetch_started,
-                    claimed
-                        .into_iter()
-                        .map(crate::__private::ClaimedJob::into_decoded)
-                        .collect(),
-                )
-                .await);
-            }
-            let selected_ids = inner
-                .pilot
-                .select_job_ids(
-                    PilotDatabaseConnection::Postgres(&mut transaction),
-                    &fetch_params,
-                )
-                .await
-                .map_err(|source| Error::Extension {
-                    phase: "fetch selection",
-                    source,
                 })?;
-            let records = if let Some(selected_ids) = selected_ids {
-                let sql = format!(
-                    "UPDATE {table} AS job SET state = 'running', attempt = job.attempt + 1, \
-                    attempted_at = now(), attempted_by = array_append(\
-                        CASE WHEN array_length(job.attempted_by, 1) >= $3 \
-                             THEN job.attempted_by[array_length(job.attempted_by, 1) + 2 - $3:] \
-                             ELSE job.attempted_by END, $2) \
-                WHERE id = ANY($1::bigint[]) AND state = 'available' \
-                RETURNING {}, false AS unique_skipped_as_duplicate",
-                    job_projection("job")
-                );
-                sqlx::query(AssertSqlSafe(sql))
-                    .bind(selected_ids)
-                    .bind(&inner.id)
-                    .bind(ATTEMPTED_BY_MAX)
-                    .fetch_all(&mut *transaction)
-                    .await?
+            let (rows, extension_ids) = if let Some(claimed) = claimed {
+                let ids = claimed.iter().filter_map(ClaimedJob::id).collect();
+                let rows = claimed.into_iter().map(ClaimedJob::into_decoded).collect();
+                (rows, Some(ids))
             } else {
-                fetch_oss_records(&mut *transaction, oss_sql, queue, maximum, &inner.id).await?
+                let selected_ids = inner
+                    .pilot
+                    .select_job_ids(
+                        PilotDatabaseConnection::Postgres(&mut transaction),
+                        &fetch_params,
+                    )
+                    .await
+                    .map_err(|source| Error::Extension {
+                        phase: "fetch selection",
+                        source,
+                    })?;
+                let records = if let Some(selected_ids) = &selected_ids {
+                    let sql = format!(
+                        "UPDATE {table} AS job SET state = 'running', attempt = job.attempt + 1, \
+                        attempted_at = now(), attempted_by = array_append(\
+                            CASE WHEN array_length(job.attempted_by, 1) >= $3 \
+                                 THEN job.attempted_by[array_length(job.attempted_by, 1) + 2 - $3:] \
+                                 ELSE job.attempted_by END, $2) \
+                    WHERE id = ANY($1::bigint[]) AND state = 'available' \
+                    RETURNING {}, false AS unique_skipped_as_duplicate",
+                        job_projection("job")
+                    );
+                    sqlx::query(AssertSqlSafe(sql))
+                        .bind(selected_ids)
+                        .bind(&inner.id)
+                        .bind(ATTEMPTED_BY_MAX)
+                        .fetch_all(&mut *transaction)
+                        .await
+                } else {
+                    fetch_oss_records(&mut *transaction, oss_sql, queue, maximum, &inner.id).await
+                }
+                .map_err(Error::from);
+                let records = rollback_extension_claims(
+                    inner,
+                    &fetch_params,
+                    selected_ids.as_deref(),
+                    records,
+                )?;
+                (records.iter().map(decode_job_row).collect(), selected_ids)
             };
-            transaction.commit().await?;
-            records
+            let committed = transaction.commit().await.map_err(Error::from);
+            rollback_extension_claims(inner, &fetch_params, extension_ids.as_deref(), committed)?;
+            rows
         } else {
             fetch_oss_records(
                 inner
@@ -721,18 +726,32 @@ pub(super) async fn fetch_jobs(
                 &inner.id,
             )
             .await?
+            .iter()
+            .map(decode_job_row)
+            .collect()
         };
-        return Ok(finish_fetch(
-            inner,
-            fetch_started,
-            records.iter().map(decode_job_row).collect(),
-        )
-        .await);
+        return Ok(finish_fetch(inner, fetch_started, rows).await);
     }
     #[allow(unreachable_code)]
     Err(Error::runtime(
         "database dispatch selected no supported backend".to_owned(),
     ))
+}
+
+/// Passes `result` through, first telling the extension that the jobs it
+/// claimed or selected won't be claimed when `result` is an error.
+fn rollback_extension_claims<T>(
+    inner: &ClientInner,
+    params: &FetchParams,
+    job_ids: Option<&[i64]>,
+    result: Result<T, Error>,
+) -> Result<T, Error> {
+    if result.is_err()
+        && let Some(job_ids) = job_ids
+    {
+        inner.pilot.claim_jobs_rolled_back(params, job_ids);
+    }
+    result
 }
 
 #[cfg(feature = "postgres")]

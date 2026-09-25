@@ -656,6 +656,19 @@ pub trait Pilot: Send + Sync + 'static {
         Ok(None)
     }
 
+    /// Called when a fetch whose jobs this extension claimed or selected
+    /// didn't commit, like River Go's rollback of `JobStartManyPrepare`.
+    ///
+    /// River calls it after [`Pilot::claim_jobs`] returned jobs, or
+    /// [`Pilot::select_job_ids`] returned IDs, and then River's claim or the
+    /// fetch transaction's `COMMIT` failed. `job_ids` are the claimed jobs'
+    /// IDs (a claimed row that couldn't be identified is left out) or the
+    /// selected IDs. The rows stay as they were before the fetch, so an
+    /// add-on crate releases anything it provisionally reserved for them, such
+    /// as running counts. It isn't called when the fetch future is dropped
+    /// mid-commit, which leaves the outcome unknown.
+    fn claim_jobs_rolled_back(&self, _params: &FetchParams, _job_ids: &[i64]) {}
+
     /// Optionally selects and locks fetch candidates using the provided
     /// transaction connection. Returned IDs are claimed by the OSS runtime in
     /// the same transaction. `None` delegates selection to River OSS.
@@ -859,6 +872,14 @@ impl ClaimedJob {
             .as_ref()
             .err()
             .map(|undecodable| undecodable.error.as_str())
+    }
+
+    /// Returns the claimed job's ID, unless the row couldn't be identified.
+    pub(crate) fn id(&self) -> Option<i64> {
+        match &self.0 {
+            Ok(job) => Some(job.id),
+            Err(undecodable) => undecodable.row.as_ref().map(|row| row.id),
+        }
     }
 
     pub(crate) fn into_decoded(self) -> crate::client::DecodedJob {
