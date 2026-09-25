@@ -991,6 +991,35 @@ async fn out_of_range_snooze_is_clamped_and_cancel_time_matches_go() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn snooze_preserves_metadata_numbers_beyond_float_range() {
+    let schema = TestSchema::new("snooze_meta").await;
+    let client = gated_client(&schema, "postgres-resilience-snooze-meta", &Gate::default());
+    let snoozed = client.insert(SnoozeForeverArgs {}).await.unwrap();
+    sqlx::query(AssertSqlSafe(format!(
+        "UPDATE {} SET metadata = metadata || $1::jsonb WHERE id = $2",
+        schema.table()
+    )))
+    .bind(r#"{"unrelated":1e400}"#)
+    .bind(snoozed.job.row.id)
+    .execute(&schema.pool)
+    .await
+    .unwrap();
+
+    let mut run = client.start().unwrap();
+    wait_until(Duration::from_secs(10), "the snooze", || async {
+        schema.job_state(snoozed.job.row.id).await == "scheduled"
+    })
+    .await;
+    run.shutdown().await.unwrap();
+    let snoozed = client.jobs().get(snoozed.job.row.id).await.unwrap();
+    // PostgreSQL expands `1e400` in jsonb; the snooze must keep it intact.
+    assert!(snoozed.metadata.get_raw("unrelated").unwrap().get().len() > 400);
+    assert_eq!(snoozed.metadata.get::<i64>("snoozes").unwrap(), Some(1));
+
+    schema.drop().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn client_survives_database_outage_and_catches_up() {
     let schema = TestSchema::new("outage").await;
     let proxy = FaultProxy::start().await;
