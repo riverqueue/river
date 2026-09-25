@@ -83,7 +83,8 @@ func Example_subscription() {
 	if err != nil {
 		panic(err)
 	}
-	_, err = riverClient.Insert(ctx, SubscriptionArgs{Fail: true}, nil)
+	// Limit the failed job to one attempt so it produces one event.
+	_, err = riverClient.Insert(ctx, SubscriptionArgs{Fail: true}, &river.InsertOpts{MaxAttempts: 1})
 	if err != nil {
 		panic(err)
 	}
@@ -124,7 +125,7 @@ func Example_subscription() {
 
 	// Output:
 	// Got job with state: completed
-	// Got job with state: available
+	// Got job with state: discarded
 	// Got job with state: cancelled
 	// Client stopped
 	// Channel is closed
