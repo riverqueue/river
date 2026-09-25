@@ -146,6 +146,7 @@ impl Client {
             after_jobs_set_state(
                 &self.inner,
                 DatabaseConnection::Postgres(&mut *connection),
+                &[row.id],
                 std::slice::from_ref(&row),
             )
             .await?;
@@ -193,6 +194,7 @@ impl Client {
             after_jobs_set_state(
                 &self.inner,
                 DatabaseConnection::Sqlite(connection),
+                &[row.id],
                 std::slice::from_ref(&row),
             )
             .await?;

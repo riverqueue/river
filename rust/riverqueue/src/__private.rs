@@ -427,6 +427,11 @@ pub struct JobUpdatedParams {
 pub struct JobSetStateParams<'a> {
     /// Selected database backend configuration.
     pub database: DatabaseConfig,
+    /// The ID of every job in the batch, including jobs deleted while their
+    /// workers ran, which have no row in `jobs`. Like River Go's pilot
+    /// `JobFinish`, this lets an extension release per-job resources for
+    /// every attempt that ended.
+    pub job_ids: &'a [i64],
     /// Every job in the batch that still exists, as returned by the update,
     /// including jobs that were no longer running and so kept their state.
     pub jobs: &'a [JobRow],
@@ -593,18 +598,20 @@ pub trait Pilot: Send + Sync + 'static {
     /// Optionally claims jobs itself, like River Go's `Pilot.JobGetAvailable`.
     ///
     /// Called in the fetch transaction when [`Pilot::intercepts_fetch`]
-    /// returns `true`, before [`Pilot::select_job_ids`]. Returning rows skips
+    /// returns `true`, before [`Pilot::select_job_ids`]. Returning jobs skips
     /// River's claim: the extension must have moved them to `running` with
     /// the attempt incremented, `attempted_at` set, and this client appended
-    /// to `attempted_by`, exactly as River's claim does. Build them with
-    /// [`postgres_job_projection`] and [`decode_postgres_job_row`] (or their
-    /// SQLite equivalents) so they decode like River's own rows. `None`
-    /// continues with [`Pilot::select_job_ids`] and River's claim.
+    /// to `attempted_by`, exactly as River's claim does. Build each entry
+    /// from a row selected with [`postgres_job_projection`] using
+    /// [`claimed_postgres_job`] (or their SQLite equivalents), so a row that
+    /// can't be fully decoded fails its attempt exactly as it would through
+    /// River's own claim. `None` continues with [`Pilot::select_job_ids`] and
+    /// River's claim.
     async fn claim_jobs(
         &self,
         _connection: DatabaseConnection<'_>,
         _params: &FetchParams,
-    ) -> Result<Option<Vec<JobRow>>, PilotError> {
+    ) -> Result<Option<Vec<ClaimedJob>>, PilotError> {
         Ok(None)
     }
 
@@ -748,6 +755,14 @@ pub fn decode_postgres_job_row(row: &sqlx::postgres::PgRow) -> Result<JobRow, Pi
     crate::client::decode_job_row(row).map_err(|undecodable| undecodable.error.into())
 }
 
+/// Decodes a claimed row selected with [`postgres_job_projection`] as far
+/// as River can, for [`Pilot::claim_jobs`].
+#[cfg(feature = "postgres")]
+#[must_use]
+pub fn claimed_postgres_job(row: &sqlx::postgres::PgRow) -> ClaimedJob {
+    ClaimedJob::from_decoded(crate::client::decode_job_row(row))
+}
+
 /// Columns River selects to decode a SQLite job row, for use with
 /// [`decode_sqlite_job_row`].
 #[cfg(feature = "sqlite")]
@@ -762,6 +777,55 @@ pub const SQLITE_JOB_COLUMNS: &str = crate::database::sqlite::JOB_COLUMNS;
 #[cfg(feature = "sqlite")]
 pub fn decode_sqlite_job_row(row: &sqlx::sqlite::SqliteRow) -> Result<JobRow, PilotError> {
     crate::database::sqlite::decode_job_row(row).map_err(|undecodable| undecodable.error.into())
+}
+
+/// Decodes a claimed row selected with [`SQLITE_JOB_COLUMNS`] as far as
+/// River can, for [`Pilot::claim_jobs`].
+#[cfg(feature = "sqlite")]
+#[must_use]
+pub fn claimed_sqlite_job(row: &sqlx::sqlite::SqliteRow) -> ClaimedJob {
+    ClaimedJob::from_decoded(crate::database::sqlite::decode_job_row(row))
+}
+
+/// A job claimed by [`Pilot::claim_jobs`].
+///
+/// River works a decoded job normally. Like a row River claims itself, an
+/// undecodable one isn't worked: its attempt fails with an error describing
+/// the decode failure, before hooks or middleware run, and it's retried or
+/// discarded through ordinary error handling.
+#[derive(Debug)]
+pub struct ClaimedJob(crate::client::DecodedJob);
+
+impl ClaimedJob {
+    fn from_decoded(decoded: crate::client::DecodedJob) -> Self {
+        Self(decoded)
+    }
+
+    /// Returns the decoded row, or `None` when some field couldn't be
+    /// decoded.
+    #[must_use]
+    pub fn job(&self) -> Option<&JobRow> {
+        self.0.as_ref().ok()
+    }
+
+    /// Returns why the row couldn't be fully decoded, if it couldn't.
+    #[must_use]
+    pub fn decode_error(&self) -> Option<&str> {
+        self.0
+            .as_ref()
+            .err()
+            .map(|undecodable| undecodable.error.as_str())
+    }
+
+    pub(crate) fn into_decoded(self) -> crate::client::DecodedJob {
+        self.0
+    }
+}
+
+impl From<JobRow> for ClaimedJob {
+    fn from(job: JobRow) -> Self {
+        Self(Ok(job))
+    }
 }
 
 /// Type-erased result returned by River's exact-version insertion seam.

@@ -586,7 +586,10 @@ pub(super) async fn fetch_jobs(
                 return Ok(finish_fetch(
                     inner,
                     fetch_started,
-                    claimed.into_iter().map(Ok).collect(),
+                    claimed
+                        .into_iter()
+                        .map(crate::__private::ClaimedJob::into_decoded)
+                        .collect(),
                 )
                 .await);
             }
@@ -661,7 +664,10 @@ pub(super) async fn fetch_jobs(
                 return Ok(finish_fetch(
                     inner,
                     fetch_started,
-                    claimed.into_iter().map(Ok).collect(),
+                    claimed
+                        .into_iter()
+                        .map(crate::__private::ClaimedJob::into_decoded)
+                        .collect(),
                 )
                 .await);
             }
