@@ -24,12 +24,17 @@ func verifyUniqueKeyGoldens(t *testing.T, repositoryRoot string, adapters ...*ad
 
 	for _, encodedCase := range fixture.Cases {
 		var expected struct {
+			ExpectedError     string `json:"expected_error"`
 			ExpectedSHA256    string `json:"expected_sha256"`
 			ExpectedStateMask int    `json:"expected_state_mask"`
 			Name              string `json:"name"`
 		}
 		require.NoError(t, json.Unmarshal(encodedCase, &expected))
 		for _, adapter := range adapters {
+			if expected.ExpectedError != "" {
+				adapter.requireCallError(t, "unique_key", encodedCase, expected.ExpectedError)
+				continue
+			}
 			var actual struct {
 				SHA256    string `json:"sha256"`
 				StateMask int    `json:"state_mask"`

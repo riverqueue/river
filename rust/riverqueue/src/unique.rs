@@ -486,7 +486,8 @@ mod tests {
     #[derive(Deserialize)]
     struct FixtureCase {
         args: Box<RawValue>,
-        expected_sha256: String,
+        expected_error: Option<String>,
+        expected_sha256: Option<String>,
         expected_state_mask: u8,
         kind: String,
         name: String,
@@ -515,10 +516,13 @@ mod tests {
         }
 
         fn expected_key(&self) -> [u8; 32] {
+            let expected = self
+                .expected_sha256
+                .as_deref()
+                .unwrap_or_else(|| panic!("golden {} expects an error", self.name));
             let mut decoded = [0_u8; 32];
             for (index, byte) in decoded.iter_mut().enumerate() {
-                *byte = u8::from_str_radix(&self.expected_sha256[index * 2..index * 2 + 2], 16)
-                    .unwrap();
+                *byte = u8::from_str_radix(&expected[index * 2..index * 2 + 2], 16).unwrap();
             }
             decoded
         }
@@ -609,9 +613,12 @@ mod tests {
         );
     }
 
+    /// Typed-only goldens are raw bytes a dynamic producer can't write, but
+    /// their keys still derive from those bytes alone.
     #[test]
     fn matches_go_generated_golden_keys() {
-        for case in fixture().cases {
+        let fixture = fixture();
+        for case in fixture.cases.into_iter().chain(fixture.typed_only_cases) {
             let unique_paths = case.selected_unique_components.clone().unwrap_or_default();
             let unique_components = unique_paths
                 .iter()
@@ -622,7 +629,7 @@ mod tests {
                 .map(Vec::as_slice)
                 .collect::<Vec<_>>();
             let opts = case.unique_opts();
-            let actual = build_unique_key_parts(
+            let result = build_unique_key_parts(
                 &case.kind,
                 &unique_path_refs,
                 &case.compact_args(),
@@ -630,9 +637,18 @@ mod tests {
                 &opts,
                 &case.queue,
                 case.scheduled_at,
-            )
-            .unwrap()
-            .unwrap();
+            );
+            if let Some(expected_error) = &case.expected_error {
+                // The contract's `rejected` is River's invalid job error.
+                assert_eq!(expected_error, "rejected", "fixture {}", case.name);
+                assert!(
+                    matches!(result, Err(Error::InvalidJob(_))),
+                    "fixture {}: {result:?}",
+                    case.name
+                );
+                continue;
+            }
+            let actual = result.unwrap().unwrap();
             assert_eq!(case.expected_key(), actual, "fixture {}", case.name);
             assert_eq!(
                 case.expected_state_mask,

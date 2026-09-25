@@ -2417,7 +2417,13 @@
         "additionalProperties": false,
         "properties": {
           "args": {
-            "type": "object"
+            "description": "Encoded job arguments. All-args fixtures include non-object values, which must fail with expected_error."
+          },
+          "expected_error": {
+            "description": "Fixture expectation; adapters ignore it.",
+            "enum": [
+              "rejected"
+            ]
           },
           "expected_sha256": {
             "description": "Fixture expectation; adapters ignore it.",

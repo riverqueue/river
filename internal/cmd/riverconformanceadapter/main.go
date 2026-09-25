@@ -356,13 +356,14 @@ type conformanceArgs struct {
 
 func (conformanceArgs) Kind() string { return "conformance_echo" }
 
-type uniqueAllArgs struct {
-	Alpha   string `json:"alpha"`
-	Maximum int64  `json:"maximum"`
-	Zeta    string `json:"zeta"`
-}
+// uniqueAllArgs accepts any encoded arguments, including non-object ones, so
+// River itself decides whether all-args uniqueness can use them. Keys are
+// computed from the request's raw argument bytes.
+type uniqueAllArgs struct{}
 
 func (uniqueAllArgs) Kind() string { return "conformance_all_args" }
+
+func (*uniqueAllArgs) UnmarshalJSON([]byte) error { return nil }
 
 type uniqueNumericArgs struct {
 	Exponent        float64 `json:"exponent"`
@@ -824,6 +825,7 @@ type uniqueKeyParams struct {
 
 	// Fixture expectations and documentation passed through unchanged by
 	// the harness; the adapter ignores them.
+	ExpectedError            string     `json:"expected_error"`
 	ExpectedSHA256           string     `json:"expected_sha256"`
 	ExpectedStateMask        int        `json:"expected_state_mask"`
 	Name                     string     `json:"name"`

@@ -24,7 +24,10 @@ fail validation.
 so two implementations deduplicate the same job only when they write
 identical argument bytes: the same key order for struct fields and object
 properties, the same escaping, and the same number formatting. Adapters must
-reproduce every entry in `cases`. Entries in `typed_only_cases` use typed
+reproduce every entry in `cases`. An entry with `expected_error` instead of
+`expected_sha256` must fail with that contract error, as Go rejects all-args
+uniqueness for arguments that aren't a JSON object (an empty array still
+hashes as `{}`). Entries in `typed_only_cases` use typed
 arguments whose byte order a producer built on dynamic objects can't write,
 such as a map with integer-like keys, which Go writes in sorted order (`"10"`
 before `"2"`) but JavaScript objects enumerate first in ascending numeric
