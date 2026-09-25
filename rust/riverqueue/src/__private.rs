@@ -47,6 +47,23 @@ pub fn sqlite_timestamp(time: DateTime<Utc>) -> String {
     crate::database::sqlite::sqlite_time(time)
 }
 
+/// Adds an add-on crate's indexes to PostgreSQL's default reindexer list.
+///
+/// Names already in the list are skipped. A caller who chose index names
+/// explicitly with `PostgresReindexConfig::with_index_names`, including an
+/// empty list that disables the reindexer, keeps exactly that list. A
+/// custom schedule or timeout alone still receives add-on indexes. SQLite
+/// sources are returned unchanged.
+#[cfg(feature = "postgres")]
+#[must_use]
+pub fn database_with_default_postgres_reindex_names(
+    mut database: Database,
+    names: impl IntoIterator<Item = impl Into<String>>,
+) -> Database {
+    database.extend_default_postgres_reindex_names(names);
+    database
+}
+
 /// Creates a detached work context with no client.
 #[must_use]
 pub fn work_context(cancellation: CancellationToken) -> crate::WorkContext {
