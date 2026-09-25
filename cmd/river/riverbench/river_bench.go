@@ -347,7 +347,6 @@ func (b *Benchmarker[TTx]) insertJobs(
 		// We'll be reusing the same batch for all inserts because (1) we can
 		// get away with it, and (2) to avoid needless allocations.
 		insertParamsBatch = make([]river.InsertManyParams, insertBatchSize)
-		jobArgsBatch      = make([]BenchmarkArgs, insertBatchSize)
 
 		jobNum int
 	)
@@ -355,14 +354,7 @@ func (b *Benchmarker[TTx]) insertJobs(
 	var numInsertedThisRound int
 
 	for {
-		for _, jobArgs := range jobArgsBatch {
-			jobNum++
-			jobArgs.Num = jobNum
-		}
-
-		for i := range insertParamsBatch {
-			insertParamsBatch[i].Args = jobArgsBatch[i]
-		}
+		jobNum = fillInsertParamsBatch(insertParamsBatch, jobNum)
 
 		numLeft := numTotalJobs - numInsertedThisRound
 		if numLeft < insertBatchSize {
@@ -411,7 +403,6 @@ func (b *Benchmarker[TTx]) insertJobsContinuously(
 		// We'll be reusing the same batch for all inserts because (1) we can
 		// get away with it, and (2) to avoid needless allocations.
 		insertParamsBatch = make([]river.InsertManyParams, insertBatchSize)
-		jobArgsBatch      = make([]BenchmarkArgs, insertBatchSize)
 
 		jobNum int
 	)
@@ -430,14 +421,7 @@ func (b *Benchmarker[TTx]) insertJobsContinuously(
 		var numInsertedThisRound int
 
 		for {
-			for _, jobArgs := range jobArgsBatch {
-				jobNum++
-				jobArgs.Num = jobNum
-			}
-
-			for i := range insertParamsBatch {
-				insertParamsBatch[i].Args = jobArgsBatch[i]
-			}
+			jobNum = fillInsertParamsBatch(insertParamsBatch, jobNum)
 
 			if _, err := client.InsertMany(ctx, insertParamsBatch); err != nil {
 				b.logger.ErrorContext(ctx, b.name+": Error inserting jobs", "err", err)
@@ -501,6 +485,17 @@ func (b *Benchmarker[TTx]) resetJobsTable(ctx context.Context) error {
 	}
 
 	return nil
+}
+
+// Sets args on every element of insertParamsBatch, numbering jobs sequentially
+// starting after lastJobNum. Returns the last job number assigned so that the
+// next batch can continue the sequence.
+func fillInsertParamsBatch(insertParamsBatch []river.InsertManyParams, lastJobNum int) int {
+	for i := range insertParamsBatch {
+		lastJobNum++
+		insertParamsBatch[i].Args = BenchmarkArgs{Num: lastJobNum}
+	}
+	return lastJobNum
 }
 
 type BenchmarkArgs struct {
