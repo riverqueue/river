@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.48.0] - 2026-09-25
+
 ### Added
 
 - Added `Config.LeaderElectionDisabled` to let a client work jobs without participating in leader election or running maintenance services. Other eligible clients in the same database and schema continue handling scheduling, retries, periodic enqueueing, rescue, and cleanup. [PR #1382](https://github.com/riverqueue/river/pull/1382).
