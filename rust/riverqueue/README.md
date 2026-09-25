@@ -114,6 +114,34 @@ its connection back in the pool still inside a transaction. River begins its
 own transactions on a separate task for this reason; run your own begins to
 completion, or on a spawned task, before reacting to cancellation.
 
+## Managing jobs and queues
+
+`client.jobs()` gets, lists, cancels, retries, updates, and deletes persisted
+jobs. `client.queues()` gets, lists, pauses, resumes, and updates the queue
+records every client shares, and `client.local_queues()` changes which queues
+this client works while it runs. Job and queue requests run when awaited and
+take `.tx(&mut transaction)` like insertions:
+
+```rust,no_run
+# use riverqueue::{Client, JobListParams, JobState, QueueConfig, QueueSelector};
+# async fn example(client: Client, pool: sqlx::PgPool) -> Result<(), riverqueue::Error> {
+let page = client
+    .jobs()
+    .list(JobListParams::default().states([JobState::Retryable]).limit(50))
+    .await?;
+for job in &page.jobs {
+    client.jobs().retry(job.id).await?;
+}
+
+let mut transaction = pool.begin().await?;
+client.queues().pause(QueueSelector::All).tx(&mut transaction).await?;
+transaction.commit().await?;
+
+client.local_queues().add("reports", QueueConfig::new(2))?;
+# Ok(())
+# }
+```
+
 ## Worker outcomes and cancellation
 
 An `Ok(WorkOutcome::Complete)` completes a job. `Snooze` reschedules without

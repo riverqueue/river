@@ -57,9 +57,23 @@ impl WorkContext {
         self.client.as_ref()
     }
 
-    /// Completes the running job inside a caller-managed transaction, merging
-    /// metadata recorded on this context and invoking the exact-version
-    /// completion extension seam.
+    /// Completes the running job in a caller-managed transaction, for example
+    /// alongside business writes the job performed, like River Go's
+    /// `JobCompleteTx`.
+    ///
+    /// Metadata recorded on this context, including output, is merged into
+    /// the job. The job becomes completed only when the transaction commits,
+    /// and River then leaves the completed row unchanged when the worker
+    /// returns. [`Jobs::complete`](crate::Jobs::complete) completes a running
+    /// job by ID outside a worker.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::Runtime`] when this context doesn't belong to a
+    /// running worker, [`Error::InvalidJob`] when the job is no longer
+    /// running, [`Error::DatabaseMismatch`] for a transaction from another
+    /// backend, [`Error::Extension`] when an extension's completion hook
+    /// fails, and [`Error::Database`] when the database operation fails.
     pub async fn job_complete_tx<'executor, E>(&self, connection: E) -> Result<JobRow, Error>
     where
         E: DatabaseTransactionExecutor<'executor>,
