@@ -64,6 +64,7 @@
     "raw_insert_full_row",
     "raw_insert_no_notify",
     "raw_job_exact_json",
+    "raw_job_row",
     "raw_job_timestamps",
     "request_resign",
     "reset",

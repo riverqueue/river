@@ -35,7 +35,7 @@ import (
 )
 
 const (
-	adapterVersion        = 13
+	adapterVersion        = 14
 	implementationVersion = "0.47.0"
 	protocolRevision      = 1
 )
@@ -74,6 +74,7 @@ var adapterMethods = []string{ //nolint:gochecknoglobals
 	"raw_insert_full_row",
 	"raw_insert_no_notify",
 	"raw_job_exact_json",
+	"raw_job_row",
 	"raw_job_timestamps",
 	"request_resign",
 	"reset",
@@ -152,6 +153,7 @@ var sqliteAdapterMethods = []string{ //nolint:gochecknoglobals
 	"migrate",
 	"raw_insert_exact_json",
 	"raw_job_exact_json",
+	"raw_job_row",
 	"raw_job_timestamps",
 	"reset",
 	"retry",
@@ -200,7 +202,7 @@ var sqliteRuntimeMethods = []string{ //nolint:gochecknoglobals
 	"barrier_create", "barrier_release", "cancel", "clock_set", "cron_next", "delete", "delete_many", "get",
 	"handshake", "insert", "insert_many", "insert_many_fast", "leader", "list", "migrate",
 	"queue_add", "queue_get", "queue_list", "queue_pause", "queue_remove", "queue_resume",
-	"queue_update", "raw_finalize", "raw_insert_exact_json", "raw_insert_no_notify", "raw_job_exact_json", "raw_job_timestamps", "request_resign", "reset", "retry", "retry_delay",
+	"queue_update", "raw_finalize", "raw_insert_exact_json", "raw_insert_no_notify", "raw_job_exact_json", "raw_job_row", "raw_job_timestamps", "request_resign", "reset", "retry", "retry_delay",
 	"rng_seed", "runtime_stats", "start", "stop", "tx_begin", "tx_cancel", "tx_commit",
 	"tx_delete", "tx_delete_many", "tx_get", "tx_insert", "tx_insert_many", "tx_insert_many_fast",
 	"tx_list", "tx_queue_get", "tx_queue_list", "tx_queue_pause", "tx_queue_resume",
@@ -232,6 +234,29 @@ func checkRequest(req *request, methods []string) error {
 		return decodeParams(req.Params, &struct{}{})
 	}
 	return nil
+}
+
+// rawJobRow is a job's JSON and timestamp columns as the database renders
+// them, for byte-level comparison across implementations.
+type rawJobRow struct {
+	Args        string  `json:"args"`
+	AttemptedAt *string `json:"attempted_at"`
+	AttemptedBy *string `json:"attempted_by"`
+	CreatedAt   string  `json:"created_at"`
+	Errors      *string `json:"errors"`
+	FinalizedAt *string `json:"finalized_at"`
+	Metadata    string  `json:"metadata"`
+	ScheduledAt string  `json:"scheduled_at"`
+	Tags        string  `json:"tags"`
+}
+
+// scanTargets returns the row's fields in the column order the raw_job_row
+// queries select.
+func (row *rawJobRow) scanTargets() []any {
+	return []any{
+		&row.Args, &row.AttemptedAt, &row.AttemptedBy, &row.CreatedAt, &row.Errors,
+		&row.FinalizedAt, &row.Metadata, &row.ScheduledAt, &row.Tags,
+	}
 }
 
 type request struct {
@@ -1796,6 +1821,22 @@ func (s *adapterState) handle(ctx context.Context, req *request) (any, error) {
 		}
 		return exactJSONTokens(job)
 
+	case "raw_job_row":
+		id, err := requestID(req.Params)
+		if err != nil {
+			return nil, err
+		}
+		var row rawJobRow
+		err = s.pool.QueryRow(ctx, `
+			SELECT args::text, attempted_at::text, attempted_by::text, created_at::text, errors::text,
+				finalized_at::text, metadata::text, scheduled_at::text, tags::text
+			FROM river_job
+			WHERE id = $1`, id).Scan(row.scanTargets()...)
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, notFound(err)
+		}
+		return row, err
+
 	case "raw_job_timestamps":
 		id, err := requestID(req.Params)
 		if err != nil {
@@ -2625,6 +2666,22 @@ func (s *sqliteAdapterState) handle(ctx context.Context, req *request) (any, err
 			return nil, err
 		}
 		return normalizeJob(job), nil
+
+	case "raw_job_row":
+		id, err := requestID(req.Params)
+		if err != nil {
+			return nil, err
+		}
+		var row rawJobRow
+		err = s.pool.QueryRowContext(ctx, `
+			SELECT json(args), CAST(attempted_at AS TEXT), json(attempted_by), CAST(created_at AS TEXT),
+				json(errors), CAST(finalized_at AS TEXT), json(metadata), CAST(scheduled_at AS TEXT), json(tags)
+			FROM river_job
+			WHERE id = ?`, id).Scan(row.scanTargets()...)
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, notFound(err)
+		}
+		return row, err
 
 	case "raw_job_timestamps":
 		id, err := requestID(req.Params)
