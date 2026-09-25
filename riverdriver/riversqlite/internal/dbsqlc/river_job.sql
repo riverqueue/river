@@ -1,5 +1,6 @@
 CREATE TABLE river_job (
-    id integer PRIMARY KEY, -- SQLite makes this autoincrementing automatically
+    -- AUTOINCREMENT prevents SQLite from reusing the IDs of deleted jobs.
+    id integer PRIMARY KEY AUTOINCREMENT,
     args jsonb NOT NULL DEFAULT (jsonb('{}')),
     attempt integer NOT NULL DEFAULT 0,
     attempted_at timestamp,

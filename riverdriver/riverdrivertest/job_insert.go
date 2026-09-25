@@ -583,6 +583,20 @@ func exerciseJobInsert[TTx any](ctx context.Context, t *testing.T,
 	t.Run("JobInsertFull", func(t *testing.T) {
 		t.Parallel()
 
+		t.Run("DoesNotReuseAutomaticallyGeneratedID", func(t *testing.T) {
+			t.Parallel()
+
+			exec, _ := setup(ctx, t)
+
+			job := testfactory.Job(ctx, t, exec, &testfactory.JobOpts{})
+
+			_, err := exec.JobDelete(ctx, &riverdriver.JobDeleteParams{ID: job.ID})
+			require.NoError(t, err)
+
+			jobAfter := testfactory.Job(ctx, t, exec, &testfactory.JobOpts{})
+			require.Greater(t, jobAfter.ID, job.ID)
+		})
+
 		t.Run("MinimalArgsWithDefaults", func(t *testing.T) {
 			t.Parallel()
 
