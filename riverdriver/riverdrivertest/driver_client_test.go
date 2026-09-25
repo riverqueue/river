@@ -3,6 +3,8 @@ package riverdrivertest
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
+	"maps"
 	"math"
 	"slices"
 	"testing"
@@ -230,6 +232,16 @@ func TestClientWithDriverRiverTurso(t *testing.T) {
 	)
 }
 
+// customJSONArgs are job args encoded as an arbitrary JSON object, like args
+// with a custom MarshalJSON implementation.
+type customJSONArgs struct {
+	values map[string]string
+}
+
+func (customJSONArgs) Kind() string { return "customJSON" }
+
+func (a customJSONArgs) MarshalJSON() ([]byte, error) { return json.Marshal(a.values) }
+
 type noOpArgs struct {
 	Name string `json:"name"`
 }
@@ -416,6 +428,52 @@ func ExerciseClient[TTx any](ctx context.Context, t *testing.T,
 		event := riversharedtest.WaitOrTimeout(t, subscribeChan)
 		require.Equal(t, river.EventKindJobCancelled, event.Kind)
 		require.Equal(t, rivertype.JobStateCancelled, event.Job.State)
+	})
+
+	// Keys containing gjson/sjson path syntax (and the empty key) are distinct
+	// keys when unique by all args, so args differing in their values aren't
+	// duplicates.
+	t.Run("InsertUniqueByArgsAllArgsWithPathSyntaxKeys", func(t *testing.T) {
+		t.Parallel()
+
+		client, bundle := setup(t)
+
+		river.AddWorker(bundle.config.Workers, river.WorkFunc(func(ctx context.Context, job *river.Job[customJSONArgs]) error {
+			return nil
+		}))
+
+		insert := func(t *testing.T, values map[string]string) *rivertype.JobInsertResult {
+			t.Helper()
+
+			insertRes, err := client.Insert(ctx, customJSONArgs{values: values}, &river.InsertOpts{
+				UniqueOpts: river.UniqueOpts{ByArgs: true},
+			})
+			require.NoError(t, err)
+			return insertRes
+		}
+
+		var (
+			keys       = []string{"", "!x", ":x", "[x", "alice@example.com", "file.name", "x*?", "x#", "x|", `x\y`, "{x"}
+			baseValues = map[string]string{"x": "x"}
+		)
+		for _, key := range keys {
+			baseValues[key] = "value"
+		}
+
+		insertRes0 := insert(t, baseValues)
+		require.False(t, insertRes0.UniqueSkippedAsDuplicate)
+
+		insertRes1 := insert(t, maps.Clone(baseValues))
+		require.True(t, insertRes1.UniqueSkippedAsDuplicate)
+		require.Equal(t, insertRes0.Job.ID, insertRes1.Job.ID)
+
+		for _, key := range keys {
+			values := maps.Clone(baseValues)
+			values[key] = "other"
+
+			insertRes := insert(t, values)
+			require.False(t, insertRes.UniqueSkippedAsDuplicate, "key: %q", key)
+		}
 	})
 
 	// Unique fields whose JSON keys contain gjson/sjson path syntax, or whose

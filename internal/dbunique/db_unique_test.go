@@ -22,6 +22,60 @@ func (a JobArgsStaticKind) Kind() string {
 	return a.kind
 }
 
+func TestAppendSortedObject(t *testing.T) {
+	t.Parallel()
+
+	t.Run("Encodes", func(t *testing.T) {
+		t.Parallel()
+
+		// Compare exact bytes: equivalent JSON with different key escaping or
+		// whitespace would change the hashes of jobs inserted before upgrading.
+		for _, tt := range []struct {
+			name          string
+			encodedObject string
+			expected      string
+		}{
+			{name: "ASCIIHTML", encodedObject: `{"a\u003cb\u0026c\u003e":1}`, expected: `{"a<b&c>":1}`},
+			{name: "Colon", encodedObject: `{"x":2,":x":1}`, expected: `{":x":1,"x":2}`},
+			{name: "ControlCharacters", encodedObject: `{"line\nbreak":1,"\u0000":2}`, expected: `{"\u0000":2,"line\nbreak":1}`},
+			{name: "DEL", encodedObject: `{"\u007f":1}`, expected: "{\"\x7f\":1}"},
+			{name: "DuplicateKeys", encodedObject: `{"a":1,"\u0061":2}`, expected: `{"a":1}`},
+			{name: "EmptyArray", encodedObject: `[]`, expected: `{}`},
+			{name: "EmptyInput", encodedObject: ``, expected: `{}`},
+			{name: "EmptyKey", encodedObject: `{"a":2,"":1}`, expected: `{"":1,"a":2}`},
+			{name: "EmptyObject", encodedObject: `{}`, expected: `{}`},
+			{name: "EscapedKey", encodedObject: `{"quote\"slash\\":1}`, expected: `{"quote\"slash\\":1}`},
+			{name: "LiteralAndNestedKeys", encodedObject: `{"file.name":"a","file":{"name":"b"}}`, expected: `{"file":{"name":"b"},"file.name":"a"}`},
+			{name: "NumericKeys", encodedObject: `{"10":2,"0":1}`, expected: `{"0":1,"10":2}`},
+			{name: "RawValues", encodedObject: `{"b":null,"a":{"y":1, "x":[1, 2]}}`, expected: `{"a":{"y":1, "x":[1, 2]},"b":null}`},
+			{name: "UnicodeHTML", encodedObject: `{"\u00e9\u003c":1}`, expected: `{"é\u003c":1}`},
+			{name: "UnicodeSeparators", encodedObject: `{"\u2029":2,"\u2028":1}`, expected: `{"\u2028":1,"\u2029":2}`},
+		} {
+			t.Run(tt.name, func(t *testing.T) {
+				t.Parallel()
+
+				encoded, err := appendSortedObject(nil, []byte(tt.encodedObject))
+				require.NoError(t, err)
+				require.Equal(t, tt.expected, string(encoded))
+			})
+		}
+	})
+
+	t.Run("RejectsNonObjectArgs", func(t *testing.T) {
+		t.Parallel()
+
+		for _, encodedArgs := range []string{`null`, `[1,2]`, `"str"`, `true`, `123`} {
+			args := JobArgsStaticKind{kind: "kind"}
+			_, err := UniqueKey(&riversharedtest.TimeStub{}, &UniqueOpts{ByArgs: true}, &rivertype.JobInsertParams{
+				Args:        args,
+				EncodedArgs: []byte(encodedArgs),
+				Kind:        args.Kind(),
+			})
+			require.EqualError(t, err, "unique args must encode a JSON object", "encoded args: %s", encodedArgs)
+		}
+	})
+}
+
 func TestUniqueKey(t *testing.T) {
 	t.Parallel()
 
@@ -425,6 +479,15 @@ func TestUniqueKey(t *testing.T) {
 			uniqueOpts: UniqueOpts{ByArgs: true},
 			// args JSON should be sorted alphabetically:
 			expectedJSON: `&kind=worker_3&args={"count":10,"description":"A generic job without unique fields."}`,
+		},
+		{
+			name:     "ByArgsWithNoUniqueFieldsAndLiteralKeys",
+			argsFunc: func() rivertype.JobArgs { return JobArgsStaticKind{kind: "worker_3"} },
+			modifyInsertParamsFunc: func(params *rivertype.JobInsertParams) {
+				params.EncodedArgs = []byte(`{"x":"x","file.name":"file","alice@example.com":"email",":x":"colon","[x":"bracket","{x":"brace","":"empty"}`)
+			},
+			uniqueOpts:   UniqueOpts{ByArgs: true},
+			expectedJSON: `&kind=worker_3&args={"":"empty",":x":"colon","[x":"bracket","alice@example.com":"email","file.name":"file","x":"x","{x":"brace"}`,
 		},
 		{
 			name: "ByArgsWithEmptyEncodedArgs",
