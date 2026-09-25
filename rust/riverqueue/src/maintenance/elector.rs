@@ -177,6 +177,14 @@ impl Elector {
             debug!(client_id = %self.client_id, "River client gained leadership");
             self.signal(ElectorEvent::Gained);
             let _ = terms.send(term.clone());
+            // Like Go, which honors a resignation request only when it
+            // arrives while this client leads, drop requests that were
+            // queued while it was bidding.
+            if !drain_wakeups(&mut wakeups) {
+                term.token.cancel();
+                self.resign(lease.elected_at).await;
+                return;
+            }
 
             let (step_down, lease) = self.run_leader(&cancel, &mut wakeups, lease).await;
             term.token.cancel();
@@ -404,6 +412,17 @@ impl Elector {
                     return false;
                 },
             }
+        }
+    }
+}
+
+/// Discards queued wakeups, returning `false` once the channel is closed.
+fn drain_wakeups(wakeups: &mut mpsc::UnboundedReceiver<LeadershipWakeup>) -> bool {
+    loop {
+        match wakeups.try_recv() {
+            Ok(_) => {}
+            Err(mpsc::error::TryRecvError::Empty) => return true,
+            Err(mpsc::error::TryRecvError::Disconnected) => return false,
         }
     }
 }
@@ -668,6 +687,40 @@ mod unit_tests {
         run.await.unwrap();
         let resigned = store.resigned.lock().unwrap().clone();
         (observed, resigned, elected_at)
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn ignores_resign_requests_queued_before_gaining_leadership() {
+        let elected_at = Utc::now();
+        let store = Arc::new(ScriptedStore {
+            elected_at,
+            reelect: Mutex::new(Vec::new()),
+            resigned: Mutex::new(Vec::new()),
+        });
+        let (wakeup_sender, wakeups) = mpsc::unbounded_channel();
+        let (terms_sender, mut terms) = mpsc::unbounded_channel();
+        let cancel = CancellationToken::new();
+        // Queued while the client is still a follower, as when a request
+        // arrives during its election attempt.
+        wakeup_sender.send(LeadershipWakeup::RequestResign).unwrap();
+        let elector = Elector::new(
+            Arc::clone(&store) as Arc<dyn LeaderStore>,
+            "stale-resign".to_owned(),
+            Duration::from_millis(100),
+        );
+        let run = tokio::spawn(elector.run(cancel.clone(), wakeups, terms_sender));
+
+        let term = terms.recv().await.unwrap();
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        assert!(!term.token.is_cancelled());
+        assert!(store.resigned.lock().unwrap().is_empty());
+
+        // A request that arrives while the client leads is honored.
+        wakeup_sender.send(LeadershipWakeup::RequestResign).unwrap();
+        term.token.cancelled().await;
+        cancel.cancel();
+        run.await.unwrap();
+        assert_eq!(store.resigned.lock().unwrap().first(), Some(&elected_at));
     }
 
     #[tokio::test(start_paused = true)]

@@ -45,9 +45,11 @@ impl ResignRequest<'_> {
         let mut session = self.target.session(inner, Access::Transaction).await?;
         session.storage(inner).leader_request_resign().await?;
         session.commit().await?;
-        // Without a listener, this client also learns of the request directly
-        // rather than at its next poll of the notification outbox.
-        if own_transaction && !inner.database.supports_listener() {
+        // A poll-only client reads neither a listener nor the notification
+        // outbox, so it learns of its own request directly. Any other client
+        // receives the committed notification like every other client does;
+        // also signalling it locally would deliver the request twice.
+        if own_transaction && inner.poll_only {
             let _ = inner
                 .queue_notifications
                 .send(RuntimeNotification::LeadershipRequestResign);
