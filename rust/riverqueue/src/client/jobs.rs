@@ -240,10 +240,12 @@ impl JobCancelRequest<'_> {
         let mut session = self.target.session(inner, Access::Transaction).await?;
         let row = session.storage(inner).job_cancel(self.id).await?;
         session.commit().await?;
-        // Without a listener, wake this client's running attempt directly,
-        // like Go's `notifyProducerWithoutListenerQueueControlEvent`. Other
-        // clients observe the committed notification when they poll.
-        if own_transaction && !inner.database.supports_listener() {
+        // Without a listener (no backend listener, or a poll-only client),
+        // wake this client's running attempt directly, like Go's
+        // `notifyProducerWithoutListenerQueueControlEvent`. Other clients
+        // observe the committed notification through their own listener or
+        // outbox poll.
+        if own_transaction && !inner.listens_for_notifications() {
             signal_running_attempt(
                 &inner.running,
                 &inner.pending_cancellations,

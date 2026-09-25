@@ -11,11 +11,16 @@ mod support;
 use std::{convert::Infallible, time::Duration};
 
 use riverqueue::{
-    Client, Error, InsertOpts, Job, JobArgs, JobDeleteManyParams, JobListParams, JobState,
-    JobUpdateParams, QueueConfig, QueueListParams, QueueSelector, QueueUpdateParams, WorkContext,
-    WorkOutcome, WorkerRegistry,
+    Client, Error, EventKind, InsertOpts, Job, JobArgs, JobDeleteManyParams, JobListParams,
+    JobState, JobUpdateParams, QueueConfig, QueueListParams, QueueSelector, QueueUpdateParams,
+    WorkContext, WorkOutcome, WorkerRegistry,
 };
 use serde::{Deserialize, Serialize};
+
+/// Blocks until its attempt is cancelled.
+#[derive(Clone, Debug, Deserialize, JobArgs, Serialize)]
+#[river(kind = "client_handles_blocking")]
+struct BlockingArgs {}
 
 #[derive(Clone, Debug, Deserialize, JobArgs, Serialize)]
 #[river(kind = "client_handles")]
@@ -32,6 +37,58 @@ fn args(name: &str) -> HandleArgs {
 /// Defines each scenario for one backend's `Fixture`.
 macro_rules! scenarios {
     () => {
+        // Port of Go's `CancelRunningJobPollOnly`: with no listener, the
+        // cancelling client must wake its own running attempt.
+        #[tokio::test(flavor = "multi_thread")]
+        async fn cancel_reaches_a_running_job_on_a_poll_only_client() {
+            let fixture = Fixture::new().await;
+            let (started_sender, mut started) = tokio::sync::mpsc::unbounded_channel();
+            let mut workers = WorkerRegistry::new();
+            workers
+                .register_fn(move |context: WorkContext, job: Job<BlockingArgs>| {
+                    let started_sender = started_sender.clone();
+                    async move {
+                        let _ = started_sender.send(job.id());
+                        context.cancellation_token().cancelled().await;
+                        Err::<WorkOutcome, _>(std::io::Error::other("cancelled"))
+                    }
+                })
+                .unwrap();
+            let client = fixture
+                .builder()
+                .without_notifications()
+                .workers(workers)
+                .queue("default", fast_queue())
+                .build()
+                .unwrap();
+            let mut events = client.subscribe(&[EventKind::JobCancelled]).unwrap();
+            let mut run = client.start().unwrap();
+            run.wait_ready().await.unwrap();
+
+            let id = client.insert(BlockingArgs {}).await.unwrap().id();
+            let started_id = tokio::time::timeout(Duration::from_secs(10), started.recv())
+                .await
+                .expect("job starts")
+                .unwrap();
+            assert_eq!(started_id, id);
+
+            let row = client.jobs().cancel(id).await.unwrap();
+            assert_eq!(row.state, JobState::Running);
+
+            let event = tokio::time::timeout(Duration::from_secs(10), events.recv())
+                .await
+                .expect("cancellation reaches the running attempt")
+                .unwrap();
+            let job = &event.as_job().unwrap().job;
+            assert_eq!(job.id, id);
+            assert_eq!(job.state, JobState::Cancelled);
+            let finalized_at = job.finalized_at.unwrap();
+            assert!((chrono::Utc::now() - finalized_at).num_seconds().abs() < 2);
+
+            run.shutdown().await.unwrap();
+            fixture.cleanup().await;
+        }
+
         #[tokio::test(flavor = "multi_thread")]
         async fn job_requests_take_effect_only_when_the_transaction_commits() {
             let fixture = Fixture::new().await;
