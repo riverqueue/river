@@ -13,6 +13,7 @@ use std::{
 
 use chrono::{DateTime, Utc};
 use tokio::sync::Notify;
+use tokio_util::sync::CancellationToken;
 
 use crate::{Client, Error, InsertOpts, JobArgs};
 
@@ -226,16 +227,12 @@ pub struct PeriodicJobs {
     pub(crate) registry: Arc<Mutex<PeriodicRegistry>>,
 }
 
-/// Result of one scheduling pass.
-#[derive(Clone, Copy, Debug, Default)]
-pub(crate) struct RunDueOutcome {
-    /// At least one due occurrence failed to insert and stays due.
-    pub(crate) insert_failed: bool,
-}
-
 /// Jobs due within this margin are inserted in the current pass, like Go's
 /// enqueuer, which also keeps each occurrence's original scheduled time.
 const DUE_MARGIN: chrono::Duration = chrono::Duration::milliseconds(100);
+
+/// Bound on one periodic insert (Go `riversharedmaintenance.TimeoutDefault`).
+const INSERT_TIMEOUT: Duration = Duration::from_secs(30);
 
 impl fmt::Debug for PeriodicJobs {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -394,7 +391,16 @@ impl PeriodicJobs {
     ///
     /// An occurrence whose insert fails keeps its scheduled time and is
     /// retried by the caller instead of being skipped as Go does.
-    pub(crate) async fn run_due(&self, client: &Client, now: DateTime<Utc>) -> RunDueOutcome {
+    ///
+    /// Like Go's enqueuer, an occurrence whose insert fails or times out is
+    /// logged and skipped rather than retried, and the pass stops as soon as
+    /// `cancel` fires so a client that lost leadership stops inserting.
+    pub(crate) async fn run_due(
+        &self,
+        client: &Client,
+        now: DateTime<Utc>,
+        cancel: &CancellationToken,
+    ) {
         struct DueJob {
             advance_handle: Option<PeriodicJobHandle>,
             job: PeriodicJob,
@@ -430,10 +436,9 @@ impl PeriodicJobs {
             due
         };
 
-        let mut outcome = RunDueOutcome::default();
         for due_job in due {
             let result = (due_job.job.constructor)();
-            let advance = match result {
+            match result {
                 Ok(Some(insert)) => {
                     let mut opts = InsertOpts::resolve(
                         client.default_max_attempts(),
@@ -448,22 +453,30 @@ impl PeriodicJobs {
                             .insert(crate::METADATA_KEY_PERIODIC_JOB_ID, id)
                             .expect("string metadata serializes");
                     }
-                    if let Err(error) = client.insert_periodic(insert, opts, due_job.target).await {
-                        tracing::error!(error = %error, "River periodic job insertion failed");
-                        outcome.insert_failed = true;
-                        false
-                    } else {
-                        true
+                    let insert = tokio::time::timeout(
+                        INSERT_TIMEOUT,
+                        client.insert_periodic(insert, opts, due_job.target),
+                    );
+                    let result = tokio::select! {
+                        biased;
+                        () = cancel.cancelled() => return,
+                        result = insert => result,
+                    };
+                    match result {
+                        Ok(Ok(_)) => {}
+                        Ok(Err(error)) => {
+                            tracing::error!(error = %error, "River periodic job insertion failed");
+                        }
+                        Err(_) => tracing::error!("River periodic job insertion timed out"),
                     }
                 }
-                Ok(None) => true,
+                Ok(None) => {}
                 Err(error) => {
                     tracing::error!(error = %error, "River periodic job constructor failed");
-                    true
                 }
-            };
+            }
 
-            if advance && let Some(handle) = due_job.advance_handle {
+            if let Some(handle) = due_job.advance_handle {
                 let mut registry = self.lock();
                 if let Some(entry) = registry.entries.get_mut(&handle)
                     && !entry.needs_initialization
@@ -473,7 +486,6 @@ impl PeriodicJobs {
                 }
             }
         }
-        outcome
     }
 }
 
@@ -564,7 +576,7 @@ mod tests {
 
     #[cfg(feature = "postgres")]
     #[tokio::test]
-    async fn insert_failure_does_not_advance_next_run() {
+    async fn insert_failure_skips_the_occurrence_like_go() {
         let attempts = Arc::new(AtomicUsize::new(0));
         let constructed = Arc::clone(&attempts);
         let jobs = PeriodicJobs::from_jobs(
@@ -586,12 +598,54 @@ mod tests {
         let client = Client::builder(pool).build().unwrap();
         let now = Utc::now();
         let target = now + chrono::Duration::seconds(1);
+        let cancel = CancellationToken::new();
 
-        jobs.run_due(&client, now).await;
-        jobs.run_due(&client, target).await;
-        jobs.run_due(&client, target).await;
+        jobs.run_due(&client, now, &cancel).await;
+        jobs.run_due(&client, target, &cancel).await;
+        jobs.run_due(&client, target, &cancel).await;
 
-        assert_eq!(attempts.load(Ordering::SeqCst), 2);
+        // The failed occurrence isn't retried; the schedule moves on.
+        assert_eq!(attempts.load(Ordering::SeqCst), 1);
+        let registry = jobs.lock();
+        assert_eq!(
+            registry.entries.values().next().unwrap().next_run,
+            Some(target + chrono::Duration::seconds(1))
+        );
+    }
+
+    #[cfg(feature = "postgres")]
+    #[tokio::test]
+    async fn cancellation_stops_a_pass_without_advancing() {
+        let jobs = PeriodicJobs::from_jobs(
+            vec![PeriodicJob::new(
+                IntervalSchedule::new(Duration::from_secs(1)).unwrap(),
+                || TestArgs,
+            )],
+            false,
+        )
+        .unwrap();
+        // A pool that never connects stands in for an insert that hangs.
+        let pool = PgPoolOptions::new()
+            .acquire_timeout(Duration::from_hours(1))
+            .connect_lazy("postgres://192.0.2.1:5432/river_periodic_test")
+            .unwrap();
+        let client = Client::builder(pool).build().unwrap();
+        let now = Utc::now();
+        let target = now + chrono::Duration::seconds(1);
+        let cancel = CancellationToken::new();
+        jobs.run_due(&client, now, &cancel).await;
+
+        let pass = jobs.run_due(&client, target, &cancel);
+        let cancel_soon = async {
+            tokio::time::sleep(Duration::from_millis(50)).await;
+            cancel.cancel();
+        };
+        tokio::time::timeout(Duration::from_secs(5), async {
+            tokio::join!(pass, cancel_soon);
+        })
+        .await
+        .expect("a cancelled pass returns promptly");
+
         let registry = jobs.lock();
         assert_eq!(
             registry.entries.values().next().unwrap().next_run,

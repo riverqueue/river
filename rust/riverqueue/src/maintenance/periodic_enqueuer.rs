@@ -10,13 +10,6 @@ use super::maintainer::ServiceContext;
 /// Sleep used when no periodic job is scheduled (Go's "very long duration").
 const IDLE_WAIT: Duration = Duration::from_hours(24);
 
-/// Delay before retrying an occurrence whose insert failed.
-///
-/// Go advances a periodic job's schedule even when the insert fails, so that
-/// occurrence is skipped. Rust keeps the occurrence due and retries it after
-/// this delay, so a transient database error delays rather than drops a run.
-const FAILED_INSERT_RETRY: Duration = Duration::from_secs(1);
-
 /// Runs periodic jobs for one leadership term.
 ///
 /// Every term starts from a fresh schedule computed from the time leadership
@@ -33,13 +26,12 @@ pub(super) async fn run(context: Arc<ServiceContext>) {
         tokio::pin!(changed);
         changed.as_mut().enable();
 
-        let outcome = periodic_jobs.run_due(&client, Utc::now()).await;
-        let mut wait = periodic_jobs.next_run_at().map_or(IDLE_WAIT, |next| {
+        periodic_jobs
+            .run_due(&client, Utc::now(), &context.cancel)
+            .await;
+        let wait = periodic_jobs.next_run_at().map_or(IDLE_WAIT, |next| {
             (next - Utc::now()).to_std().unwrap_or_default()
         });
-        if outcome.insert_failed {
-            wait = wait.max(FAILED_INSERT_RETRY);
-        }
         tokio::select! {
             biased;
             () = context.cancel.cancelled() => return,

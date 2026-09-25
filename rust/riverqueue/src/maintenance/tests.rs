@@ -789,13 +789,19 @@ async fn periodic_jobs_use_expected_run_time_and_uniqueness() {
 
     let start = Utc::now();
     periodic.reset_for_leadership();
-    periodic.run_due(&client, start).await;
+    periodic
+        .run_due(&client, start, &CancellationToken::new())
+        .await;
     let target = periodic.next_run_at().unwrap();
     // Running a little before the target still inserts it, scheduled at the
     // expected run time rather than when the enqueuer woke up (Go
     // `SetsScheduledAtAccordingToExpectedNextRunAt`).
     periodic
-        .run_due(&client, target - chrono::Duration::milliseconds(50))
+        .run_due(
+            &client,
+            target - chrono::Duration::milliseconds(50),
+            &CancellationToken::new(),
+        )
         .await;
     let rows: Vec<DateTime<Utc>> = sqlx::query_scalar(AssertSqlSafe(format!(
         "SELECT scheduled_at FROM {}",
@@ -815,7 +821,9 @@ async fn periodic_jobs_use_expected_run_time_and_uniqueness() {
     // (Go `RespectsJobUniqueness`).
     let next = periodic.next_run_at().unwrap();
     assert!(next > target);
-    periodic.run_due(&client, next).await;
+    periodic
+        .run_due(&client, next, &CancellationToken::new())
+        .await;
     let count: i64 = sqlx::query_scalar(AssertSqlSafe(format!(
         "SELECT count(*) FROM {}",
         database.table("river_job")
