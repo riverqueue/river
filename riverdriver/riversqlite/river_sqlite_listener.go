@@ -3,6 +3,7 @@ package riversqlite
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"sync"
 	"time"
@@ -10,9 +11,11 @@ import (
 	"github.com/riverqueue/river/riverdriver"
 	"github.com/riverqueue/river/riverdriver/riversqlite/internal/dbsqlc"
 	"github.com/riverqueue/river/rivershared/sqlctemplate"
+	"github.com/riverqueue/river/rivershared/util/maputil"
 )
 
 const (
+	notificationBatchSize           = 256
 	notificationPollIntervalDefault = 50 * time.Millisecond
 )
 
@@ -20,9 +23,9 @@ const (
 // table. SQLite doesn't have a native LISTEN/NOTIFY equivalent, so NotifyMany
 // appends rows to river_notification and this listener polls for rows with IDs
 // greater than its remembered lastID. The lastID marker is initialized to the
-// current max ID on connect so historical rows aren't replayed, and advances
-// past every observed row so unlistened topics don't get delivered later if
-// they're re-listened.
+// current max ID on connect so historical rows aren't replayed. Each topic also
+// records the max ID at subscription time so earlier rows aren't delivered,
+// including buffered rows from a previous subscription to the same topic.
 type Listener struct {
 	afterConnectExec string // should only ever be used in testing
 	dbPool           *sql.DB
@@ -36,10 +39,11 @@ type Listener struct {
 	lastID int64
 
 	mu           sync.Mutex
+	pending      []*dbsqlc.NotificationGetAfterRow
 	pollInterval time.Duration
 	replacer     *sqlctemplate.Replacer
 	schema       string
-	topics       map[string]struct{}
+	topics       map[string]int64
 }
 
 type notificationPayload struct {
@@ -52,6 +56,8 @@ func (l *Listener) Close(context.Context) error {
 	defer l.mu.Unlock()
 
 	l.isConnected = false
+	l.pending = nil
+	l.topics = nil
 	return nil
 }
 
@@ -105,19 +111,32 @@ func (l *Listener) Connect(ctx context.Context) error {
 	return nil
 }
 
-func (l *Listener) Listen(_ context.Context, topic string) error {
+func (l *Listener) Listen(ctx context.Context, topic string) error {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 
 	if !l.isConnected {
 		return errors.New("listener is not connected")
 	}
-
-	if l.topics == nil {
-		l.topics = make(map[string]struct{})
+	if _, ok := l.topics[topic]; ok {
+		return nil
 	}
 
-	l.topics[topic] = struct{}{}
+	// Only advance this topic's starting ID. Updating the global cursor here
+	// could skip pending messages for topics that are already subscribed.
+	lastID, err := dbsqlc.New().NotificationGetLastID(
+		schemaTemplateParam(ctx, l.schema), notificationDBTX(l.dbPool, l.replacer),
+	)
+	if err != nil {
+		return err
+	}
+
+	if l.topics == nil {
+		l.topics = make(map[string]int64)
+	}
+
+	// Cleanup may have removed rows that are still buffered locally.
+	l.topics[topic] = max(l.lastID, lastID)
 	return nil
 }
 
@@ -215,52 +234,61 @@ func (l *Listener) waitForNextPoll(ctx context.Context) error {
 }
 
 func (l *Listener) waitForNotificationOnce(ctx context.Context) (*riverdriver.Notification, bool, error) {
-	var (
-		after    int64
-		dbPool   *sql.DB
-		replacer *sqlctemplate.Replacer
-		schema   string
-	)
-
-	l.mu.Lock()
-	if !l.isConnected {
-		l.mu.Unlock()
-		return nil, false, errors.New("listener is not connected")
-	}
-	after = l.lastID
-	dbPool = l.dbPool
-	replacer = l.replacer
-	schema = l.schema
-	l.mu.Unlock()
-
-	if dbPool == nil {
-		return nil, false, errors.New("database pool is nil")
-	}
-
-	notification, err := dbsqlc.New().NotificationGetAfter(
-		schemaTemplateParam(ctx, schema),
-		notificationDBTX(dbPool, replacer),
-		after,
-	)
-	if err != nil {
-		return nil, false, err
-	}
-
 	l.mu.Lock()
 	defer l.mu.Unlock()
 
-	if notification.ID > l.lastID {
-		l.lastID = notification.ID
+	if !l.isConnected {
+		return nil, false, errors.New("listener is not connected")
+	}
+	if l.dbPool == nil {
+		return nil, false, errors.New("database pool is nil")
 	}
 
-	if _, ok := l.topics[notification.Topic]; !ok {
-		return nil, false, nil
+	if len(l.pending) == 0 {
+		if len(l.topics) == 0 {
+			return nil, false, sql.ErrNoRows
+		}
+		topics, err := json.Marshal(maputil.Keys(l.topics))
+		if err != nil {
+			return nil, false, err
+		}
+
+		// Serialize the fetch with subscription changes and connection resets,
+		// but release the lock between calls and while waiting for the next poll.
+		notifications, err := dbsqlc.New().NotificationGetAfter(
+			schemaTemplateParam(ctx, l.schema),
+			notificationDBTX(l.dbPool, l.replacer),
+			&dbsqlc.NotificationGetAfterParams{
+				After:  l.lastID,
+				Max:    notificationBatchSize,
+				Topics: topics,
+			},
+		)
+		if err != nil {
+			return nil, false, err
+		}
+		if len(notifications) == 0 {
+			return nil, false, sql.ErrNoRows
+		}
+		l.pending = notifications
+		l.lastID = notifications[len(notifications)-1].ID
 	}
 
-	return &riverdriver.Notification{
-		Payload: notification.Payload,
-		Topic:   notification.Topic,
-	}, true, nil
+	for len(l.pending) > 0 {
+		notification := l.pending[0]
+		l.pending[0] = nil
+		l.pending = l.pending[1:]
+
+		// Subscriptions can change between fetching a batch and delivering it.
+		if startID, ok := l.topics[notification.Topic]; ok && notification.ID > startID {
+			return &riverdriver.Notification{
+				Payload: notification.Payload,
+				Topic:   notification.Topic,
+			}, true, nil
+		}
+	}
+
+	return nil, false, nil
 }
 
 func notificationDBTX(dbPool *sql.DB, replacer *sqlctemplate.Replacer) templateReplaceWrapper {

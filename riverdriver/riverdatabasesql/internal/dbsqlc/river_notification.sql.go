@@ -12,11 +12,22 @@ import (
 
 const notificationDeleteBefore = `-- name: NotificationDeleteBefore :execrows
 DELETE FROM /* TEMPLATE: schema */river_notification
-WHERE created_at < $1::timestamptz
+WHERE id IN (
+    SELECT id
+    FROM /* TEMPLATE: schema */river_notification
+    WHERE created_at < $1::timestamptz
+    ORDER BY created_at, id
+    LIMIT $2::bigint
+)
 `
 
-func (q *Queries) NotificationDeleteBefore(ctx context.Context, db DBTX, createdAtHorizon time.Time) (int64, error) {
-	result, err := db.ExecContext(ctx, notificationDeleteBefore, createdAtHorizon)
+type NotificationDeleteBeforeParams struct {
+	CreatedAtHorizon time.Time
+	Max              int64
+}
+
+func (q *Queries) NotificationDeleteBefore(ctx context.Context, db DBTX, arg *NotificationDeleteBeforeParams) (int64, error) {
+	result, err := db.ExecContext(ctx, notificationDeleteBefore, arg.CreatedAtHorizon, arg.Max)
 	if err != nil {
 		return 0, err
 	}

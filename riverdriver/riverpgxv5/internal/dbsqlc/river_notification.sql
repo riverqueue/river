@@ -13,4 +13,10 @@ CREATE TABLE river_notification (
 
 -- name: NotificationDeleteBefore :execrows
 DELETE FROM /* TEMPLATE: schema */river_notification
-WHERE created_at < @created_at_horizon::timestamptz;
+WHERE id IN (
+    SELECT id
+    FROM /* TEMPLATE: schema */river_notification
+    WHERE created_at < @created_at_horizon::timestamptz
+    ORDER BY created_at, id
+    LIMIT @max::bigint
+);

@@ -11,35 +11,70 @@ import (
 
 const notificationDeleteBefore = `-- name: NotificationDeleteBefore :execrows
 DELETE FROM /* TEMPLATE: schema */river_notification
-WHERE created_at < cast(?1 AS text)
+WHERE id IN (
+    SELECT id
+    FROM /* TEMPLATE: schema */river_notification
+    WHERE created_at < cast(?1 AS text)
+    ORDER BY created_at, id
+    LIMIT ?2
+)
 `
 
-func (q *Queries) NotificationDeleteBefore(ctx context.Context, db DBTX, createdAtHorizon string) (int64, error) {
-	result, err := db.ExecContext(ctx, notificationDeleteBefore, createdAtHorizon)
+type NotificationDeleteBeforeParams struct {
+	CreatedAtHorizon string
+	Max              int64
+}
+
+func (q *Queries) NotificationDeleteBefore(ctx context.Context, db DBTX, arg *NotificationDeleteBeforeParams) (int64, error) {
+	result, err := db.ExecContext(ctx, notificationDeleteBefore, arg.CreatedAtHorizon, arg.Max)
 	if err != nil {
 		return 0, err
 	}
 	return result.RowsAffected()
 }
 
-const notificationGetAfter = `-- name: NotificationGetAfter :one
-SELECT id, created_at, payload, topic
+const notificationGetAfter = `-- name: NotificationGetAfter :many
+SELECT id, payload, topic
 FROM /* TEMPLATE: schema */river_notification
 WHERE id > ?1
+    AND topic IN (SELECT value FROM json_each(cast(?2 AS blob)))
 ORDER BY id ASC
-LIMIT 1
+LIMIT ?3
 `
 
-func (q *Queries) NotificationGetAfter(ctx context.Context, db DBTX, after int64) (*RiverNotification, error) {
-	row := db.QueryRowContext(ctx, notificationGetAfter, after)
-	var i RiverNotification
-	err := row.Scan(
-		&i.ID,
-		&i.CreatedAt,
-		&i.Payload,
-		&i.Topic,
-	)
-	return &i, err
+type NotificationGetAfterParams struct {
+	After  int64
+	Topics []byte
+	Max    int64
+}
+
+type NotificationGetAfterRow struct {
+	ID      int64
+	Payload string
+	Topic   string
+}
+
+func (q *Queries) NotificationGetAfter(ctx context.Context, db DBTX, arg *NotificationGetAfterParams) ([]*NotificationGetAfterRow, error) {
+	rows, err := db.QueryContext(ctx, notificationGetAfter, arg.After, arg.Topics, arg.Max)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []*NotificationGetAfterRow
+	for rows.Next() {
+		var i NotificationGetAfterRow
+		if err := rows.Scan(&i.ID, &i.Payload, &i.Topic); err != nil {
+			return nil, err
+		}
+		items = append(items, &i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
 }
 
 const notificationGetLastID = `-- name: NotificationGetLastID :one
