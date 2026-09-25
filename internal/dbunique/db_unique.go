@@ -2,6 +2,8 @@ package dbunique
 
 import (
 	"crypto/sha256"
+	"encoding/json"
+	"errors"
 	"slices"
 	"strings"
 	"time"
@@ -12,7 +14,6 @@ import (
 	"github.com/riverqueue/river/rivershared/structtag"
 	"github.com/riverqueue/river/rivershared/uniquestates"
 	"github.com/riverqueue/river/rivershared/util/ptrutil"
-	"github.com/riverqueue/river/rivershared/util/sliceutil"
 	"github.com/riverqueue/river/rivertype"
 )
 
@@ -93,20 +94,10 @@ func buildUniqueKeyString(timeGen rivertype.TimeGenerator, uniqueOpts *UniqueOpt
 			encodedArgsForUnique = sortedJSONWithOnlyUniqueValues
 		} else {
 			// Use all keys from EncodedArgs sorted alphabetically
-			keys := sliceutil.Map(gjson.GetBytes(params.EncodedArgs, "@keys").Array(), func(v gjson.Result) string { return v.String() })
-			slices.Sort(keys)
-
-			sortedJSON := make([]byte, 0, len(params.EncodedArgs))
-			sortedJSON = append(sortedJSON, "{}"...)
-			sjsonOpts := &sjson.Options{ReplaceInPlace: true}
-			for _, key := range keys {
-				sortedJSON, err = sjson.SetRawBytesOptions(sortedJSON, key, []byte(gjson.GetBytes(params.EncodedArgs, key).Raw), sjsonOpts)
-				if err != nil {
-					// Should not happen unless key was invalid
-					return "", err
-				}
+			encodedArgsForUnique, err = appendSortedObject(make([]byte, 0, len(params.EncodedArgs)), params.EncodedArgs)
+			if err != nil {
+				return "", err
 			}
-			encodedArgsForUnique = sortedJSON
 		}
 
 		sb.WriteString("&args=")
@@ -128,4 +119,74 @@ func buildUniqueKeyString(timeGen rivertype.TimeGenerator, uniqueOpts *UniqueOpt
 	}
 
 	return sb.String(), nil
+}
+
+// appendJSONKey appends key to buf as a JSON string, encoded the same way sjson
+// encodes object keys: verbatim between quotes, unless the key contains a byte
+// below 0x20 or above 0x7f, `"`, or `\`, in which case it's encoded with
+// encoding/json (which also escapes `<`, `>`, `&`, U+2028, and U+2029, and
+// replaces invalid UTF-8 with U+FFFD). Matching sjson keeps unique keys
+// identical to those of earlier versions, which built unique args with sjson.
+func appendJSONKey(buf []byte, key string) []byte {
+	for i := range len(key) {
+		if key[i] < ' ' || key[i] > 0x7f || key[i] == '"' || key[i] == '\\' {
+			encodedKey, _ := json.Marshal(key) //nolint:errchkjson // marshaling a string can't fail
+			return append(buf, encodedKey...)
+		}
+	}
+
+	buf = append(buf, '"')
+	buf = append(buf, key...)
+	return append(buf, '"')
+}
+
+// appendSortedObject appends to buf a compact JSON object containing each
+// top-level key of encodedObject along with its raw value, sorted by key. If
+// a key appears more than once, its first value is used. As in the previous
+// path-based implementation, empty input and an empty array produce `{}`;
+// other non-object input is rejected.
+//
+// Keys are walked directly rather than addressed as gjson/sjson paths so that
+// keys containing path syntax (like `.`, `@`, or a leading `:`) and empty
+// keys are included literally, and distinct values of such keys produce
+// distinct output. For all other keys, output is byte-identical to that
+// produced by setting each key onto `{}` with sjson.
+func appendSortedObject(buf, encodedObject []byte) ([]byte, error) {
+	type keyValue struct {
+		key      string
+		rawValue string
+	}
+
+	var (
+		keyValues []keyValue
+		keysSeen  = make(map[string]struct{})
+		err       error
+	)
+	gjson.ParseBytes(encodedObject).ForEach(func(key, value gjson.Result) bool {
+		if key.Type != gjson.String {
+			err = errors.New("unique args must encode a JSON object")
+			return false
+		}
+		if _, ok := keysSeen[key.Str]; !ok {
+			keysSeen[key.Str] = struct{}{}
+			keyValues = append(keyValues, keyValue{key: key.Str, rawValue: value.Raw})
+		}
+		return true
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	slices.SortFunc(keyValues, func(a, b keyValue) int { return strings.Compare(a.key, b.key) })
+
+	buf = append(buf, '{')
+	for i, keyValue := range keyValues {
+		if i > 0 {
+			buf = append(buf, ',')
+		}
+		buf = appendJSONKey(buf, keyValue.key)
+		buf = append(buf, ':')
+		buf = append(buf, keyValue.rawValue...)
+	}
+	return append(buf, '}'), nil
 }
