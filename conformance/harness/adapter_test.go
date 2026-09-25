@@ -261,15 +261,16 @@ func (adapter *adapter) unvalidatedRoundTrip(method string, params any) (rpcResp
 	if err != nil {
 		return rpcResponse{}, err
 	}
-	if _, err := adapter.input.Write(append(encoded, '\n')); err != nil {
-		return rpcResponse{}, fmt.Errorf("write %s adapter request: %w", adapter.name, err)
+	line, err := adapter.exchange(encoded, adapterRequestTimeout)
+	if errors.Is(err, errAdapterStopped) {
+		return rpcResponse{}, fmt.Errorf("%s adapter %s: %w: %s", adapter.name, method, err, adapter.stderr.String())
 	}
-	if !adapter.output.Scan() {
-		return rpcResponse{}, fmt.Errorf("%s adapter stopped: %s", adapter.name, adapter.stderr.String())
+	if err != nil {
+		return rpcResponse{}, fmt.Errorf("%s adapter %s: %w", adapter.name, method, err)
 	}
 
 	var response rpcResponse
-	if err := json.Unmarshal(adapter.output.Bytes(), &response); err != nil {
+	if err := json.Unmarshal(line, &response); err != nil {
 		return rpcResponse{}, fmt.Errorf("decode %s adapter response: %w", adapter.name, err)
 	}
 	if response.ID != requestID {
