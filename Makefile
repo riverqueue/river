@@ -117,37 +117,45 @@ test/rust/postgres: ## Run all Rust tests, including PostgreSQL integration test
 test/rust/sqlite: ## Run Rust unit, doc, and SQLite integration tests without a PostgreSQL database
 	cd rust && cargo test --workspace --features riverqueue/sqlite,riverqueue-migrate/sqlite --locked
 
+# `go test -timeout` backstops for the conformance targets. The harness bounds
+# each adapter request (two minutes) and exit (thirty seconds) itself, so a
+# hung adapter fails with a message naming it long before these fire. Soaks
+# check at startup that their duration plus five minutes to finish fits in
+# CONFORMANCE_SOAK_TIMEOUT, so raise it with the soak duration.
+CONFORMANCE_TIMEOUT ?= 30m
+CONFORMANCE_SOAK_TIMEOUT ?= 6h20m
+
 .PHONY: test/conformance
 test/conformance: ## Run Go and configured candidate conformance (requires database URL)
-	go test -tags riverconformance ./conformance/harness -run '^Test(Maintenance|Mixed|Resilience)Conformance$$' -count=1 -timeout 30m
+	go test -tags riverconformance ./conformance/harness -run '^Test(Maintenance|Mixed|Resilience)Conformance$$' -count=1 -timeout $(CONFORMANCE_TIMEOUT)
 
 .PHONY: test/conformance/insert-only
 test/conformance/insert-only: ## Run the insert-only-v1 profile against the configured candidate (requires database URL)
-	go test -tags riverconformance ./conformance/harness -run '^TestInsertOnlyConformance$$' -count=1
+	go test -tags riverconformance ./conformance/harness -run '^TestInsertOnlyConformance$$' -count=1 -timeout $(CONFORMANCE_TIMEOUT)
 
 .PHONY: test/conformance/sqlite
 test/conformance/sqlite: ## Run candidate-neutral SQLite storage and runtime conformance
-	go test -tags riverconformance ./conformance/harness -run '^Test(MixedSQLite|MixedSQLiteRuntime|ResilienceSQLite)Conformance$$' -count=1
+	go test -tags riverconformance ./conformance/harness -run '^Test(MixedSQLite|MixedSQLiteRuntime|ResilienceSQLite)Conformance$$' -count=1 -timeout $(CONFORMANCE_TIMEOUT)
 
 .PHONY: test/conformance/performance
 test/conformance/performance: ## Run Go and configured candidate performance gates
-	go test -tags riverconformance ./conformance/harness -run '^TestPerformanceGate$$' -count=1 -timeout 30m
+	go test -tags riverconformance ./conformance/harness -run '^TestPerformanceGate$$' -count=1 -timeout $(CONFORMANCE_TIMEOUT)
 
 .PHONY: test/conformance/soak
 test/conformance/soak: ## Run mixed soak for RIVER_CONFORMANCE_SOAK_DURATION
-	go test -tags riverconformance ./conformance/harness -run '^TestMixedSoak$$' -count=1 -timeout 6h15m
+	go test -tags riverconformance ./conformance/harness -run '^TestMixedSoak$$' -count=1 -timeout $(CONFORMANCE_SOAK_TIMEOUT)
 
 .PHONY: test/conformance/multi-engine
 test/conformance/multi-engine: ## Run direct multi-engine competition, failover, fault, and SQLite pair checks
-	go test -tags riverconformance ./conformance/harness -run '^TestMultiEngine(Conformance|SQLiteConformance)$$' -count=1
+	go test -tags riverconformance ./conformance/harness -run '^TestMultiEngine(Conformance|SQLiteConformance)$$' -count=1 -timeout $(CONFORMANCE_TIMEOUT)
 
 .PHONY: test/conformance/multi-engine/performance
 test/conformance/multi-engine/performance: ## Compare release-built reference and candidate adapters together
-	go test -tags riverconformance ./conformance/harness -run '^TestMultiEnginePerformanceGate$$' -count=1
+	go test -tags riverconformance ./conformance/harness -run '^TestMultiEnginePerformanceGate$$' -count=1 -timeout $(CONFORMANCE_TIMEOUT)
 
 .PHONY: test/conformance/multi-engine/soak
 test/conformance/multi-engine/soak: ## Run direct multi-engine soak
-	go test -tags riverconformance ./conformance/harness -run '^TestMultiEngineSoak$$' -count=1 -timeout 6h15m
+	go test -tags riverconformance ./conformance/harness -run '^TestMultiEngineSoak$$' -count=1 -timeout $(CONFORMANCE_SOAK_TIMEOUT)
 
 .PHONY: doc/rust
 doc/rust: ## Build Rust API documentation and compiled examples
