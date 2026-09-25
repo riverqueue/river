@@ -312,6 +312,7 @@ impl<'c> Storage<'c> {
     ) -> Result<JobRow, Error> {
         let mut metadata = params.metadata;
         if let Some(output) = params.output {
+            crate::worker::check_output_size(&output).map_err(Error::invalid_job)?;
             metadata.insert(crate::METADATA_KEY_OUTPUT.to_owned(), output);
         }
         self.backend
