@@ -217,6 +217,79 @@ macro_rules! scenarios {
             fixture.cleanup().await;
         }
 
+        // SQLite must match PostgreSQL's `@>` containment exactly.
+        #[tokio::test(flavor = "multi_thread")]
+        async fn metadata_filters_match_postgres_containment() {
+            let fixture = Fixture::new().await;
+            let client = &fixture.client;
+            let mut ids = std::collections::HashMap::new();
+            for (name, metadata) in [
+                ("null", r#"{"a":null}"#),
+                ("missing", "{}"),
+                ("integer", r#"{"a":1}"#),
+                ("float", r#"{"a":1.0}"#),
+                ("string", r#"{"a":"1"}"#),
+                ("array", r#"{"a":[1,2,{"b":"x"}],"s":"a<b"}"#),
+                ("nested", r#"{"a":{"b":{"c":true},"d":2}}"#),
+                ("scalar_array", r#"{"a":["x"]}"#),
+            ] {
+                let metadata: riverqueue::JobMetadata = metadata.parse().unwrap();
+                let id = client
+                    .insert(args(name))
+                    .opts(InsertOpts::default().with_metadata(metadata))
+                    .await
+                    .unwrap()
+                    .id();
+                ids.insert(name, id);
+            }
+
+            for (fragment, want) in [
+                (
+                    "{}",
+                    &[
+                        "null",
+                        "missing",
+                        "integer",
+                        "float",
+                        "string",
+                        "array",
+                        "nested",
+                        "scalar_array",
+                    ][..],
+                ),
+                (r#"{"a":null}"#, &["null"][..]),
+                (r#"{"a":1}"#, &["integer", "float"][..]),
+                (r#"{"a":1.0}"#, &["integer", "float"][..]),
+                (r#"{"a":"1"}"#, &["string"][..]),
+                (r#"{"a":[]}"#, &["array", "scalar_array"][..]),
+                (r#"{"a":[2]}"#, &["array"][..]),
+                (r#"{"a":[2,1,2]}"#, &["array"][..]),
+                (r#"{"a":[{}]}"#, &["array"][..]),
+                (r#"{"a":[{"b":"x"}]}"#, &["array"][..]),
+                (r#"{"a":[[1]]}"#, &[][..]),
+                (r#"{"a":"x"}"#, &[][..]),
+                (r#"{"a":{}}"#, &["nested"][..]),
+                (r#"{"a":{"b":{"c":true}}}"#, &["nested"][..]),
+                (r#"{"a":{"b":{"c":false}}}"#, &[][..]),
+                (r#"{"s":"a<b"}"#, &["array"][..]),
+                (r#"{"a":1,"z":null}"#, &[][..]),
+            ] {
+                let fragment: serde_json::Map<String, serde_json::Value> =
+                    serde_json::from_str(fragment).unwrap();
+                let mut want = want.iter().map(|name| ids[name]).collect::<Vec<_>>();
+                want.sort_unstable();
+                let listed = client
+                    .jobs()
+                    .list(JobListParams::default().metadata(fragment.clone()))
+                    .await
+                    .unwrap();
+                let got = listed.jobs.iter().map(|job| job.id).collect::<Vec<_>>();
+                assert_eq!(got, want, "{fragment:?}");
+            }
+
+            fixture.cleanup().await;
+        }
+
         #[tokio::test(flavor = "multi_thread")]
         async fn queue_requests_take_effect_only_when_the_transaction_commits() {
             let fixture = Fixture::new().await;
