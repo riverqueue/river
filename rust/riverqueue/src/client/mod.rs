@@ -548,7 +548,7 @@ impl Client {
         match self.inner.database.pool() {
             #[cfg(feature = "postgres")]
             DatabasePool::Postgres(pool) => {
-                let mut transaction = pool.begin().await?;
+                let mut transaction = crate::database::begin_postgres(pool).await?;
                 let row = self.job_cancel_tx(&mut transaction, id).await?;
                 transaction.commit().await?;
                 Ok(row)
@@ -715,7 +715,7 @@ impl Client {
         match self.inner.database.pool() {
             #[cfg(feature = "postgres")]
             DatabasePool::Postgres(pool) => {
-                let mut transaction = pool.begin().await?;
+                let mut transaction = crate::database::begin_postgres(pool).await?;
                 self.request_resign_tx(&mut transaction).await?;
                 transaction.commit().await?;
                 Ok(())

@@ -442,7 +442,7 @@ impl LeaderStore for DatabaseLeaderStore {
                 .postgres_pool()
                 .expect("client database is PostgreSQL or SQLite");
             let table = self.inner.schema.qualify("river_leader");
-            let mut transaction = pool.begin().await?;
+            let mut transaction = crate::database::begin_postgres(pool).await?;
             sqlx::query(AssertSqlSafe(format!(
                 "DELETE FROM {table} WHERE expires_at < now()"
             )))

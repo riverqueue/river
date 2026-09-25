@@ -578,11 +578,12 @@ pub(super) async fn fetch_jobs(
             job_projection("job")
         );
         let records = if inner.pilot.intercepts_fetch() {
-            let mut transaction = inner
-                .postgres_pool()
-                .expect("PostgreSQL fetch extension requires a PostgreSQL pool")
-                .begin()
-                .await?;
+            let mut transaction = crate::database::begin_postgres(
+                inner
+                    .postgres_pool()
+                    .expect("PostgreSQL fetch extension requires a PostgreSQL pool"),
+            )
+            .await?;
             let fetch_params = extension_fetch_params(inner, queue, maximum);
             if let Some(claimed) = inner
                 .pilot

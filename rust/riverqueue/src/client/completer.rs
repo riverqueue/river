@@ -646,7 +646,7 @@ pub(super) async fn persist_completion_batch(
             .postgres_pool()
             .expect("PostgreSQL completion path requires a PostgreSQL pool");
         if inner.pilot.intercepts_job_set_state() {
-            let mut transaction = pool.begin().await?;
+            let mut transaction = crate::database::begin_postgres(pool).await?;
             let rows = decode_completion_rows(&query.fetch_all(&mut *transaction).await?);
             after_jobs_set_state(
                 inner,

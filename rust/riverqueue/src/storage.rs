@@ -204,7 +204,7 @@ impl Client {
     pub async fn job_delete(&self, id: i64) -> Result<JobRow, Error> {
         #[cfg(feature = "postgres")]
         if let Some(pool) = self.inner.postgres_pool() {
-            let mut transaction = pool.begin().await?;
+            let mut transaction = crate::database::begin_postgres(pool).await?;
             let row = job_delete_postgres(self, &mut transaction, id).await?;
             transaction.commit().await?;
             return Ok(row);
@@ -254,7 +254,7 @@ impl Client {
     ) -> Result<Vec<JobRow>, Error> {
         #[cfg(feature = "postgres")]
         if let Some(pool) = self.inner.postgres_pool() {
-            let mut transaction = pool.begin().await?;
+            let mut transaction = crate::database::begin_postgres(pool).await?;
             let rows = self.job_delete_many_tx(&mut transaction, params).await?;
             transaction.commit().await?;
             return Ok(rows);
@@ -386,7 +386,7 @@ impl Client {
     pub async fn job_retry(&self, id: i64) -> Result<JobRow, Error> {
         #[cfg(feature = "postgres")]
         if let Some(pool) = self.inner.postgres_pool() {
-            let mut transaction = pool.begin().await?;
+            let mut transaction = crate::database::begin_postgres(pool).await?;
             let row = job_retry_postgres(self, &mut transaction, id).await?;
             transaction.commit().await?;
             return Ok(row);
@@ -585,7 +585,7 @@ impl Client {
     pub async fn queue_pause(&self, name: &str) -> Result<(), Error> {
         #[cfg(feature = "postgres")]
         if let Some(pool) = self.inner.postgres_pool() {
-            let mut transaction = pool.begin().await?;
+            let mut transaction = crate::database::begin_postgres(pool).await?;
             queue_set_paused_postgres(self, &mut transaction, name, true).await?;
             transaction.commit().await?;
         }
@@ -614,7 +614,7 @@ impl Client {
     pub async fn queue_resume(&self, name: &str) -> Result<(), Error> {
         #[cfg(feature = "postgres")]
         if let Some(pool) = self.inner.postgres_pool() {
-            let mut transaction = pool.begin().await?;
+            let mut transaction = crate::database::begin_postgres(pool).await?;
             queue_set_paused_postgres(self, &mut transaction, name, false).await?;
             transaction.commit().await?;
         }
@@ -645,7 +645,7 @@ impl Client {
     ) -> Result<Queue, Error> {
         #[cfg(feature = "postgres")]
         if let Some(pool) = self.inner.postgres_pool() {
-            let mut transaction = pool.begin().await?;
+            let mut transaction = crate::database::begin_postgres(pool).await?;
             let queue = queue_update_postgres(self, &mut transaction, name, metadata).await?;
             transaction.commit().await?;
             return Ok(queue);
