@@ -74,6 +74,8 @@ func exerciseMigration[TTx any](ctx context.Context, t *testing.T,
 			require.Equal(t, expectedLatestTables,
 				driver.GetMigrationTruncateTables(riverdriver.MigrationLineMain, 7))
 			require.Equal(t, expectedLatestTables,
+				driver.GetMigrationTruncateTables(riverdriver.MigrationLineMain, 8))
+			require.Equal(t, expectedLatestTables,
 				driver.GetMigrationTruncateTables(riverdriver.MigrationLineMain, 0))
 		})
 	})
@@ -144,7 +146,7 @@ func exerciseMigration[TTx any](ctx context.Context, t *testing.T,
 		}
 	})
 
-	t.Run("MigrateDownFromVersionSevenWithJobData", func(t *testing.T) {
+	t.Run("MigrateDownFromVersionEightWithJobData", func(t *testing.T) {
 		t.Parallel()
 
 		driver, schema := driverWithSchema(ctx, t, &riverdbtest.TestSchemaOpts{
@@ -169,6 +171,39 @@ func exerciseMigration[TTx any](ctx context.Context, t *testing.T,
 		job, err = exec.JobGetByID(ctx, &riverdriver.JobGetByIDParams{ID: job.ID, Schema: schema})
 		require.NoError(t, err)
 		require.NotZero(t, job.ID)
+	})
+
+	t.Run("MigrateUpFromVersionSevenWithJobData", func(t *testing.T) {
+		t.Parallel()
+
+		driver, schema := driverWithSchema(ctx, t, &riverdbtest.TestSchemaOpts{
+			DisableReuse: true,
+			LineTargetVersions: map[string]int{
+				riverdriver.MigrationLineMain: 7,
+			},
+		})
+		exec := driver.GetExecutor()
+
+		job := testfactory.Job(ctx, t, exec, &testfactory.JobOpts{Schema: schema})
+
+		migrator, err := rivermigrate.New(driver, &rivermigrate.Config{
+			Line:   riverdriver.MigrationLineMain,
+			Logger: riversharedtest.Logger(t),
+			Schema: schema,
+		})
+		require.NoError(t, err)
+
+		_, err = migrator.Migrate(ctx, rivermigrate.DirectionUp, nil)
+		require.NoError(t, err)
+
+		job, err = exec.JobGetByID(ctx, &riverdriver.JobGetByIDParams{ID: job.ID, Schema: schema})
+		require.NoError(t, err)
+
+		_, err = exec.JobDelete(ctx, &riverdriver.JobDeleteParams{ID: job.ID, Schema: schema})
+		require.NoError(t, err)
+
+		jobAfter := testfactory.Job(ctx, t, exec, &testfactory.JobOpts{Schema: schema})
+		require.Greater(t, jobAfter.ID, job.ID)
 	})
 
 	t.Run("MigrateUpFromVersionSixWithQueueData", func(t *testing.T) {
