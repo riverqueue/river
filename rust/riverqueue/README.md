@@ -5,18 +5,20 @@
 It uses the same database protocol as River Go so Rust and Go producers,
 workers, migrators, and maintenance services can operate on one queue.
 
-This crate is a pre-release preview matched to the exact Go revision in the
-repository's compatibility manifest. The crates are prepared for packaging but
-are not published by this project yet.
+This crate is a pre-release preview. Each release is matched to the River Go
+release with the same minor version; see the
+[mixed deployment guide](crate::guide::mixed_deployments) for running both
+against one database.
 
 ## Quick start
 
-Define serializable arguments, register an async function or a [`Worker`], and
-start a client:
+Define serializable arguments, register an async function or a [`Worker`],
+apply River's migrations, and start a client:
 
 ```rust,no_run
 use riverqueue::{
     BoxError, Client, Job, JobArgs, QueueConfig, WorkContext, WorkOutcome, WorkerRegistry,
+    migrate::PostgresMigrator,
 };
 use serde::{Deserialize, Serialize};
 use sqlx::PgPool;
@@ -39,6 +41,10 @@ async fn send_email(
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let pool = PgPool::connect(&std::env::var("DATABASE_URL")?).await?;
+    // Create or upgrade River's tables. Applications often run
+    // `riverqueue migrate-up` from `riverqueue-cli` at deploy time instead.
+    PostgresMigrator::new(pool.clone()).migrate_up().await?;
+
     let mut workers = WorkerRegistry::new();
     workers.register_fn(send_email)?;
 
@@ -62,8 +68,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 }
 ```
 
-Run River's migrations (with `riverqueue-migrate` or `riverqueue migrate-up`) before starting a producer or
-worker. `Client::start` must run inside a Tokio runtime. Keep its `RunHandle`
+Migrations must be applied before any client starts. `Client::start` must run
+inside a Tokio runtime. Keep its `RunHandle`
 and await `wait`, `shutdown` (soft stop), or `shutdown_now` (cancel running
 jobs); these take `&mut self` and are cancel safe. `RunHandle::stopper` returns
 a cloneable `Stopper` for stopping the client from another task, such as a
@@ -85,7 +91,13 @@ the job type leaves unspecified. A call can override only the fields it needs:
 # struct SendEmail { address: String }
 # async fn example(client: Client) -> Result<(), riverqueue::Error> {
 client
-    .insert(SendEmail { address: "urgent@example.com".to_owned() }).opts(InsertOpts::default() .with_queue("critical") .with_priority(1) .with_max_attempts(8))
+    .insert(SendEmail { address: "urgent@example.com".to_owned() })
+    .opts(
+        InsertOpts::default()
+            .with_queue("critical")
+            .with_priority(1)
+            .with_max_attempts(8),
+    )
     .await?;
 # Ok(())
 # }
@@ -93,9 +105,11 @@ client
 
 The precedence is call override, job-type default, client default, then River
 default. It is based on whether an option was supplied, not whether its value
-happens to equal a default. `insert_many` preserves input/result order and is
-atomic. PostgreSQL's `insert_many_fast` uses `COPY`, returns only a count, and
-rejects the entire batch on a unique conflict.
+happens to equal a default. `insert_many` inserts many jobs of one kind
+atomically and returns results in input order; `insert_batch` does the same
+for jobs of different kinds. Adding `.fast()` to `insert_many` inserts with
+PostgreSQL's `COPY` (or a batched insert on SQLite) and returns only a count,
+and a unique conflict rejects the whole batch.
 
 Chain `.tx(&mut transaction)` onto an insertion, or onto any request from
 `client.jobs()` or `client.queues()`, to run it in the same SQL transaction as
@@ -185,9 +199,9 @@ have no global completion order.
 - Completion, cancellation, retry, snooze, rescue, queue state, and reserved
   metadata transitions match River Go and are exercised by the shared
   conformance harness.
-- Hooks and middleware run in documented order around insertion and work.
-  Exact-version companion crates use a hidden, source-preserving extension
-  seam; it is not a third-party driver API.
+- Hooks and middleware nest as in River Go: insertion middleware wraps the
+  insert-begin hooks, and work middleware wraps the work hooks, argument
+  decoding, and the worker. See [`WorkMiddleware`] and [`Hook`].
 
 ## Leadership and maintenance
 
@@ -224,13 +238,11 @@ that occurrence; Rust keeps it due and retries it after one second.
 
 ## Database support
 
-River accepts only built-in, sealed database backends rather than exposing a
-user-implemented SQL dialect trait. PostgreSQL and SQLite implement the same
-public job and queue protocol. The public database shape is non-generic so
-backend types do not leak through workers, contexts, plugins, or ordinary
-client code. Each exact-version companion operation uses the selected backend
-or returns a structured unsupported-backend error. MySQL can be added as
-another built-in backend without redesigning the public client API.
+River supports PostgreSQL and SQLite, selected by passing an SQLx pool (or a
+`PostgresDatabase`/`SqliteDatabase` with options) to `Client::builder`. Both
+implement the same job and queue behavior. `Client` isn't generic over the
+database, so backend types don't leak into workers, contexts, or extensions,
+and there's no database driver trait to implement.
 
 Database-specific behavior stays behind each backend: PostgreSQL uses schemas,
 `LISTEN`/`NOTIFY`, advisory locking, and `COPY`; SQLite uses its canonical River
@@ -278,13 +290,16 @@ let client = Client::builder(pool).build()?;
 - [`queue`] and [`query`] — queue records and storage filters/cursors.
 - [`periodic`] — schedules and dynamic periodic-job registration.
 - [`extension`] — hooks, middleware, policies, and metrics.
-- [`database`] — sealed built-in backend source and executor types.
+- [`database`] — PostgreSQL and SQLite database options, and the transaction
+  types River's `.tx` methods accept.
 - [`error`] — structured, source-preserving public errors.
 - [`protocol`] — wire values such as notification topics and unique keys for
   tools that interoperate with River's tables directly.
 
-The workspace has complete examples for ordinary workers, cancellation,
-transactions, custom PostgreSQL schemas, and migrations. The higher-level
+The crate's `examples` directory has runnable programs for a basic worker,
+graceful shutdown, cancellation, transactional enqueueing and completion,
+unique and periodic jobs, events, custom PostgreSQL schemas, SQLite, and a
+Go and Rust service sharing one database. The higher-level
 [River documentation](https://riverqueue.com/docs) explains queueing concepts;
 until the website becomes language-aware, Rust API details live in this
 crate's rustdoc and examples.
@@ -298,6 +313,8 @@ periodic throughput plus final throughput and p95 latency. Run
 `riverqueue bench --help` and use a disposable database.
 
 [`Client::start`]: crate::Client::start
+[`Hook`]: crate::Hook
+[`WorkMiddleware`]: crate::WorkMiddleware
 [`Worker`]: crate::Worker
 [`database`]: crate::database
 [`error`]: crate::error
