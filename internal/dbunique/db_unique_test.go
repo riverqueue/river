@@ -102,6 +102,88 @@ func TestUniqueKey(t *testing.T) {
 			expectedJSON: `&kind=worker_1&args={"Recipient":"john@example.com","Subject":"Another Test Email"}`,
 		},
 		{
+			name: "ByArgsUniqueWithUnnamedJSONTagUsesFieldName",
+			argsFunc: func() rivertype.JobArgs {
+				//nolint:tagliatelle // non-snake keys are intentional
+				type EmailJobArgs struct {
+					JobArgsStaticKind
+
+					Recipient  string `json:",omitempty" river:"unique"`
+					Subject    string `json:"subject"    river:"unique"`
+					TemplateID int
+				}
+				return EmailJobArgs{
+					JobArgsStaticKind: JobArgsStaticKind{kind: "worker_1"},
+					Recipient:         "john@example.com",
+					Subject:           "Another Test Email",
+					TemplateID:        102,
+				}
+			},
+			uniqueOpts:   UniqueOpts{ByArgs: true},
+			expectedJSON: `&kind=worker_1&args={"Recipient":"john@example.com","subject":"Another Test Email"}`,
+		},
+		{
+			name: "ByArgsWithCompatibleJSONNames",
+			argsFunc: func() rivertype.JobArgs {
+				//nolint:tagliatelle // Exercise names whose escaped sort order differs.
+				type Nested struct {
+					Amount int    `json:"a&b" river:"unique"`
+					Upper  string `json:"Y"   river:"unique"`
+				}
+				//nolint:tagliatelle // Exercise valid names whose escaping must not change hashes.
+				type Args struct {
+					JobArgsStaticKind
+
+					Dollar  string `json:"$x"     river:"unique"`
+					Nested  Nested `json:"nested"`
+					Unicode string `json:"é<"     river:"unique"`
+					Upper   string `json:"Y"      river:"unique"`
+				}
+				return Args{
+					JobArgsStaticKind: JobArgsStaticKind{kind: "worker_1"},
+					Dollar:            "dollar",
+					Nested:            Nested{Amount: 1, Upper: "nested"},
+					Unicode:           "unicode",
+					Upper:             "upper",
+				}
+			},
+			uniqueOpts: UniqueOpts{ByArgs: true},
+			// Preserve the old byte ordering even though escaped `\$x` sorts after `Y`.
+			expectedJSON: `&kind=worker_1&args={"$x":"dollar","Y":"upper","nested":{"Y":"nested","a&b":1},"é\u003c":"unicode"}`,
+		},
+		{
+			name: "ByArgsUniqueWithPathSyntaxInJSONTags",
+			argsFunc: func() rivertype.JobArgs {
+				type Nested struct {
+					Value string `json:"inner@key" river:"unique"`
+				}
+				//nolint:tagliatelle // non-snake keys are intentional
+				type PathSyntaxJobArgs struct {
+					JobArgsStaticKind
+
+					Bang    string `json:"!bang"               river:"unique"`
+					Colon   string `json:":x"                  river:"unique"`
+					Email   string `json:"alice@example.com"   river:"unique"`
+					Literal string `json:"outer.key.inner@key" river:"unique"`
+					Nested  Nested `json:"outer.key"`
+					UserID  string `json:"user.id"             river:"unique"`
+					X       string `json:"x"                   river:"unique"`
+				}
+				return PathSyntaxJobArgs{
+					JobArgsStaticKind: JobArgsStaticKind{kind: "worker_1"},
+					Bang:              "bang",
+					Colon:             "colon",
+					Email:             "email",
+					Literal:           "literal",
+					Nested:            Nested{Value: "nested"},
+					UserID:            "u1",
+					X:                 "x",
+				}
+			},
+			uniqueOpts:   UniqueOpts{ByArgs: true},
+			expectedJSON: `&kind=worker_1&args={"!bang":"bang",":x":"colon","alice@example.com":"email","outer.key":{"inner@key":"nested"},"outer.key.inner@key":"literal","user.id":"u1","x":"x"}`,
+		},
+		{
 			name: "ByArgsWithPointerToStruct",
 			argsFunc: func() rivertype.JobArgs {
 				type EmailJobArgs struct {
