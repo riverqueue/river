@@ -892,8 +892,8 @@ func (e *Executor) JobSchedule(ctx context.Context, params *riverdriver.JobSched
 		// undecodable fields left empty) so that it doesn't fail scheduling
 		// for every other job. A job whose attempt fails because its row
 		// can't be decoded is retried, so its row comes through here.
-		scheduledJobRow := func(internal *dbsqlc.RiverJob) *rivertype.JobRow {
-			job, _ := jobRowFromInternalPartial(internal)
+		scheduledJobRow := func(row *dbsqlc.JobGetAvailableRow) *rivertype.JobRow {
+			job, _ := jobRowFromInternalPartial(jobFromReturningRow(row))
 			return job
 		}
 
@@ -903,7 +903,7 @@ func (e *Executor) JobSchedule(ctx context.Context, params *riverdriver.JobSched
 				continue
 			}
 
-			internal, err := dbsqlc.New().JobScheduleGetCollision(ctx, dbtx, &dbsqlc.JobScheduleGetCollisionParams{
+			collidingID, err := dbsqlc.New().JobScheduleGetCollision(ctx, dbtx, &dbsqlc.JobScheduleGetCollisionParams{
 				ID:        eligibleJob.ID,
 				UniqueKey: eligibleJob.UniqueKey,
 			})
@@ -911,7 +911,7 @@ func (e *Executor) JobSchedule(ctx context.Context, params *riverdriver.JobSched
 				return nil, interpretError(err)
 			}
 
-			if internal.ID != 0 {
+			if collidingID != 0 {
 				discardIDs = append(discardIDs, eligibleJob.ID)
 				continue
 			}
@@ -925,7 +925,7 @@ func (e *Executor) JobSchedule(ctx context.Context, params *riverdriver.JobSched
 			if err != nil {
 				return nil, interpretError(err)
 			}
-			updatedJob := scheduledJobRow(updatedJobs[0])
+			updatedJob := scheduledJobRow((*dbsqlc.JobGetAvailableRow)(updatedJobs[0]))
 			scheduledResMap[updatedJob.ID] = &riverdriver.JobScheduleResult{Job: *updatedJob}
 		}
 
@@ -938,8 +938,8 @@ func (e *Executor) JobSchedule(ctx context.Context, params *riverdriver.JobSched
 				return nil, interpretError(err)
 			}
 
-			for _, internal := range updatedJobs {
-				updatedJob := scheduledJobRow(internal)
+			for _, row := range updatedJobs {
+				updatedJob := scheduledJobRow((*dbsqlc.JobGetAvailableRow)(row))
 				scheduledResMap[updatedJob.ID] = &riverdriver.JobScheduleResult{ConflictDiscarded: true, Job: *updatedJob}
 			}
 		}
@@ -950,14 +950,14 @@ func (e *Executor) JobSchedule(ctx context.Context, params *riverdriver.JobSched
 				return nil, interpretError(err)
 			}
 
-			for _, internal := range updatedJobs {
-				updatedJob := scheduledJobRow(internal)
+			for _, row := range updatedJobs {
+				updatedJob := scheduledJobRow((*dbsqlc.JobGetAvailableRow)(row))
 				scheduledResMap[updatedJob.ID] = &riverdriver.JobScheduleResult{Job: *updatedJob}
 			}
 		}
 
 		// Return jobs in the same order we fetched them.
-		return sliceutil.Map(eligibleJobs, func(eligibleJob *dbsqlc.RiverJob) *riverdriver.JobScheduleResult {
+		return sliceutil.Map(eligibleJobs, func(eligibleJob *dbsqlc.JobScheduleGetEligibleRow) *riverdriver.JobScheduleResult {
 			return scheduledResMap[eligibleJob.ID]
 		}), nil
 	})
@@ -1703,8 +1703,8 @@ func sqliteJobInsertFullManyJobsParam(jobs []*riverdriver.JobInsertFullParams) (
 // JSON (see JobGetAvailable in the SQL) into a job. sqlc's SQLite engine
 // ignores aliases in `RETURNING`, so these rows get their own types with
 // positional names for the JSON columns. The types have identical fields
-// though, so rows of JobSetMetadataIfNotRunning and JobSetStateIfRunning are
-// converted to JobGetAvailableRow to use this too.
+// though, so rows of the other queries are converted to JobGetAvailableRow to
+// use this too.
 func jobFromReturningRow(row *dbsqlc.JobGetAvailableRow) *dbsqlc.RiverJob {
 	return &dbsqlc.RiverJob{
 		ID:           row.ID,
