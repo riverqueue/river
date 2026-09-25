@@ -379,8 +379,11 @@ fn decode_unique_states(bits: i64) -> Result<Vec<JobState>, String> {
         .collect())
 }
 
+/// Encodes JSON column values with Go's `encoding/json` rules, because SQLite
+/// JSONB keeps each string's escapes as written and rows must be byte-for-byte
+/// identical to the ones Go writes.
 fn json_text(value: &(impl serde::Serialize + ?Sized)) -> Result<String, serde_json::Error> {
-    serde_json::to_string(value)
+    crate::encoding::to_go_string(value)
 }
 
 pub(crate) fn sqlite_time(time: DateTime<Utc>) -> String {
