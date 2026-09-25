@@ -334,7 +334,10 @@ impl WeakClient {
 }
 
 impl Client {
-    /// Creates a builder for an insert-only client.
+    /// Creates a client builder for `database`, such as an SQLx pool or a
+    /// [`PostgresDatabase`](crate::database::PostgresDatabase). A client
+    /// built without queues only inserts and manages jobs; add queues and
+    /// workers to work them.
     #[must_use]
     pub fn builder<D>(database: D) -> ClientBuilder
     where

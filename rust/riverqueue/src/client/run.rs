@@ -458,7 +458,8 @@ impl Stopper {
     /// cancellation is made available again without using up its attempt,
     /// and one that ignores cancellation for longer than the job stuck
     /// threshold is aborted. A job whose cancellation was requested with
-    /// `job_cancel` is cancelled rather than made available.
+    /// [`Jobs::cancel`](crate::Jobs::cancel) is cancelled rather than
+    /// made available.
     pub fn stop_now(&self) {
         self.fetch_cancel.cancel();
         self.work_cancel.cancel();

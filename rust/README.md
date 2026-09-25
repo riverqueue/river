@@ -30,19 +30,8 @@ backend without propagating a driver type through workers and extensions.
 
 ## Quick start
 
-```rust,no_run
-use riverqueue::{Client, InsertOpts};
-use sqlx::PgPool;
-
-# async fn example(pool: PgPool) -> Result<(), riverqueue::Error> {
-let client = Client::builder(pool).build()?;
-// `EmailArgs` is a Serialize/Deserialize type deriving `JobArgs`.
-// client.insert(EmailArgs { /* ... */ }).await?;
-// client.insert(EmailArgs { /* ... */ }).opts(InsertOpts::default()).await?;
-# let _ = (client, InsertOpts::default());
-# Ok(())
-# }
-```
+The [`riverqueue` crate README](riverqueue/README.md) walks through defining
+a job, registering a worker, inserting, and starting a client.
 
 To run Rust clients alongside River Go against one database, including
 version matching, queue and kind layout, unique jobs, and rolling deployment
@@ -50,9 +39,10 @@ and rollback, see the
 [mixed deployment guide](riverqueue/docs/mixed-deployments.md), also published
 as `riverqueue::guide::mixed_deployments`.
 
-Compiled examples cover workers and graceful stop, cancellation,
-transactions, custom schemas, and migrations under the workspace crates'
-`examples` directories.
+Runnable examples in `riverqueue/examples` cover workers and graceful
+shutdown, cancellation, transactional completion, unique and periodic jobs,
+event subscriptions, custom schemas, SQLite, and a mixed Go and Rust
+deployment; `riverqueue-migrate/examples` covers migrations.
 
 Run the Rust suite from the repository root:
 

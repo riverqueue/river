@@ -64,7 +64,7 @@ pub enum Error {
     #[error(transparent)]
     DatabaseMismatch(#[from] crate::database::DatabaseMismatch),
 
-    /// A hook, middleware, or exact-version extension failed.
+    /// A hook, middleware, error handler, or add-on crate failed.
     #[error("extension {phase}: {source}")]
     Extension {
         /// Lifecycle phase in which the extension failed.

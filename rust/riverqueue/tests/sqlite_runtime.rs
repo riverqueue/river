@@ -1206,7 +1206,7 @@ async fn sqlite_reinsert_preserves_wire_fields_and_runs_the_canonical_pipeline()
                     serde_json::json!(true),
                 )]))
                 .with_scheduled_at(scheduled_at)
-                .with_tags(["dead-letter"])
+                .with_tags(["reinserted"])
                 .with_unique(UniqueOpts::new().by_args()),
         )
         .await

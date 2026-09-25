@@ -357,9 +357,10 @@ impl InsertOpts {
 
 /// Fully resolved insertion parameters visible to insertion extensions.
 ///
-/// River resolves these from call, job-type, client, and library defaults
-/// before invoking hooks or middleware. Extensions may mutate them before
-/// validation and persistence.
+/// River resolves and validates these from call, job-type, client, and
+/// library defaults before invoking hooks or middleware, and computes the
+/// unique key from them. Extensions may still change them, but River doesn't
+/// validate the changes again before persisting them, as in River Go.
 #[derive(Clone, Debug)]
 #[non_exhaustive]
 pub struct InsertParams {
