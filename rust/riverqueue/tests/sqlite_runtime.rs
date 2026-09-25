@@ -1560,6 +1560,47 @@ async fn sqlite_runs_jobs_and_persists_output() {
 }
 
 #[tokio::test]
+async fn sqlite_returning_insert_nonce_matches_go() {
+    let pool = setup().await;
+    let client = Client::builder(pool).build().unwrap();
+
+    let first = client.insert(RuntimeArgs { value: 1 }).await.unwrap();
+    let second = client.insert(RuntimeArgs { value: 2 }).await.unwrap();
+    let first_nonce = first
+        .job
+        .row
+        .metadata
+        .get::<String>("river:unique_nonce")
+        .unwrap()
+        .unwrap();
+    let second_nonce = second
+        .job
+        .row
+        .metadata
+        .get::<String>("river:unique_nonce")
+        .unwrap()
+        .unwrap();
+    assert_eq!(first_nonce.len(), 16);
+    assert!(
+        first_nonce
+            .bytes()
+            .all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase())
+    );
+    assert_ne!(first_nonce, second_nonce);
+    assert_eq!(
+        client
+            .jobs()
+            .get(first.job.row.id)
+            .await
+            .unwrap()
+            .metadata
+            .get::<String>("river:unique_nonce")
+            .unwrap(),
+        Some(first_nonce)
+    );
+}
+
+#[tokio::test]
 async fn sqlite_transaction_insert_respects_rollback() {
     let pool = setup().await;
     let client = Client::builder(pool.clone()).build().unwrap();

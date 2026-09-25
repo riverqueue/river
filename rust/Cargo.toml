@@ -25,6 +25,7 @@ chrono = { version = "0.4.45", features = ["serde"] }
 futures-util = { version = "0.3.34", default-features = false, features = ["std"] }
 proc-macro2 = "1.0.107"
 quote = "1.0.47"
+rand = "0.10.2"
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = { version = "1.0.151", features = ["raw_value"] }
 sha2 = "0.11.0"

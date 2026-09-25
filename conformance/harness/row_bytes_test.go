@@ -38,8 +38,9 @@ var (
 	sqliteTimePattern = regexp.MustCompile(`^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\.\d{3}$`)
 
 	// uniqueNoncePattern matches the random `river:unique_nonce` member
-	// Go's SQLite driver writes into rows it inserts and returns.
-	uniqueNoncePattern = regexp.MustCompile(`"river:unique_nonce":"[0-9a-f]+",?|,"river:unique_nonce":"[0-9a-f]+"`)
+	// Go's SQLite driver writes as eight lowercase hex bytes into rows it
+	// inserts and returns.
+	uniqueNoncePattern = regexp.MustCompile(`"river:unique_nonce":"[0-9a-f]{16}",?|,"river:unique_nonce":"[0-9a-f]{16}"`)
 )
 
 // rowBytesText is text written into every JSON column the byte scenarios
