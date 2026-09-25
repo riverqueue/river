@@ -763,37 +763,27 @@ impl Client {
         if jobs.is_empty() {
             return Err(Error::invalid_job("no jobs to insert".to_owned()));
         }
-        let intercepts = self.inner.pilot.intercepts_insert();
+        let intercepts = match mode {
+            InsertMode::Fast => self.inner.pilot.intercepts_fast_insert(),
+            InsertMode::Rows => self.inner.pilot.intercepts_insert(),
+        };
         for job in &mut jobs {
             for hook in &self.inner.hooks {
                 hook.insert_begin(job).await?;
             }
-            if intercepts {
-                let InsertContext {
-                    encoded_args,
-                    kind,
-                    opts,
-                    state,
-                    ..
-                } = job;
-                self.inner
-                    .pilot
-                    .before_job_insert(
-                        connection.reborrow(),
-                        &mut PilotJobInsertParams {
-                            encoded_args,
-                            kind,
-                            metadata: &mut opts.metadata,
-                            queue: &mut opts.queue,
-                            state,
-                        },
-                    )
-                    .await
-                    .map_err(|source| Error::Extension {
-                        phase: "job insertion",
-                        source,
-                    })?;
-            }
+        }
+        if intercepts {
+            let mut params = extension_insert_params(&mut jobs);
+            self.inner
+                .pilot
+                .before_jobs_insert(connection.reborrow(), &mut params)
+                .await
+                .map_err(|source| Error::Extension {
+                    phase: "job insertion",
+                    source,
+                })?;
+        }
+        for job in &jobs {
             if !matches!(
                 job.state,
                 JobState::Available | JobState::Pending | JobState::Scheduled
@@ -1092,6 +1082,28 @@ impl Client {
         }
         Ok(copy.finish().await?)
     }
+}
+
+/// Exposes the mutable fields of each job to an extension's insert hook.
+fn extension_insert_params(jobs: &mut [InsertContext]) -> Vec<PilotJobInsertParams<'_>> {
+    jobs.iter_mut()
+        .map(|job| {
+            let InsertContext {
+                encoded_args,
+                kind,
+                opts,
+                state,
+                ..
+            } = job;
+            PilotJobInsertParams {
+                encoded_args,
+                kind,
+                metadata: &mut opts.metadata,
+                queue: &mut opts.queue,
+                state,
+            }
+        })
+        .collect()
 }
 
 /// Encodes jobs as `COPY` CSV rows.
