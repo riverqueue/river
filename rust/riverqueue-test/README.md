@@ -1,6 +1,43 @@
 # riverqueue-test
 
-Typed, database-free test helpers for applications using River's Rust client.
+Test helpers for applications using River's Rust client: assertions about
+inserted jobs, and a database-free way to run a worker once.
+
+## Asserting on inserted jobs
+
+`require_inserted`, `require_many_inserted`, and `require_not_inserted` check
+the jobs a test's code inserted, like River Go's `rivertest` helpers. Each
+lists jobs of the expected kinds in insertion order and panics with a
+descriptive message when the expectation isn't met, failing the test.
+`RequireInsertedOpts` adds expected properties such as the queue, priority,
+state, or tags. The `_tx` variants read through an open transaction, to test
+code that enqueues jobs transactionally before it commits.
+
+```rust,no_run
+use riverqueue::{Client, JobArgs, JobState};
+use riverqueue_test::{RequireInsertedOpts, require_inserted, require_not_inserted};
+use serde::{Deserialize, Serialize};
+
+#[derive(Clone, Debug, Deserialize, JobArgs, Serialize)]
+#[river(kind = "send_welcome_email")]
+struct SendWelcomeEmail {
+    user_id: i64,
+}
+
+# async fn sign_up(_client: &Client, _user_id: i64) {}
+# async fn example(client: Client) {
+sign_up(&client, 42).await;
+
+let job = require_inserted::<SendWelcomeEmail>(
+    &client,
+    Some(&RequireInsertedOpts::new().state(JobState::Available)),
+)
+.await;
+assert_eq!(job.args.user_id, 42);
+# }
+```
+
+## Running a worker once
 
 `TestJobBuilder` constructs a realistic `Job<A>` from the argument type's
 insertion defaults and lets a test override the persisted ID, attempt, state,
