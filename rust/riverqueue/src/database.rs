@@ -18,11 +18,50 @@ use sqlx::{Sqlite, SqliteConnection, SqlitePool};
 use sqlx::{Transaction, pool::PoolConnection};
 use thiserror::Error;
 
+/// Begins a PostgreSQL transaction that is never abandoned half-started.
+///
+/// SQLx 0.9 records a transaction only once the server has answered `BEGIN`. If
+/// the future beginning it is dropped after `BEGIN` reaches the server but
+/// before that answer arrives, for example because a `select!` or timeout
+/// around it fires, SQLx never queues a `ROLLBACK` and the connection goes
+/// back to the pool idle in a transaction. River begins every transaction on
+/// its own task instead: if the caller stops waiting, the task still
+/// finishes, and dropping the finished transaction rolls it back.
+#[cfg(feature = "postgres")]
+pub(crate) async fn begin_postgres(
+    pool: &PgPool,
+) -> Result<Transaction<'static, Postgres>, sqlx::Error> {
+    let pool = pool.clone();
+    run_to_completion(async move { pool.begin().await }).await
+}
+
+/// Begins a SQLite transaction that may write, with the same protection as
+/// [`begin_postgres`] against being abandoned half-started.
+///
+/// `BEGIN IMMEDIATE` takes the write lock up front, so a transaction that
+/// reads before writing can't fail with `SQLITE_BUSY_SNAPSHOT` when another
+/// connection commits in between.
 #[cfg(feature = "sqlite")]
 pub(crate) async fn begin_sqlite_write(
     pool: &SqlitePool,
 ) -> Result<Transaction<'static, Sqlite>, sqlx::Error> {
-    pool.begin_with("BEGIN IMMEDIATE").await
+    let pool = pool.clone();
+    run_to_completion(async move { pool.begin_with("BEGIN IMMEDIATE").await }).await
+}
+
+/// Runs `operation` on its own task, so dropping the returned future doesn't
+/// cancel it midway.
+async fn run_to_completion<T: Send + 'static>(
+    operation: impl Future<Output = Result<T, sqlx::Error>> + Send + 'static,
+) -> Result<T, sqlx::Error> {
+    match tokio::spawn(operation).await {
+        Ok(result) => result,
+        Err(error) if error.is_panic() => std::panic::resume_unwind(error.into_panic()),
+        // The runtime is shutting down and cancelled the task.
+        Err(error) => Err(sqlx::Error::Io(std::io::Error::other(format!(
+            "transaction begin task failed: {error}"
+        )))),
+    }
 }
 
 pub(crate) mod erased;
@@ -627,5 +666,163 @@ mod tests {
 
         pool.close().await;
         std::fs::remove_file(database_path).unwrap();
+    }
+}
+
+#[cfg(all(test, feature = "postgres-tests"))]
+mod postgres_begin_tests {
+    use std::{sync::Arc, time::Duration};
+
+    use sqlx::{
+        PgPool,
+        postgres::{PgConnectOptions, PgPoolOptions},
+    };
+    use tokio::{
+        io::{AsyncReadExt, AsyncWriteExt},
+        net::{TcpListener, TcpStream},
+        sync::{Notify, watch},
+    };
+
+    use super::begin_postgres;
+
+    /// A TCP proxy that reports when a client sends `BEGIN` and can hold the
+    /// server's replies, so a test can stop waiting for a begin that already
+    /// reached the server.
+    struct BeginProxy {
+        address: std::net::SocketAddr,
+        begin_sent: Arc<Notify>,
+        hold_replies: watch::Sender<bool>,
+    }
+
+    impl BeginProxy {
+        async fn start(upstream: &PgConnectOptions) -> Self {
+            let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let address = listener.local_addr().unwrap();
+            let upstream = format!("{}:{}", upstream.get_host(), upstream.get_port());
+            let begin_sent = Arc::new(Notify::new());
+            let (hold_replies, hold) = watch::channel(false);
+            let sent = Arc::clone(&begin_sent);
+            tokio::spawn(async move {
+                while let Ok((client, _)) = listener.accept().await {
+                    let server = TcpStream::connect(&upstream).await.unwrap();
+                    let (mut client_read, mut client_write) = client.into_split();
+                    let (mut server_read, mut server_write) = server.into_split();
+                    let sent = Arc::clone(&sent);
+                    tokio::spawn(async move {
+                        let mut buffer = vec![0; 8192];
+                        while let Ok(read) = client_read.read(&mut buffer).await {
+                            if read == 0 || server_write.write_all(&buffer[..read]).await.is_err() {
+                                break;
+                            }
+                            if buffer[..read].windows(5).any(|window| window == b"BEGIN") {
+                                sent.notify_one();
+                            }
+                        }
+                    });
+                    let mut hold = hold.clone();
+                    tokio::spawn(async move {
+                        let mut buffer = vec![0; 8192];
+                        while let Ok(read) = server_read.read(&mut buffer).await {
+                            if read == 0 {
+                                break;
+                            }
+                            if hold.wait_for(|held| !held).await.is_err() {
+                                break;
+                            }
+                            if client_write.write_all(&buffer[..read]).await.is_err() {
+                                break;
+                            }
+                        }
+                    });
+                }
+            });
+            Self {
+                address,
+                begin_sent,
+                hold_replies,
+            }
+        }
+    }
+
+    /// Counts this pool's server connections that are idle inside a
+    /// transaction, observed through a separate connection.
+    async fn idle_in_transaction(observer: &PgPool, application_name: &str) -> i64 {
+        sqlx::query_scalar(
+            "SELECT count(*) FROM pg_stat_activity \
+             WHERE datname = current_database() AND application_name = $1 \
+               AND state = 'idle in transaction'",
+        )
+        .bind(application_name)
+        .fetch_one(observer)
+        .await
+        .unwrap()
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn abandoned_begin_does_not_leave_a_connection_in_a_transaction() {
+        let url = std::env::var("RIVER_RUST_DATABASE_URL")
+            .expect("RIVER_RUST_DATABASE_URL must point at a disposable test database");
+        let upstream: PgConnectOptions = url.parse().unwrap();
+        let observer = PgPool::connect(&url).await.unwrap();
+        let proxy = BeginProxy::start(&upstream).await;
+        let application_name = format!("river-begin-cancel-{}", std::process::id());
+        // One connection, used without a liveness query that the held
+        // replies would stall.
+        let pool = PgPoolOptions::new()
+            .max_connections(1)
+            .test_before_acquire(false)
+            .connect_with(
+                upstream
+                    .clone()
+                    .host(&proxy.address.ip().to_string())
+                    .port(proxy.address.port())
+                    .application_name(&application_name),
+            )
+            .await
+            .unwrap();
+
+        // Stop waiting for a begin after `BEGIN` reached the server but
+        // before its reply, as a `select!` or timeout around it would.
+        proxy.hold_replies.send_replace(true);
+        tokio::select! {
+            result = begin_postgres(&pool) => panic!("begin finished while replies were held: {result:?}"),
+            () = proxy.begin_sent.notified() => {}
+        }
+        proxy.hold_replies.send_replace(false);
+
+        // The abandoned begin still finishes and rolls back, so the pool's
+        // only connection ends up idle outside a transaction.
+        tokio::time::timeout(Duration::from_secs(10), async {
+            loop {
+                // Use the connection so any unread reply is consumed, then
+                // check its server-side state once it's back in the pool.
+                let mut connection = pool.acquire().await.unwrap();
+                sqlx::query("SELECT 1")
+                    .execute(&mut *connection)
+                    .await
+                    .unwrap();
+                drop(connection);
+                if idle_in_transaction(&observer, &application_name).await == 0
+                    && sqlx::query_scalar::<_, i64>(
+                        "SELECT count(*) FROM pg_stat_activity \
+                         WHERE datname = current_database() AND application_name = $1 \
+                           AND state = 'idle'",
+                    )
+                    .bind(&application_name)
+                    .fetch_one(&observer)
+                    .await
+                    .unwrap()
+                        == 1
+                {
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .expect("an abandoned begin left its connection inside a transaction");
+
+        pool.close().await;
+        observer.close().await;
     }
 }

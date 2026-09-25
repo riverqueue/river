@@ -33,10 +33,12 @@ impl MaintenanceTransaction {
         cancel: &CancellationToken,
         timeout: Duration,
     ) -> Result<Self, MaintenanceError> {
+        // Dropping the begin when cancellation wins is safe: River begins on
+        // its own task, which rolls the transaction back once it starts.
         let mut transaction = tokio::select! {
             biased;
             () = cancel.cancelled() => return Err(MaintenanceError::Cancelled),
-            transaction = pool.begin() => transaction?,
+            transaction = crate::database::begin_postgres(pool) => transaction?,
         };
         let backend_pid = tokio::select! {
             biased;

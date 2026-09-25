@@ -101,6 +101,13 @@ commits, producing `SQLITE_BUSY_SNAPSHOT` even when a busy timeout is set.
 River starts its own SQLite writer transactions in immediate mode; callers
 choose the mode of transactions passed to `_tx` methods.
 
+Don't abandon a `pool.begin()` future partway, for example inside a
+`select!` or timeout that can fire first. SQLx 0.9 records a transaction only
+after the server answers `BEGIN`, so a begin dropped between the two leaves
+its connection back in the pool still inside a transaction. River begins its
+own transactions on a separate task for this reason; run your own begins to
+completion, or on a spawned task, before reacting to cancellation.
+
 ## Worker outcomes and cancellation
 
 An `Ok(WorkOutcome::Complete)` completes a job. `Snooze` reschedules without

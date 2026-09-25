@@ -120,7 +120,7 @@ impl ExtensionClient<'_> {
                     RETURNING {}, false AS unique_skipped_as_duplicate",
                 job_projection("job")
             );
-            let mut transaction = pool.begin().await?;
+            let mut transaction = crate::database::begin_postgres(pool).await?;
             let records = sqlx::query_as::<_, JobRecord>(AssertSqlSafe(sql))
                 .bind(&params.queue)
                 .bind(&params.kind)
