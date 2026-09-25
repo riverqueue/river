@@ -189,6 +189,25 @@ func Test_JobListCursor_MarshalJSON(t *testing.T) {
 		_, err := json.Marshal(cursor)
 		require.EqualError(t, err, "json: error calling MarshalText for type *river.JobListCursor: cursor initialized with only a job can't be marshaled; try a cursor from JobListResult instead")
 	})
+
+	t.Run("URLSafeAlphabet", func(t *testing.T) {
+		t.Parallel()
+
+		cursor := &JobListCursor{
+			id:        1,
+			kind:      "a~",
+			queue:     "default",
+			sortField: JobListOrderByID,
+		}
+
+		text, err := cursor.MarshalText()
+		require.NoError(t, err)
+		require.Contains(t, string(text), "-")
+
+		decoded := &JobListCursor{}
+		require.NoError(t, decoded.UnmarshalText(text))
+		require.Equal(t, cursor, decoded)
+	})
 }
 
 func Test_JobListParams_toDBParams(t *testing.T) {

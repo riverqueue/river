@@ -64,8 +64,8 @@ func jobListCursorFromJobAndParams(job *rivertype.JobRow, listParams *JobListPar
 // UnmarshalText implements encoding.TextUnmarshaler to decode the cursor from
 // a previously marshaled string.
 func (c *JobListCursor) UnmarshalText(text []byte) error {
-	dst := make([]byte, base64.StdEncoding.DecodedLen(len(text)))
-	n, err := base64.StdEncoding.Decode(dst, text)
+	dst := make([]byte, base64.URLEncoding.DecodedLen(len(text)))
+	n, err := base64.URLEncoding.Decode(dst, text)
 	if err != nil {
 		return err
 	}
