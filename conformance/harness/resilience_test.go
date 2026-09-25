@@ -7,7 +7,6 @@ import (
 	"io"
 	"net"
 	"net/url"
-	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -27,10 +26,7 @@ import (
 // are injected by the harness itself (a TCP proxy and direct SQL) rather than
 // through adapter methods, so every implementation runs the same scenarios.
 func TestResilienceConformance(t *testing.T) { //nolint:paralleltest // Owns the shared PostgreSQL database.
-	databaseURL := os.Getenv("RIVER_CONFORMANCE_DATABASE_URL")
-	if databaseURL == "" {
-		t.Skip("RIVER_CONFORMANCE_DATABASE_URL is required")
-	}
+	databaseURL := requireEnv(t, "RIVER_CONFORMANCE_DATABASE_URL")
 	scenarios := newScenarioTracker(t, scenarioOwnerResilience)
 	ctx := context.Background()
 	repositoryRoot := repoRoot(t)
@@ -63,8 +59,12 @@ func TestResilienceConformance(t *testing.T) { //nolint:paralleltest // Owns the
 		},
 	}
 
+	scenarios.attach(reference, workers[0].adapter, workers[1].adapter)
+
 	// Subtests share one database and run in order, so none are parallel.
-	t.Run("DatabaseUnavailableReconnect", func(t *testing.T) { //nolint:paralleltest // Shares the conformance database.
+	t.Run("database_unavailable_reconnect", func(t *testing.T) { //nolint:paralleltest // Shares the conformance database.
+		defer scenarios.record(t)
+
 		for _, worker := range workers {
 			reference.call(t, "reset", map[string]any{}, nil)
 			worker.adapter.call(t, "start", map[string]any{"client_id": worker.name + "-outage"}, nil)
@@ -91,10 +91,11 @@ func TestResilienceConformance(t *testing.T) { //nolint:paralleltest // Owns the
 			}
 			worker.adapter.call(t, "stop", map[string]any{}, nil)
 		}
-		scenarios.pass("database_unavailable_reconnect")
 	})
 
-	t.Run("CompletionTransientFailureRetry", func(t *testing.T) { //nolint:paralleltest // Shares the conformance database.
+	t.Run("completion_transient_failure_retry", func(t *testing.T) { //nolint:paralleltest // Shares the conformance database.
+		defer scenarios.record(t)
+
 		for _, worker := range workers {
 			reference.call(t, "reset", map[string]any{}, nil)
 			// Fail the first running-to-completed transition with a
@@ -135,10 +136,11 @@ func TestResilienceConformance(t *testing.T) { //nolint:paralleltest // Owns the
 				DROP FUNCTION river_resilience_fail_completion_once();
 				DROP SEQUENCE river_resilience_completion_fault`)
 		}
-		scenarios.pass("completion_transient_failure_retry")
 	})
 
-	t.Run("CompletionRowLockWait", func(t *testing.T) { //nolint:paralleltest // Shares the conformance database.
+	t.Run("completion_row_lock_wait", func(t *testing.T) { //nolint:paralleltest // Shares the conformance database.
+		defer scenarios.record(t)
+
 		for _, worker := range workers {
 			reference.call(t, "reset", map[string]any{}, nil)
 			worker.adapter.call(t, "start", map[string]any{"client_id": worker.name + "-row-lock"}, nil)
@@ -165,10 +167,14 @@ func TestResilienceConformance(t *testing.T) { //nolint:paralleltest // Owns the
 			require.Equal(t, 1, job.Attempt, worker.name)
 			worker.adapter.call(t, "stop", map[string]any{}, nil)
 		}
-		scenarios.pass("completion_row_lock_wait")
 	})
 
-	t.Run("HardShutdownOutcomes", func(t *testing.T) { //nolint:paralleltest // Shares the conformance database.
+	// The hard shutdown also stops a job whose cancellation never reached
+	// the worker; the next scenario checks that job.
+	cancelAttemptedAfterShutdown := make(map[string]normalizedJob)
+	t.Run("hard_shutdown_soft_stop_classification", func(t *testing.T) { //nolint:paralleltest // Shares the conformance database.
+		defer scenarios.record(t)
+
 		for _, worker := range workers {
 			reference.call(t, "reset", map[string]any{}, nil)
 			worker.adapter.call(t, "start", map[string]any{
@@ -199,8 +205,7 @@ func TestResilienceConformance(t *testing.T) { //nolint:paralleltest // Owns the
 			require.Empty(t, job.Errors, worker.name)
 
 			reference.call(t, "get", map[string]any{"id": jobs["cancel_attempted"].ID}, &job)
-			require.Equal(t, "cancelled", job.State, worker.name)
-			require.NotNil(t, job.FinalizedAt, worker.name)
+			cancelAttemptedAfterShutdown[worker.name] = job
 
 			for _, behavior := range []string{"cancel_error", "cancel_panic"} {
 				reference.call(t, "get", map[string]any{"id": jobs[behavior].ID}, &job)
@@ -209,7 +214,17 @@ func TestResilienceConformance(t *testing.T) { //nolint:paralleltest // Owns the
 				require.Len(t, job.Errors, 1, "%s %s", worker.name, behavior)
 			}
 		}
-		scenarios.pass("hard_shutdown_soft_stop_classification", "shutdown_after_cancel_attempt")
+	})
+
+	t.Run("shutdown_after_cancel_attempt", func(t *testing.T) { //nolint:paralleltest // Shares the conformance database.
+		defer scenarios.record(t)
+
+		require.Len(t, cancelAttemptedAfterShutdown, len(workers),
+			"hard_shutdown_soft_stop_classification must run first")
+		for name, job := range cancelAttemptedAfterShutdown {
+			require.Equal(t, "cancelled", job.State, name)
+			require.NotNil(t, job.FinalizedAt, name)
+		}
 	})
 
 	// A claimed row that an implementation can't decode must not strand the
@@ -221,7 +236,9 @@ func TestResilienceConformance(t *testing.T) { //nolint:paralleltest // Owns the
 	// value is left as it was. Array metadata is valid for Go but can't be
 	// decoded by every implementation, so each implementation either works
 	// such a row or fails it this way.
-	t.Run("ClaimedRowDecodeIsolation", func(t *testing.T) { //nolint:paralleltest // Shares the conformance database.
+	t.Run("claimed_row_decode_isolation", func(t *testing.T) { //nolint:paralleltest // Shares the conformance database.
+		defer scenarios.record(t)
+
 		const retryDelay = time.Hour
 		setArrayMetadata := func(t *testing.T, id int64) {
 			t.Helper()
@@ -328,7 +345,6 @@ func TestResilienceConformance(t *testing.T) { //nolint:paralleltest // Owns the
 			})
 			worker.adapter.call(t, "stop", map[string]any{}, nil)
 		}
-		scenarios.pass("claimed_row_decode_isolation")
 	})
 }
 
@@ -398,9 +414,12 @@ func TestResilienceSQLiteConformance(t *testing.T) { //nolint:tparallel // Subte
 		t, repositoryRoot, databaseURL, "sqlite", profileName,
 		candidateSpec.Implementation, candidateSpec, candidateSpec.Command,
 	)
+	scenarios.attach(goAdapter, candidateAdapter)
 	goAdapter.call(t, "migrate", map[string]any{}, nil)
 
-	t.Run("GoIntegerRanges", func(t *testing.T) { //nolint:paralleltest // Shares the SQLite database.
+	t.Run("sqlite_runtime_go_integer_ranges", func(t *testing.T) { //nolint:paralleltest // Shares the SQLite database.
+		defer scenarios.record(t)
+
 		// River Go stores native integers on SQLite, so `max_attempts` can
 		// exceed a 16-bit integer. Every implementation must still work it.
 		for _, pair := range []struct{ inserter, worker *adapter }{
@@ -418,10 +437,11 @@ func TestResilienceSQLiteConformance(t *testing.T) { //nolint:tparallel // Subte
 			pair.inserter.call(t, "get", map[string]any{"id": inserted.ID}, &stored)
 			require.Equal(t, 40_000, stored.MaxAttempts, "working the job must not rewrite max_attempts")
 		}
-		scenarios.pass("sqlite_runtime_go_integer_ranges")
 	})
 
-	t.Run("CompletionUnderForeignWriterLock", func(t *testing.T) { //nolint:paralleltest // Shares the SQLite database.
+	t.Run("sqlite_runtime_completion_under_writer_lock", func(t *testing.T) { //nolint:paralleltest // Shares the SQLite database.
+		defer scenarios.record(t)
+
 		for _, pair := range []struct{ locker, worker *adapter }{
 			{locker: goAdapter, worker: candidateAdapter},
 			{locker: candidateAdapter, worker: goAdapter},
@@ -452,7 +472,6 @@ func TestResilienceSQLiteConformance(t *testing.T) { //nolint:tparallel // Subte
 			})
 			pair.worker.call(t, "stop", map[string]any{}, nil)
 		}
-		scenarios.pass("sqlite_runtime_completion_under_writer_lock")
 	})
 }
 

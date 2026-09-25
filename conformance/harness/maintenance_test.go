@@ -115,15 +115,13 @@ func table(schema, name string) string {
 }
 
 func TestMaintenanceConformance(t *testing.T) { //nolint:paralleltest // Owns the shared PostgreSQL database.
-	databaseURL := os.Getenv("RIVER_CONFORMANCE_DATABASE_URL")
-	if databaseURL == "" {
-		t.Skip("RIVER_CONFORMANCE_DATABASE_URL is required")
-	}
+	databaseURL := requireEnv(t, "RIVER_CONFORMANCE_DATABASE_URL")
 	scenarios := newScenarioTracker(t, scenarioOwnerMaintenance)
 	repositoryRoot := repoRoot(t)
 	goAdapter := startReferenceAdapter(t, repositoryRoot, databaseURL, "go")
 	candidateSpec := conformanceCandidateSpec(t, repositoryRoot, false)
 	candidateAdapter := startCandidateAdapter(t, repositoryRoot, databaseURL, candidateSpec.Implementation, candidateSpec, candidateSpec.Command)
+	scenarios.attach(goAdapter, candidateAdapter)
 	implementations := []maintenanceImplementation{
 		{adapter: goAdapter, name: "go"},
 		{adapter: candidateAdapter, name: candidateSpec.Implementation},
@@ -135,12 +133,15 @@ func TestMaintenanceConformance(t *testing.T) { //nolint:paralleltest // Owns th
 	harness := &maintenanceHarness{pool: pool, t: t}
 	goAdapter.call(t, "migrate", map[string]any{}, nil)
 
-	t.Run("CronScheduleGoldens", func(t *testing.T) { //nolint:paralleltest // Shares adapters.
+	t.Run("cron_schedule_goldens", func(t *testing.T) { //nolint:paralleltest // Shares adapters.
+		defer scenarios.record(t)
+
 		verifyCronScheduleGoldens(t, repositoryRoot, goAdapter, candidateAdapter)
-		scenarios.pass("cron_schedule_goldens")
 	})
 
-	t.Run("QueueNamesAndUnknownQueueControl", func(t *testing.T) { //nolint:paralleltest // Shares adapters.
+	t.Run("queue_names_and_unknown_queue_control", func(t *testing.T) { //nolint:paralleltest // Shares adapters.
+		defer scenarios.record(t)
+
 		// River Go doesn't validate names passed to queue control: a name
 		// that could never be a valid queue simply has no record, so control
 		// reports not found rather than a validation error.
@@ -167,10 +168,11 @@ func TestMaintenanceConformance(t *testing.T) { //nolint:paralleltest // Owns th
 			require.Equal(t, "tenant|emails", inserted.Queue, implementation.name)
 			implementation.adapter.call(t, "delete", map[string]any{"id": inserted.ID}, nil)
 		}
-		scenarios.pass("queue_names_and_unknown_queue_control")
 	})
 
-	t.Run("MigrationMixedCaseSchema", func(t *testing.T) { //nolint:paralleltest // Shares adapters.
+	t.Run("migration_mixed_case_schema", func(t *testing.T) { //nolint:paralleltest // Shares adapters.
+		defer scenarios.record(t)
+
 		// Go quotes the schema; a migrated mixed-case schema must be seen as
 		// migrated rather than folded to lowercase.
 		schema := harness.schema(goAdapter, "MaintMixedCase")
@@ -181,63 +183,70 @@ func TestMaintenanceConformance(t *testing.T) { //nolint:paralleltest // Owns th
 		candidateAdapter.call(t, "migrate", map[string]any{"schema": schema}, &result)
 		require.Empty(t, result.Versions)
 		require.NotEmpty(t, result.Existing)
-		scenarios.pass("migration_mixed_case_schema")
 	})
 
-	t.Run("JobCleanerRetention", func(t *testing.T) { //nolint:paralleltest // Shares adapters.
+	t.Run("maintenance_job_cleaner_retention", func(t *testing.T) { //nolint:paralleltest // Shares adapters.
+		defer scenarios.record(t)
+
 		for _, implementation := range implementations {
 			verifyJobCleanerRetention(t, harness, goAdapter, implementation)
 		}
-		scenarios.pass("maintenance_job_cleaner_retention")
 	})
 
-	t.Run("QueueCleanerKeepsActiveQueues", func(t *testing.T) { //nolint:paralleltest // Shares adapters.
+	t.Run("maintenance_queue_cleaner_keeps_active_queues", func(t *testing.T) { //nolint:paralleltest // Shares adapters.
+		defer scenarios.record(t)
+
 		for _, implementation := range implementations {
 			verifyQueueCleaner(t, harness, goAdapter, implementation)
 		}
-		scenarios.pass("maintenance_queue_cleaner_keeps_active_queues")
 	})
 
-	t.Run("ReindexerSkipsArtifacts", func(t *testing.T) { //nolint:paralleltest // Shares adapters.
+	t.Run("maintenance_reindexer_skips_artifacts", func(t *testing.T) { //nolint:paralleltest // Shares adapters.
+		defer scenarios.record(t)
+
 		for _, implementation := range implementations {
 			verifyReindexer(t, harness, goAdapter, implementation)
 		}
-		scenarios.pass("maintenance_reindexer_skips_artifacts")
 	})
 
-	t.Run("RescuerPastFullBatchOfUnexpiredJobs", func(t *testing.T) { //nolint:paralleltest // Shares adapters.
+	t.Run("maintenance_rescuer_full_batch_of_unexpired_jobs", func(t *testing.T) { //nolint:paralleltest // Shares adapters.
+		defer scenarios.record(t)
+
 		for _, implementation := range implementations {
 			verifyRescuerFullBatch(t, harness, goAdapter, implementation)
 		}
-		scenarios.pass("maintenance_rescuer_full_batch_of_unexpired_jobs")
 	})
 
-	t.Run("RescuerStaleSelection", func(t *testing.T) { //nolint:paralleltest // Shares adapters.
+	t.Run("maintenance_rescuer_stale_selection", func(t *testing.T) { //nolint:paralleltest // Shares adapters.
+		defer scenarios.record(t)
+
 		for _, implementation := range implementations {
 			verifyRescuerStaleSelection(t, harness, goAdapter, implementation)
 		}
-		scenarios.pass("maintenance_rescuer_stale_selection")
 	})
 
-	t.Run("SameClientIDTermReplacement", func(t *testing.T) { //nolint:paralleltest // Shares adapters.
+	t.Run("leadership_same_client_id_term_replacement", func(t *testing.T) { //nolint:paralleltest // Shares adapters.
+		defer scenarios.record(t)
+
 		for _, implementation := range implementations {
 			verifySameClientIDTermReplacement(t, harness, goAdapter, implementation)
 		}
-		scenarios.pass("leadership_same_client_id_term_replacement")
 	})
 
-	t.Run("LeaderRenewalUnderSlowMaintenance", func(t *testing.T) { //nolint:paralleltest // Shares adapters.
+	t.Run("leadership_renewal_under_slow_maintenance", func(t *testing.T) { //nolint:paralleltest // Shares adapters.
+		defer scenarios.record(t)
+
 		for _, implementation := range implementations {
 			verifyRenewalUnderSlowMaintenance(t, harness, goAdapter, implementation)
 		}
-		scenarios.pass("leadership_renewal_under_slow_maintenance")
 	})
 
-	t.Run("PeriodicDueJobAvailable", func(t *testing.T) { //nolint:paralleltest // Shares adapters.
+	t.Run("periodic_due_job_available", func(t *testing.T) { //nolint:paralleltest // Shares adapters.
+		defer scenarios.record(t)
+
 		for _, implementation := range implementations {
 			verifyPeriodicDueJobAvailable(t, harness, goAdapter, implementation)
 		}
-		scenarios.pass("periodic_due_job_available")
 	})
 }
 
