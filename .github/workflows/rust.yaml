@@ -127,6 +127,8 @@ jobs:
       RIVER_CONFORMANCE_DATABASE_URL: postgres://postgres:postgres@localhost:5432/river_rust_test?sslmode=disable
       RIVER_CONFORMANCE_REQUIRED: "1"
       RIVER_CONFORMANCE_SOAK_DURATION: 10m
+      # Keeps the soak's `go test` backstop inside this job's timeout.
+      CONFORMANCE_SOAK_TIMEOUT: 20m
       RIVER_RUST_DATABASE_URL: postgres://postgres:postgres@localhost:5432/river_rust_test?sslmode=disable
 
     services:

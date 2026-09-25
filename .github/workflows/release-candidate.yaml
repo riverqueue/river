@@ -59,4 +59,7 @@ jobs:
       - name: Go and Rust soak
         env:
           RIVER_CONFORMANCE_SOAK_DURATION: ${{ inputs.soak-duration }}
+          # Keeps the soak's `go test` backstop inside this job's timeout. A
+          # soak that can't finish within it fails at startup.
+          CONFORMANCE_SOAK_TIMEOUT: 3h
         run: make test/conformance/soak

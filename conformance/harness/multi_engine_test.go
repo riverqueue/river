@@ -440,6 +440,9 @@ func TestMultiEngineSoak(t *testing.T) { //nolint:paralleltest // Owns the share
 		current.call(t, "start", map[string]any{"client_id": clientIDs[index], "max_workers": 8}, nil)
 	}
 
+	// Checked after the engines are built and started, so the budget
+	// accounts for that setup.
+	requireSoakBudget(t, "RIVER_CONFORMANCE_MULTI_ENGINE_SOAK_DURATION", duration)
 	deadline := time.Now().Add(duration)
 	jobsCompleted := 0
 	batch := 0

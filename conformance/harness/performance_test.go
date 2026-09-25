@@ -126,6 +126,21 @@ func slowestMetrics(metrics []benchmarkMetrics) benchmarkMetrics {
 	return slowest
 }
 
+// requireSoakBudget fails a soak immediately when running for duration and
+// then finishing would outlast `go test`'s -timeout, instead of letting the
+// run panic on the timeout hours later.
+func requireSoakBudget(t *testing.T, variable string, duration time.Duration) {
+	t.Helper()
+
+	deadline, ok := t.Deadline()
+	if !ok {
+		return
+	}
+	if err := soakBudgetError(variable, duration, time.Until(deadline)); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestMixedSoak(t *testing.T) { //nolint:paralleltest // Owns the shared PostgreSQL database.
 	// This opt-in soak owns the shared conformance database. CI sets 10m,
 	// release candidates use 1h, and the scheduled job uses 6h.
@@ -146,6 +161,9 @@ func TestMixedSoak(t *testing.T) { //nolint:paralleltest // Owns the shared Post
 		"client_id": candidateSpec.Implementation + "-soak", "max_workers": 8,
 	}, nil)
 
+	// Checked after the adapters are built and started, so the budget
+	// accounts for that setup.
+	requireSoakBudget(t, "RIVER_CONFORMANCE_SOAK_DURATION", duration)
 	deadline := time.Now().Add(duration)
 	jobsCompleted := 0
 	for time.Now().Before(deadline) {

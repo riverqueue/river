@@ -89,6 +89,15 @@ RIVER_CONFORMANCE_DATABASE_URL=postgres://localhost/river_conformance \
 RIVER_CONFORMANCE_SOAK_DURATION=10m make test/conformance/soak
 ```
 
+The harness bounds every adapter request to two minutes and every adapter
+exit to thirty seconds, killing an adapter that overruns, so a hung adapter
+fails the scenario with a message naming it. Each make target also passes
+`go test` an explicit `-timeout` as a backstop: `CONFORMANCE_TIMEOUT` (default
+`30m`) for ordinary tiers and `CONFORMANCE_SOAK_TIMEOUT` (default `6h20m`) for
+soaks. A soak fails at startup, with a message saying so, when its duration
+plus five minutes to finish doesn't fit in the remaining timeout, so set
+`CONFORMANCE_SOAK_TIMEOUT` along with a longer soak duration.
+
 Direct multi-engine tiers start the Go reference and every configured
 candidate simultaneously against one PostgreSQL database. The ordinary
 candidate descriptor is joined by one or more peer descriptors from
