@@ -98,10 +98,16 @@ type dottedSelectedUser struct {
 }
 
 type dottedSelectedArgs struct {
+	At      string `json:"@user,omitempty" river:"unique"`
+	Bang    string `json:"!x,omitempty"    river:"unique"`
+	Brace   string `json:"{x},omitempty"   river:"unique"`
+	Bracket string `json:"[x],omitempty"   river:"unique"`
+	Colon   string `json:":id,omitempty"   river:"unique"`
 	//nolint:tagliatelle // literal dotted names distinguish them from nested paths
-	Literal string             `json:"user.id,omitempty" river:"unique"`
+	Literal string             `json:"user.id,omitempty"   river:"unique"`
+	Symbols string             `json:"a*b?c#d|e,omitempty" river:"unique"`
 	User    dottedSelectedUser `json:"user"`
-	Unicode string             `json:"é,omitempty"       river:"unique"`
+	Unicode string             `json:"é,omitempty"         river:"unique"`
 }
 
 func (dottedSelectedArgs) Kind() string { return "conformance_dotted_selected_args" }
@@ -300,6 +306,7 @@ func main() {
 		rivertype.JobStateRunning,
 		rivertype.JobStateScheduled,
 	}
+	dottedSelectedPaths := []string{`\@user`, `\!x`, `\{x\}`, `\[x\]`, `\:id`, "user.id", `user\.id`, `a\*b\?c\#d\|e`, "é"}
 	references := []referenceCase{
 		{
 			args:                selectedArgs{},
@@ -398,7 +405,7 @@ func main() {
 			now:                 now,
 			opts:                dbunique.UniqueOpts{ByArgs: true},
 			queue:               "default",
-			selectedUniquePaths: []string{"user.id", `user\.id`, "é"},
+			selectedUniquePaths: dottedSelectedPaths,
 		},
 		{
 			args:                dottedSelectedArgs{User: dottedSelectedUser{ID: "nested"}},
@@ -406,7 +413,7 @@ func main() {
 			now:                 now,
 			opts:                dbunique.UniqueOpts{ByArgs: true},
 			queue:               "default",
-			selectedUniquePaths: []string{"user.id", `user\.id`, "é"},
+			selectedUniquePaths: dottedSelectedPaths,
 		},
 		{
 			args:                dottedSelectedArgs{Unicode: "café"},
@@ -414,7 +421,18 @@ func main() {
 			now:                 now,
 			opts:                dbunique.UniqueOpts{ByArgs: true},
 			queue:               "default",
-			selectedUniquePaths: []string{"user.id", `user\.id`, "é"},
+			selectedUniquePaths: dottedSelectedPaths,
+		},
+		{
+			args: dottedSelectedArgs{
+				At: "at", Bang: "bang", Brace: "brace", Bracket: "bracket",
+				Colon: "colon", Symbols: "symbols",
+			},
+			name:                "selected_punctuation_field_names",
+			now:                 now,
+			opts:                dbunique.UniqueOpts{ByArgs: true},
+			queue:               "default",
+			selectedUniquePaths: dottedSelectedPaths,
 		},
 		{
 			args: collectionsArgs{

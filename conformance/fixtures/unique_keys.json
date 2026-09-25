@@ -288,6 +288,21 @@
       "scheduled_at": null,
       "selected_unique_components": [
         [
+          "@user"
+        ],
+        [
+          "!x"
+        ],
+        [
+          "{x}"
+        ],
+        [
+          "[x]"
+        ],
+        [
+          ":id"
+        ],
+        [
           "user",
           "id"
         ],
@@ -295,12 +310,21 @@
           "user.id"
         ],
         [
+          "a*b?c#d|e"
+        ],
+        [
           "é"
         ]
       ],
       "selected_unique_paths": [
+        "\\@user",
+        "\\!x",
+        "\\{x\\}",
+        "\\[x\\]",
+        "\\:id",
         "user.id",
         "user\\.id",
+        "a\\*b\\?c\\#d\\|e",
         "é"
       ]
     },
@@ -325,6 +349,21 @@
       "scheduled_at": null,
       "selected_unique_components": [
         [
+          "@user"
+        ],
+        [
+          "!x"
+        ],
+        [
+          "{x}"
+        ],
+        [
+          "[x]"
+        ],
+        [
+          ":id"
+        ],
+        [
           "user",
           "id"
         ],
@@ -332,12 +371,21 @@
           "user.id"
         ],
         [
+          "a*b?c#d|e"
+        ],
+        [
           "é"
         ]
       ],
       "selected_unique_paths": [
+        "\\@user",
+        "\\!x",
+        "\\{x\\}",
+        "\\[x\\]",
+        "\\:id",
         "user.id",
         "user\\.id",
+        "a\\*b\\?c\\#d\\|e",
         "é"
       ]
     },
@@ -361,6 +409,21 @@
       "scheduled_at": null,
       "selected_unique_components": [
         [
+          "@user"
+        ],
+        [
+          "!x"
+        ],
+        [
+          "{x}"
+        ],
+        [
+          "[x]"
+        ],
+        [
+          ":id"
+        ],
+        [
           "user",
           "id"
         ],
@@ -368,12 +431,86 @@
           "user.id"
         ],
         [
+          "a*b?c#d|e"
+        ],
+        [
           "é"
         ]
       ],
       "selected_unique_paths": [
+        "\\@user",
+        "\\!x",
+        "\\{x\\}",
+        "\\[x\\]",
+        "\\:id",
         "user.id",
         "user\\.id",
+        "a\\*b\\?c\\#d\\|e",
+        "é"
+      ]
+    },
+    {
+      "args": {
+        "@user": "at",
+        "!x": "bang",
+        "{x}": "brace",
+        "[x]": "bracket",
+        ":id": "colon",
+        "a*b?c#d|e": "symbols",
+        "user": {}
+      },
+      "expected_sha256": "d00ff085218024d7059a4556b24af92cbe57744935e2d37ff644b149fae4c2f3",
+      "expected_state_mask": 245,
+      "kind": "conformance_dotted_selected_args",
+      "name": "selected_punctuation_field_names",
+      "now": "2026-01-02T03:04:05.6789Z",
+      "options": {
+        "by_args": true,
+        "by_period_nanos": 0,
+        "by_queue": false,
+        "exclude_kind": false
+      },
+      "queue": "default",
+      "scheduled_at": null,
+      "selected_unique_components": [
+        [
+          "@user"
+        ],
+        [
+          "!x"
+        ],
+        [
+          "{x}"
+        ],
+        [
+          "[x]"
+        ],
+        [
+          ":id"
+        ],
+        [
+          "user",
+          "id"
+        ],
+        [
+          "user.id"
+        ],
+        [
+          "a*b?c#d|e"
+        ],
+        [
+          "é"
+        ]
+      ],
+      "selected_unique_paths": [
+        "\\@user",
+        "\\!x",
+        "\\{x\\}",
+        "\\[x\\]",
+        "\\:id",
+        "user.id",
+        "user\\.id",
+        "a\\*b\\?c\\#d\\|e",
         "é"
       ]
     },

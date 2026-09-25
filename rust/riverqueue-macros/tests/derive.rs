@@ -87,6 +87,12 @@ fn declares_job_type_uniqueness() {
 #[derive(Deserialize, JobArgs, Serialize)]
 #[river(kind = "literal_paths", unique(by_args("user.id", "user\\.id")))]
 struct LiteralPaths {
+    #[river(unique)]
+    #[serde(rename = "@user")]
+    at: String,
+    #[river(unique)]
+    #[serde(rename = ":id")]
+    colon: String,
     #[serde(rename = "user.id")]
     literal: String,
     user: Customer,
@@ -99,7 +105,13 @@ struct LiteralPaths {
 fn separates_literal_and_nested_unique_fields() {
     assert_eq!(
         LiteralPaths::unique_fields(),
-        [&["é"][..], &["user", "id"][..], &["user.id"][..],]
+        [
+            &["@user"][..],
+            &[":id"][..],
+            &["é"][..],
+            &["user", "id"][..],
+            &["user.id"][..],
+        ]
     );
 }
 
