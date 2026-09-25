@@ -404,12 +404,13 @@ impl PeriodicJobs {
                         insert.defaults.clone(),
                         insert.opts.clone(),
                     );
-                    opts.metadata.insert("periodic".to_owned(), true.into());
+                    opts.metadata
+                        .insert("periodic", true)
+                        .expect("boolean metadata serializes");
                     if let Some(id) = &due_job.job.opts.id {
-                        opts.metadata.insert(
-                            crate::METADATA_KEY_PERIODIC_JOB_ID.to_owned(),
-                            id.clone().into(),
-                        );
+                        opts.metadata
+                            .insert(crate::METADATA_KEY_PERIODIC_JOB_ID, id)
+                            .expect("string metadata serializes");
                     }
                     if let Err(error) = client.insert_periodic(insert, opts, due_job.target).await {
                         tracing::error!(error = %error, "River periodic job insertion failed");

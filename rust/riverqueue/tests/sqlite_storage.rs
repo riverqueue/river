@@ -215,9 +215,15 @@ async fn job_crud_preserves_sqlite_semantics() {
         )
         .await
         .unwrap();
-    assert_eq!(updated.metadata["original"], true);
-    assert_eq!(updated.metadata["added"], 42);
-    assert_eq!(updated.output(), Some(&json!({"ok": true})));
+    assert_eq!(
+        updated.metadata.get::<bool>("original").unwrap(),
+        Some(true)
+    );
+    assert_eq!(updated.metadata.get::<i64>("added").unwrap(), Some(42));
+    assert_eq!(
+        updated.output().map(serde_json::value::RawValue::get),
+        Some(r#"{"ok":true}"#)
+    );
 
     let mut transaction = pool.begin().await.unwrap();
     let transaction_update = client
@@ -230,7 +236,13 @@ async fn job_crud_preserves_sqlite_semantics() {
         .tx(&mut transaction)
         .await
         .unwrap();
-    assert_eq!(transaction_update.metadata["rolled_back"], true);
+    assert_eq!(
+        transaction_update
+            .metadata
+            .get::<bool>("rolled_back")
+            .unwrap(),
+        Some(true)
+    );
     assert_eq!(
         client
             .jobs()
@@ -238,8 +250,10 @@ async fn job_crud_preserves_sqlite_semantics() {
             .tx(&mut transaction)
             .await
             .unwrap()
-            .metadata["rolled_back"],
-        true
+            .metadata
+            .get::<bool>("rolled_back")
+            .unwrap(),
+        Some(true)
     );
     transaction.rollback().await.unwrap();
     assert!(

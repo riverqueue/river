@@ -16,14 +16,14 @@ use std::fmt::Display;
 #[cfg(feature = "postgres")]
 use chrono::{DateTime, Utc};
 #[cfg(feature = "postgres")]
-use serde_json::{Value, value::RawValue};
+use serde_json::value::RawValue;
 #[cfg(feature = "postgres")]
 use sqlx::{FromRow, Row, postgres::PgRow, types::Json};
 use tracing::error;
 
 use crate::JobRow;
 #[cfg(feature = "postgres")]
-use crate::{AttemptError, Error, JobState};
+use crate::{AttemptError, Error, JobMetadata, JobState};
 
 /// A row with fields that River couldn't decode.
 #[derive(Debug)]
@@ -113,7 +113,7 @@ pub(crate) struct JobRecord {
     id: i64,
     kind: String,
     max_attempts: i16,
-    metadata: Json<Value>,
+    metadata: Json<Box<RawValue>>,
     priority: i16,
     queue: String,
     scheduled_at: DateTime<Utc>,
@@ -189,13 +189,7 @@ impl JobRecord {
                         .collect()
                 }),
         );
-        let metadata = errors.field(
-            "metadata",
-            match self.metadata.0 {
-                Value::Object(metadata) => Ok(metadata),
-                _ => Err("not a JSON object"),
-            },
-        );
+        let metadata = errors.field("metadata", JobMetadata::try_from(self.metadata.0));
         let tags = errors.field("tags", self.tags);
         let unique_states = errors.field(
             "unique_states",

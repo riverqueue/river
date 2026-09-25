@@ -1220,13 +1220,16 @@
     },
     {
       "capability": "job_crud",
-      "description": "Insert exact JSON numeric fixtures with an optional exact signed-64-bit job ID and return that ID.",
+      "description": "Insert exact JSON numeric fixtures with optional exact signed-64-bit job ID and raw metadata object text, and return that ID.",
       "name": "raw_insert_exact_json",
       "params": {
         "additionalProperties": false,
         "properties": {
           "id": {
             "$ref": "#/$defs/job_id"
+          },
+          "metadata_json": {
+            "type": "string"
           }
         },
         "type": "object"
@@ -1329,6 +1332,12 @@
       "result": {
         "additionalProperties": false,
         "properties": {
+          "big_integer": {
+            "type": "string"
+          },
+          "beyond_float": {
+            "type": "string"
+          },
           "decimal": {
             "type": "string"
           },
@@ -1336,6 +1345,9 @@
             "type": "string"
           },
           "negative": {
+            "type": "string"
+          },
+          "long_decimal": {
             "type": "string"
           }
         },

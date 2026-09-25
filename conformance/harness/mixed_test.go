@@ -145,6 +145,7 @@ func TestMixedConformance(t *testing.T) {
 		defer scenarios.record(t)
 
 		verifyJobRowRoundTrip(t, goAdapter, candidateAdapter)
+		verifyLargeMetadataRoundTrip(t, goAdapter, candidateAdapter)
 	})
 	t.Run("unsafe_int64_job_ids_rpc_list_cursors", func(t *testing.T) {
 		defer scenarios.record(t)

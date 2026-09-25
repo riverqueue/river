@@ -1732,7 +1732,8 @@ func (s *adapterState) handle(ctx context.Context, req *request) (any, error) {
 
 	case "raw_insert_exact_json":
 		var params struct {
-			ID *int64 `json:"id"`
+			ID           *int64  `json:"id"`
+			MetadataJSON *string `json:"metadata_json"`
 		}
 		if err := decodeParams(req.Params, &params); err != nil {
 			return nil, err
@@ -1744,8 +1745,8 @@ func (s *adapterState) handle(ctx context.Context, req *request) (any, error) {
 				COALESCE($1, nextval(pg_get_serial_sequence('river_job', 'id'))),
 				'{"decimal":0.12345678901234567890123456789,"integer":9223372036854775807}'::jsonb,
 				'conformance_exact_json', 25,
-				'{"negative":-9223372036854775808}'::jsonb
-			) RETURNING id`, params.ID).Scan(&id)
+				COALESCE($2::jsonb, '{"negative":-9223372036854775808}'::jsonb)
+			) RETURNING id`, params.ID, params.MetadataJSON).Scan(&id)
 		return map[string]any{"id": id}, err
 
 	case "raw_insert_full_row":
@@ -2478,7 +2479,8 @@ func (s *sqliteAdapterState) handle(ctx context.Context, req *request) (any, err
 
 	case "raw_insert_exact_json":
 		var params struct {
-			ID *int64 `json:"id"`
+			ID           *int64  `json:"id"`
+			MetadataJSON *string `json:"metadata_json"`
 		}
 		if err := decodeParams(req.Params, &params); err != nil {
 			return nil, err
@@ -2490,8 +2492,8 @@ func (s *sqliteAdapterState) handle(ctx context.Context, req *request) (any, err
 				?,
 				jsonb('{"decimal":0.12345678901234567890123456789,"integer":9223372036854775807}'),
 				'conformance_exact_json', 25,
-				jsonb('{"negative":-9223372036854775808}')
-			) RETURNING id`, params.ID).Scan(&id)
+				jsonb(COALESCE(?, '{"negative":-9223372036854775808}'))
+			) RETURNING id`, params.ID, params.MetadataJSON).Scan(&id)
 		return map[string]any{"id": id}, err
 
 	case "get": //nolint:usestdlibvars // JSON-RPC method names are lowercase protocol values.
@@ -3436,11 +3438,17 @@ func exactJSONTokens(job *rivertype.JobRow) (map[string]any, error) {
 	if err != nil {
 		return nil, err
 	}
-	return map[string]any{
+	result := map[string]any{
 		"decimal":  decimal,
 		"integer":  integer,
 		"negative": negative,
-	}, nil
+	}
+	for _, key := range []string{"big_integer", "beyond_float", "long_decimal"} {
+		if value, ok := metadata[key]; ok {
+			result[key] = string(value)
+		}
+	}
+	return result, nil
 }
 
 func normalizeJob(job *rivertype.JobRow) map[string]any {

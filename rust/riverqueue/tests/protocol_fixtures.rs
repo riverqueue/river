@@ -114,7 +114,7 @@ fn retry_row(id: i64, now: DateTime<Utc>, previous_errors: usize) -> JobRow {
     row.attempted_by = vec!["fixture".to_owned()];
     row.errors = vec![AttemptError::new(now, 1, "previous failure"); previous_errors];
     row.max_attempts = 1_000;
-    row.metadata = Map::new();
+    row.metadata = Map::new().into();
     row.state = JobState::Retryable;
     row
 }

@@ -1,7 +1,6 @@
 //! Rescues jobs stuck in `running`, a port of Go's `JobRescuer`.
 
 use chrono::{DateTime, Utc};
-use serde_json::Value;
 #[cfg(feature = "postgres")]
 use sqlx::AssertSqlSafe;
 use tracing::{debug, error};
@@ -129,7 +128,7 @@ type Decision = Option<(JobState, Option<DateTime<Utc>>, DateTime<Utc>)>;
 
 /// Go's `makeRetryDecision`, preceded by its cancellation check.
 fn decide(inner: &ClientInner, row: &JobRow, now: DateTime<Utc>) -> Result<Decision, Error> {
-    if cancel_attempted(row.metadata.get("cancel_attempted_at")) {
+    if cancel_attempted(row.metadata.get_raw("cancel_attempted_at")) {
         return Ok(Some((JobState::Cancelled, Some(now), row.scheduled_at)));
     }
     if !inner.workers.contains_kind(&row.kind) {
@@ -197,12 +196,12 @@ fn decide(inner: &ClientInner, row: &JobRow, now: DateTime<Utc>) -> Result<Decis
 
 /// Go decodes `cancel_attempted_at` as a `time.Time` and cancels only when it
 /// is a non-zero timestamp; absent, null, or unparsable values do not cancel.
-fn cancel_attempted(value: Option<&Value>) -> bool {
+fn cancel_attempted(value: Option<&serde_json::value::RawValue>) -> bool {
     let go_zero_time =
         chrono::NaiveDate::from_ymd_opt(1, 1, 1).and_then(|date| date.and_hms_opt(0, 0, 0));
     value
-        .and_then(Value::as_str)
-        .and_then(|value| DateTime::parse_from_rfc3339(value).ok())
+        .and_then(|raw| serde_json::from_str::<String>(raw.get()).ok())
+        .and_then(|value| DateTime::parse_from_rfc3339(&value).ok())
         .is_some_and(|time| Some(time.naive_utc()) != go_zero_time)
 }
 
@@ -474,14 +473,16 @@ mod unit_tests {
 
     #[test]
     fn cancel_attempted_requires_a_non_zero_timestamp_like_go() {
-        assert!(cancel_attempted(Some(&json!("2026-01-02T03:04:05Z"))));
-        assert!(cancel_attempted(Some(&json!(
-            "2026-01-02T03:04:05.123456+00:00"
-        ))));
-        assert!(!cancel_attempted(None));
-        assert!(!cancel_attempted(Some(&json!(null))));
-        assert!(!cancel_attempted(Some(&json!("0001-01-01T00:00:00Z"))));
-        assert!(!cancel_attempted(Some(&json!("not a time"))));
-        assert!(!cancel_attempted(Some(&json!(true))));
+        let cancel = |value: Option<serde_json::Value>| {
+            let raw = value.map(|value| serde_json::value::to_raw_value(&value).unwrap());
+            cancel_attempted(raw.as_deref())
+        };
+        assert!(cancel(Some(json!("2026-01-02T03:04:05Z"))));
+        assert!(cancel(Some(json!("2026-01-02T03:04:05.123456+00:00"))));
+        assert!(!cancel(None));
+        assert!(!cancel(Some(json!(null))));
+        assert!(!cancel(Some(json!("0001-01-01T00:00:00Z"))));
+        assert!(!cancel(Some(json!("not a time"))));
+        assert!(!cancel(Some(json!(true))));
     }
 }

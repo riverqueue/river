@@ -614,7 +614,11 @@ async fn cancel_attempted_at_matches_go_time_json() {
         .unwrap();
     let job = client.insert(ResilienceArgs {}).await.unwrap();
     let cancelled = client.jobs().cancel(job.job.row.id).await.unwrap();
-    let cancel_attempted_at = cancelled.metadata["cancel_attempted_at"].as_str().unwrap();
+    let cancel_attempted_at = cancelled
+        .metadata
+        .get::<String>("cancel_attempted_at")
+        .unwrap()
+        .unwrap();
     assert!(cancel_attempted_at.ends_with('Z'), "{cancel_attempted_at}");
     if let Some((_, fraction)) = cancel_attempted_at.trim_end_matches('Z').split_once('.') {
         assert!(
@@ -622,7 +626,7 @@ async fn cancel_attempted_at_matches_go_time_json() {
             "trailing zeros are trimmed: {cancel_attempted_at}"
         );
     }
-    chrono::DateTime::parse_from_rfc3339(cancel_attempted_at).unwrap();
+    chrono::DateTime::parse_from_rfc3339(&cancel_attempted_at).unwrap();
 }
 
 #[tokio::test(flavor = "multi_thread")]

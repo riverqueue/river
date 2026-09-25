@@ -1089,7 +1089,7 @@ fn encode_fast_copy(jobs: &[InsertContext], now: DateTime<Utc>) -> Vec<u8> {
             Some(timestamp(job.created_at)),
             Some(job.kind.clone()),
             Some(job.opts.max_attempts.to_string()),
-            Some(Value::Object(job.opts.metadata.clone()).to_string()),
+            Some(job.opts.metadata.as_raw().get().to_owned()),
             Some(job.opts.priority.to_string()),
             Some(job.opts.queue.clone()),
             Some(timestamp(job.opts.scheduled_at)),
