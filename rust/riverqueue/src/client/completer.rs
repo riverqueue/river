@@ -308,7 +308,10 @@ impl CompletionBatcher {
                 .unwrap_or_else(|panic| {
                     Err(Error::runtime_context(
                         "job completion",
-                        format!("completion persistence panicked: {}", panic_message(&panic)),
+                        format!(
+                            "completion persistence panicked: {}",
+                            crate::error::panic_message(&panic)
+                        ),
                     ))
                 });
             if let Ok(rows) = &result {
@@ -342,14 +345,6 @@ impl CompletionBatcher {
     pub(super) const fn concurrency(&self) -> usize {
         self.max_concurrency
     }
-}
-
-fn panic_message(panic: &Box<dyn std::any::Any + Send>) -> &str {
-    panic
-        .downcast_ref::<&str>()
-        .copied()
-        .or_else(|| panic.downcast_ref::<String>().map(String::as_str))
-        .unwrap_or("non-string panic payload")
 }
 
 /// Whether a completion error can never succeed on retry, matching River Go's

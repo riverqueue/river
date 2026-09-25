@@ -175,6 +175,15 @@ impl Error {
     }
 }
 
+/// Returns a caught panic's message, when it has one.
+pub(crate) fn panic_message(panic: &Box<dyn std::any::Any + Send>) -> &str {
+    panic
+        .downcast_ref::<&str>()
+        .copied()
+        .or_else(|| panic.downcast_ref::<String>().map(String::as_str))
+        .unwrap_or("non-string panic payload")
+}
+
 impl From<sqlx::Error> for Error {
     fn from(error: sqlx::Error) -> Self {
         Self::Database(Box::new(error))
