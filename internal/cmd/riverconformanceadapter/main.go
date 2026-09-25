@@ -389,6 +389,18 @@ type uniqueSelectedArgs struct {
 
 func (uniqueSelectedArgs) Kind() string { return "conformance_selected_args" }
 
+type uniqueDottedSelectedUser struct {
+	ID string `json:"id,omitempty" river:"unique"`
+}
+
+type uniqueDottedSelectedArgs struct {
+	//nolint:tagliatelle // literal dotted names distinguish them from nested paths
+	Literal string                   `json:"user.id,omitempty" river:"unique"`
+	User    uniqueDottedSelectedUser `json:"user"`
+}
+
+func (uniqueDottedSelectedArgs) Kind() string { return "conformance_dotted_selected_args" }
+
 type uniqueSimpleArgs struct {
 	ID int64 `json:"id"`
 }
@@ -847,6 +859,8 @@ func (p uniqueKeyParams) jobArgs() (rivertype.JobArgs, error) {
 		}, nil
 	case "conformance_selected_args":
 		args = &uniqueSelectedArgs{}
+	case "conformance_dotted_selected_args":
+		args = &uniqueDottedSelectedArgs{}
 	case "conformance_simple":
 		args = &uniqueSimpleArgs{}
 	default:

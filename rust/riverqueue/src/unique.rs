@@ -112,16 +112,21 @@ fn write_selected_args(
     // Reject non-object arguments consistently with the all-arguments mode.
     object_members(encoded_args)?;
 
-    let mut paths = unique_fields.to_vec();
-    paths.sort_unstable();
-    paths.dedup();
-    for (index, path) in paths.iter().enumerate() {
-        validate_unique_path(path)?;
-        if paths[index + 1..].iter().any(|other| {
-            other
-                .strip_prefix(path)
-                .is_some_and(|rest| rest.starts_with('.'))
-        }) {
+    let mut paths = unique_fields
+        .iter()
+        .map(|path| Ok((*path, parse_unique_path(path)?)))
+        .collect::<Result<Vec<_>, Error>>()?;
+    paths.sort_by(|(left_path, left), (right_path, right)| {
+        left.join(".")
+            .cmp(&right.join("."))
+            .then_with(|| left_path.cmp(right_path))
+    });
+    paths.dedup_by(|left, right| left.1 == right.1);
+    for (index, (path, parts)) in paths.iter().enumerate() {
+        if paths[index + 1..]
+            .iter()
+            .any(|(_, other)| other.len() > parts.len() && other.starts_with(parts))
+        {
             return Err(unique_args_error(format!(
                 "unique path {path:?} contains another selected unique path"
             )));
@@ -129,9 +134,9 @@ fn write_selected_args(
     }
 
     let mut selected = Vec::new();
-    for path in paths {
-        if let Some(value) = lookup_path(encoded_args, path)? {
-            insert_selected(&mut selected, path.split('.'), value);
+    for (_, parts) in paths {
+        if let Some(value) = lookup_path(encoded_args, &parts)? {
+            insert_selected(&mut selected, &parts, value);
         }
     }
     if !selected.is_empty() {
@@ -140,22 +145,34 @@ fn write_selected_args(
     Ok(())
 }
 
-/// Validates a dotted unique path against the subset of `gjson`/`sjson` path
-/// syntax that River Go hashes deterministically.
-fn validate_unique_path(path: &str) -> Result<(), Error> {
-    for segment in path.split('.') {
-        validate_path_segment(segment, "unique path segment")?;
-        if segment.bytes().all(|byte| byte.is_ascii_digit()) || segment == "-1" {
-            return Err(unique_args_error(format!(
-                "unique path {path:?} contains array index segment {segment:?}"
-            )));
+/// Splits a Go `gjson` path, where an escaped dot is part of a literal name.
+fn parse_unique_path(path: &str) -> Result<Vec<String>, Error> {
+    let mut parts = Vec::new();
+    let mut part = String::new();
+    let mut escaped = false;
+    for character in path.chars() {
+        if escaped {
+            part.push(character);
+            escaped = false;
+        } else if character == '\\' {
+            escaped = true;
+        } else if character == '.' {
+            validate_path_segment(&part, "unique path segment")?;
+            parts.push(std::mem::take(&mut part));
+        } else {
+            part.push(character);
         }
     }
-    Ok(())
+    if escaped {
+        part.push('\\');
+    }
+    validate_path_segment(&part, "unique path segment")?;
+    parts.push(part);
+    Ok(parts)
 }
 
 struct SelectedMember<'a> {
-    key: &'a str,
+    key: String,
     value: SelectedValue<'a>,
 }
 
@@ -164,21 +181,17 @@ enum SelectedValue<'a> {
     Raw(&'a str),
 }
 
-fn insert_selected<'a>(
-    members: &mut Vec<SelectedMember<'a>>,
-    mut segments: std::str::Split<'a, char>,
-    value: &'a str,
-) {
-    let Some(segment) = segments.next() else {
+fn insert_selected<'a>(members: &mut Vec<SelectedMember<'a>>, segments: &[String], value: &'a str) {
+    let Some((segment, rest)) = segments.split_first() else {
         return;
     };
-    let position = members.iter().position(|member| member.key == segment);
-    if segments.clone().next().is_none() {
+    let position = members.iter().position(|member| member.key == *segment);
+    if rest.is_empty() {
         let value = SelectedValue::Raw(value);
         match position {
             Some(position) => members[position].value = value,
             None => members.push(SelectedMember {
-                key: segment,
+                key: segment.clone(),
                 value,
             }),
         }
@@ -186,7 +199,7 @@ fn insert_selected<'a>(
     }
     let position = position.unwrap_or_else(|| {
         members.push(SelectedMember {
-            key: segment,
+            key: segment.clone(),
             value: SelectedValue::Object(Vec::new()),
         });
         members.len() - 1
@@ -194,7 +207,7 @@ fn insert_selected<'a>(
     // Prefix conflicts are rejected before insertion, so an intermediate
     // segment always names an object.
     if let SelectedValue::Object(children) = &mut members[position].value {
-        insert_selected(children, segments, value);
+        insert_selected(children, rest, value);
     }
 }
 
@@ -204,7 +217,7 @@ fn write_selected_object(members: &[SelectedMember<'_>], output: &mut String) {
         if index > 0 {
             output.push(',');
         }
-        write_sjson_key(member.key, output);
+        write_sjson_key(&member.key, output);
         output.push(':');
         match &member.value {
             SelectedValue::Object(children) => write_selected_object(children, output),
@@ -216,15 +229,15 @@ fn write_selected_object(members: &[SelectedMember<'_>], output: &mut String) {
 
 /// Resolves a dotted path to the raw text of its value, following `gjson`:
 /// each segment selects the first object member with that (unescaped) key.
-fn lookup_path<'a>(encoded_args: &'a str, path: &str) -> Result<Option<&'a str>, Error> {
+fn lookup_path<'a>(encoded_args: &'a str, path: &[String]) -> Result<Option<&'a str>, Error> {
     let mut current = encoded_args;
-    for segment in path.split('.') {
+    for segment in path {
         if !current.trim_start().starts_with('{') {
             return Ok(None);
         }
         match object_members(current)?
             .into_iter()
-            .find(|member| member.key == segment)
+            .find(|member| member.key == segment.as_str())
         {
             Some(member) => current = member.value,
             None => return Ok(None),
@@ -237,17 +250,6 @@ fn validate_path_segment(segment: &str, description: &str) -> Result<(), Error> 
     if segment.is_empty() {
         return Err(unique_args_error(format!(
             "{description} is empty, which River Go cannot hash"
-        )));
-    }
-    if segment.starts_with(':')
-        || segment
-            .bytes()
-            .any(|byte| matches!(byte, b'.' | b'*' | b'?' | b'|' | b'#' | b'@' | b'\\'))
-    {
-        return Err(unique_args_error(format!(
-            "{description} {segment:?} contains JSON path syntax that River Go cannot hash \
-             deterministically; select unique fields that avoid `.`, `*`, `?`, `|`, `#`, `@`, \
-             `\\`, and a leading `:`"
         )));
     }
     Ok(())
@@ -1067,7 +1069,7 @@ mod tests {
         }
 
         let raw = RawValue::from_string(r#"{"a":{"b":1}}"#.to_owned()).unwrap();
-        for paths in [&["a.0"][..], &["a", "a.b"], &["a*"], &["a."]] {
+        for paths in [&["a", "a.b"][..], &["a."]] {
             assert!(key_for("raw", paths, &raw, &opts).is_err(), "{paths:?}");
         }
     }

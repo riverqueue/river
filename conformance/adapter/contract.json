@@ -2414,6 +2414,7 @@
           "kind": {
             "enum": [
               "conformance_all_args",
+              "conformance_dotted_selected_args",
               "conformance_numeric_boundaries",
               "conformance_selected_args",
               "conformance_simple"
