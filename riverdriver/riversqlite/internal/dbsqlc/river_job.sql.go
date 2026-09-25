@@ -1460,7 +1460,7 @@ func (q *Queries) JobRetry(ctx context.Context, db DBTX, arg *JobRetryParams) (*
 }
 
 const jobScheduleGetCollision = `-- name: JobScheduleGetCollision :one
-SELECT id, json(args), attempt, attempted_at, json(attempted_by), created_at, json(errors), finalized_at, kind, max_attempts, json(metadata), priority, queue, state, scheduled_at, json(tags), unique_key, unique_states
+SELECT id
 FROM /* TEMPLATE: schema */river_job
 WHERE id <> ?1
     AND unique_key = ?2
@@ -1483,34 +1483,15 @@ type JobScheduleGetCollisionParams struct {
 	UniqueKey []byte
 }
 
-func (q *Queries) JobScheduleGetCollision(ctx context.Context, db DBTX, arg *JobScheduleGetCollisionParams) (*RiverJob, error) {
+func (q *Queries) JobScheduleGetCollision(ctx context.Context, db DBTX, arg *JobScheduleGetCollisionParams) (int64, error) {
 	row := db.QueryRowContext(ctx, jobScheduleGetCollision, arg.ID, arg.UniqueKey)
-	var i RiverJob
-	err := row.Scan(
-		&i.ID,
-		&i.Args,
-		&i.Attempt,
-		&i.AttemptedAt,
-		&i.AttemptedBy,
-		&i.CreatedAt,
-		&i.Errors,
-		&i.FinalizedAt,
-		&i.Kind,
-		&i.MaxAttempts,
-		&i.Metadata,
-		&i.Priority,
-		&i.Queue,
-		&i.State,
-		&i.ScheduledAt,
-		&i.Tags,
-		&i.UniqueKey,
-		&i.UniqueStates,
-	)
-	return &i, err
+	var id int64
+	err := row.Scan(&id)
+	return id, err
 }
 
 const jobScheduleGetEligible = `-- name: JobScheduleGetEligible :many
-SELECT id, json(args), attempt, attempted_at, json(attempted_by), created_at, json(errors), finalized_at, kind, max_attempts, json(metadata), priority, queue, state, scheduled_at, json(tags), unique_key, unique_states
+SELECT id, unique_key
 FROM /* TEMPLATE: schema */river_job
 WHERE
     state IN ('retryable', 'scheduled')
@@ -1527,35 +1508,23 @@ type JobScheduleGetEligibleParams struct {
 	Max int64
 }
 
-func (q *Queries) JobScheduleGetEligible(ctx context.Context, db DBTX, arg *JobScheduleGetEligibleParams) ([]*RiverJob, error) {
+type JobScheduleGetEligibleRow struct {
+	ID        int64
+	UniqueKey []byte
+}
+
+// Selects only the columns needed to schedule jobs so that a job with a JSON
+// column that isn't valid JSON doesn't fail scheduling. See JobGetAvailable.
+func (q *Queries) JobScheduleGetEligible(ctx context.Context, db DBTX, arg *JobScheduleGetEligibleParams) ([]*JobScheduleGetEligibleRow, error) {
 	rows, err := db.QueryContext(ctx, jobScheduleGetEligible, arg.Now, arg.Max)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	var items []*RiverJob
+	var items []*JobScheduleGetEligibleRow
 	for rows.Next() {
-		var i RiverJob
-		if err := rows.Scan(
-			&i.ID,
-			&i.Args,
-			&i.Attempt,
-			&i.AttemptedAt,
-			&i.AttemptedBy,
-			&i.CreatedAt,
-			&i.Errors,
-			&i.FinalizedAt,
-			&i.Kind,
-			&i.MaxAttempts,
-			&i.Metadata,
-			&i.Priority,
-			&i.Queue,
-			&i.State,
-			&i.ScheduledAt,
-			&i.Tags,
-			&i.UniqueKey,
-			&i.UniqueStates,
-		); err != nil {
+		var i JobScheduleGetEligibleRow
+		if err := rows.Scan(&i.ID, &i.UniqueKey); err != nil {
 			return nil, err
 		}
 		items = append(items, &i)
@@ -1574,10 +1543,51 @@ UPDATE /* TEMPLATE: schema */river_job
 SET
     state = 'available'
 WHERE id IN (/*SLICE:id*/?)
-RETURNING id, json(args), attempt, attempted_at, json(attempted_by), created_at, json(errors), finalized_at, kind, max_attempts, json(metadata), priority, queue, state, scheduled_at, json(tags), unique_key, unique_states
+RETURNING
+    id,
+    cast(CASE WHEN typeof(args) = 'text' AND NOT json_valid(args) THEN args ELSE json(args) END AS blob) AS args,
+    attempt,
+    attempted_at,
+    cast(CASE WHEN typeof(attempted_by) = 'text' AND NOT json_valid(attempted_by) THEN attempted_by ELSE json(attempted_by) END AS blob) AS attempted_by,
+    created_at,
+    cast(CASE WHEN typeof(errors) = 'text' AND NOT json_valid(errors) THEN errors ELSE json(errors) END AS blob) AS errors,
+    finalized_at,
+    kind,
+    max_attempts,
+    cast(CASE WHEN typeof(metadata) = 'text' AND NOT json_valid(metadata) THEN metadata ELSE json(metadata) END AS blob) AS metadata,
+    priority,
+    queue,
+    state,
+    scheduled_at,
+    cast(CASE WHEN typeof(tags) = 'text' AND NOT json_valid(tags) THEN tags ELSE json(tags) END AS blob) AS tags,
+    unique_key,
+    unique_states
 `
 
-func (q *Queries) JobScheduleSetAvailable(ctx context.Context, db DBTX, id []int64) ([]*RiverJob, error) {
+type JobScheduleSetAvailableRow struct {
+	ID           int64
+	Column2      []byte
+	Attempt      int64
+	AttemptedAt  *time.Time
+	Column5      []byte
+	CreatedAt    time.Time
+	Column7      []byte
+	FinalizedAt  *time.Time
+	Kind         string
+	MaxAttempts  int64
+	Column11     []byte
+	Priority     int64
+	Queue        string
+	State        string
+	ScheduledAt  time.Time
+	Column16     []byte
+	UniqueKey    []byte
+	UniqueStates *int64
+}
+
+// Columns are listed out to tolerate values that aren't valid JSON. See
+// JobGetAvailable.
+func (q *Queries) JobScheduleSetAvailable(ctx context.Context, db DBTX, id []int64) ([]*JobScheduleSetAvailableRow, error) {
 	query := jobScheduleSetAvailable
 	var queryParams []interface{}
 	if len(id) > 0 {
@@ -1593,26 +1603,26 @@ func (q *Queries) JobScheduleSetAvailable(ctx context.Context, db DBTX, id []int
 		return nil, err
 	}
 	defer rows.Close()
-	var items []*RiverJob
+	var items []*JobScheduleSetAvailableRow
 	for rows.Next() {
-		var i RiverJob
+		var i JobScheduleSetAvailableRow
 		if err := rows.Scan(
 			&i.ID,
-			&i.Args,
+			&i.Column2,
 			&i.Attempt,
 			&i.AttemptedAt,
-			&i.AttemptedBy,
+			&i.Column5,
 			&i.CreatedAt,
-			&i.Errors,
+			&i.Column7,
 			&i.FinalizedAt,
 			&i.Kind,
 			&i.MaxAttempts,
-			&i.Metadata,
+			&i.Column11,
 			&i.Priority,
 			&i.Queue,
 			&i.State,
 			&i.ScheduledAt,
-			&i.Tags,
+			&i.Column16,
 			&i.UniqueKey,
 			&i.UniqueStates,
 		); err != nil {
@@ -1631,11 +1641,31 @@ func (q *Queries) JobScheduleSetAvailable(ctx context.Context, db DBTX, id []int
 
 const jobScheduleSetDiscarded = `-- name: JobScheduleSetDiscarded :many
 UPDATE /* TEMPLATE: schema */river_job
-SET metadata = jsonb_patch(json(metadata), json('{"unique_key_conflict": "scheduler_discarded"}')),
+SET metadata = CASE WHEN typeof(metadata) <> 'text' OR json_valid(metadata)
+                    THEN jsonb_patch(json(metadata), json('{"unique_key_conflict": "scheduler_discarded"}'))
+                    ELSE metadata END,
     finalized_at = coalesce(cast(?1 AS text), datetime('now', 'subsec')),
     state = 'discarded'
 WHERE id IN (/*SLICE:id*/?)
-RETURNING id, json(args), attempt, attempted_at, json(attempted_by), created_at, json(errors), finalized_at, kind, max_attempts, json(metadata), priority, queue, state, scheduled_at, json(tags), unique_key, unique_states
+RETURNING
+    id,
+    cast(CASE WHEN typeof(args) = 'text' AND NOT json_valid(args) THEN args ELSE json(args) END AS blob) AS args,
+    attempt,
+    attempted_at,
+    cast(CASE WHEN typeof(attempted_by) = 'text' AND NOT json_valid(attempted_by) THEN attempted_by ELSE json(attempted_by) END AS blob) AS attempted_by,
+    created_at,
+    cast(CASE WHEN typeof(errors) = 'text' AND NOT json_valid(errors) THEN errors ELSE json(errors) END AS blob) AS errors,
+    finalized_at,
+    kind,
+    max_attempts,
+    cast(CASE WHEN typeof(metadata) = 'text' AND NOT json_valid(metadata) THEN metadata ELSE json(metadata) END AS blob) AS metadata,
+    priority,
+    queue,
+    state,
+    scheduled_at,
+    cast(CASE WHEN typeof(tags) = 'text' AND NOT json_valid(tags) THEN tags ELSE json(tags) END AS blob) AS tags,
+    unique_key,
+    unique_states
 `
 
 type JobScheduleSetDiscardedParams struct {
@@ -1643,7 +1673,30 @@ type JobScheduleSetDiscardedParams struct {
 	ID  []int64
 }
 
-func (q *Queries) JobScheduleSetDiscarded(ctx context.Context, db DBTX, arg *JobScheduleSetDiscardedParams) ([]*RiverJob, error) {
+type JobScheduleSetDiscardedRow struct {
+	ID           int64
+	Column2      []byte
+	Attempt      int64
+	AttemptedAt  *time.Time
+	Column5      []byte
+	CreatedAt    time.Time
+	Column7      []byte
+	FinalizedAt  *time.Time
+	Kind         string
+	MaxAttempts  int64
+	Column11     []byte
+	Priority     int64
+	Queue        string
+	State        string
+	ScheduledAt  time.Time
+	Column16     []byte
+	UniqueKey    []byte
+	UniqueStates *int64
+}
+
+// Metadata that isn't valid JSON is left in place, and columns are listed out
+// to tolerate values that aren't valid JSON. See JobGetAvailable.
+func (q *Queries) JobScheduleSetDiscarded(ctx context.Context, db DBTX, arg *JobScheduleSetDiscardedParams) ([]*JobScheduleSetDiscardedRow, error) {
 	query := jobScheduleSetDiscarded
 	var queryParams []interface{}
 	queryParams = append(queryParams, arg.Now)
@@ -1660,26 +1713,26 @@ func (q *Queries) JobScheduleSetDiscarded(ctx context.Context, db DBTX, arg *Job
 		return nil, err
 	}
 	defer rows.Close()
-	var items []*RiverJob
+	var items []*JobScheduleSetDiscardedRow
 	for rows.Next() {
-		var i RiverJob
+		var i JobScheduleSetDiscardedRow
 		if err := rows.Scan(
 			&i.ID,
-			&i.Args,
+			&i.Column2,
 			&i.Attempt,
 			&i.AttemptedAt,
-			&i.AttemptedBy,
+			&i.Column5,
 			&i.CreatedAt,
-			&i.Errors,
+			&i.Column7,
 			&i.FinalizedAt,
 			&i.Kind,
 			&i.MaxAttempts,
-			&i.Metadata,
+			&i.Column11,
 			&i.Priority,
 			&i.Queue,
 			&i.State,
 			&i.ScheduledAt,
-			&i.Tags,
+			&i.Column16,
 			&i.UniqueKey,
 			&i.UniqueStates,
 		); err != nil {

@@ -754,6 +754,58 @@ func exerciseJobUpdate[TTx any](ctx context.Context, t *testing.T, executorWithT
 			require.False(t, gjson.GetBytes(updatedJob3.Metadata, "unique_key_conflict").Exists())
 		})
 
+		// SQLite only: jobs with JSON columns that hold invalid JSON are
+		// scheduled (or discarded for a unique conflict) without failing the
+		// rest of the batch, and the invalid values are left in place.
+		t.Run("InvalidJSONJobsScheduled", func(t *testing.T) {
+			t.Parallel()
+
+			exec, bundle := setup(ctx, t)
+			if bundle.driver.DatabaseName() != riverdriver.DatabaseNameSQLite {
+				t.Skip("only SQLite's JSON columns can hold invalid JSON")
+			}
+
+			var (
+				horizon       = time.Now()
+				beforeHorizon = horizon.Add(-1 * time.Minute)
+				uniqueStates  = uniquestates.UniqueStatesToBitmask([]rivertype.JobState{rivertype.JobStateAvailable, rivertype.JobStateRunning})
+			)
+
+			var (
+				goodJob        = testfactory.Job(ctx, t, exec, &testfactory.JobOpts{ScheduledAt: &beforeHorizon, State: new(rivertype.JobStateRetryable)})
+				invalidJob     = testfactory.Job(ctx, t, exec, &testfactory.JobOpts{ScheduledAt: &beforeHorizon, State: new(rivertype.JobStateRetryable)})
+				conflictingJob = testfactory.Job(ctx, t, exec, &testfactory.JobOpts{ScheduledAt: &beforeHorizon, State: new(rivertype.JobStateRetryable), UniqueKey: []byte("unique-key"), UniqueStates: uniqueStates})
+			)
+			for _, column := range sqliteJobJSONColumns {
+				sqliteSetJobColumnMalformed(ctx, t, exec, invalidJob.ID, column)
+			}
+			sqliteSetJobColumnMalformed(ctx, t, exec, conflictingJob.ID, "metadata")
+
+			// Conflicts with conflictingJob, which is discarded instead of scheduled.
+			_ = testfactory.Job(ctx, t, exec, &testfactory.JobOpts{
+				State:        new(rivertype.JobStateRunning),
+				UniqueKey:    []byte("unique-key"),
+				UniqueStates: uniqueStates,
+			})
+
+			result, err := exec.JobSchedule(ctx, &riverdriver.JobScheduleParams{
+				Max: 100,
+				Now: &horizon,
+			})
+			require.NoError(t, err)
+			require.Equal(t, []int64{goodJob.ID, invalidJob.ID, conflictingJob.ID},
+				sliceutil.Map(result, func(r *riverdriver.JobScheduleResult) int64 { return r.Job.ID }))
+			require.Equal(t, []rivertype.JobState{rivertype.JobStateAvailable, rivertype.JobStateAvailable, rivertype.JobStateDiscarded},
+				sliceutil.Map(result, func(r *riverdriver.JobScheduleResult) rivertype.JobState { return r.Job.State }))
+			require.Equal(t, []bool{false, false, true},
+				sliceutil.Map(result, func(r *riverdriver.JobScheduleResult) bool { return r.ConflictDiscarded }))
+
+			for _, column := range sqliteJobJSONColumns {
+				require.Equal(t, sqliteMalformedValue, sqliteJobColumnText(ctx, t, exec, invalidJob.ID, column))
+			}
+			require.Equal(t, sqliteMalformedValue, sqliteJobColumnText(ctx, t, exec, conflictingJob.ID, "metadata"))
+		})
+
 		// SQLite only: jobs whose rows can't be decoded are scheduled (or
 		// discarded for a unique conflict) without failing the rest of the
 		// batch, and the undecodable values are left in place.

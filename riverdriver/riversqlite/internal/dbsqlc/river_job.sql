@@ -597,8 +597,10 @@ WHERE id = @id
     )
 RETURNING *;
 
+-- Selects only the columns needed to schedule jobs so that a job with a JSON
+-- column that isn't valid JSON doesn't fail scheduling. See JobGetAvailable.
 -- name: JobScheduleGetEligible :many
-SELECT *
+SELECT id, unique_key
 FROM /* TEMPLATE: schema */river_job
 WHERE
     state IN ('retryable', 'scheduled')
@@ -610,7 +612,7 @@ ORDER BY
 LIMIT @max;
 
 -- name: JobScheduleGetCollision :one
-SELECT *
+SELECT id
 FROM /* TEMPLATE: schema */river_job
 WHERE id <> @id
     AND unique_key = @unique_key
@@ -627,20 +629,62 @@ WHERE id <> @id
             ELSE 0
         END >= 1;
 
+-- Columns are listed out to tolerate values that aren't valid JSON. See
+-- JobGetAvailable.
 -- name: JobScheduleSetAvailable :many
 UPDATE /* TEMPLATE: schema */river_job
 SET
     state = 'available'
 WHERE id IN (sqlc.slice('id'))
-RETURNING *;
+RETURNING
+    id,
+    cast(CASE WHEN typeof(args) = 'text' AND NOT json_valid(args) THEN args ELSE json(args) END AS blob) AS args,
+    attempt,
+    attempted_at,
+    cast(CASE WHEN typeof(attempted_by) = 'text' AND NOT json_valid(attempted_by) THEN attempted_by ELSE json(attempted_by) END AS blob) AS attempted_by,
+    created_at,
+    cast(CASE WHEN typeof(errors) = 'text' AND NOT json_valid(errors) THEN errors ELSE json(errors) END AS blob) AS errors,
+    finalized_at,
+    kind,
+    max_attempts,
+    cast(CASE WHEN typeof(metadata) = 'text' AND NOT json_valid(metadata) THEN metadata ELSE json(metadata) END AS blob) AS metadata,
+    priority,
+    queue,
+    state,
+    scheduled_at,
+    cast(CASE WHEN typeof(tags) = 'text' AND NOT json_valid(tags) THEN tags ELSE json(tags) END AS blob) AS tags,
+    unique_key,
+    unique_states;
 
+-- Metadata that isn't valid JSON is left in place, and columns are listed out
+-- to tolerate values that aren't valid JSON. See JobGetAvailable.
 -- name: JobScheduleSetDiscarded :many
 UPDATE /* TEMPLATE: schema */river_job
-SET metadata = jsonb_patch(json(metadata), json('{"unique_key_conflict": "scheduler_discarded"}')),
+SET metadata = CASE WHEN typeof(metadata) <> 'text' OR json_valid(metadata)
+                    THEN jsonb_patch(json(metadata), json('{"unique_key_conflict": "scheduler_discarded"}'))
+                    ELSE metadata END,
     finalized_at = coalesce(cast(sqlc.narg('now') AS text), datetime('now', 'subsec')),
     state = 'discarded'
 WHERE id IN (sqlc.slice('id'))
-RETURNING *;
+RETURNING
+    id,
+    cast(CASE WHEN typeof(args) = 'text' AND NOT json_valid(args) THEN args ELSE json(args) END AS blob) AS args,
+    attempt,
+    attempted_at,
+    cast(CASE WHEN typeof(attempted_by) = 'text' AND NOT json_valid(attempted_by) THEN attempted_by ELSE json(attempted_by) END AS blob) AS attempted_by,
+    created_at,
+    cast(CASE WHEN typeof(errors) = 'text' AND NOT json_valid(errors) THEN errors ELSE json(errors) END AS blob) AS errors,
+    finalized_at,
+    kind,
+    max_attempts,
+    cast(CASE WHEN typeof(metadata) = 'text' AND NOT json_valid(metadata) THEN metadata ELSE json(metadata) END AS blob) AS metadata,
+    priority,
+    queue,
+    state,
+    scheduled_at,
+    cast(CASE WHEN typeof(tags) = 'text' AND NOT json_valid(tags) THEN tags ELSE json(tags) END AS blob) AS tags,
+    unique_key,
+    unique_states;
 
 -- This doesn't exist under the Postgres driver, but needed as an extra query
 -- for JobSetStateIfRunning to use when falling back to non-running jobs.
