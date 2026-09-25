@@ -878,6 +878,15 @@ func (e *Executor) JobSchedule(ctx context.Context, params *riverdriver.JobSched
 			scheduledResMap = make(map[int64]*riverdriver.JobScheduleResult)
 		)
 
+		// A job whose row can't be fully decoded is still returned (with the
+		// undecodable fields left empty) so that it doesn't fail scheduling
+		// for every other job. A job whose attempt fails because its row
+		// can't be decoded is retried, so its row comes through here.
+		scheduledJobRow := func(internal *dbsqlc.RiverJob) *rivertype.JobRow {
+			job, _ := jobRowFromInternalPartial(internal)
+			return job
+		}
+
 		for _, eligibleJob := range eligibleJobs {
 			if eligibleJob.UniqueKey == nil {
 				nonUniqueIDs = append(nonUniqueIDs, eligibleJob.ID)
@@ -906,10 +915,7 @@ func (e *Executor) JobSchedule(ctx context.Context, params *riverdriver.JobSched
 			if err != nil {
 				return nil, interpretError(err)
 			}
-			updatedJob, err := jobRowFromInternal(updatedJobs[0])
-			if err != nil {
-				return nil, err
-			}
+			updatedJob := scheduledJobRow(updatedJobs[0])
 			scheduledResMap[updatedJob.ID] = &riverdriver.JobScheduleResult{Job: *updatedJob}
 		}
 
@@ -923,10 +929,7 @@ func (e *Executor) JobSchedule(ctx context.Context, params *riverdriver.JobSched
 			}
 
 			for _, internal := range updatedJobs {
-				updatedJob, err := jobRowFromInternal(internal)
-				if err != nil {
-					return nil, err
-				}
+				updatedJob := scheduledJobRow(internal)
 				scheduledResMap[updatedJob.ID] = &riverdriver.JobScheduleResult{ConflictDiscarded: true, Job: *updatedJob}
 			}
 		}
@@ -938,10 +941,7 @@ func (e *Executor) JobSchedule(ctx context.Context, params *riverdriver.JobSched
 			}
 
 			for _, internal := range updatedJobs {
-				updatedJob, err := jobRowFromInternal(internal)
-				if err != nil {
-					return nil, err
-				}
+				updatedJob := scheduledJobRow(internal)
 				scheduledResMap[updatedJob.ID] = &riverdriver.JobScheduleResult{Job: *updatedJob}
 			}
 		}
