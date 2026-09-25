@@ -623,8 +623,20 @@ struct UniqueDottedSelectedUser {
 
 #[derive(Debug, Deserialize, Serialize)]
 struct UniqueDottedSelectedArgs {
+    #[serde(default, rename = "@user")]
+    at: String,
+    #[serde(default, rename = "!x")]
+    bang: String,
+    #[serde(default, rename = "{x}")]
+    brace: String,
+    #[serde(default, rename = "[x]")]
+    bracket: String,
+    #[serde(default, rename = ":id")]
+    colon: String,
     #[serde(default, rename = "user.id")]
     literal: String,
+    #[serde(default, rename = "a*b?c#d|e")]
+    symbols: String,
     #[serde(default, rename = "é")]
     unicode: String,
     #[serde(default)]
@@ -635,7 +647,17 @@ impl JobArgs for UniqueDottedSelectedArgs {
     const KIND: &'static str = "conformance_dotted_selected_args";
 
     fn unique_fields() -> &'static [&'static [&'static str]] {
-        &[&["user", "id"], &["user.id"], &["é"]]
+        &[
+            &["@user"],
+            &["!x"],
+            &["{x}"],
+            &["[x]"],
+            &[":id"],
+            &["user", "id"],
+            &["user.id"],
+            &["a*b?c#d|e"],
+            &["é"],
+        ]
     }
 }
 

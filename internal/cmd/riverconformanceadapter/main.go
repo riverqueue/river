@@ -394,10 +394,16 @@ type uniqueDottedSelectedUser struct {
 }
 
 type uniqueDottedSelectedArgs struct {
+	At      string `json:"@user,omitempty" river:"unique"`
+	Bang    string `json:"!x,omitempty"    river:"unique"`
+	Brace   string `json:"{x},omitempty"   river:"unique"`
+	Bracket string `json:"[x],omitempty"   river:"unique"`
+	Colon   string `json:":id,omitempty"   river:"unique"`
 	//nolint:tagliatelle // literal dotted names distinguish them from nested paths
-	Literal string                   `json:"user.id,omitempty" river:"unique"`
+	Literal string                   `json:"user.id,omitempty"   river:"unique"`
+	Symbols string                   `json:"a*b?c#d|e,omitempty" river:"unique"`
 	User    uniqueDottedSelectedUser `json:"user"`
-	Unicode string                   `json:"é,omitempty"       river:"unique"`
+	Unicode string                   `json:"é,omitempty"         river:"unique"`
 }
 
 func (uniqueDottedSelectedArgs) Kind() string { return "conformance_dotted_selected_args" }
