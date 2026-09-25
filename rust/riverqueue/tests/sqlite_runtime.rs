@@ -1655,14 +1655,28 @@ async fn sqlite_transaction_batches_roll_back_only_the_failed_batch() {
                 InsertOpts::default().with_tags(["fast-failed-batch"]),
             ),
             (
-                RuntimeArgs { value: 200 },
-                InsertOpts::default().with_unique(unique),
+                RuntimeArgs { value: 203 },
+                InsertOpts::default().with_priority(0),
             ),
         ])
         .fast()
         .tx(&mut transaction)
         .await;
     assert!(result.is_err());
+    // Like Go's SQLite driver, a unique conflict skips only that job.
+    let inserted = client
+        .insert_many([
+            (RuntimeArgs { value: 204 }, InsertOpts::default()),
+            (
+                RuntimeArgs { value: 200 },
+                InsertOpts::default().with_unique(unique),
+            ),
+        ])
+        .fast()
+        .tx(&mut transaction)
+        .await
+        .unwrap();
+    assert_eq!(inserted, 1);
     transaction.commit().await.unwrap();
 
     let control_count: i64 = sqlx::query_scalar(
@@ -1679,6 +1693,13 @@ async fn sqlite_transaction_batches_roll_back_only_the_failed_batch() {
     .unwrap();
     assert_eq!(control_count, 1);
     assert_eq!(batch_count, 0);
+    let unique_count: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM river_job WHERE json_extract(args, '$.value') IN (200, 204)",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(unique_count, 2);
 }
 
 #[tokio::test]
