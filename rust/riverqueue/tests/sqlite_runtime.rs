@@ -1028,13 +1028,17 @@ async fn sqlite_transient_renewal_contention_preserves_leadership_services() {
         .unwrap();
     let mut run = client.start().unwrap();
     run.wait_ready().await.unwrap();
-    let startup_deadline = tokio::time::Instant::now() + Duration::from_secs(2);
+    // The client is the only one bidding, so it wins the first election.
+    // Requesting resignations here would churn leadership and leave
+    // requests in the outbox that could arrive during the contention below.
+    let startup_deadline = tokio::time::Instant::now() + Duration::from_secs(5);
     while service.starts.load(Ordering::SeqCst) == 0 {
-        assert!(tokio::time::Instant::now() < startup_deadline);
-        client.request_resign().await.unwrap();
-        tokio::time::sleep(Duration::from_millis(10)).await;
+        assert!(
+            tokio::time::Instant::now() < startup_deadline,
+            "leadership services never started"
+        );
+        tokio::time::sleep(Duration::from_millis(5)).await;
     }
-    tokio::time::sleep(Duration::from_millis(50)).await;
     let starts_before_contention = service.starts.load(Ordering::SeqCst);
     let stops_before_contention = service.stops.load(Ordering::SeqCst);
     let mut writer = pool.begin_with("BEGIN IMMEDIATE").await.unwrap();
@@ -1063,14 +1067,16 @@ async fn sqlite_transient_renewal_contention_preserves_leadership_services() {
         stops_before_contention
     );
 
+    // A renewal that failed during the contention backs off for about a
+    // second before the leader reads its next wakeup.
     client.request_resign().await.unwrap();
-    tokio::time::timeout(Duration::from_secs(2), async {
+    tokio::time::timeout(Duration::from_secs(5), async {
         while service.stops.load(Ordering::SeqCst) == stops_before_contention {
-            tokio::task::yield_now().await;
+            tokio::time::sleep(Duration::from_millis(5)).await;
         }
     })
     .await
-    .unwrap();
+    .expect("leader resigns on request");
 
     run.shutdown_now().await.unwrap();
     assert!(service.stops.load(Ordering::SeqCst) >= 1);
