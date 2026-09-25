@@ -118,7 +118,10 @@ jobs:
 
   postgres-conformance:
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    # Builds plus the Rust suite (~10m), mixed conformance (~5m), the
+    # ten-minute soak (up to its 20m backstop), and the advisory performance
+    # tier (~10m on PostgreSQL 18) need more than 45 minutes on a slow runner.
+    timeout-minutes: 60
     strategy:
       fail-fast: false
       matrix:
