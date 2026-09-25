@@ -25,10 +25,9 @@ func TestMixedSQLiteConformance(t *testing.T) {
 	goAdapter := startReferenceAdapterForProfile(t, repositoryRoot, databaseURL, "sqlite", "", "go")
 	candidateSpec := conformanceCandidateSpec(t, repositoryRoot, false)
 	candidateSpec.requireProfile(t, profilePortableStorage)
-	candidateAdapter := startAdapterCommandForBackend(
-		t, repositoryRoot, databaseURL, "sqlite", candidateSpec.Implementation, candidateSpec.Command,
+	candidateAdapter := startAdapterCommandForProfile(
+		t, repositoryRoot, databaseURL, "sqlite", "", candidateSpec.Implementation, candidateSpec, candidateSpec.Command,
 	)
-	candidateAdapter.spec = candidateSpec
 	scenarios.attach(goAdapter, candidateAdapter)
 	pair := mixedPair{candidate: candidateAdapter, candidateSpec: candidateSpec, reference: goAdapter}
 
@@ -99,9 +98,8 @@ func TestMixedSQLiteRuntimeConformance(t *testing.T) {
 	candidateSpec.requireProfile(t, profileSQLiteRuntime)
 	candidateAdapter := startAdapterCommandForProfile(
 		t, repositoryRoot, databaseURL, "sqlite", profileName,
-		candidateSpec.Implementation, candidateSpec.Command,
+		candidateSpec.Implementation, candidateSpec, candidateSpec.Command,
 	)
-	candidateAdapter.spec = candidateSpec
 	scenarios.attach(goAdapter, candidateAdapter)
 	pair := mixedPair{candidate: candidateAdapter, candidateSpec: candidateSpec, reference: goAdapter}
 

@@ -8,7 +8,9 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -25,6 +27,10 @@ const (
 	// reaped, including adapterPipeCloseDelay.
 	adapterKillTimeout = 15 * time.Second
 
+	// maxApplicationNameLength is PostgreSQL's application_name limit
+	// (NAMEDATALEN - 1). The server silently truncates longer names.
+	maxApplicationNameLength = 63
+
 	// adapterPipeCloseDelay bounds how long the harness waits for an exited
 	// adapter's output pipes to close. A descendant process that inherited
 	// them, such as the adapter under a wrapper command, would otherwise keep
@@ -35,6 +41,10 @@ const (
 // errAdapterExitTimeout reports an adapter that had to be killed because it
 // didn't exit within its time bound.
 var errAdapterExitTimeout = errors.New("adapter did not exit")
+
+// adapterProcessSequence numbers the adapter processes this harness process
+// starts, so each gets its own application_name.
+var adapterProcessSequence atomic.Int64 //nolint:gochecknoglobals // shared by every test in the process
 
 // adapterProcess is one running adapter child process and its protocol
 // pipes. Its exit status is collected at most once, by whichever of kill or
@@ -142,6 +152,38 @@ func (buffer *lockedBuffer) Write(data []byte) (int, error) {
 	return buffer.buffer.Write(data)
 }
 
+// processApplicationName returns a PostgreSQL application_name for one new
+// adapter process: the descriptor's base name followed by this harness
+// process's ID and a sequence number, so it names no other adapter attached
+// to the database.
+func processApplicationName(base string) (string, error) {
+	if base == "" {
+		return "", errors.New("adapter has no base application_name")
+	}
+	name := fmt.Sprintf("%s-%d-%d", base, os.Getpid(), adapterProcessSequence.Add(1))
+	if len(name) > maxApplicationNameLength {
+		return "", fmt.Errorf("per-process application_name %q is longer than PostgreSQL's %d byte limit; shorten the descriptor's application_name",
+			name, maxApplicationNameLength)
+	}
+	return name, nil
+}
+
+// resolveApplicationName returns the application_name identifying an
+// adapter process's connections, given the name the harness requested and
+// the one its handshake reported. An adapter that reports no name keeps the
+// descriptor's shared fallback; one that reports a different name than
+// requested is misconfigured.
+func resolveApplicationName(requested, fallback, reported string) (string, error) {
+	switch reported {
+	case "":
+		return fallback, nil
+	case requested:
+		return requested, nil
+	default:
+		return "", fmt.Errorf("handshake reported application_name %q, but the harness requested %q", reported, requested)
+	}
+}
+
 func TestAdapterProcess(t *testing.T) {
 	t.Parallel()
 
@@ -223,4 +265,67 @@ func TestAdapterProcessFake(t *testing.T) {
 		time.Sleep(time.Minute)
 	}
 	os.Exit(2)
+}
+
+func TestProcessApplicationName(t *testing.T) {
+	t.Parallel()
+
+	t.Run("DistinctPerProcess", func(t *testing.T) {
+		t.Parallel()
+
+		first, err := processApplicationName("river-conformance-rust")
+		require.NoError(t, err)
+		second, err := processApplicationName("river-conformance-rust")
+		require.NoError(t, err)
+
+		require.NotEqual(t, first, second)
+		require.True(t, strings.HasPrefix(first, "river-conformance-rust-"), first)
+		require.True(t, strings.HasPrefix(second, "river-conformance-rust-"), second)
+	})
+
+	t.Run("RejectsEmptyBase", func(t *testing.T) {
+		t.Parallel()
+
+		_, err := processApplicationName("")
+		require.EqualError(t, err, "adapter has no base application_name")
+	})
+
+	t.Run("RejectsNamesPostgreSQLWouldTruncate", func(t *testing.T) {
+		t.Parallel()
+
+		_, err := processApplicationName("river-conformance-" + strings.Repeat("x", 40))
+		require.ErrorContains(t, err, "longer than PostgreSQL's 63 byte limit")
+	})
+}
+
+func TestResolveApplicationName(t *testing.T) {
+	t.Parallel()
+
+	const (
+		fallback  = "river-conformance-rust"
+		requested = "river-conformance-rust-100-1"
+	)
+
+	t.Run("FallsBackWhenNotReported", func(t *testing.T) {
+		t.Parallel()
+
+		name, err := resolveApplicationName(requested, fallback, "")
+		require.NoError(t, err)
+		require.Equal(t, fallback, name)
+	})
+
+	t.Run("RejectsMismatch", func(t *testing.T) {
+		t.Parallel()
+
+		_, err := resolveApplicationName(requested, fallback, fallback)
+		require.EqualError(t, err, `handshake reported application_name "river-conformance-rust", but the harness requested "river-conformance-rust-100-1"`)
+	})
+
+	t.Run("UsesReportedName", func(t *testing.T) {
+		t.Parallel()
+
+		name, err := resolveApplicationName(requested, fallback, requested)
+		require.NoError(t, err)
+		require.Equal(t, requested, name)
+	})
 }

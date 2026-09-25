@@ -1163,6 +1163,8 @@ fn build_unique_opts(
 }
 
 struct Adapter {
+    /// Identifies this process's PostgreSQL connections.
+    application_name: String,
     barriers: Arc<BarrierRegistry>,
     clock: Option<DateTime<Utc>>,
     pool: PgPool,
@@ -1210,9 +1212,12 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
                     format!("unsupported PostgreSQL conformance profile {profile:?}").into(),
                 );
             }
+            let application_name =
+                adapter_application_name(std::env::var("RIVER_CONFORMANCE_APPLICATION_NAME").ok())?;
             let options =
-                postgres_connect_options(&database_url)?.application_name("river-conformance-rust");
+                postgres_connect_options(&database_url)?.application_name(&application_name);
             AdapterBackend::Postgres(Adapter {
+                application_name,
                 barriers: Arc::new(BarrierRegistry::default()),
                 clock: None,
                 pool: PgPoolOptions::new().connect_with(options).await?,
@@ -1362,6 +1367,7 @@ impl Adapter {
                 let (methods, capabilities) = self.profile_methods();
                 Ok(json!({
                     "adapter_version": ADAPTER_VERSION,
+                    "application_name": self.application_name,
                     "backend": "postgres",
                     "capabilities": capabilities,
                     "implementation": "rust",
@@ -1672,36 +1678,35 @@ impl Adapter {
             }
             "listener_count" => {
                 let count = sqlx::query_scalar::<_, i64>(
-                    "SELECT count(*) FROM pg_stat_activity WHERE datname = current_database() AND application_name = 'river-conformance-rust' AND query LIKE 'LISTEN %'",
+                    "SELECT count(*) FROM pg_stat_activity WHERE datname = current_database() AND application_name = $1 AND query LIKE 'LISTEN %'",
                 )
+                .bind(&self.application_name)
                 .fetch_one(&self.pool)
                 .await?;
                 Ok(json!({"count": count}))
             }
             "connection_count" => {
                 let count = sqlx::query_scalar::<_, i64>(
-                    "SELECT count(*) FROM pg_stat_activity WHERE datname = current_database() AND application_name = 'river-conformance-rust'",
+                    "SELECT count(*) FROM pg_stat_activity WHERE datname = current_database() AND application_name = $1",
                 )
+                .bind(&self.application_name)
                 .fetch_one(&self.pool)
                 .await?;
                 Ok(json!({"count": count}))
             }
             "fault_disconnect_listeners" => {
                 let count = sqlx::query_scalar::<_, i64>(
-                    "SELECT count(*) FROM (SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = current_database() AND application_name = 'river-conformance-rust' AND query LIKE 'LISTEN %' AND pid != pg_backend_pid()) AS terminated",
+                    "SELECT count(*) FROM (SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = current_database() AND application_name = $1 AND query LIKE 'LISTEN %' AND pid != pg_backend_pid()) AS terminated",
                 )
+                .bind(&self.application_name)
                 .fetch_one(&self.pool)
                 .await?;
                 Ok(json!({"count": count}))
             }
             "fault_disconnect_application" => {
                 let application_name = required_string(&params, "application_name")?;
-                // Only conformance adapters may be disconnected. Every
-                // descriptor's application name carries this prefix, so the
-                // check stays candidate-neutral.
-                if !application_name.starts_with("river-conformance-")
-                    || application_name == "river-conformance-harness"
-                {
+                // Only conformance adapters may be disconnected.
+                if !is_adapter_application_name(&application_name) {
                     return Err("application_name must name a conformance adapter".into());
                 }
                 let count = sqlx::query_scalar::<_, i64>(
@@ -3457,6 +3462,28 @@ fn duration_millis(
     Ok(Duration::from_millis(u64::try_from(milliseconds)?))
 }
 
+/// Returns the PostgreSQL `application_name` for this process's connections:
+/// the one the harness passes through `RIVER_CONFORMANCE_APPLICATION_NAME`,
+/// which is unique to the process, or the implementation's default.
+fn adapter_application_name(requested: Option<String>) -> Result<String, String> {
+    let name = requested
+        .filter(|name| !name.is_empty())
+        .unwrap_or_else(|| "river-conformance-rust".to_owned());
+    if !is_adapter_application_name(&name) {
+        return Err(format!(
+            "RIVER_CONFORMANCE_APPLICATION_NAME {name:?} must name a conformance adapter"
+        ));
+    }
+    Ok(name)
+}
+
+/// Reports whether `name` may identify a conformance adapter's connections.
+/// Fault injection relies on the `river-conformance-` prefix to never
+/// terminate other connections, and the harness's own observer is excluded.
+fn is_adapter_application_name(name: &str) -> bool {
+    name.starts_with("river-conformance-") && name != "river-conformance-harness"
+}
+
 fn required_i64(
     params: &Value,
     name: &str,
@@ -3527,6 +3554,24 @@ impl Response {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn application_name_defaults_and_honors_the_harness() {
+        assert_eq!(
+            adapter_application_name(None).unwrap(),
+            "river-conformance-rust"
+        );
+        assert_eq!(
+            adapter_application_name(Some(String::new())).unwrap(),
+            "river-conformance-rust"
+        );
+        assert_eq!(
+            adapter_application_name(Some("river-conformance-rust-42-7".to_owned())).unwrap(),
+            "river-conformance-rust-42-7"
+        );
+        assert!(adapter_application_name(Some("psql".to_owned())).is_err());
+        assert!(adapter_application_name(Some("river-conformance-harness".to_owned())).is_err());
+    }
 
     #[test]
     fn detects_explicit_postgres_userinfo() {

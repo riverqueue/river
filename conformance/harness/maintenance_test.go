@@ -23,9 +23,8 @@ import (
 // checked. Every scenario runs against the Go reference first, which
 // validates the scenario itself, and then against the candidate.
 type maintenanceImplementation struct {
-	adapter         *adapter
-	applicationName string
-	name            string
+	adapter *adapter
+	name    string
 }
 
 // maintenanceTuning shortens intervals River Go doesn't expose. Only
@@ -126,8 +125,8 @@ func TestMaintenanceConformance(t *testing.T) { //nolint:paralleltest // Owns th
 	candidateSpec := conformanceCandidateSpec(t, repositoryRoot, false)
 	candidateAdapter := startCandidateAdapter(t, repositoryRoot, databaseURL, candidateSpec.Implementation, candidateSpec, candidateSpec.Command)
 	implementations := []maintenanceImplementation{
-		{adapter: goAdapter, applicationName: "river-conformance-go", name: "go"},
-		{adapter: candidateAdapter, applicationName: candidateSpec.ApplicationName, name: candidateSpec.Implementation},
+		{adapter: goAdapter, name: "go"},
+		{adapter: candidateAdapter, name: candidateSpec.Implementation},
 	}
 
 	pool, err := pgxpool.New(context.Background(), databaseURL)
@@ -465,7 +464,7 @@ func verifyRescuerStaleSelection(t *testing.T, harness *maintenanceHarness, migr
 		return harness.queryInt("SELECT count(*) FROM "+jobs+" WHERE id = $1 AND state = 'discarded'", eligible) == 1
 	}
 	harness.waitFor(implementation.name+" rescue pass reaching the held rows", 30*time.Second, func() bool {
-		return harness.lockWaiters(implementation.applicationName) > 0 || eligibleRescued()
+		return harness.lockWaiters(implementation.adapter.applicationName) > 0 || eligibleRescued()
 	})
 
 	// A worker finishes one job and another client re-claims the other before
@@ -567,7 +566,7 @@ func verifyRenewalUnderSlowMaintenance(t *testing.T, harness *maintenanceHarness
 		"queue": "maintenance_idle",
 	}), maintenanceTuning())
 	harness.waitFor(implementation.name+" blocked job cleaner", 30*time.Second, func() bool {
-		return harness.lockWaiters(implementation.applicationName) > 0
+		return harness.lockWaiters(implementation.adapter.applicationName) > 0
 	})
 
 	// The leader keeps renewing the same term while its maintenance is stuck:
@@ -588,7 +587,7 @@ func verifyRenewalUnderSlowMaintenance(t *testing.T, harness *maintenanceHarness
 			return false
 		})
 		if renewal == 0 {
-			require.Positive(t, harness.lockWaiters(implementation.applicationName),
+			require.Positive(t, harness.lockWaiters(implementation.adapter.applicationName),
 				"%s maintenance stopped waiting before the lease was renewed", implementation.name)
 		}
 	}
