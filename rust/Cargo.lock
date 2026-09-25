@@ -907,6 +907,7 @@ dependencies = [
  "base64",
  "chrono",
  "futures-util",
+ "rand",
  "riverqueue-macros",
  "riverqueue-migrate",
  "serde",

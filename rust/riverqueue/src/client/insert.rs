@@ -998,7 +998,7 @@ impl Client {
                 // insertion still needs one here to detect a skipped
                 // duplicate, since it reads the row back.
                 let nonce = (mode == InsertMode::Rows || unique_key.is_some())
-                    .then(|| self.unique_insert_nonce());
+                    .then(Self::unique_insert_nonce);
                 let inserted = crate::database::sqlite::insert(
                     connection,
                     &crate::database::sqlite::InsertJob {
@@ -1039,27 +1039,10 @@ impl Client {
     /// returned row carries the nonce the insert wrote. Like River Go's
     /// `randutil.Hex(8)`, the nonce must not repeat across processes: client
     /// IDs and counters can (a restarted container keeps its hostname and
-    /// PID), so 128 unpredictable bits are drawn from the standard library's
-    /// randomly keyed hasher.
+    /// PID), so eight random bytes are drawn for each insert.
     #[cfg(feature = "sqlite")]
-    fn unique_insert_nonce(&self) -> String {
-        use std::hash::{BuildHasher as _, Hasher as _};
-
-        let counter = self.inner.unique_nonce.fetch_add(1, Ordering::Relaxed);
-        let mut halves = [0_u64; 2];
-        for (index, half) in halves.iter_mut().enumerate() {
-            let mut hasher = std::collections::hash_map::RandomState::new().build_hasher();
-            hasher.write_u64(counter);
-            hasher.write_usize(index);
-            hasher.write_u128(
-                std::time::SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH)
-                    .unwrap_or_default()
-                    .as_nanos(),
-            );
-            *half = hasher.finish();
-        }
-        format!("{:016x}{:016x}", halves[0], halves[1])
+    fn unique_insert_nonce() -> String {
+        format!("{:016x}", rand::random::<u64>())
     }
 
     /// Writes jobs with PostgreSQL `COPY`, which is the fastest bulk path
