@@ -1,5 +1,6 @@
-//! Work middleware and work hooks: ordering, result replacement, unknown
-//! kinds, and the job span around worker code.
+//! Work middleware, work hooks, and error handlers: ordering, result
+//! replacement, handler panics, unknown kinds, and the job span around
+//! worker code.
 //!
 //! Extension behavior doesn't depend on the backend, so these tests use
 //! temporary SQLite databases and need no external services.
@@ -14,8 +15,9 @@ use std::{
 };
 
 use riverqueue::{
-    Client, EventKind, Hook, InsertOpts, Job, JobArgs, JobRow, JobState, QueueConfig, WorkContext,
-    WorkError, WorkMiddleware, WorkNext, WorkOutcome, WorkerRegistry,
+    Client, ErrorHandler, ErrorHandlerDecision, EventKind, Hook, InsertOpts, Job, JobArgs, JobRow,
+    JobState, QueueConfig, WorkContext, WorkError, WorkMiddleware, WorkNext, WorkOutcome,
+    WorkerRegistry,
 };
 use riverqueue_migrate::SqliteMigrator;
 use serde::{Deserialize, Serialize};
@@ -153,6 +155,20 @@ impl Hook for TracingHook {
     }
 }
 
+/// Panics instead of handling the error, like a buggy Go `ErrorHandler`.
+struct PanickingErrorHandler;
+
+impl ErrorHandler for PanickingErrorHandler {
+    async fn handle_error(
+        &self,
+        _context: &WorkContext,
+        _job: &JobRow,
+        _result: &riverqueue::WorkResult,
+    ) -> Result<ErrorHandlerDecision, riverqueue::BoxError> {
+        panic!("error handler panicked on purpose");
+    }
+}
+
 fn workers(trace: &Trace) -> WorkerRegistry {
     let trace = trace.clone();
     let mut workers = WorkerRegistry::new();
@@ -270,6 +286,39 @@ async fn work_end_hooks_replace_the_workers_result() {
     // records an error nor consumes the attempt.
     assert_eq!(snoozed.state, JobState::Scheduled);
     assert!(snoozed.errors.is_empty());
+    database.close().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn panicking_error_handlers_still_persist_the_result() {
+    let database = TestDatabase::new().await;
+    let trace = Trace::default();
+    let client = Client::builder(database.pool.clone())
+        .queue(
+            "default",
+            QueueConfig::new(1)
+                .with_fetch_cooldown(Duration::from_millis(1))
+                .with_fetch_poll_interval(Duration::from_millis(10)),
+        )
+        .workers(workers(&trace))
+        .error_handler(PanickingErrorHandler)
+        .build()
+        .unwrap();
+    let job = client
+        .insert(ExtensionArgs { fail: true })
+        .opts(InsertOpts::default().with_max_attempts(1))
+        .await
+        .unwrap();
+    let failed = work_until(&client, EventKind::JobFailed, job.id()).await;
+
+    // Like Go, the panic is treated as a handler failure: the worker's
+    // error is still recorded and the job leaves `running`.
+    assert_eq!(failed.state, JobState::Discarded);
+    assert_eq!(failed.errors.len(), 1);
+    assert_eq!(
+        client.jobs().get(job.id()).await.unwrap().state,
+        JobState::Discarded
+    );
     database.close().await;
 }
 

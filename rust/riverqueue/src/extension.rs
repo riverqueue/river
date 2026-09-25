@@ -689,8 +689,8 @@ pub enum ErrorHandlerDecision {
 
 /// Handler invoked for worker errors, panics, and stuck jobs.
 ///
-/// Both methods have default implementations. Handler errors are logged and
-/// don't change how River handles the job.
+/// Both methods have default implementations. Handler errors and panics are
+/// logged and don't change how River handles the job.
 pub trait ErrorHandler: Send + Sync + 'static {
     /// Called when a worker returns an error, panics, or is aborted. Returning
     /// [`ErrorHandlerDecision::Cancel`] cancels the job regardless of its
@@ -730,19 +730,32 @@ impl<H: ErrorHandler> DynErrorHandler for H {
         job: &'a JobRow,
         result: &'a WorkResult,
     ) -> BoxFuture<'a, Result<ErrorHandlerDecision, Error>> {
-        Box::pin(async move {
-            ErrorHandler::handle_error(self, context, job, result)
-                .await
-                .map_err(hook_error("error handler"))
-        })
+        Box::pin(recover_handler_panic("error handler", async move {
+            ErrorHandler::handle_error(self, context, job, result).await
+        }))
     }
 
     fn handle_stuck<'a>(&'a self, job: &'a JobRow) -> BoxFuture<'a, Result<(), Error>> {
-        Box::pin(async move {
-            ErrorHandler::handle_stuck(self, job)
-                .await
-                .map_err(hook_error("stuck job handler"))
-        })
+        Box::pin(recover_handler_panic("stuck job handler", async move {
+            ErrorHandler::handle_stuck(self, job).await
+        }))
+    }
+}
+
+/// Awaits an error handler, treating a panic like a returned error, as Go's
+/// `invokeErrorHandler` recovers one. The job's result is still persisted,
+/// rather than the panic unwinding the executor and leaving the job running.
+async fn recover_handler_panic<T>(
+    phase: &'static str,
+    handler: impl Future<Output = Result<T, BoxError>>,
+) -> Result<T, Error> {
+    use futures_util::FutureExt as _;
+
+    match std::panic::AssertUnwindSafe(handler).catch_unwind().await {
+        Ok(result) => result.map_err(hook_error(phase)),
+        Err(panic) => Err(hook_error(phase)(
+            format!("panicked: {}", crate::error::panic_message(&panic)).into(),
+        )),
     }
 }
 
