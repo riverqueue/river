@@ -210,6 +210,49 @@ async fn assert_claims_roll_back<F, Fut>(
     run.shutdown().await.unwrap();
 }
 
+/// Finalized jobs seeded for deletion: `(queue, state)`, all finalized an
+/// hour ago.
+const FINALIZED_SEEDS: [(&str, &str); 6] = [
+    ("alpha", "completed"),
+    ("alpha", "cancelled"),
+    ("alpha", "discarded"),
+    ("beta", "completed"),
+    ("gamma", "completed"),
+    ("gamma", "discarded"),
+];
+
+/// Deletion filters and the seeds (indexes into [`FINALIZED_SEEDS`]) each
+/// leaves in place, applied in order to the same rows.
+fn finalized_deletions() -> Vec<(riverqueue::__private::FinalizedJobDeleteParams, Vec<usize>)> {
+    use riverqueue::__private::FinalizedJobDeleteParams;
+
+    let before = chrono::Utc::now();
+    let mut none = FinalizedJobDeleteParams::new(100);
+    none.queues_included = Some(vec!["alpha".to_owned()]);
+
+    let mut alpha_completed = FinalizedJobDeleteParams::new(100);
+    alpha_completed.completed_before = Some(before);
+    alpha_completed.queues_included = Some(vec!["alpha".to_owned()]);
+
+    let mut not_gamma = FinalizedJobDeleteParams::new(100);
+    not_gamma.completed_before = Some(before);
+    not_gamma.discarded_before = Some(before);
+    not_gamma.queues_excluded = vec!["gamma".to_owned()];
+
+    let mut limited = FinalizedJobDeleteParams::new(1);
+    limited.completed_before = Some(before);
+    limited.discarded_before = Some(before);
+
+    vec![
+        // No horizon keeps everything, like the cleaner's `None` retention.
+        (none, vec![0, 1, 2, 3, 4, 5]),
+        (alpha_completed, vec![1, 2, 3, 4, 5]),
+        (not_gamma, vec![1, 4, 5]),
+        // The lowest ID goes first.
+        (limited, vec![1, 5]),
+    ]
+}
+
 #[cfg(feature = "postgres-tests")]
 mod postgres {
     use riverqueue::database::PostgresDatabase;
@@ -273,6 +316,51 @@ mod postgres {
         .await;
         schema.cleanup().await;
     }
+    #[tokio::test(flavor = "multi_thread")]
+    async fn deletes_finalized_jobs_with_the_cleaner_filters() {
+        use riverqueue::__private::{DatabaseConfig, delete_finalized_jobs};
+
+        let schema = PostgresSchema::new("seam_finalized_delete").await;
+        let mut ids = Vec::new();
+        for (queue, state) in FINALIZED_SEEDS {
+            let id: i64 = sqlx::query_scalar(AssertSqlSafe(format!(
+                "INSERT INTO {} (args, finalized_at, kind, max_attempts, queue, state) \
+                 VALUES ('{{}}', now() - interval '1 hour', 'extension_seams', 25, $1, \
+                 $2::text::{}) RETURNING id",
+                schema.table("river_job"),
+                schema.table("river_job_state"),
+            )))
+            .bind(queue)
+            .bind(state)
+            .fetch_one(&schema.pool)
+            .await
+            .unwrap();
+            ids.push(id);
+        }
+        let database = DatabaseConfig::Postgres {
+            schema: schema.schema.clone(),
+        };
+        for (params, kept) in finalized_deletions() {
+            let mut connection = schema.pool.acquire().await.unwrap();
+            delete_finalized_jobs(
+                DatabaseConnection::Postgres(&mut connection),
+                &database,
+                &params,
+            )
+            .await
+            .unwrap();
+            let remaining: Vec<i64> = sqlx::query_scalar(AssertSqlSafe(format!(
+                "SELECT id FROM {} ORDER BY id",
+                schema.table("river_job")
+            )))
+            .fetch_all(&schema.pool)
+            .await
+            .unwrap();
+            let expected: Vec<i64> = kept.iter().map(|&index| ids[index]).collect();
+            assert_eq!(remaining, expected, "{params:?}");
+        }
+        schema.cleanup().await;
+    }
 }
 
 #[cfg(feature = "sqlite")]
@@ -307,6 +395,45 @@ mod sqlite {
             },
         )
         .await;
+        sqlite_cleanup(pool, path).await;
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn deletes_finalized_jobs_with_the_cleaner_filters() {
+        use riverqueue::__private::{DatabaseConfig, delete_finalized_jobs};
+
+        let (pool, path) = sqlite_file_pool(4).await;
+        let mut ids = Vec::new();
+        for (queue, state) in FINALIZED_SEEDS {
+            let id: i64 = sqlx::query_scalar(
+                "INSERT INTO river_job (args, finalized_at, kind, max_attempts, queue, state) \
+                 VALUES (jsonb('{}'), strftime('%Y-%m-%d %H:%M:%f', 'now', '-1 hour'), \
+                 'extension_seams', 25, ?, ?) RETURNING id",
+            )
+            .bind(queue)
+            .bind(state)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+            ids.push(id);
+        }
+        for (params, kept) in finalized_deletions() {
+            let mut connection = pool.acquire().await.unwrap();
+            delete_finalized_jobs(
+                DatabaseConnection::Sqlite(&mut connection),
+                &DatabaseConfig::Sqlite,
+                &params,
+            )
+            .await
+            .unwrap();
+            drop(connection);
+            let remaining: Vec<i64> = sqlx::query_scalar("SELECT id FROM river_job ORDER BY id")
+                .fetch_all(&pool)
+                .await
+                .unwrap();
+            let expected: Vec<i64> = kept.iter().map(|&index| ids[index]).collect();
+            assert_eq!(remaining, expected, "{params:?}");
+        }
         sqlite_cleanup(pool, path).await;
     }
 }

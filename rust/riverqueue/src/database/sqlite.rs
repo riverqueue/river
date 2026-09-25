@@ -169,6 +169,7 @@ pub(crate) struct CleanupJobs<'a> {
     pub discarded_before: Option<DateTime<Utc>>,
     pub limit: i32,
     pub queues_excluded: &'a [&'a str],
+    pub queues_included: Option<&'a [&'a str]>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -1574,6 +1575,17 @@ pub(crate) async fn cleanup_jobs(
         query.push(" AND queue NOT IN (");
         let mut separated = query.separated(", ");
         for queue in params.queues_excluded {
+            separated.push_bind(queue);
+        }
+        separated.push_unseparated(")");
+    }
+    if let Some(queues_included) = params.queues_included {
+        if queues_included.is_empty() {
+            return Ok(0);
+        }
+        query.push(" AND queue IN (");
+        let mut separated = query.separated(", ");
+        for queue in queues_included {
             separated.push_bind(queue);
         }
         separated.push_unseparated(")");

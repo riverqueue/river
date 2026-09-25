@@ -8,9 +8,9 @@ use chrono::{DateTime, Utc};
 #[cfg(feature = "postgres")]
 use sqlx::AssertSqlSafe;
 
-use crate::Error;
 #[cfg(feature = "sqlite")]
 use crate::database::sqlite;
+use crate::{__private::FinalizedJobDeleteParams, Error};
 
 use super::{
     MaintenanceError, TIMEOUT_DEFAULT, batch_backoff, batch_size, maintainer::ServiceContext,
@@ -24,13 +24,6 @@ pub(super) const NOTIFICATION_CLEANER_INTERVAL: Duration = Duration::from_mins(1
 /// Age after which SQLite notification outbox rows are deleted.
 #[cfg(feature = "sqlite")]
 const NOTIFICATION_RETENTION: Duration = Duration::from_mins(5);
-
-/// Deletion horizons of one job cleaner pass. `None` keeps that state forever.
-struct JobHorizons {
-    cancelled: Option<DateTime<Utc>>,
-    completed: Option<DateTime<Utc>>,
-    discarded: Option<DateTime<Utc>>,
-}
 
 fn horizon(
     now: DateTime<Utc>,
@@ -60,13 +53,13 @@ pub(super) async fn clean_jobs(context: &ServiceContext) -> Result<(), Maintenan
     let queues_excluded = context.inner.pilot.job_cleaner_queue_exclusions();
     loop {
         let now = Utc::now();
-        let horizons = JobHorizons {
-            cancelled: horizon(now, maintenance.cancelled_job_retention)?,
-            completed: horizon(now, maintenance.completed_job_retention)?,
-            discarded: horizon(now, maintenance.discarded_job_retention)?,
-        };
         let limit = batch_size(&context.breakers.job_cleaner);
-        let result = clean_jobs_batch(context, &horizons, &queues_excluded, limit).await;
+        let mut params = FinalizedJobDeleteParams::new(limit);
+        params.cancelled_before = horizon(now, maintenance.cancelled_job_retention)?;
+        params.completed_before = horizon(now, maintenance.completed_job_retention)?;
+        params.discarded_before = horizon(now, maintenance.discarded_job_retention)?;
+        params.queues_excluded.clone_from(&queues_excluded);
+        let result = clean_jobs_batch(context, &params).await;
         record_batch(&context.breakers.job_cleaner, &result);
         if i64::try_from(result?).unwrap_or(i64::MAX) < limit {
             return Ok(());
@@ -77,30 +70,14 @@ pub(super) async fn clean_jobs(context: &ServiceContext) -> Result<(), Maintenan
 
 async fn clean_jobs_batch(
     context: &ServiceContext,
-    horizons: &JobHorizons,
-    queues_excluded: &[String],
-    limit: i64,
+    params: &FinalizedJobDeleteParams,
 ) -> Result<u64, MaintenanceError> {
     let timeout = context.inner.maintenance.job_cleaner_timeout;
     #[cfg(feature = "sqlite")]
     if let Some(pool) = context.inner.sqlite_pool() {
         let operation = async {
             let mut transaction = crate::database::begin_sqlite_write(pool).await?;
-            let queues_excluded = queues_excluded
-                .iter()
-                .map(String::as_str)
-                .collect::<Vec<_>>();
-            let count = sqlite::cleanup_jobs(
-                &mut transaction,
-                &sqlite::CleanupJobs {
-                    cancelled_before: horizons.cancelled,
-                    completed_before: horizons.completed,
-                    discarded_before: horizons.discarded,
-                    limit: i32::try_from(limit).unwrap_or(i32::MAX),
-                    queues_excluded: &queues_excluded,
-                },
-            )
-            .await?;
+            let count = sqlite_delete_finalized_jobs(&mut transaction, params).await?;
             transaction.commit().await?;
             Ok::<_, MaintenanceError>(count)
         };
@@ -114,41 +91,95 @@ async fn clean_jobs_batch(
             .inner
             .postgres_pool()
             .expect("client database is PostgreSQL or SQLite");
-        let table = context.inner.schema.qualify("river_job");
         let mut transaction = MaintenanceTransaction::begin(pool, &context.cancel, timeout).await?;
         let backend_pid = transaction.backend_pid;
-        let now = Utc::now();
-        let result = cancellable(
+        let count = cancellable(
             pool,
             backend_pid,
             &context.cancel,
             timeout,
-            sqlx::query(AssertSqlSafe(format!(
-                "DELETE FROM {table} WHERE id IN (\
-                    SELECT id FROM {table} WHERE (\
-                        (state = 'cancelled' AND $1 AND finalized_at < $2) OR \
-                        (state = 'completed' AND $3 AND finalized_at < $4) OR \
-                        (state = 'discarded' AND $5 AND finalized_at < $6)\
-                    ) AND NOT (queue = ANY($7::text[])) \
-                    ORDER BY id LIMIT $8\
-                 )"
-            )))
-            .bind(horizons.cancelled.is_some())
-            .bind(horizons.cancelled.unwrap_or(now))
-            .bind(horizons.completed.is_some())
-            .bind(horizons.completed.unwrap_or(now))
-            .bind(horizons.discarded.is_some())
-            .bind(horizons.discarded.unwrap_or(now))
-            .bind(queues_excluded)
-            .bind(limit)
-            .execute(&mut *transaction.transaction),
+            postgres_delete_finalized_jobs(
+                &mut transaction.transaction,
+                &context.inner.schema,
+                params,
+            ),
         )
         .await?;
         transaction.commit(pool, &context.cancel).await?;
-        return Ok(result.rows_affected());
+        return Ok(count);
     }
     #[allow(unreachable_code)]
     Ok(0)
+}
+
+/// Runs the job cleaner's deletion on PostgreSQL.
+#[cfg(feature = "postgres")]
+pub(crate) async fn postgres_delete_finalized_jobs(
+    connection: &mut sqlx::PgConnection,
+    schema: &crate::database::SchemaName,
+    params: &FinalizedJobDeleteParams,
+) -> Result<u64, sqlx::Error> {
+    if params.limit <= 0
+        || (params.cancelled_before.is_none()
+            && params.completed_before.is_none()
+            && params.discarded_before.is_none())
+    {
+        return Ok(0);
+    }
+    let table = schema.qualify("river_job");
+    let now = Utc::now();
+    let result = sqlx::query(AssertSqlSafe(format!(
+        "DELETE FROM {table} WHERE id IN (\
+            SELECT id FROM {table} WHERE (\
+                (state = 'cancelled' AND $1 AND finalized_at < $2) OR \
+                (state = 'completed' AND $3 AND finalized_at < $4) OR \
+                (state = 'discarded' AND $5 AND finalized_at < $6)\
+            ) AND NOT (queue = ANY($7::text[])) \
+              AND ($8::text[] IS NULL OR queue = ANY($8::text[])) \
+            ORDER BY id LIMIT $9\
+         )"
+    )))
+    .bind(params.cancelled_before.is_some())
+    .bind(params.cancelled_before.unwrap_or(now))
+    .bind(params.completed_before.is_some())
+    .bind(params.completed_before.unwrap_or(now))
+    .bind(params.discarded_before.is_some())
+    .bind(params.discarded_before.unwrap_or(now))
+    .bind(&params.queues_excluded)
+    .bind(params.queues_included.as_deref())
+    .bind(params.limit)
+    .execute(connection)
+    .await?;
+    Ok(result.rows_affected())
+}
+
+/// Runs the job cleaner's deletion on SQLite.
+#[cfg(feature = "sqlite")]
+pub(crate) async fn sqlite_delete_finalized_jobs(
+    connection: &mut sqlx::SqliteConnection,
+    params: &FinalizedJobDeleteParams,
+) -> Result<u64, sqlite::BackendError> {
+    let queues_excluded = params
+        .queues_excluded
+        .iter()
+        .map(String::as_str)
+        .collect::<Vec<_>>();
+    let queues_included = params
+        .queues_included
+        .as_ref()
+        .map(|queues| queues.iter().map(String::as_str).collect::<Vec<_>>());
+    sqlite::cleanup_jobs(
+        connection,
+        &sqlite::CleanupJobs {
+            cancelled_before: params.cancelled_before,
+            completed_before: params.completed_before,
+            discarded_before: params.discarded_before,
+            limit: i32::try_from(params.limit).unwrap_or(i32::MAX),
+            queues_excluded: &queues_excluded,
+            queues_included: queues_included.as_deref(),
+        },
+    )
+    .await
 }
 
 /// Deletes queue records that no client has touched within the retention.
