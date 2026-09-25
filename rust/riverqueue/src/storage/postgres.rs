@@ -7,9 +7,8 @@ use sqlx::{AssertSqlSafe, FromRow, PgConnection, Postgres, types::Json};
 use super::Backend;
 use crate::__private::{DatabaseConnection, ExtensionClaimParams};
 use crate::client::{JobRecord, go_time_json, job_projection};
-use crate::{
-    Error, JobListOrderBy, JobListParams, JobRow, JobState, Queue, SchemaName, SortDirection,
-};
+use crate::query::{JobListSqlPart, JobListTimeField};
+use crate::{Error, JobListParams, JobRow, JobState, Queue, SchemaName};
 
 /// PostgreSQL storage bound to one connection.
 pub(super) struct PostgresBackend<'c> {
@@ -385,23 +384,20 @@ fn job_list_sql_parts(
     params: &JobListParams,
     optimize_single_state: bool,
 ) -> JobListSqlParts {
-    let sort_field = job_list_sort_field(params);
-    let direction = match params.direction {
-        SortDirection::Ascending => "ASC",
-        SortDirection::Descending => "DESC",
-    };
-    let comparison = match params.direction {
-        SortDirection::Ascending => ">",
-        SortDirection::Descending => "<",
-    };
-    let cursor_predicate = if sort_field == "id" {
-        format!("($10::bigint IS NULL OR id {comparison} $10)")
-    } else {
-        format!(
-            "($9::timestamptz IS NULL OR ({sort_field} {comparison} $9 OR \
-             ({sort_field} = $9 AND id {comparison} $10)))"
-        )
-    };
+    let keyset = params.keyset();
+    let cursor_predicate = keyset.after_sql().map_or_else(
+        || "true".to_owned(),
+        |parts| {
+            parts
+                .into_iter()
+                .map(|part| match part {
+                    JobListSqlPart::AfterId => "$10".to_owned(),
+                    JobListSqlPart::AfterTime => "$9".to_owned(),
+                    JobListSqlPart::Sql(sql) => sql,
+                })
+                .collect::<String>()
+        },
+    );
     let state_type = schema.qualify("river_job_state");
     // Like Go (upstream 35c4eab8), a single-state list without metadata
     // predicates compares state with equality so PostgreSQL can use the
@@ -410,7 +406,7 @@ fn job_list_sql_parts(
     // finalized-time index requires. Bulk deletion keeps the generic form.
     let state_predicate =
         if optimize_single_state && params.states.len() == 1 && params.metadata.is_none() {
-            let finalized = sort_field == "finalized_at"
+            let finalized = keyset.time_field == Some(JobListTimeField::Finalized)
                 && matches!(
                     params.states[0],
                     JobState::Cancelled | JobState::Completed | JobState::Discarded
@@ -437,30 +433,9 @@ fn job_list_sql_parts(
          AND ($8::jsonb IS NULL OR metadata @> $8) \
          AND {cursor_predicate}"
     );
-    let order_sql = if sort_field == "id" {
-        format!("id {direction}")
-    } else {
-        format!("{sort_field} {direction}, id {direction}")
-    };
     JobListSqlParts {
-        order_sql,
+        order_sql: keyset.order_sql(),
         where_sql,
-    }
-}
-
-fn job_list_sort_field(params: &JobListParams) -> &'static str {
-    match params.order_by {
-        JobListOrderBy::FinalizedAt => "finalized_at",
-        JobListOrderBy::Id => "id",
-        JobListOrderBy::ScheduledAt => "scheduled_at",
-        JobListOrderBy::Time if params.states.is_empty() => "id",
-        JobListOrderBy::Time => match params.states[0] {
-            JobState::Available | JobState::Pending | JobState::Retryable | JobState::Scheduled => {
-                "scheduled_at"
-            }
-            JobState::Running => "attempted_at",
-            JobState::Cancelled | JobState::Completed | JobState::Discarded => "finalized_at",
-        },
     }
 }
 
@@ -477,6 +452,7 @@ fn bind_job_list<'query>(
         .metadata
         .as_ref()
         .map(|metadata| Json(Value::Object(metadata.clone())));
+    let keyset = params.keyset();
     query
         .bind(&params.ids)
         .bind(&params.kinds)
@@ -486,7 +462,7 @@ fn bind_job_list<'query>(
         .bind(&params.tags_all)
         .bind(&params.tags_any)
         .bind(metadata)
-        .bind(params.cursor_time())
-        .bind(params.cursor_id())
+        .bind(keyset.after_time())
+        .bind(keyset.after_id())
         .bind(i64::from(params.limit))
 }

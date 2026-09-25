@@ -20,6 +20,8 @@ pub struct JobListCursor {
     kind: String,
     order_by: JobListOrderBy,
     queue: String,
+    /// Value of the time field the list is ordered by, or `None` when the
+    /// list is ordered by ID alone or the job's value is null.
     pub(crate) sort_time: Option<DateTime<Utc>>,
 }
 
@@ -42,28 +44,15 @@ impl JobListCursor {
 
     /// Builds the cursor after `job` for already validated parameters.
     pub(crate) fn after_job(job: &JobRow, params: &JobListParams) -> Self {
-        let sort_time = match params.order_by {
-            JobListOrderBy::Id => None,
-            JobListOrderBy::FinalizedAt => job.finalized_at,
-            JobListOrderBy::ScheduledAt => Some(job.scheduled_at),
-            JobListOrderBy::Time if params.states.is_empty() => None,
-            JobListOrderBy::Time => match job.state {
-                JobState::Available
-                | JobState::Pending
-                | JobState::Retryable
-                | JobState::Scheduled => Some(job.scheduled_at),
-                JobState::Running => job.attempted_at.or(Some(job.created_at)),
-                JobState::Cancelled | JobState::Completed | JobState::Discarded => {
-                    job.finalized_at.or(Some(job.created_at))
-                }
-            },
-        };
+        // The time comes from the field the list is ordered by. For time
+        // ordering over several states, that's the first state's field for
+        // every job, which may differ from the field of the job's own state.
         Self {
             id: job.id,
             kind: job.kind.clone(),
             order_by: params.order_by,
             queue: job.queue.clone(),
-            sort_time,
+            sort_time: params.time_field().and_then(|field| field.value(job)),
         }
     }
 
@@ -127,7 +116,9 @@ impl FromStr for JobListCursor {
             kind: value.kind,
             order_by,
             queue: value.queue,
-            sort_time: (order_by != JobListOrderBy::Id).then_some(value.time),
+            // The zero time stands for no time. No job's time field holds it.
+            sort_time: (order_by != JobListOrderBy::Id && value.time != go_zero_time())
+                .then_some(value.time),
         })
     }
 }
@@ -171,6 +162,20 @@ pub enum JobListOrderBy {
     /// Scheduled time followed by ID.
     ScheduledAt,
     /// State-appropriate time followed by ID.
+    ///
+    /// The time field is chosen by the first state given to
+    /// [`JobListParams::states`], and jobs in every listed state are ordered
+    /// by that field:
+    ///
+    /// * `available`, `pending`, `retryable`, and `scheduled` use
+    ///   `scheduled_at`.
+    /// * `running` uses `attempted_at`.
+    /// * `cancelled`, `completed`, and `discarded` use `finalized_at`.
+    ///
+    /// Without a state filter, jobs are ordered by `scheduled_at`. Jobs whose
+    /// field is null, like `finalized_at` for jobs that haven't finalized,
+    /// come after all others in ascending order and before all others in
+    /// descending order.
     Time,
 }
 
@@ -442,18 +447,69 @@ impl JobListParams {
         }
     }
 
-    /// Returns the ID to continue after, from either a cursor or an ID.
-    pub(crate) const fn cursor_id(&self) -> Option<i64> {
-        match &self.start {
-            Some(JobListStart::Cursor(cursor)) => Some(cursor.id),
-            Some(JobListStart::Id(id)) => Some(*id),
-            None => None,
+    /// Returns how the list is ordered and where it resumes, for the storage
+    /// backends to render as SQL.
+    pub(crate) fn keyset(&self) -> JobListKeyset {
+        let time_field = self.time_field();
+        let nullable = time_field.is_some_and(|field| self.time_field_nullable(field));
+        let after = self.start.as_ref().map(|start| match start {
+            JobListStart::Id(id) => JobListAfter::Id(*id),
+            JobListStart::Cursor(cursor) => match (time_field, cursor.sort_time) {
+                (Some(_), Some(time)) => JobListAfter::Time {
+                    id: cursor.id,
+                    time,
+                },
+                (Some(_), None) if nullable => JobListAfter::NullTime { id: cursor.id },
+                // Like Go, a cursor without a time for a field that can't be
+                // null resumes by ID.
+                _ => JobListAfter::Id(cursor.id),
+            },
+        });
+        JobListKeyset {
+            after,
+            direction: self.direction,
+            nullable,
+            time_field,
         }
     }
 
-    /// Returns the cursor's sort time, if it has one.
-    pub(crate) fn cursor_time(&self) -> Option<DateTime<Utc>> {
-        self.cursor().and_then(|cursor| cursor.sort_time)
+    /// Returns the time field jobs are ordered by before ID, or `None` when
+    /// ordering by ID alone.
+    fn time_field(&self) -> Option<JobListTimeField> {
+        match self.order_by {
+            JobListOrderBy::FinalizedAt => Some(JobListTimeField::Finalized),
+            JobListOrderBy::Id => None,
+            JobListOrderBy::ScheduledAt => Some(JobListTimeField::Scheduled),
+            // No state filter lists every state. Like Go, whose default
+            // states start with `available`, use that state's field.
+            JobListOrderBy::Time => Some(
+                self.states
+                    .first()
+                    .map_or(JobListTimeField::Scheduled, |state| {
+                        JobListTimeField::for_state(*state)
+                    }),
+            ),
+        }
+    }
+
+    /// Returns whether `field` may be null for listed jobs.
+    fn time_field_nullable(&self, field: JobListTimeField) -> bool {
+        match field {
+            JobListTimeField::Attempted => true,
+            // The schema requires `finalized_at` for exactly the finalized
+            // states. Unlike Go's custom SQL conditions, no Rust filter can
+            // widen the state filter, so other filters don't matter here.
+            JobListTimeField::Finalized => {
+                self.states.is_empty()
+                    || self.states.iter().any(|state| {
+                        !matches!(
+                            state,
+                            JobState::Cancelled | JobState::Completed | JobState::Discarded
+                        )
+                    })
+            }
+            JobListTimeField::Scheduled => false,
+        }
     }
 
     pub(crate) fn validate(&self) -> Result<(), String> {
@@ -479,14 +535,176 @@ impl JobListParams {
                     .to_owned(),
             );
         }
-        if self.cursor().is_some_and(|cursor| {
-            self.order_by != JobListOrderBy::Id
-                && !(self.order_by == JobListOrderBy::Time && self.states.is_empty())
-                && cursor.sort_time.is_none()
-        }) {
-            return Err("job list cursor does not contain its sort time".to_owned());
-        }
         Ok(())
+    }
+}
+
+/// Where a job list resumes, relative to its ordering.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) enum JobListAfter {
+    /// Jobs whose ID follows this one in the list direction.
+    Id(i64),
+    /// Jobs following a cursor job whose time field is null. Nulls sort
+    /// last ascending and first descending.
+    NullTime { id: i64 },
+    /// Jobs following a cursor job with this time.
+    Time { id: i64, time: DateTime<Utc> },
+}
+
+/// How a validated job list is ordered and where it resumes. Each storage
+/// backend renders it as SQL, so they order and page identically.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub(crate) struct JobListKeyset {
+    pub(crate) after: Option<JobListAfter>,
+    pub(crate) direction: SortDirection,
+    /// Whether the time field may be null for listed jobs. Nulls then sort
+    /// explicitly last ascending and first descending, the PostgreSQL
+    /// default, so that every backend agrees and cursors can match them.
+    pub(crate) nullable: bool,
+    /// Time field ordered before ID, or `None` to order by ID alone.
+    pub(crate) time_field: Option<JobListTimeField>,
+}
+
+impl JobListKeyset {
+    /// Returns the ID of the job the list resumes after.
+    pub(crate) const fn after_id(&self) -> Option<i64> {
+        match self.after {
+            Some(
+                JobListAfter::Id(id)
+                | JobListAfter::NullTime { id }
+                | JobListAfter::Time { id, .. },
+            ) => Some(id),
+            None => None,
+        }
+    }
+
+    /// Returns the time of the job the list resumes after, if that job has
+    /// one.
+    pub(crate) const fn after_time(&self) -> Option<DateTime<Utc>> {
+        match self.after {
+            Some(JobListAfter::Time { time, .. }) => Some(time),
+            Some(JobListAfter::Id(_) | JobListAfter::NullTime { .. }) | None => None,
+        }
+    }
+
+    /// Returns the condition selecting rows after the cursor, or `None` to
+    /// start from the beginning. Backends replace the placeholders with
+    /// their parameters for [`after_time`](Self::after_time) and
+    /// [`after_id`](Self::after_id).
+    pub(crate) fn after_sql(&self) -> Option<Vec<JobListSqlPart>> {
+        use JobListSqlPart::{AfterId, AfterTime, Sql};
+
+        let comparison = match self.direction {
+            SortDirection::Ascending => ">",
+            SortDirection::Descending => "<",
+        };
+        let id_only = || vec![Sql(format!("id {comparison} ")), AfterId];
+        let after = self.after?;
+        let Some(field) = self.time_field.map(JobListTimeField::column) else {
+            return Some(id_only());
+        };
+        Some(match (after, self.direction) {
+            (JobListAfter::Id(_), _) => id_only(),
+            // After a null time, only nulls with a later ID follow ascending,
+            // and every non-null time also follows descending.
+            (JobListAfter::NullTime { .. }, SortDirection::Ascending) => {
+                vec![
+                    Sql(format!("({field} IS NULL AND id > ")),
+                    AfterId,
+                    Sql(")".to_owned()),
+                ]
+            }
+            (JobListAfter::NullTime { .. }, SortDirection::Descending) => vec![
+                Sql(format!("({field} IS NOT NULL OR id < ")),
+                AfterId,
+                Sql(")".to_owned()),
+            ],
+            (JobListAfter::Time { .. }, direction) => {
+                // Nulls follow every time ascending and precede every time
+                // descending.
+                let or_null = if self.nullable && direction == SortDirection::Ascending {
+                    format!(" OR {field} IS NULL")
+                } else {
+                    String::new()
+                };
+                vec![
+                    Sql(format!("({field} {comparison} ")),
+                    AfterTime,
+                    Sql(format!(" OR ({field} = ")),
+                    AfterTime,
+                    Sql(format!(" AND id {comparison} ")),
+                    AfterId,
+                    Sql(format!("){or_null})")),
+                ]
+            }
+        })
+    }
+
+    /// Returns the `ORDER BY` clause, without the keyword.
+    pub(crate) fn order_sql(&self) -> String {
+        let direction = match self.direction {
+            SortDirection::Ascending => "ASC",
+            SortDirection::Descending => "DESC",
+        };
+        let Some(field) = self.time_field else {
+            return format!("id {direction}");
+        };
+        let nulls = match (self.nullable, self.direction) {
+            (false, _) => "",
+            (true, SortDirection::Ascending) => " NULLS LAST",
+            (true, SortDirection::Descending) => " NULLS FIRST",
+        };
+        format!("{} {direction}{nulls}, id {direction}", field.column())
+    }
+}
+
+/// A piece of a job list cursor condition.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) enum JobListSqlPart {
+    /// Placeholder for the ID of the job the list resumes after.
+    AfterId,
+    /// Placeholder for the time of the job the list resumes after.
+    AfterTime,
+    /// SQL text.
+    Sql(String),
+}
+
+/// Time field a job list orders by before its ID tiebreaker.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum JobListTimeField {
+    Attempted,
+    Finalized,
+    Scheduled,
+}
+
+impl JobListTimeField {
+    /// Returns the field that [`JobListOrderBy::Time`] uses for `state`.
+    const fn for_state(state: JobState) -> Self {
+        match state {
+            JobState::Available | JobState::Pending | JobState::Retryable | JobState::Scheduled => {
+                Self::Scheduled
+            }
+            JobState::Running => Self::Attempted,
+            JobState::Cancelled | JobState::Completed | JobState::Discarded => Self::Finalized,
+        }
+    }
+
+    /// Returns the job table column.
+    pub(crate) const fn column(self) -> &'static str {
+        match self {
+            Self::Attempted => "attempted_at",
+            Self::Finalized => "finalized_at",
+            Self::Scheduled => "scheduled_at",
+        }
+    }
+
+    /// Returns the field's value on `job`, or `None` if it's null.
+    const fn value(self, job: &JobRow) -> Option<DateTime<Utc>> {
+        match self {
+            Self::Attempted => job.attempted_at,
+            Self::Finalized => job.finalized_at,
+            Self::Scheduled => Some(job.scheduled_at),
+        }
     }
 }
 
@@ -591,6 +809,40 @@ mod tests {
     }
 
     #[test]
+    fn zero_time_cursor_keeps_nullable_time_ordering() {
+        let cursor = JobListCursor {
+            id: 42,
+            kind: "send_email".to_owned(),
+            order_by: JobListOrderBy::Time,
+            queue: "priority".to_owned(),
+            sort_time: None,
+        };
+        let decoded = JobListCursor::decode(&cursor.encode()).unwrap();
+        assert_eq!(decoded.sort_time, None);
+
+        for (direction, expected_order) in [
+            (
+                SortDirection::Ascending,
+                "attempted_at ASC NULLS LAST, id ASC",
+            ),
+            (
+                SortDirection::Descending,
+                "attempted_at DESC NULLS FIRST, id DESC",
+            ),
+        ] {
+            let keyset = JobListParams::default()
+                .states([JobState::Running, JobState::Available])
+                .order_by(JobListOrderBy::Time)
+                .direction(direction)
+                .after(decoded.clone())
+                .keyset();
+            assert_eq!(keyset.after, Some(JobListAfter::NullTime { id: 42 }));
+            assert_eq!(keyset.order_sql(), expected_order);
+            assert!(keyset.after_sql().is_some());
+        }
+    }
+
+    #[test]
     fn a_later_start_replaces_an_earlier_one() {
         let cursor = JobListCursor::decode(
             &JobListCursor {
@@ -605,12 +857,12 @@ mod tests {
         .unwrap();
 
         let params = JobListParams::default().after(cursor.clone()).after_id(3);
-        assert_eq!(params.cursor_id(), Some(3));
+        assert_eq!(params.keyset().after_id(), Some(3));
         assert!(params.cursor().is_none());
         assert!(params.validate().is_ok());
 
         let params = JobListParams::default().after_id(3).after(cursor);
-        assert_eq!(params.cursor_id(), Some(7));
+        assert_eq!(params.keyset().after_id(), Some(7));
         assert!(params.cursor().is_some());
         assert!(params.has_filter());
     }

@@ -37,15 +37,12 @@ impl SqliteBackend<'_> {
         sqlite::list(
             self.connection,
             &sqlite::ListJobs {
-                after_id: params.cursor_id(),
-                after_time: params.cursor_time(),
-                direction: params.direction,
                 exclude_running,
                 ids: &params.ids,
+                keyset: params.keyset(),
                 kinds: &kinds,
                 limit: i32::try_from(params.limit).unwrap_or(i32::MAX),
                 metadata: params.metadata.as_ref(),
-                order_by: params.order_by,
                 priorities: &params.priorities,
                 queues: &queues,
                 states: &params.states,

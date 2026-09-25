@@ -87,7 +87,7 @@ async fn empty_batches_are_rejected_before_database_work() {
 }
 
 #[tokio::test]
-async fn job_list_time_without_states_uses_id_and_finalized_requires_states() {
+async fn job_list_time_without_states_uses_schedule_and_finalized_requires_states() {
     let (client, pool) = setup().await;
     let now = Utc::now();
     let first = insert_job(
@@ -113,7 +113,7 @@ async fn job_list_time_without_states_uses_id_and_finalized_requires_states() {
     let rows = client.jobs().list(params.clone()).await.unwrap().jobs;
     assert_eq!(
         rows.iter().map(|row| row.id).collect::<Vec<_>>(),
-        [first, second]
+        [second, first]
     );
     let cursor = JobListCursor::from_job(&rows[0], &params).unwrap();
     let page = client
@@ -122,7 +122,7 @@ async fn job_list_time_without_states_uses_id_and_finalized_requires_states() {
         .await
         .unwrap()
         .jobs;
-    assert_eq!(page.iter().map(|row| row.id).collect::<Vec<_>>(), [second]);
+    assert_eq!(page.iter().map(|row| row.id).collect::<Vec<_>>(), [first]);
 
     let error = client
         .jobs()
