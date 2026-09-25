@@ -257,7 +257,7 @@ pub struct ClientBuilder {
     pub(super) allow_unregistered_job_kinds: bool,
     pub(super) soft_stop_timeout: Option<Duration>,
     pub(crate) workers: WorkerRegistry,
-    pub(super) work_middleware: Vec<Arc<dyn WorkMiddleware>>,
+    pub(super) work_middleware: Vec<Arc<dyn crate::extension::DynWorkMiddleware>>,
 }
 
 impl std::fmt::Debug for ClientBuilder {

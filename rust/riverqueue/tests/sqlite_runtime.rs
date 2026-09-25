@@ -19,7 +19,7 @@ use riverqueue::__private::{
 use riverqueue::{
     BoxError, Client, ErrorHandler, ErrorHandlerDecision, EventKind, Hook, InsertBatch, InsertOpts,
     Job, JobArgs, JobRow, JobState, MaintenanceConfig, QueueConfig, UniqueOpts, WorkContext,
-    WorkOutcome, WorkResult, WorkerRegistry, database::DatabaseKind,
+    WorkError, WorkOutcome, WorkResult, WorkerRegistry, database::DatabaseKind,
 };
 use riverqueue_migrate::SqliteMigrator;
 use serde::{Deserialize, Serialize};
@@ -96,10 +96,10 @@ impl Hook for CompletionHook {
         &self,
         _context: &WorkContext,
         _job: &JobRow,
-        _result: &WorkResult,
-    ) -> Result<(), BoxError> {
+        result: Result<WorkOutcome, WorkError>,
+    ) -> Result<WorkOutcome, WorkError> {
         self.0.work_end_count.fetch_add(1, Ordering::SeqCst);
-        Ok(())
+        result
     }
 }
 

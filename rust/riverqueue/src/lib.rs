@@ -43,7 +43,7 @@ pub use event::{
 pub use extension::{
     DefaultRetryPolicy, ErrorHandler, ErrorHandlerDecision, Extensions, Hook, InsertContext,
     InsertMiddleware, InsertNext, InsertedJob, InsertedJobs, Metric, MetricName, Plugin,
-    RetryPolicy, WorkCancelled, WorkError, WorkMiddleware, WorkResult,
+    RetryPolicy, WorkCancelled, WorkError, WorkMiddleware, WorkNext, WorkResult,
 };
 pub use job::{
     AttemptError, InsertBatch, InsertBatchResult, InsertOpts, InsertParams, InsertResult, Job,
