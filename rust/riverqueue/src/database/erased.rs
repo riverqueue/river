@@ -33,6 +33,18 @@ impl Database {
         into_database(database)
     }
 
+    #[cfg(feature = "postgres")]
+    pub(crate) fn extend_default_postgres_reindex_names(
+        &mut self,
+        names: impl IntoIterator<Item = impl Into<String>>,
+    ) {
+        match &mut self.inner {
+            DatabaseInner::Postgres(source) => source.extend_default_reindex_names(names),
+            #[cfg(feature = "sqlite")]
+            DatabaseInner::Sqlite(_) => {}
+        }
+    }
+
     /// Returns the configured backend kind.
     #[must_use]
     pub const fn kind(&self) -> DatabaseKind {
@@ -232,4 +244,85 @@ impl<'executor> ErasedExecutor<'executor> {
 pub(crate) enum ExecutorInner<'executor> {
     Connection(DatabaseConnection<'executor>),
     Pool(DatabaseKind),
+}
+
+#[cfg(all(test, feature = "postgres"))]
+mod tests {
+    use std::time::Duration;
+
+    use sqlx::postgres::{PgConnectOptions, PgPool, PgPoolOptions};
+
+    use super::*;
+    use crate::{
+        __private::database_with_default_postgres_reindex_names, database::PostgresReindexSchedule,
+    };
+
+    fn lazy_pool() -> PgPool {
+        PgPoolOptions::new().connect_lazy_with(PgConnectOptions::new())
+    }
+
+    #[tokio::test]
+    async fn add_on_reindex_names_are_kept_by_schedule_and_timeout_changes() {
+        let pool = lazy_pool();
+        for config in [
+            PostgresReindexConfig::default().with_timeout(Duration::from_secs(5)),
+            PostgresReindexConfig::default()
+                .with_schedule(PostgresReindexSchedule::Interval(Duration::from_hours(1))),
+        ] {
+            let database = database_with_default_postgres_reindex_names(
+                Database::from_source(PostgresDatabase::new(pool.clone()).reindex(config)),
+                ["add_on_hot_index"],
+            );
+            let names = database.postgres_reindex().unwrap().index_names();
+            assert!(names.contains(&"river_job_pkey".to_owned()));
+            assert!(names.contains(&"add_on_hot_index".to_owned()));
+        }
+    }
+
+    #[tokio::test]
+    async fn add_on_reindex_names_extend_defaults_without_duplicates() {
+        let database = database_with_default_postgres_reindex_names(
+            Database::from_source(PostgresDatabase::new(lazy_pool())),
+            ["river_job_pkey", "add_on_hot_index"],
+        );
+        let names = database.postgres_reindex().unwrap().index_names();
+        assert!(names.contains(&"add_on_hot_index".to_owned()));
+        assert_eq!(
+            names
+                .iter()
+                .filter(|name| *name == "river_job_pkey")
+                .count(),
+            1
+        );
+    }
+
+    #[tokio::test]
+    async fn add_on_reindex_names_leave_explicit_index_names_unchanged() {
+        let pool = lazy_pool();
+        for explicit in [vec!["custom_index"], vec![]] {
+            let configured = PostgresDatabase::new(pool.clone()).reindex(
+                PostgresReindexConfig::default()
+                    .with_timeout(Duration::from_secs(5))
+                    .with_index_names(explicit.clone()),
+            );
+            let database = database_with_default_postgres_reindex_names(
+                Database::from_source(configured),
+                ["add_on_hot_index"],
+            );
+            assert_eq!(database.postgres_reindex().unwrap().index_names(), explicit);
+        }
+    }
+
+    #[cfg(feature = "sqlite")]
+    #[tokio::test]
+    async fn add_on_reindex_names_leave_sqlite_unchanged() {
+        let sqlite_pool = sqlx::sqlite::SqlitePoolOptions::new()
+            .connect_lazy_with(sqlx::sqlite::SqliteConnectOptions::new());
+        let database = database_with_default_postgres_reindex_names(
+            Database::from_source(SqliteDatabase::new(sqlite_pool)),
+            ["add_on_hot_index"],
+        );
+        assert_eq!(database.kind(), DatabaseKind::Sqlite);
+        assert!(database.postgres_reindex().is_none());
+    }
 }

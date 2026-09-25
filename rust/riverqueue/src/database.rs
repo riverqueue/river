@@ -131,6 +131,13 @@ impl PostgresDatabase {
         self
     }
 
+    pub(crate) fn extend_default_reindex_names(
+        &mut self,
+        names: impl IntoIterator<Item = impl Into<String>>,
+    ) {
+        self.reindex.extend_default_index_names(names);
+    }
+
     /// Returns PostgreSQL reindexer configuration.
     #[must_use]
     pub const fn reindex_config(&self) -> &PostgresReindexConfig {
@@ -168,12 +175,30 @@ impl fmt::Debug for PostgresDatabase {
 #[derive(Clone, Debug)]
 pub struct PostgresReindexConfig {
     index_names: Vec<String>,
+    /// Whether [`Self::with_index_names`] replaced River's default list.
+    /// Add-on crates extend only a default list, so a custom schedule or
+    /// timeout doesn't discard their indexes.
+    index_names_explicit: bool,
     schedule: PostgresReindexSchedule,
     timeout: Duration,
 }
 
 #[cfg(feature = "postgres")]
 impl PostgresReindexConfig {
+    /// Appends add-on indexes unless the caller chose index names
+    /// explicitly, including an empty list that disables the service.
+    fn extend_default_index_names(&mut self, names: impl IntoIterator<Item = impl Into<String>>) {
+        if self.index_names_explicit {
+            return;
+        }
+        for name in names {
+            let name = name.into();
+            if !self.index_names.contains(&name) {
+                self.index_names.push(name);
+            }
+        }
+    }
+
     /// Returns configured index names.
     #[must_use]
     pub fn index_names(&self) -> &[String] {
@@ -197,6 +222,7 @@ impl PostgresReindexConfig {
     #[must_use]
     pub fn with_index_names(mut self, names: impl IntoIterator<Item = impl Into<String>>) -> Self {
         self.index_names = names.into_iter().map(Into::into).collect();
+        self.index_names_explicit = true;
         self
     }
 
@@ -228,6 +254,7 @@ impl Default for PostgresReindexConfig {
                 "river_job_state_and_finalized_at_index".to_owned(),
                 "river_job_unique_idx".to_owned(),
             ],
+            index_names_explicit: false,
             schedule: PostgresReindexSchedule::default(),
             timeout: Duration::from_mins(1),
         }
