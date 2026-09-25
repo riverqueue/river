@@ -10,7 +10,6 @@ use std::{
     time::Duration,
 };
 
-use async_trait::async_trait;
 use chrono::{DateTime, SecondsFormat, Utc};
 use riverqueue::database::SchemaName;
 use riverqueue::{
@@ -20,8 +19,8 @@ use riverqueue::{
     JobArgs, JobDeleteManyParams, JobListCursor, JobListParams, JobListResult, JobRow, JobState,
     JobUpdateParams, MaintenanceConfig, PeriodicJob, PeriodicJobOpts, PeriodicJobs, Plugin, Queue,
     QueueConfig, QueueListParams, QueueSelector, QueueUpdateParams, RetryPolicy, RunHandle,
-    SortDirection, SubscribeConfig, UniqueOpts, WorkCancelled, WorkContext, WorkMiddleware,
-    WorkOutcome, WorkResult, Worker, WorkerRegistry,
+    SortDirection, SubscribeConfig, UniqueOpts, WorkCancelled, WorkContext, WorkError,
+    WorkMiddleware, WorkNext, WorkOutcome, WorkResult, Worker, WorkerRegistry,
     database::{PostgresDatabase, PostgresReindexConfig, PostgresReindexSchedule, SqliteDatabase},
     encoding::encode_args,
     protocol::{UniqueKeyInput, unique_key, unique_states_bitmask},
@@ -931,11 +930,12 @@ impl Hook for ProbeHook {
         &self,
         _context: &WorkContext,
         _job: &JobRow,
-        _result: &WorkResult,
-    ) -> Result<(), BoxError> {
+        result: Result<WorkOutcome, WorkError>,
+    ) -> Result<WorkOutcome, WorkError> {
         self.0
             .add_trace("hook:work_end")
-            .map_err(|error| BoxError::from(error.to_string()))
+            .map_err(|error| WorkError::new(error.to_string()))?;
+        result
     }
 }
 
@@ -960,27 +960,21 @@ impl InsertMiddleware for ProbeInsertMiddleware {
 
 struct ProbeWorkMiddleware(Arc<RuntimeProbe>);
 
-#[async_trait]
 impl WorkMiddleware for ProbeWorkMiddleware {
-    async fn before_work(
+    async fn work(
         &self,
         _context: &WorkContext,
-        _job: &mut JobRow,
-    ) -> Result<(), riverqueue::Error> {
+        job: JobRow,
+        next: WorkNext<'_>,
+    ) -> Result<WorkOutcome, WorkError> {
         self.0
             .add_trace("middleware:work_before")
-            .map_err(|error| riverqueue::Error::runtime(error.to_string()))
-    }
-
-    async fn after_work(
-        &self,
-        _context: &WorkContext,
-        _job: &JobRow,
-        _result: &WorkResult,
-    ) -> Result<(), riverqueue::Error> {
+            .map_err(|error| WorkError::new(error.to_string()))?;
+        let result = next.run(job).await;
         self.0
             .add_trace("middleware:work_after")
-            .map_err(|error| riverqueue::Error::runtime(error.to_string()))
+            .map_err(|error| WorkError::new(error.to_string()))?;
+        result
     }
 }
 

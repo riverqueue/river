@@ -2,10 +2,9 @@
 
 use std::{fmt, future::Future, pin::Pin, sync::Arc, time::Duration};
 
-use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 
-use crate::{BoxError, Error, InsertParams, JobRow, PeriodicJobs, WorkContext};
+use crate::{BoxError, Error, InsertParams, JobRow, PeriodicJobs, WorkContext, WorkOutcome};
 
 /// Cloneable worker error passed to hooks and error handlers.
 #[derive(Clone)]
@@ -15,7 +14,10 @@ pub struct WorkError {
 }
 
 impl WorkError {
-    pub(crate) fn new(error: Box<dyn std::error::Error + Send + Sync>) -> Self {
+    /// Wraps an error, for example one a [`WorkMiddleware`] or
+    /// [`Hook::work_end`] returns in place of the worker's result.
+    pub fn new(error: impl Into<BoxError>) -> Self {
+        let error = error.into();
         let message = error.to_string();
         Self {
             message,
@@ -249,7 +251,12 @@ pub trait Hook: Send + Sync + 'static {
         std::future::ready(Ok(()))
     }
 
-    /// Runs before work middleware and the worker.
+    /// Runs inside work middleware, before the job's arguments are decoded
+    /// and the worker runs. It may change the job, for example to decode
+    /// arguments another hook or middleware transformed on insertion.
+    ///
+    /// An error fails the attempt with that error; the worker and
+    /// [`Hook::work_end`] don't run.
     fn work_begin(
         &self,
         context: &WorkContext,
@@ -259,16 +266,22 @@ pub trait Hook: Send + Sync + 'static {
         std::future::ready(Ok(()))
     }
 
-    /// Runs after the worker and work middleware, before the result is
-    /// persisted.
+    /// Runs inside work middleware, after the worker returns, and returns
+    /// the attempt's result.
+    ///
+    /// Like River Go's `HookWorkEnd`, the returned result replaces the
+    /// worker's, so a hook should return `result` unchanged unless it means
+    /// to change the outcome, for example to turn a specific error into a
+    /// snooze. Hooks run in registration order, each receiving the previous
+    /// hook's result. It doesn't run when the worker panics.
     fn work_end(
         &self,
         context: &WorkContext,
         job: &JobRow,
-        result: &WorkResult,
-    ) -> impl Future<Output = Result<(), BoxError>> + Send {
-        let _ = (context, job, result);
-        std::future::ready(Ok(()))
+        result: Result<WorkOutcome, WorkError>,
+    ) -> impl Future<Output = Result<WorkOutcome, WorkError>> + Send {
+        let _ = (context, job);
+        std::future::ready(result)
     }
 }
 
@@ -288,13 +301,13 @@ pub(crate) trait DynHook: Send + Sync + 'static {
         &'a self,
         context: &'a WorkContext,
         job: &'a mut JobRow,
-    ) -> BoxFuture<'a, Result<(), Error>>;
+    ) -> BoxFuture<'a, Result<(), BoxError>>;
     fn work_end<'a>(
         &'a self,
         context: &'a WorkContext,
         job: &'a JobRow,
-        result: &'a WorkResult,
-    ) -> BoxFuture<'a, Result<(), Error>>;
+        result: Result<WorkOutcome, WorkError>,
+    ) -> BoxFuture<'a, Result<WorkOutcome, WorkError>>;
 }
 
 fn hook_error(phase: &'static str) -> impl FnOnce(BoxError) -> Error {
@@ -344,25 +357,17 @@ impl<H: Hook> DynHook for H {
         &'a self,
         context: &'a WorkContext,
         job: &'a mut JobRow,
-    ) -> BoxFuture<'a, Result<(), Error>> {
-        Box::pin(async move {
-            Hook::work_begin(self, context, job)
-                .await
-                .map_err(hook_error("work begin hook"))
-        })
+    ) -> BoxFuture<'a, Result<(), BoxError>> {
+        Box::pin(Hook::work_begin(self, context, job))
     }
 
     fn work_end<'a>(
         &'a self,
         context: &'a WorkContext,
         job: &'a JobRow,
-        result: &'a WorkResult,
-    ) -> BoxFuture<'a, Result<(), Error>> {
-        Box::pin(async move {
-            Hook::work_end(self, context, job, result)
-                .await
-                .map_err(hook_error("work end hook"))
-        })
+        result: Result<WorkOutcome, WorkError>,
+    ) -> BoxFuture<'a, Result<WorkOutcome, WorkError>> {
+        Box::pin(Hook::work_end(self, context, job, result))
     }
 }
 
@@ -522,22 +527,126 @@ impl InsertedJob {
     }
 }
 
-/// Ordered worker middleware.
-#[async_trait]
+/// Middleware wrapping each job attempt.
+///
+/// Like River Go's `WorkerMiddleware`, middleware decides whether and how to
+/// continue by calling [`WorkNext::run`], and returns the attempt's result.
+/// Middleware registered first is outermost. [`Hook::work_begin`], argument
+/// decoding, the worker, and [`Hook::work_end`] all run inside the innermost
+/// middleware, so middleware can change the job before it's decoded, wrap
+/// the attempt in a span or timer, or change its result. A job whose kind has
+/// no registered worker fails before any middleware runs.
+///
+/// When the worker panics, the panic unwinds through middleware as it does in
+/// River Go; River records it as a failed attempt.
+///
+/// ```
+/// use riverqueue::{JobRow, WorkContext, WorkError, WorkMiddleware, WorkNext, WorkOutcome};
+///
+/// struct TimeJobs;
+///
+/// impl WorkMiddleware for TimeJobs {
+///     async fn work(
+///         &self,
+///         _context: &WorkContext,
+///         job: JobRow,
+///         next: WorkNext<'_>,
+///     ) -> Result<WorkOutcome, WorkError> {
+///         let kind = job.kind.clone();
+///         let started = std::time::Instant::now();
+///         let result = next.run(job).await;
+///         println!("{kind} took {:?}", started.elapsed());
+///         result
+///     }
+/// }
+/// ```
 pub trait WorkMiddleware: Send + Sync + 'static {
-    /// Runs before the typed worker.
-    async fn before_work(&self, _context: &WorkContext, _job: &mut JobRow) -> Result<(), Error> {
-        Ok(())
+    /// Wraps one attempt of `job`.
+    fn work(
+        &self,
+        context: &WorkContext,
+        job: JobRow,
+        next: WorkNext<'_>,
+    ) -> impl Future<Output = Result<WorkOutcome, WorkError>> + Send;
+}
+
+/// Object-safe form of [`WorkMiddleware`].
+pub(crate) trait DynWorkMiddleware: Send + Sync + 'static {
+    fn work<'a>(
+        &'a self,
+        context: &'a WorkContext,
+        job: JobRow,
+        next: WorkNext<'a>,
+    ) -> BoxFuture<'a, Result<WorkOutcome, WorkError>>;
+}
+
+impl<M: WorkMiddleware> DynWorkMiddleware for M {
+    fn work<'a>(
+        &'a self,
+        context: &'a WorkContext,
+        job: JobRow,
+        next: WorkNext<'a>,
+    ) -> BoxFuture<'a, Result<WorkOutcome, WorkError>> {
+        Box::pin(WorkMiddleware::work(self, context, job, next))
+    }
+}
+
+pub(crate) type WorkEndpoint<'a> =
+    Box<dyn FnOnce(JobRow) -> BoxFuture<'a, Result<WorkOutcome, WorkError>> + Send + 'a>;
+
+/// The remainder of a job attempt: any inner middleware followed by River's
+/// work hooks and the worker.
+pub struct WorkNext<'a> {
+    context: &'a WorkContext,
+    endpoint: WorkEndpoint<'a>,
+    remaining: &'a [Arc<dyn DynWorkMiddleware>],
+}
+
+impl<'a> WorkNext<'a> {
+    pub(crate) fn new(
+        middleware: &'a [Arc<dyn DynWorkMiddleware>],
+        context: &'a WorkContext,
+        endpoint: WorkEndpoint<'a>,
+    ) -> Self {
+        Self {
+            context,
+            endpoint,
+            remaining: middleware,
+        }
     }
 
-    /// Runs after the typed worker in reverse registration order.
-    async fn after_work(
-        &self,
-        _context: &WorkContext,
-        _job: &JobRow,
-        _result: &WorkResult,
-    ) -> Result<(), Error> {
-        Ok(())
+    /// Continues the attempt with `job`.
+    ///
+    /// # Errors
+    ///
+    /// Returns the worker's error, or the error of an inner middleware, a
+    /// work hook, or argument decoding.
+    pub async fn run(self, job: JobRow) -> Result<WorkOutcome, WorkError> {
+        match self.remaining.split_first() {
+            Some((middleware, remaining)) => {
+                middleware
+                    .work(
+                        self.context,
+                        job,
+                        WorkNext {
+                            context: self.context,
+                            endpoint: self.endpoint,
+                            remaining,
+                        },
+                    )
+                    .await
+            }
+            None => (self.endpoint)(job).await,
+        }
+    }
+}
+
+impl fmt::Debug for WorkNext<'_> {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("WorkNext")
+            .field("remaining_middleware", &self.remaining.len())
+            .finish_non_exhaustive()
     }
 }
 
@@ -673,7 +782,7 @@ pub trait Plugin: Send + Sync + 'static {
 pub struct Extensions {
     pub(crate) hooks: Vec<Arc<dyn DynHook>>,
     pub(crate) insert_middleware: Vec<Arc<dyn DynInsertMiddleware>>,
-    pub(crate) work_middleware: Vec<Arc<dyn WorkMiddleware>>,
+    pub(crate) work_middleware: Vec<Arc<dyn DynWorkMiddleware>>,
 }
 
 impl Extensions {

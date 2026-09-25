@@ -10,12 +10,11 @@ use std::{
     time::Duration,
 };
 
-use async_trait::async_trait;
 use riverqueue::{
     BoxError, Client, EventKind, EventRecvError, Extensions, Hook, InsertContext, InsertMiddleware,
     InsertNext, InsertOpts, InsertedJobs, Job, JobArgs, JobRow, JobState, Metric, PeriodicJobs,
-    Plugin, QueueConfig, SubscribeConfig, WorkContext, WorkMiddleware, WorkOutcome, WorkResult,
-    Worker, WorkerRegistry, database::PostgresDatabase,
+    Plugin, QueueConfig, SubscribeConfig, WorkContext, WorkError, WorkMiddleware, WorkNext,
+    WorkOutcome, Worker, WorkerRegistry, database::PostgresDatabase,
 };
 use riverqueue_migrate::PostgresMigrator;
 use serde::{Deserialize, Serialize};
@@ -170,10 +169,10 @@ impl Hook for RuntimeHook {
         &self,
         _context: &WorkContext,
         _job: &JobRow,
-        _result: &WorkResult,
-    ) -> Result<(), BoxError> {
+        result: Result<WorkOutcome, WorkError>,
+    ) -> Result<WorkOutcome, WorkError> {
         self.counts.work_after.fetch_add(1, Ordering::SeqCst);
-        Ok(())
+        result
     }
 }
 
@@ -225,29 +224,23 @@ impl Plugin for RuntimePlugin {
 #[derive(Clone)]
 struct RuntimeWorkMiddleware(Arc<RuntimeCounts>);
 
-#[async_trait]
 impl WorkMiddleware for RuntimeWorkMiddleware {
-    async fn after_work(
+    async fn work(
         &self,
         _context: &WorkContext,
-        _job: &JobRow,
-        _result: &WorkResult,
-    ) -> Result<(), riverqueue::Error> {
-        self.0.work_after.fetch_add(1, Ordering::SeqCst);
-        Ok(())
-    }
-
-    async fn before_work(
-        &self,
-        _context: &WorkContext,
-        job: &mut JobRow,
-    ) -> Result<(), riverqueue::Error> {
-        assert_eq!(
-            job.decode_args::<serde_json::Value>()?["hook_decrypted"],
-            true
-        );
+        job: JobRow,
+        next: WorkNext<'_>,
+    ) -> Result<WorkOutcome, WorkError> {
+        // Like River Go, work hooks run inside middleware, so the hook
+        // hasn't transformed the arguments yet.
+        let args = job
+            .decode_args::<serde_json::Value>()
+            .map_err(WorkError::new)?;
+        assert!(args.get("hook_decrypted").is_none());
         self.0.work_before.fetch_add(1, Ordering::SeqCst);
-        Ok(())
+        let result = next.run(job).await;
+        self.0.work_after.fetch_add(1, Ordering::SeqCst);
+        result
     }
 }
 

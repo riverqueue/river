@@ -92,6 +92,7 @@ use crate::__private::{
     JobInsertParams as PilotJobInsertParams, JobSetStateParams,
 };
 
+use crate::extension::{WorkEndpoint, WorkNext};
 use crate::{
     AttemptError, BoxError, DefaultRetryPolicy, Error, ErrorHandler, ErrorHandlerDecision, Event,
     EventKind, EventReceiver, FETCH_COOLDOWN_DEFAULT, FETCH_COOLDOWN_MIN,
@@ -146,7 +147,7 @@ pub(crate) struct ClientInner {
     started: AtomicBool,
     unique_nonce: AtomicU64,
     pub(crate) workers: WorkerRegistry,
-    work_middleware: Vec<Arc<dyn WorkMiddleware>>,
+    work_middleware: Vec<Arc<dyn crate::extension::DynWorkMiddleware>>,
 }
 
 #[cfg(feature = "sqlite")]

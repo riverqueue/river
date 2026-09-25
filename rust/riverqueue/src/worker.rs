@@ -599,13 +599,14 @@ trait ErasedWorker: Send + Sync {
 
     /// Runs one attempt. Arguments are decoded once, and the worker's
     /// timeout for the decoded job is reported through `timeout` before
-    /// work starts.
+    /// work starts. The outer error reports arguments that couldn't be
+    /// decoded, in which case the worker didn't run.
     async fn work(
         &self,
         context: WorkContext,
         row: &JobRow,
         timeout: oneshot::Sender<WorkerTimeout>,
-    ) -> Result<WorkOutcome, WorkError>;
+    ) -> Result<Result<WorkOutcome, WorkError>, WorkError>;
 }
 
 struct FunctionWorker<F> {
@@ -669,11 +670,9 @@ where
         context: WorkContext,
         row: &JobRow,
         timeout: oneshot::Sender<WorkerTimeout>,
-    ) -> Result<WorkOutcome, WorkError> {
+    ) -> Result<Result<WorkOutcome, WorkError>, WorkError> {
         let job = Job {
-            args: row
-                .decode_args()
-                .map_err(|error| WorkError::new(Box::new(error)))?,
+            args: row.decode_args().map_err(WorkError::new)?,
             row: row.clone(),
         };
         // The supervisor may have stopped waiting for a timeout; that is not
@@ -684,10 +683,11 @@ where
         // starts the timeout before a worker that blocks the thread (which
         // the supervisor exists to detect) can delay it.
         tokio::task::yield_now().await;
-        self.worker
+        Ok(self
+            .worker
             .work(context, job)
             .await
-            .map_err(|error| WorkError::new(error.into()))
+            .map_err(|error| WorkError::new(error.into())))
     }
 }
 
@@ -811,15 +811,23 @@ impl WorkerRegistry {
         self.register::<A, _>(FunctionWorker { function })
     }
 
+    /// Returns an error for a row whose kind has no registered worker, which
+    /// River fails before running any hook or middleware, as River Go does.
+    pub(crate) fn check_kind(&self, row: &JobRow) -> Result<(), WorkError> {
+        self.worker_for(row).map(|_| ()).map_err(WorkError::new)
+    }
+
     /// Runs one attempt of `row`, decoding its arguments once. The worker's
     /// timeout for the job is sent on `timeout` before work starts; the
-    /// sender is dropped without a value when the attempt fails first.
+    /// sender is dropped without a value when the attempt fails first. The
+    /// outer error reports an unknown kind or arguments that couldn't be
+    /// decoded, in which case the worker didn't run.
     pub(crate) async fn work(
         &self,
         context: WorkContext,
         row: &JobRow,
         timeout: oneshot::Sender<WorkerTimeout>,
-    ) -> Result<WorkOutcome, WorkError> {
+    ) -> Result<Result<WorkOutcome, WorkError>, WorkError> {
         let worker = self.worker_for(row).map_err(WorkError::new)?;
         worker.work(context, row, timeout).await
     }
@@ -1025,6 +1033,7 @@ mod tests {
                 timeout_sender,
             )
             .await
+            .unwrap()
             .unwrap();
 
         assert_eq!(outcome, WorkOutcome::Snooze(Duration::from_secs(1)));
@@ -1049,6 +1058,7 @@ mod tests {
                 timeout_sender,
             )
             .await
+            .unwrap()
             .unwrap_err();
         assert!(error.source_ref().downcast_ref::<FunctionError>().is_some());
     }
@@ -1112,6 +1122,7 @@ mod tests {
                 timeout_sender,
             )
             .await
+            .unwrap()
             .unwrap();
 
         assert_eq!(outcome, WorkOutcome::Complete);
@@ -1152,6 +1163,7 @@ mod tests {
                 timeout_sender,
             )
             .await
+            .and_then(|result| result)
     }
 
     async fn anyhow_function_worker(

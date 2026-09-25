@@ -268,13 +268,15 @@ func verifyExtensionOrder(t *testing.T, current *adapter) {
 	stats := waitForRuntimeStats(t, current, func(stats runtimeStats) bool {
 		return slices.Contains(stats.Events, "job_completed")
 	})
-	// Hooks and middleware each run in order around insertion and work.
-	// Whether hooks run inside or outside middleware differs between
-	// implementations and is not asserted.
-	requireOrderedSubsequence(t, stats.Trace, []string{"hook:insert_begin", "middleware:insert_after"})
-	requireOrderedSubsequence(t, stats.Trace, []string{"middleware:insert_before", "middleware:insert_after"})
-	requireOrderedSubsequence(t, stats.Trace, []string{"hook:work_begin", "hook:work_end"})
-	requireOrderedSubsequence(t, stats.Trace, []string{"middleware:work_before", "middleware:work_after"})
+	// Like River Go, hooks run inside middleware: insertion middleware wraps
+	// the insert-begin hooks, and work middleware wraps the work hooks and
+	// the worker.
+	requireOrderedSubsequence(t, stats.Trace, []string{
+		"middleware:insert_before", "hook:insert_begin", "middleware:insert_after",
+	})
+	requireOrderedSubsequence(t, stats.Trace, []string{
+		"middleware:work_before", "hook:work_begin", "hook:work_end", "middleware:work_after",
+	})
 	requireOrderedSubsequence(t, stats.Trace, []string{"middleware:insert_after", "hook:work_begin"})
 	current.call(t, "stop", map[string]any{}, nil)
 }

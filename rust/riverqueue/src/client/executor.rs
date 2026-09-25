@@ -178,41 +178,43 @@ async fn run_worker(
     cancellation: &CancellationToken,
     cancellation_cause: &mut Option<CancellationCause>,
 ) -> Option<WorkerResult> {
-    let mut worker_row = row.clone();
+    let worker_row = row.clone();
     let worker_context = context.clone();
     let worker_inner = Arc::clone(inner);
     let (timeout_sender, timeout_receiver) = oneshot::channel();
-    let mut worker_task = AbortOnDrop(tokio::spawn(async move {
-        worker_context.resumable_validate()?;
-        for hook in &worker_inner.hooks {
-            hook.work_begin(&worker_context, &mut worker_row)
+    // The worker runs in its own task so a panic or an abort can't take the
+    // executor with it. It stays inside this job's span.
+    let mut worker_task = AbortOnDrop(tokio::spawn(
+        async move {
+            worker_context.resumable_validate()?;
+            // Like River Go, an unknown kind fails before any middleware or
+            // hook runs.
+            worker_inner.workers.check_kind(&worker_row)?;
+            let hooks_context = worker_context.clone();
+            let hooks_inner = Arc::clone(&worker_inner);
+            let endpoint: WorkEndpoint<'_> = Box::new(move |mut job: JobRow| {
+                Box::pin(async move {
+                    for hook in &hooks_inner.hooks {
+                        hook.work_begin(&hooks_context, &mut job)
+                            .await
+                            .map_err(WorkError::new)?;
+                    }
+                    let mut result = hooks_inner
+                        .workers
+                        .work(hooks_context.clone(), &job, timeout_sender)
+                        .await?;
+                    for hook in &hooks_inner.hooks {
+                        result = hook.work_end(&hooks_context, &job, result).await;
+                    }
+                    result
+                })
+            });
+            WorkNext::new(&worker_inner.work_middleware, &worker_context, endpoint)
+                .run(worker_row)
                 .await
-                .map_err(boxed_extension_error)?;
         }
-        for middleware in &worker_inner.work_middleware {
-            middleware
-                .before_work(&worker_context, &mut worker_row)
-                .await
-                .map_err(boxed_extension_error)?;
-        }
-        let result = worker_inner
-            .workers
-            .work(worker_context.clone(), &worker_row, timeout_sender)
-            .await;
-        let public_result = erased_work_result(&result);
-        for middleware in worker_inner.work_middleware.iter().rev() {
-            middleware
-                .after_work(&worker_context, &worker_row, &public_result)
-                .await
-                .map_err(boxed_extension_error)?;
-        }
-        for hook in &worker_inner.hooks {
-            hook.work_end(&worker_context, &worker_row, &public_result)
-                .await
-                .map_err(boxed_extension_error)?;
-        }
-        result
-    }));
+        .in_current_span(),
+    ));
 
     // The worker reports its timeout after decoding the job's arguments,
     // following any hooks and middleware, so the timeout covers the work
@@ -394,20 +396,6 @@ pub(super) fn worker_failure_from_source(error: BoxError) -> WorkerFailure {
         kind: WorkerFailureKind::Error,
         source: Some(error),
         trace: String::new(),
-    }
-}
-
-pub(super) fn boxed_extension_error(error: Error) -> WorkError {
-    WorkError::new(Box::new(error))
-}
-
-pub(super) fn erased_work_result(result: &Result<WorkOutcome, WorkError>) -> WorkResult {
-    match result {
-        Ok(WorkOutcome::Cancel) => WorkResult::Cancelled,
-        Ok(WorkOutcome::Complete) => WorkResult::Completed,
-        Ok(WorkOutcome::Discard) => WorkResult::Discarded,
-        Ok(WorkOutcome::Snooze(duration)) => WorkResult::Snoozed(*duration),
-        Err(error) => WorkResult::Failed(error.clone()),
     }
 }
 
