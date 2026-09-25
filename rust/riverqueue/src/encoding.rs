@@ -51,14 +51,7 @@ use serde_json::{
 /// Returns an error when the value's [`Serialize`] implementation fails, for
 /// example because a map has non-string keys.
 pub fn encode_args<T: Serialize + ?Sized>(args: &T) -> Result<Box<RawValue>, serde_json::Error> {
-    let mut buffer = Vec::with_capacity(128);
-    args.serialize(&mut serde_json::Serializer::with_formatter(
-        &mut buffer,
-        GoFormatter,
-    ))?;
-    let text =
-        String::from_utf8(buffer).map_err(<serde_json::Error as serde::ser::Error>::custom)?;
-    RawValue::from_string(text)
+    RawValue::from_string(to_go_string(args)?)
 }
 
 /// Serde helpers that encode a `DateTime<Utc>` the way Go's `encoding/json`
@@ -151,6 +144,16 @@ impl Formatter for GoFormatter {
             start = index + character.len_utf8();
         }
         writer.write_all(&fragment.as_bytes()[start..])
+    }
+
+    /// Embeds raw JSON (a [`RawValue`], such as job metadata) the way Go
+    /// embeds a `json.RawMessage`: compacted, with the same HTML-safe string
+    /// escaping, and every other token byte for byte.
+    fn write_raw_fragment<W>(&mut self, writer: &mut W, fragment: &str) -> io::Result<()>
+    where
+        W: ?Sized + io::Write,
+    {
+        writer.write_all(go_compact(fragment).as_bytes())
     }
 
     fn write_char_escape<W>(&mut self, writer: &mut W, char_escape: CharEscape) -> io::Result<()>
@@ -326,6 +329,62 @@ fn control_escape(byte: u8) -> [u8; 6] {
     ]
 }
 
+/// Compacts valid JSON like Go's `json.Compact` after `json.HTMLEscape`:
+/// whitespace between tokens is removed, and inside strings `<`, `>`, `&`,
+/// U+2028, and U+2029 are escaped. Numbers, key order, and existing escapes
+/// are kept byte for byte.
+pub(crate) fn go_compact(json: &str) -> String {
+    let mut output = String::with_capacity(json.len());
+    let mut in_string = false;
+    let mut escaped = false;
+    for character in json.chars() {
+        if !in_string {
+            match character {
+                ' ' | '\t' | '\n' | '\r' => {}
+                '"' => {
+                    in_string = true;
+                    output.push(character);
+                }
+                _ => output.push(character),
+            }
+            continue;
+        }
+        if escaped {
+            escaped = false;
+            output.push(character);
+            continue;
+        }
+        match character {
+            '\\' => {
+                escaped = true;
+                output.push(character);
+            }
+            '"' => {
+                in_string = false;
+                output.push(character);
+            }
+            '<' => output.push_str("\\u003c"),
+            '>' => output.push_str("\\u003e"),
+            '&' => output.push_str("\\u0026"),
+            '\u{2028}' => output.push_str("\\u2028"),
+            '\u{2029}' => output.push_str("\\u2029"),
+            _ => output.push(character),
+        }
+    }
+    output
+}
+
+/// Serializes `value` to JSON text with Go's `encoding/json` output rules,
+/// as [`encode_args`] does.
+pub(crate) fn to_go_string<T: Serialize + ?Sized>(value: &T) -> Result<String, serde_json::Error> {
+    let mut buffer = Vec::with_capacity(128);
+    value.serialize(&mut serde_json::Serializer::with_formatter(
+        &mut buffer,
+        GoFormatter,
+    ))?;
+    String::from_utf8(buffer).map_err(<serde_json::Error as serde::ser::Error>::custom)
+}
+
 /// Appends `value` as a JSON string with Go's `encoding/json` escaping.
 pub(crate) fn write_go_string(value: &str, output: &mut String) {
     output.push('"');
@@ -428,6 +487,19 @@ mod tests {
         let mut direct = String::new();
         write_go_string(value, &mut direct);
         assert_eq!(direct, expected);
+    }
+
+    #[test]
+    fn embeds_raw_json_like_go_raw_messages() {
+        let raw = RawValue::from_string(
+            "{ \"b\" : \"a<b>&\u{2028}\\u003c\\\"<\" ,\n \"n\": 1.50e0, \"z\":[ 1 , 2 ] }"
+                .to_owned(),
+        )
+        .unwrap();
+        assert_eq!(
+            encoded(&raw),
+            r#"{"b":"a\u003cb\u003e\u0026\u2028\u003c\"\u003c","n":1.50e0,"z":[1,2]}"#
+        );
     }
 
     #[test]

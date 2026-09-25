@@ -594,6 +594,21 @@ mod tests {
     }
 
     #[test]
+    fn serializes_at_like_go() {
+        let at = NaiveDate::from_ymd_opt(2024, 1, 2)
+            .unwrap()
+            .and_hms_opt(3, 4, 5)
+            .unwrap()
+            .and_utc()
+            + chrono::Duration::nanoseconds(678_900_000);
+        let encoded = serde_json::to_string(&attempt_error(at, 1, "", "")).unwrap();
+        assert_eq!(
+            encoded,
+            r#"{"at":"2024-01-02T03:04:05.6789Z","attempt":1,"error":"","trace":""}"#
+        );
+    }
+
+    #[test]
     fn round_trip() {
         let attempt_error = attempt_error(attempt_at(), 3, "job failed", "frame one");
         let encoded = serde_json::to_string(&attempt_error).unwrap();

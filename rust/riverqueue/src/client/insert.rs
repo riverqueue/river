@@ -824,7 +824,9 @@ impl Client {
         let now = Utc::now();
         let mut rows = Vec::with_capacity(jobs.len());
         for job in jobs {
-            let row = self.insert_row(connection.reborrow(), job, now).await?;
+            let row = self
+                .insert_row(connection.reborrow(), job, now, mode)
+                .await?;
             // Go's PostgreSQL `COPY` fails on a unique conflict, while its
             // SQLite fast insertion skips the conflicting job.
             #[cfg(feature = "postgres")]
@@ -937,11 +939,16 @@ impl Client {
     }
 
     /// Writes one job, returning it or the existing unique job it matched.
+    #[cfg_attr(
+        not(feature = "sqlite"),
+        expect(unused_variables, reason = "only SQLite insertion depends on the mode")
+    )]
     async fn insert_row(
         &self,
         connection: PilotDatabaseConnection<'_>,
         job: InsertContext,
         now: DateTime<Utc>,
+        mode: InsertMode,
     ) -> Result<InsertedJob, Error> {
         let InsertContext {
             encoded_args,
@@ -996,7 +1003,12 @@ impl Client {
             }
             #[cfg(feature = "sqlite")]
             PilotDatabaseConnection::Sqlite(connection) => {
-                let nonce = unique_key.as_ref().map(|_| self.unique_insert_nonce());
+                // Go's SQLite driver writes a nonce into every row it inserts
+                // and returns, and none into fast insertions. A fast unique
+                // insertion still needs one here to detect a skipped
+                // duplicate, since it reads the row back.
+                let nonce = (mode == InsertMode::Rows || unique_key.is_some())
+                    .then(|| self.unique_insert_nonce());
                 let inserted = crate::database::sqlite::insert(
                     connection,
                     &crate::database::sqlite::InsertJob {
@@ -1031,10 +1043,10 @@ impl Client {
         }
     }
 
-    /// Returns a nonce that marks a SQLite unique insert as this call's own.
+    /// Returns a nonce that marks a SQLite insert as this call's own.
     ///
-    /// SQLite reports a skipped duplicate by checking whether the returned
-    /// row carries the nonce the insert wrote. Like River Go's
+    /// SQLite reports a skipped unique duplicate by checking whether the
+    /// returned row carries the nonce the insert wrote. Like River Go's
     /// `randutil.Hex(8)`, the nonce must not repeat across processes: client
     /// IDs and counters can (a restarted container keeps its hostname and
     /// PID), so 128 unpredictable bits are drawn from the standard library's

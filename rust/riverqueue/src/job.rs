@@ -108,7 +108,9 @@ pub(crate) struct InsertBatchItem {
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 #[non_exhaustive]
 pub struct AttemptError {
-    /// Time at which the error occurred.
+    /// Time at which the error occurred. It serializes like Go's
+    /// `time.Time`, with the shortest fractional seconds.
+    #[serde(serialize_with = "crate::encoding::go_time::serialize")]
     pub at: DateTime<Utc>,
     /// Attempt number on which the error occurred.
     pub attempt: i16,
