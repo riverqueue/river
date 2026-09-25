@@ -74,6 +74,8 @@ func exerciseMigration[TTx any](ctx context.Context, t *testing.T,
 			require.Equal(t, expectedLatestTables,
 				driver.GetMigrationTruncateTables(riverdriver.MigrationLineMain, 7))
 			require.Equal(t, expectedLatestTables,
+				driver.GetMigrationTruncateTables(riverdriver.MigrationLineMain, 8))
+			require.Equal(t, expectedLatestTables,
 				driver.GetMigrationTruncateTables(riverdriver.MigrationLineMain, 0))
 		})
 	})
@@ -144,7 +146,7 @@ func exerciseMigration[TTx any](ctx context.Context, t *testing.T,
 		}
 	})
 
-	t.Run("MigrateDownFromVersionSevenWithJobData", func(t *testing.T) {
+	t.Run("MigrateDownFromVersionEightWithJobData", func(t *testing.T) {
 		t.Parallel()
 
 		driver, schema := driverWithSchema(ctx, t, &riverdbtest.TestSchemaOpts{
@@ -169,6 +171,39 @@ func exerciseMigration[TTx any](ctx context.Context, t *testing.T,
 		job, err = exec.JobGetByID(ctx, &riverdriver.JobGetByIDParams{ID: job.ID, Schema: schema})
 		require.NoError(t, err)
 		require.NotZero(t, job.ID)
+	})
+
+	t.Run("MigrateUpFromVersionSevenWithJobData", func(t *testing.T) {
+		t.Parallel()
+
+		driver, schema := driverWithSchema(ctx, t, &riverdbtest.TestSchemaOpts{
+			DisableReuse: true,
+			LineTargetVersions: map[string]int{
+				riverdriver.MigrationLineMain: 7,
+			},
+		})
+		exec := driver.GetExecutor()
+
+		job := testfactory.Job(ctx, t, exec, &testfactory.JobOpts{Schema: schema})
+
+		migrator, err := rivermigrate.New(driver, &rivermigrate.Config{
+			Line:   riverdriver.MigrationLineMain,
+			Logger: riversharedtest.Logger(t),
+			Schema: schema,
+		})
+		require.NoError(t, err)
+
+		_, err = migrator.Migrate(ctx, rivermigrate.DirectionUp, nil)
+		require.NoError(t, err)
+
+		job, err = exec.JobGetByID(ctx, &riverdriver.JobGetByIDParams{ID: job.ID, Schema: schema})
+		require.NoError(t, err)
+
+		_, err = exec.JobDelete(ctx, &riverdriver.JobDeleteParams{ID: job.ID, Schema: schema})
+		require.NoError(t, err)
+
+		jobAfter := testfactory.Job(ctx, t, exec, &testfactory.JobOpts{Schema: schema})
+		require.Greater(t, jobAfter.ID, job.ID)
 	})
 
 	t.Run("MigrateUpFromVersionSixWithQueueData", func(t *testing.T) {
@@ -213,6 +248,69 @@ func exerciseMigration[TTx any](ctx context.Context, t *testing.T,
 		require.NoError(t, err)
 		require.Equal(t, "queue-with-defaults", queue.Name)
 		require.NotZero(t, queue.UpdatedAt)
+	})
+
+	t.Run("MigrateVersionEightRejectsProSchema", func(t *testing.T) {
+		t.Parallel()
+
+		for _, testCase := range []struct {
+			name string
+			sql  string
+		}{
+			{"LegacyWorkflow", `CREATE INDEX river_job_workflow_scheduling ON river_job (state)`},
+			{"Pro", `CREATE TABLE river_job_sequence (id integer PRIMARY KEY, key text)`},
+			{"WorkflowV2", `CREATE TABLE river_workflow (id text PRIMARY KEY)`},
+		} {
+			t.Run(testCase.name, func(t *testing.T) {
+				t.Parallel()
+
+				for _, direction := range []rivermigrate.Direction{rivermigrate.DirectionDown, rivermigrate.DirectionUp} {
+					t.Run(string(direction), func(t *testing.T) {
+						t.Parallel()
+
+						version := 7
+						if direction == rivermigrate.DirectionDown {
+							version = 8
+						}
+						driver, schema := driverWithSchema(ctx, t, &riverdbtest.TestSchemaOpts{
+							DisableReuse: true,
+							LineTargetVersions: map[string]int{
+								riverdriver.MigrationLineMain: version,
+							},
+							Lines: []string{riverdriver.MigrationLineMain},
+						})
+						if driver.DatabaseName() != riverdriver.DatabaseNameSQLite {
+							t.Skip("SQLite table rebuild")
+						}
+						exec := driver.GetExecutor()
+						job := testfactory.Job(ctx, t, exec, &testfactory.JobOpts{Schema: schema})
+
+						// Deliberately omit Pro migration records, as when applying SQL
+						// through an external migration tool.
+						require.NoError(t, exec.Exec(ctx, testCase.sql))
+						require.NoError(t, exec.Exec(ctx, `ALTER TABLE river_job ADD COLUMN partition_key text`))
+						migrator, err := rivermigrate.New(driver, &rivermigrate.Config{Logger: riversharedtest.Logger(t), Schema: schema})
+						require.NoError(t, err)
+
+						_, err = migrator.Migrate(ctx, direction, &rivermigrate.MigrateOpts{MaxSteps: 1})
+						require.ErrorContains(t, err, "River SQLite migration 008 cannot run while River Pro schema is installed")
+
+						jobAfter, err := exec.JobGetByID(ctx, &riverdriver.JobGetByIDParams{ID: job.ID, Schema: schema})
+						require.NoError(t, err)
+						require.Equal(t, job, jobAfter)
+						exists, err := exec.ColumnExists(ctx, &riverdriver.ColumnExistsParams{Column: "partition_key", Schema: schema, Table: "river_job"})
+						require.NoError(t, err)
+						require.True(t, exists)
+						exists, err = exec.IndexExists(ctx, &riverdriver.IndexExistsParams{Index: "river_job_kind", Schema: schema})
+						require.NoError(t, err)
+						require.True(t, exists)
+						migrations, err := exec.MigrationGetByLine(ctx, &riverdriver.MigrationGetByLineParams{Line: riverdriver.MigrationLineMain, Schema: schema})
+						require.NoError(t, err)
+						require.Len(t, migrations, version)
+					})
+				}
+			})
+		}
 	})
 
 	type testBundle struct {

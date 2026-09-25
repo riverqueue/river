@@ -53,7 +53,7 @@ DROP INDEX /* TEMPLATE: schema */river_job_unique_idx;
 ALTER TABLE /* TEMPLATE: schema */river_job RENAME TO river_job_old;
 
 CREATE TABLE /* TEMPLATE: schema */river_job (
-    id integer PRIMARY KEY, -- SQLite makes this autoincrementing automatically
+    id integer PRIMARY KEY, -- SQLite aliases this to ROWID, which may reuse deleted IDs.
     args blob NOT NULL DEFAULT '{}',
     attempt integer NOT NULL DEFAULT 0,
     attempted_at timestamp,
