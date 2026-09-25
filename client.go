@@ -249,6 +249,22 @@ type Config struct {
 	// both a hook and middleware.
 	Hooks []rivertype.Hook
 
+	// LeaderElectionDisabled prevents this client from participating in leader
+	// election and running maintenance services. It still fetches and executes
+	// jobs from its configured queues normally.
+	//
+	// At least one other started client in the same database and schema must
+	// remain eligible to lead for scheduled jobs, retries, periodic enqueueing,
+	// stuck job rescue, and cleanup to progress. This client will never become
+	// leader, even if no other eligible client is running.
+	//
+	// PeriodicJobs must be empty when this is true. Periodic jobs cannot be
+	// configured on this client, though it can still execute periodic jobs
+	// enqueued by another client.
+	//
+	// Defaults to false.
+	LeaderElectionDisabled bool
+
 	// Logger is the structured logger to use for logging purposes. If none is
 	// specified, logs will be emitted to STDOUT with messages at warn level
 	// or higher.
@@ -304,6 +320,8 @@ type Config struct {
 
 	// PeriodicJobs are a set of periodic jobs to run at the specified intervals
 	// in the client.
+	//
+	// Must be empty when LeaderElectionDisabled is true.
 	PeriodicJobs []*PeriodicJob
 
 	// PollOnly starts the client in "poll only" mode, which avoids issuing
@@ -522,6 +540,7 @@ func (c *Config) WithDefaults() *Config {
 		JobStuckHandler:             c.JobStuckHandler,
 		JobStuckThreshold:           cmp.Or(c.JobStuckThreshold, JobStuckThresholdDefault),
 		JobTimeout:                  cmp.Or(c.JobTimeout, JobTimeoutDefault),
+		LeaderElectionDisabled:      c.LeaderElectionDisabled,
 		Logger:                      logger,
 		MaxAttempts:                 cmp.Or(c.MaxAttempts, MaxAttemptsDefault),
 		Middleware:                  c.Middleware,
@@ -574,6 +593,9 @@ func (c *Config) validate() error {
 	}
 	if c.JobStuckThreshold < 0 {
 		return errors.New("JobStuckThreshold cannot be less than zero")
+	}
+	if c.LeaderElectionDisabled && len(c.PeriodicJobs) > 0 {
+		return errors.New("PeriodicJobs must be empty when LeaderElectionDisabled is true")
 	}
 	if c.MaxAttempts < 0 {
 		return errors.New("MaxAttempts cannot be less than zero")
@@ -920,11 +942,13 @@ func NewClient[TTx any](driver riverdriver.Driver[TTx], config *Config) (*Client
 			config.Logger.Info("Driver does not support listener; entering poll only mode")
 		}
 
-		client.elector = leadership.NewElector(archetype, driver.GetExecutor(), client.notifier, &leadership.Config{
-			ClientID: config.ID,
-			Schema:   config.Schema,
-		})
-		client.services = append(client.services, client.elector)
+		if !config.LeaderElectionDisabled {
+			client.elector = leadership.NewElector(archetype, driver.GetExecutor(), client.notifier, &leadership.Config{
+				ClientID: config.ID,
+				Schema:   config.Schema,
+			})
+			client.services = append(client.services, client.elector)
+		}
 
 		for queue, queueConfig := range config.Queues {
 			if _, err := client.producerAdd(queue, queueConfig); err != nil {
@@ -938,7 +962,9 @@ func NewClient[TTx any](driver riverdriver.Driver[TTx], config *Config) (*Client
 		if pluginPilot != nil {
 			client.services = append(client.services, pluginPilot.PluginServices()...)
 		}
+	}
 
+	if config.willExecuteJobs() && !config.LeaderElectionDisabled {
 		//
 		// Maintenance services
 		//
@@ -1235,20 +1261,22 @@ func (c *Client[TTx]) Start(ctx context.Context) error {
 		c.workCancel(rivercommon.ErrStop)
 
 		// Stop all mainline services where stop order isn't important.
-		startstop.StopAllParallel(append(
-			// This list of services contains the completer, which should always
-			// stop after the producers so that any remaining work that was enqueued
-			// will have a chance to have its state completed as it finishes.
-			//
-			// TODO: there's a risk here that the completer is stuck on a job that
-			// won't complete. We probably need a timeout or way to move on in those
-			// cases.
-			c.services,
+		// This list of services contains the completer, which should always
+		// stop after the producers so that any remaining work that was enqueued
+		// will have a chance to have its state completed as it finishes.
+		//
+		// TODO: there's a risk here that the completer is stuck on a job that
+		// won't complete. We probably need a timeout or way to move on in those
+		// cases.
+		servicesToStop := c.services
 
+		if c.queueMaintainer != nil {
 			// Will only be started if this client was leader, but can tolerate a
 			// stop without having been started.
-			c.queueMaintainer,
-		)...)
+			servicesToStop = append(servicesToStop, c.queueMaintainer)
+		}
+
+		startstop.StopAllParallel(servicesToStop...)
 	}()
 
 	return nil
@@ -2565,14 +2593,17 @@ func (c *ClientNotifyBundle[TTx]) requestResignTx(ctx context.Context, execTx ri
 // PeriodicJobs returns the currently configured set of periodic jobs for the
 // client, and can be used to add new or remove existing ones.
 //
-// This function should only be invoked on clients capable of running perioidc
-// jobs. Running periodic jobs requires that the client be electable as leader
-// to run maintenance services, and being electable as leader requires that a
-// client be started. To be startable, a client must have Queues and Workers
-// configured. Invoking this function will panic if these conditions aren't met.
+// This function should only be invoked on clients capable of enqueueing
+// periodic jobs: Queues and Workers must be configured and
+// LeaderElectionDisabled must be false. Otherwise, invoking this function
+// will panic. The client must be started and elected leader for periodic jobs
+// to be enqueued.
 func (c *Client[TTx]) PeriodicJobs() *PeriodicJobBundle {
 	if !c.config.willExecuteJobs() {
 		panic("client Queues and Workers must be configured to modify periodic jobs (otherwise, they'll have no effect because a client not configured to work jobs can't be started)")
+	}
+	if c.config.LeaderElectionDisabled {
+		panic("cannot modify periodic jobs when LeaderElectionDisabled is true")
 	}
 
 	return c.periodicJobs

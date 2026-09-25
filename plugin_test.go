@@ -95,7 +95,7 @@ func TestClientPilotPlugin(t *testing.T) {
 		pluginPilot  *TestPilotWithPlugin
 	}
 
-	setup := func(t *testing.T) (*Client[pgx.Tx], *testBundle) {
+	setup := func(t *testing.T, leaderElectionDisabled bool) (*Client[pgx.Tx], *testBundle) {
 		t.Helper()
 
 		var (
@@ -106,6 +106,7 @@ func TestClientPilotPlugin(t *testing.T) {
 			pluginDriver = newDriverWithPlugin(t, dbPool)
 			pluginPilot  = newPilotWithPlugin(t)
 		)
+		config.LeaderElectionDisabled = leaderElectionDisabled
 		pluginDriver.pilot = pluginPilot
 
 		client, err := NewClient(pluginDriver, config)
@@ -117,10 +118,27 @@ func TestClientPilotPlugin(t *testing.T) {
 		}
 	}
 
+	t.Run("LeaderElectionDisabled", func(t *testing.T) {
+		t.Parallel()
+
+		client, bundle := setup(t, true)
+
+		startClient(ctx, t, client)
+		riversharedtest.WaitOrTimeout(t, client.baseStartStop.Started())
+		riversharedtest.WaitOrTimeout(t, bundle.pluginPilot.service.Started())
+
+		require.False(t, bundle.pluginPilot.maintenanceServicesCalled)
+		select {
+		case <-bundle.pluginPilot.maintenanceService.Started():
+			t.Fatal("plugin maintenance service should not have started")
+		default:
+		}
+	})
+
 	t.Run("ServicesStart", func(t *testing.T) {
 		t.Parallel()
 
-		client, bundle := setup(t)
+		client, bundle := setup(t, false)
 
 		startClient(ctx, t, client)
 
@@ -136,8 +154,9 @@ var _ pilotPlugin = &TestPilotWithPlugin{}
 type TestPilotWithPlugin struct {
 	riverpilot.StandardPilot
 
-	maintenanceService startstop.Service
-	service            startstop.Service
+	maintenanceService        startstop.Service
+	maintenanceServicesCalled bool
+	service                   startstop.Service
 }
 
 func newPilotWithPlugin(t *testing.T) *TestPilotWithPlugin {
@@ -170,6 +189,7 @@ func newPilotWithPlugin(t *testing.T) *TestPilotWithPlugin {
 }
 
 func (d *TestPilotWithPlugin) PluginMaintenanceServices() []startstop.Service {
+	d.maintenanceServicesCalled = true
 	return []startstop.Service{d.maintenanceService}
 }
 
