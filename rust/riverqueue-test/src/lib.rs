@@ -9,6 +9,13 @@ use riverqueue::{
 };
 use serde_json::{Map, Value};
 
+mod require;
+
+pub use require::{
+    ExpectedJob, RequireInsertedOpts, require_inserted, require_inserted_tx, require_many_inserted,
+    require_many_inserted_tx, require_not_inserted, require_not_inserted_tx,
+};
+
 /// Protocol revision understood by the Rust test helpers.
 pub const PROTOCOL_REVISION: u32 = 1;
 
