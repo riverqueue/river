@@ -1703,6 +1703,34 @@ async fn sqlite_transaction_batches_roll_back_only_the_failed_batch() {
 }
 
 #[tokio::test]
+async fn sqlite_long_fetch_cooldown_still_fetches_first() {
+    let pool = setup().await;
+    let worked = Arc::new(Semaphore::new(0));
+    // Longer than the monotonic clock has run on any host.
+    let ten_years = Duration::from_hours(24 * 365 * 10);
+    let client = Client::builder(pool)
+        .queue(
+            "default",
+            QueueConfig::new(1)
+                .with_fetch_cooldown(ten_years)
+                .with_fetch_poll_interval(ten_years),
+        )
+        .workers(runtime_workers(Arc::clone(&worked)))
+        .build()
+        .unwrap();
+    client.insert(RuntimeArgs { value: 1 }).await.unwrap();
+    let mut run = client.start().unwrap();
+    run.wait_ready().await.unwrap();
+
+    tokio::time::timeout(Duration::from_secs(5), worked.acquire())
+        .await
+        .expect("the first fetch doesn't wait for a cooldown")
+        .unwrap()
+        .forget();
+    run.shutdown().await.unwrap();
+}
+
+#[tokio::test]
 async fn sqlite_outbox_cancels_work_from_another_client() {
     let pool = setup().await;
     let started = Arc::new(Semaphore::new(0));
