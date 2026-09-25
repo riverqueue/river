@@ -532,6 +532,9 @@ fn respond_unique_key(request: &Request) -> Response {
                 "conformance_selected_args" => {
                     unique_key_for_args::<UniqueSelectedArgs>(&params, &opts)
                 }
+                "conformance_dotted_selected_args" => {
+                    unique_key_for_args::<UniqueDottedSelectedArgs>(&params, &opts)
+                }
                 "conformance_simple" => unique_key_for_args::<UniqueSimpleArgs>(&params, &opts),
                 kind => Err(format!("unsupported unique fixture kind {kind:?}")),
             }?;
@@ -610,6 +613,28 @@ struct UniqueSelectedArgs {
     label: Option<String>,
     #[serde(default, rename = "path/key")]
     path_key: String,
+}
+
+#[derive(Debug, Default, Deserialize, Serialize)]
+#[serde(default)]
+struct UniqueDottedSelectedUser {
+    id: String,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+struct UniqueDottedSelectedArgs {
+    #[serde(default, rename = "user.id")]
+    literal: String,
+    #[serde(default)]
+    user: UniqueDottedSelectedUser,
+}
+
+impl JobArgs for UniqueDottedSelectedArgs {
+    const KIND: &'static str = "conformance_dotted_selected_args";
+
+    fn unique_fields() -> &'static [&'static str] {
+        &["user.id", "user\\.id"]
+    }
 }
 
 #[derive(Debug, Deserialize, JobArgs, Serialize)]

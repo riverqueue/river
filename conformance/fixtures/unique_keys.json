@@ -222,6 +222,53 @@
     },
     {
       "args": {
+        "user.id": "literal",
+        "user": {}
+      },
+      "expected_sha256": "7d478fa6978b3fbb5c326d90fd10c2eab663cf2c9c2e1e3ddcce032989a05cdb",
+      "expected_state_mask": 245,
+      "kind": "conformance_dotted_selected_args",
+      "name": "selected_literal_dotted_name",
+      "now": "2026-01-02T03:04:05.6789Z",
+      "options": {
+        "by_args": true,
+        "by_period_nanos": 0,
+        "by_queue": false,
+        "exclude_kind": false
+      },
+      "queue": "default",
+      "scheduled_at": null,
+      "selected_unique_paths": [
+        "user.id",
+        "user\\.id"
+      ]
+    },
+    {
+      "args": {
+        "user": {
+          "id": "nested"
+        }
+      },
+      "expected_sha256": "6fd34aa5a46274e4f7d159063be43c2c02e90438b84dab208c8c5209f94dda25",
+      "expected_state_mask": 245,
+      "kind": "conformance_dotted_selected_args",
+      "name": "selected_nested_dotted_path",
+      "now": "2026-01-02T03:04:05.6789Z",
+      "options": {
+        "by_args": true,
+        "by_period_nanos": 0,
+        "by_queue": false,
+        "exclude_kind": false
+      },
+      "queue": "default",
+      "scheduled_at": null,
+      "selected_unique_paths": [
+        "user.id",
+        "user\\.id"
+      ]
+    },
+    {
+      "args": {
         "empty": [],
         "labels": {
           "alpha": "first",

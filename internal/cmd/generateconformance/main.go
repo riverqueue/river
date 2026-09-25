@@ -92,6 +92,18 @@ type selectedArgs struct {
 
 func (selectedArgs) Kind() string { return "conformance_selected_args" }
 
+type dottedSelectedUser struct {
+	ID string `json:"id,omitempty" river:"unique"`
+}
+
+type dottedSelectedArgs struct {
+	//nolint:tagliatelle // literal dotted names distinguish them from nested paths
+	Literal string             `json:"user.id,omitempty" river:"unique"`
+	User    dottedSelectedUser `json:"user"`
+}
+
+func (dottedSelectedArgs) Kind() string { return "conformance_dotted_selected_args" }
+
 type simpleArgs struct {
 	ID int64 `json:"id"`
 }
@@ -376,6 +388,22 @@ func main() {
 			opts:                dbunique.UniqueOpts{ByArgs: true},
 			queue:               "default",
 			selectedUniquePaths: []string{"account.id", "account.region", "label", "path/key"},
+		},
+		{
+			args:                dottedSelectedArgs{Literal: "literal"},
+			name:                "selected_literal_dotted_name",
+			now:                 now,
+			opts:                dbunique.UniqueOpts{ByArgs: true},
+			queue:               "default",
+			selectedUniquePaths: []string{"user.id", `user\.id`},
+		},
+		{
+			args:                dottedSelectedArgs{User: dottedSelectedUser{ID: "nested"}},
+			name:                "selected_nested_dotted_path",
+			now:                 now,
+			opts:                dbunique.UniqueOpts{ByArgs: true},
+			queue:               "default",
+			selectedUniquePaths: []string{"user.id", `user\.id`},
 		},
 		{
 			args: collectionsArgs{
