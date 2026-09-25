@@ -209,7 +209,7 @@ impl ExtensionClient<'_> {
     pub async fn insert_raw(
         &self,
         kind: &str,
-        unique_fields: &[&str],
+        unique_fields: &[&[&str]],
         encoded_args: Box<RawValue>,
         opts: InsertOpts,
     ) -> Result<RawInsertResult, Error> {
@@ -227,7 +227,7 @@ impl ExtensionClient<'_> {
     pub async fn insert_raw_params(
         &self,
         kind: &str,
-        unique_fields: &[&str],
+        unique_fields: &[&[&str]],
         encoded_args: Box<RawValue>,
         opts: InsertParams,
     ) -> Result<RawInsertResult, Error> {
@@ -243,7 +243,7 @@ impl ExtensionClient<'_> {
         &self,
         connection: E,
         kind: &str,
-        unique_fields: &[&str],
+        unique_fields: &[&[&str]],
         encoded_args: Box<RawValue>,
         opts: InsertOpts,
     ) -> Result<RawInsertResult, Error>
@@ -265,7 +265,7 @@ impl ExtensionClient<'_> {
         &self,
         connection: E,
         kind: &str,
-        unique_fields: &[&str],
+        unique_fields: &[&[&str]],
         encoded_args: Box<RawValue>,
         opts: InsertParams,
     ) -> Result<RawInsertResult, Error>
@@ -297,7 +297,7 @@ impl ExtensionClient<'_> {
         &self,
         transaction: E,
         kind: &str,
-        unique_fields: &[&str],
+        unique_fields: &[&[&str]],
         encoded_args: Box<RawValue>,
         opts: InsertParams,
         target: DateTime<Utc>,

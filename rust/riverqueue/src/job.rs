@@ -25,8 +25,8 @@ pub trait JobArgs: DeserializeOwned + Send + Serialize + Sync + 'static {
         InsertOpts::default()
     }
 
-    /// JSON paths selected for argument-scoped uniqueness.
-    fn unique_fields() -> &'static [&'static str] {
+    /// Literal JSON path components selected for argument-scoped uniqueness.
+    fn unique_fields() -> &'static [&'static [&'static str]] {
         &[]
     }
 }
@@ -93,7 +93,7 @@ pub(crate) struct InsertBatchItem {
     pub(crate) encoded_args: Result<Box<RawValue>, serde_json::Error>,
     pub(crate) kind: &'static str,
     pub(crate) opts: InsertOpts,
-    pub(crate) unique_fields: &'static [&'static str],
+    pub(crate) unique_fields: &'static [&'static [&'static str]],
 }
 
 /// A failed job attempt persisted in `river_job.errors`.

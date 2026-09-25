@@ -32,6 +32,10 @@ use syn::{
 /// names follow Serde's serialization-side `rename` and `rename_all`. A
 /// unique field may be conditionally omitted with `skip_serializing_if`,
 /// matching River Go, but cannot be flattened or unconditionally skipped.
+/// `by_args` paths separate nested names with `.`; escape a literal dot or
+/// backslash with a backslash (for example, `"user\\.id"` selects the single
+/// JSON name `user.id`). Tagged fields use their whole serialized name as one
+/// component, even when that name contains a dot.
 #[proc_macro_derive(JobArgs, attributes(river))]
 pub fn derive_job_args(input: TokenStream) -> TokenStream {
     let input = parse_macro_input!(input as DeriveInput);
@@ -397,23 +401,29 @@ fn expand_job_args(input: &DeriveInput) -> syn::Result<proc_macro2::TokenStream>
                     "#[river(unique)] fields are only hashed with `unique(by_args)`; add it to the type's #[river(...)] attribute",
                 ));
             }
-            unique_fields.push(LitStr::new(&json_name, field_ident.span()));
+            unique_fields.push(vec![LitStr::new(&json_name, field_ident.span())]);
         }
     }
     if let Some(unique) = &attributes.unique {
         for path in &unique.by_args_paths {
-            let value = path.value();
-            let first = value.split('.').next().unwrap_or_default();
+            let components = parse_unique_path(path)?;
+            let first = &components[0];
             if !available_json_fields.iter().any(|field| field == first) {
                 return Err(syn::Error::new_spanned(
                     path,
                     "unique JSON path must start with a serialized field name",
                 ));
             }
-            unique_fields.push(path.clone());
+            unique_fields.push(
+                components
+                    .into_iter()
+                    .map(|component| LitStr::new(&component, path.span()))
+                    .collect(),
+            );
         }
     }
     validate_unique_paths(&unique_fields)?;
+    let unique_fields = unique_fields.iter().map(|path| quote!(&[#(#path),*]));
 
     let krate = attributes
         .krate
@@ -476,7 +486,7 @@ fn expand_job_args(input: &DeriveInput) -> syn::Result<proc_macro2::TokenStream>
                     #overlay
             }
 
-            fn unique_fields() -> &'static [&'static str] {
+            fn unique_fields() -> &'static [&'static [&'static str]] {
                 &[#(#unique_fields),*]
             }
         }
@@ -513,47 +523,71 @@ fn expand_unique_opts(krate: &syn::Path, unique: &UniqueAttribute) -> proc_macro
     }
 }
 
-/// Rejects unique paths that River Go's `gjson`/`sjson` hashing interprets as
-/// something other than plain object keys.
-fn validate_unique_paths(paths: &[LitStr]) -> syn::Result<()> {
+/// Decode the convenience dotted syntax into literal JSON field names.
+fn parse_unique_path(path: &LitStr) -> syn::Result<Vec<String>> {
+    let mut parts = Vec::new();
+    let mut current = String::new();
+    let mut escaped = false;
+    for character in path.value().chars() {
+        if escaped {
+            current.push(character);
+            escaped = false;
+        } else if character == '\\' {
+            escaped = true;
+        } else if character == '.' {
+            parts.push(std::mem::take(&mut current));
+        } else {
+            current.push(character);
+        }
+    }
+    if escaped {
+        return Err(syn::Error::new_spanned(
+            path,
+            "unique JSON path ends in an escape",
+        ));
+    }
+    parts.push(current);
+    if parts.iter().any(String::is_empty) {
+        return Err(syn::Error::new_spanned(
+            path,
+            "unique JSON path segments cannot be empty",
+        ));
+    }
+    Ok(parts)
+}
+
+fn validate_unique_paths(paths: &[Vec<LitStr>]) -> syn::Result<()> {
     for path in paths {
-        let value = path.value();
-        for segment in value.split('.') {
-            let message = if segment.is_empty() {
-                Some("unique JSON path segments cannot be empty".to_owned())
-            } else if segment.starts_with(':')
-                || segment
-                    .bytes()
-                    .any(|byte| matches!(byte, b'*' | b'?' | b'|' | b'#' | b'@' | b'\\'))
-            {
-                Some(format!(
-                    "unique JSON path segment {segment:?} contains JSON path syntax that River Go cannot hash deterministically"
-                ))
-            } else if segment.bytes().all(|byte| byte.is_ascii_digit()) || segment == "-1" {
-                Some(format!(
-                    "unique JSON path segment {segment:?} would be treated as an array index"
-                ))
-            } else {
-                None
-            };
-            if let Some(message) = message {
-                return Err(syn::Error::new_spanned(path, message));
-            }
+        if path.iter().any(|segment| segment.value().is_empty()) {
+            return Err(syn::Error::new_spanned(
+                &path[0],
+                "unique JSON path segments cannot be empty",
+            ));
+        }
+        if let Some(segment) = path.iter().find(|segment| {
+            let value = segment.value();
+            value.bytes().all(|byte| byte.is_ascii_digit()) || value == "-1"
+        }) {
+            return Err(syn::Error::new_spanned(
+                segment,
+                "numeric unique JSON path segments require array semantics that are not yet supported",
+            ));
         }
     }
     for path in paths {
-        let value = path.value();
+        let value = path.iter().map(LitStr::value).collect::<Vec<_>>();
         if let Some(other) = paths.iter().find(|other| {
-            other
-                .value()
-                .strip_prefix(&value)
-                .is_some_and(|rest| rest.starts_with('.'))
+            other.len() > path.len()
+                && other
+                    .iter()
+                    .zip(&value)
+                    .all(|(segment, value)| segment.value() == *value)
         }) {
             return Err(syn::Error::new_spanned(
-                other,
+                &other[0],
                 format!(
                     "unique JSON path {:?} is inside another unique path {value:?}",
-                    other.value()
+                    other.iter().map(LitStr::value).collect::<Vec<_>>()
                 ),
             ));
         }
@@ -814,7 +848,7 @@ mod tests {
         assert!(expanded.contains(
             ".overlay({letoverrides:::riverqueue::InsertOpts=email_insert_opts();overrides})"
         ));
-        assert!(expanded.contains("&[\"messageId\",\"account.id\"]"));
+        assert!(expanded.contains("&[&[\"messageId\"],&[\"account\",\"id\"]]"));
     }
 
     #[test]
@@ -1015,20 +1049,12 @@ mod tests {
                 "#[river(unique)] fields are only hashed with `unique(by_args)`",
             ),
             (
-                r#"#[river(kind = "valid", unique(by_args("value.*")))] struct WildcardPath { value: String }"#,
-                "contains JSON path syntax",
-            ),
-            (
                 r#"#[river(kind = "valid", unique(by_args("value.0")))] struct IndexPath { value: String }"#,
-                "would be treated as an array index",
+                "require array semantics",
             ),
             (
                 r#"#[river(kind = "valid", unique(by_args("value", "value.id")))] struct NestedPath { value: String }"#,
                 "is inside another unique path",
-            ),
-            (
-                r#"#[river(kind = "valid", unique(by_args))] struct DottedField { #[river(unique)] #[serde(rename = "a.")] value: String }"#,
-                "segments cannot be empty",
             ),
         ];
 

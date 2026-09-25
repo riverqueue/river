@@ -16,6 +16,22 @@
       },
       "queue": "default",
       "scheduled_at": null,
+      "selected_unique_components": [
+        [
+          "account",
+          "id"
+        ],
+        [
+          "account",
+          "region"
+        ],
+        [
+          "label"
+        ],
+        [
+          "path/key"
+        ]
+      ],
       "selected_unique_paths": [
         "account.id",
         "account.region",
@@ -45,6 +61,22 @@
       },
       "queue": "default",
       "scheduled_at": null,
+      "selected_unique_components": [
+        [
+          "account",
+          "id"
+        ],
+        [
+          "account",
+          "region"
+        ],
+        [
+          "label"
+        ],
+        [
+          "path/key"
+        ]
+      ],
       "selected_unique_paths": [
         "account.id",
         "account.region",
@@ -213,6 +245,22 @@
       },
       "queue": "default",
       "scheduled_at": null,
+      "selected_unique_components": [
+        [
+          "account",
+          "id"
+        ],
+        [
+          "account",
+          "region"
+        ],
+        [
+          "label"
+        ],
+        [
+          "path/key"
+        ]
+      ],
       "selected_unique_paths": [
         "account.id",
         "account.region",
@@ -238,9 +286,22 @@
       },
       "queue": "default",
       "scheduled_at": null,
+      "selected_unique_components": [
+        [
+          "user",
+          "id"
+        ],
+        [
+          "user.id"
+        ],
+        [
+          "é"
+        ]
+      ],
       "selected_unique_paths": [
         "user.id",
-        "user\\.id"
+        "user\\.id",
+        "é"
       ]
     },
     {
@@ -262,9 +323,58 @@
       },
       "queue": "default",
       "scheduled_at": null,
+      "selected_unique_components": [
+        [
+          "user",
+          "id"
+        ],
+        [
+          "user.id"
+        ],
+        [
+          "é"
+        ]
+      ],
       "selected_unique_paths": [
         "user.id",
-        "user\\.id"
+        "user\\.id",
+        "é"
+      ]
+    },
+    {
+      "args": {
+        "user": {},
+        "é": "café"
+      },
+      "expected_sha256": "28513f484784e6b0fe8aed6cc1fadb04498f43305b74619aa56e701a2feff578",
+      "expected_state_mask": 245,
+      "kind": "conformance_dotted_selected_args",
+      "name": "selected_unicode_field_name",
+      "now": "2026-01-02T03:04:05.6789Z",
+      "options": {
+        "by_args": true,
+        "by_period_nanos": 0,
+        "by_queue": false,
+        "exclude_kind": false
+      },
+      "queue": "default",
+      "scheduled_at": null,
+      "selected_unique_components": [
+        [
+          "user",
+          "id"
+        ],
+        [
+          "user.id"
+        ],
+        [
+          "é"
+        ]
+      ],
+      "selected_unique_paths": [
+        "user.id",
+        "user\\.id",
+        "é"
       ]
     },
     {
@@ -378,6 +488,22 @@
       },
       "queue": "default",
       "scheduled_at": null,
+      "selected_unique_components": [
+        [
+          "account",
+          "id"
+        ],
+        [
+          "account",
+          "region"
+        ],
+        [
+          "label"
+        ],
+        [
+          "path/key"
+        ]
+      ],
       "selected_unique_paths": [
         "account.id",
         "account.region",

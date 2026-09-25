@@ -80,7 +80,26 @@ fn declares_job_type_uniqueness() {
     assert!(unique.excludes_kind());
     assert_eq!(
         UniqueArgs::unique_fields(),
-        ["invoiceNumber", "customer.id"]
+        [&["invoiceNumber"][..], &["customer", "id"][..]]
+    );
+}
+
+#[derive(Deserialize, JobArgs, Serialize)]
+#[river(kind = "literal_paths", unique(by_args("user.id", "user\\.id")))]
+struct LiteralPaths {
+    #[serde(rename = "user.id")]
+    literal: String,
+    user: Customer,
+    #[river(unique)]
+    #[serde(rename = "é")]
+    unicode: String,
+}
+
+#[test]
+fn separates_literal_and_nested_unique_fields() {
+    assert_eq!(
+        LiteralPaths::unique_fields(),
+        [&["é"][..], &["user", "id"][..], &["user.id"][..],]
     );
 }
 

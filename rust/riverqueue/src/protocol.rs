@@ -36,10 +36,11 @@ pub struct UniqueKeyInput<'a> {
     pub queue: &'a str,
     /// Scheduled time, if the job is scheduled.
     pub scheduled_at: Option<DateTime<Utc>>,
-    /// Dotted argument paths selected for argument-scoped uniqueness, such as
-    /// [`JobArgs::unique_fields`](crate::JobArgs::unique_fields). When empty,
-    /// every top-level argument participates.
-    pub unique_fields: &'a [&'a str],
+    /// Literal argument path components selected for uniqueness, such as
+    /// [`JobArgs::unique_fields`](crate::JobArgs::unique_fields). For example,
+    /// `&[&["user.id"], &["user", "id"]]` selects two distinct fields.
+    /// When empty, every top-level argument participates.
+    pub unique_fields: &'a [&'a [&'a str]],
 }
 
 /// Computes the SHA-256 unique key River Go stores in `river_job.unique_key`
@@ -48,9 +49,7 @@ pub struct UniqueKeyInput<'a> {
 ///
 /// # Errors
 ///
-/// Returns an error when the options are invalid, when the arguments are not
-/// a JSON object, or when a participating argument key contains JSON path
-/// syntax that River Go cannot hash deterministically.
+/// Returns an error when the options or selected argument paths are invalid.
 pub fn unique_key(input: &UniqueKeyInput<'_>) -> Result<Option<[u8; 32]>, Error> {
     crate::unique::build_unique_key_parts(
         input.kind,

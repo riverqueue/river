@@ -53,11 +53,18 @@ both languages must serialize the same way:
 
 - Use the same JSON field names. Go uses struct tags; Rust follows Serde's
   rename rules.
-- Unique fields are compared by their selected top-level keys, which are
-  sorted. Nested objects keep their field order, so a nested Go struct needs
-  the same field order in Rust, and a Go map needs sorted keys in Rust (a
-  `BTreeMap`). Selecting individual scalar fields avoids depending on nested
-  order.
+- Without selected fields, every top-level key participates, sorted by its
+  literal JSON name. With selected fields, use the same JSON-name paths in
+  both languages. `#[river(unique)]` selects a serialized Rust field name
+  literally; `unique(by_args("account.id"))` selects a nested field, while
+  `unique(by_args("account\\.id"))` selects one field named `account.id`.
+  Manual `JobArgs::unique_fields` implementations pass slices of decoded
+  path components, such as `&[&["account", "id"], &["account.id"]]`.
+  Nested objects retain their encoded field order, so a nested Go struct
+  needs the same field order in Rust, and a Go map needs sorted keys in Rust
+  (a `BTreeMap`). Selecting individual scalar fields avoids depending on
+  nested order. Numeric array-index path components are not yet supported
+  by Rust's unique-field API.
 - Rust encodes floating point numbers and escapes strings the way Go's
   `encoding/json` does, so `1.0` hashes the same as Go's `1`.
 - `ByPeriod` periods are measured in UTC from the job's scheduled time. River
