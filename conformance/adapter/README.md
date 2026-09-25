@@ -169,7 +169,11 @@ an adapter whose implementation does not expose them; the Go reference is one.
   `retry`, `cancel`, `delete`, and `delete_many`. Typed batch results preserve
   input order and include each normalized job and its unique-conflict flag.
 - `queue_get`, `queue_list`, `queue_pause`, `queue_resume`, `queue_update`, and
-  runtime `queue_add`/`queue_remove`.
+  runtime `queue_add`/`queue_remove`. Like River Go, `queue_pause`,
+  `queue_resume`, and `queue_update` don't validate the queue name: a name
+  with no queue record, including one that could never be a valid queue name
+  (for example one containing a space or longer than 128 characters), returns
+  `not_found` rather than `rejected`.
 - `start`, `stop`, `wait`, and the compatibility shorthand `work`. `start`
   also accepts optional maintenance tuning: `cancelled_job_retention_ms`,
   `completed_job_retention_ms`, and `discarded_job_retention_ms` (`-1` keeps

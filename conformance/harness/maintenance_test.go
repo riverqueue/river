@@ -10,6 +10,7 @@ import (
 	"maps"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -141,9 +142,22 @@ func TestMaintenanceConformance(t *testing.T) { //nolint:paralleltest // Owns th
 	})
 
 	t.Run("QueueNamesAndUnknownQueueControl", func(t *testing.T) { //nolint:paralleltest // Shares adapters.
+		// River Go doesn't validate names passed to queue control: a name
+		// that could never be a valid queue simply has no record, so control
+		// reports not found rather than a validation error.
+		missingNames := []string{
+			"maintenance_missing_queue",
+			"maintenance missing queue",
+			strings.Repeat("q", 129),
+		}
 		for _, implementation := range implementations {
-			implementation.adapter.requireCallError(t, "queue_pause", map[string]any{"name": "maintenance_missing_queue"}, "not_found")
-			implementation.adapter.requireCallError(t, "queue_resume", map[string]any{"name": "maintenance_missing_queue"}, "not_found")
+			for _, name := range missingNames {
+				implementation.adapter.requireCallError(t, "queue_pause", map[string]any{"name": name}, "not_found")
+				implementation.adapter.requireCallError(t, "queue_resume", map[string]any{"name": name}, "not_found")
+				implementation.adapter.requireCallError(t, "queue_update", map[string]any{
+					"metadata": map[string]any{"owner": "conformance"}, "name": name,
+				}, "not_found")
+			}
 			implementation.adapter.call(t, "queue_pause", map[string]any{"name": "*"}, nil)
 			implementation.adapter.call(t, "queue_resume", map[string]any{"name": "*"}, nil)
 
