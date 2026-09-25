@@ -3,13 +3,10 @@
 package harness_test
 
 import (
-	"bufio"
-	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -25,21 +22,19 @@ import (
 // sequential within a process: a request is written, then its response is
 // read before the next request is sent.
 type adapter struct {
+	*adapterProcess
+
 	// applicationName is the PostgreSQL application_name the adapter uses,
 	// when known. Harness-side observations such as lock waits use it.
 	applicationName   string
-	command           *exec.Cmd
 	expectedExitError bool
-	input             io.WriteCloser
 	name              string
 	nextID            int
 	openHandles       map[string]bool
-	output            *bufio.Scanner
 	running           bool
 	// spec describes the implementation behind the adapter, including the
 	// optional start tuning it honors.
-	spec   adapterSpec
-	stderr lockedBuffer
+	spec adapterSpec
 }
 
 type adapterHandshake struct {
@@ -60,25 +55,6 @@ type adapterProfile struct {
 	Methods          []string `json:"methods"`
 	Name             string   `json:"name"`
 	ProtocolRevision int      `json:"protocol_revision"`
-}
-
-type lockedBuffer struct {
-	buffer bytes.Buffer
-	mu     sync.Mutex
-}
-
-func (buffer *lockedBuffer) String() string {
-	buffer.mu.Lock()
-	defer buffer.mu.Unlock()
-
-	return buffer.buffer.String()
-}
-
-func (buffer *lockedBuffer) Write(data []byte) (int, error) {
-	buffer.mu.Lock()
-	defer buffer.mu.Unlock()
-
-	return buffer.buffer.Write(data)
 }
 
 type rpcResponse struct {
@@ -165,11 +141,13 @@ func (adapter *adapter) callWithoutTest(method string, params any, result any) e
 	return nil
 }
 
+// kill kills the adapter process, as a crash would, and waits for it to be
+// reaped so later steps observe a process that is really gone.
 func (adapter *adapter) kill(t *testing.T) {
 	t.Helper()
 
 	adapter.expectedExitError = true
-	require.NoError(t, adapter.command.Process.Kill())
+	require.NoError(t, adapter.adapterProcess.kill(adapterKillTimeout), "%s adapter", adapter.name)
 	adapter.running = false
 	adapter.openHandles = nil
 }
@@ -447,24 +425,14 @@ func startAdapterForProfile(
 	if profile != "" {
 		command.Env = append(command.Env, "RIVER_CONFORMANCE_PROFILE="+profile)
 	}
-	input, err := command.StdinPipe()
-	require.NoError(t, err)
-	output, err := command.StdoutPipe()
-	require.NoError(t, err)
-	adapter := &adapter{
-		command: command,
-		input:   input,
-		name:    name,
-		output:  bufio.NewScanner(output),
-	}
-	adapter.output.Buffer(make([]byte, 64*1024), 4*1024*1024)
-	command.Stderr = &adapter.stderr
-	require.NoError(t, command.Start())
+	process, err := startAdapterProcess(command)
+	require.NoError(t, err, "start %s adapter", name)
+	adapter := &adapter{adapterProcess: process, name: name}
 	t.Cleanup(func() {
-		if err := adapter.input.Close(); err != nil && !adapter.expectedExitError {
-			t.Errorf("%s adapter stdin close: %v", name, err)
-		}
-		if err := adapter.command.Wait(); err != nil && !adapter.expectedExitError {
+		// A killed adapter already exited with an error, but one that must be
+		// killed now was wedged and always fails the test.
+		err := adapter.shutdown(adapterExitTimeout)
+		if errors.Is(err, errAdapterExitTimeout) || (err != nil && !adapter.expectedExitError) {
 			t.Errorf("%s adapter exit: %v\nstderr: %s", name, err, adapter.stderr.String())
 		}
 	})
