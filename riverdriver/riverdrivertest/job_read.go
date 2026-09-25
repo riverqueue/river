@@ -504,6 +504,58 @@ func exerciseJobRead[TTx any](ctx context.Context, t *testing.T, executorWithTx 
 			}))
 		})
 
+		// SQLite only: a locked job with a JSON column that holds invalid JSON
+		// doesn't fail the fetch. It's returned as undecodable with the bad
+		// value left in place, and doesn't prevent returning the others.
+		t.Run("InvalidJSONJobsReturnedSeparately", func(t *testing.T) {
+			t.Parallel()
+
+			exec, bundle := setup(ctx, t)
+			if bundle.driver.DatabaseName() != riverdriver.DatabaseNameSQLite {
+				t.Skip("only SQLite's JSON columns can hold invalid JSON")
+			}
+
+			goodJob1 := testfactory.Job(ctx, t, exec, &testfactory.JobOpts{})
+
+			invalidJobIDs := make(map[string]int64, len(sqliteJobJSONColumns))
+			for _, column := range sqliteJobJSONColumns {
+				job := testfactory.Job(ctx, t, exec, &testfactory.JobOpts{})
+				sqliteSetJobColumnMalformed(ctx, t, exec, job.ID, column)
+				invalidJobIDs[column] = job.ID
+			}
+
+			goodJob2 := testfactory.Job(ctx, t, exec, &testfactory.JobOpts{})
+
+			res, err := exec.JobGetAvailable(ctx, &riverdriver.JobGetAvailableParams{
+				ClientID:       testClientID,
+				MaxAttemptedBy: maxAttemptedBy,
+				MaxToLock:      maxToLock,
+				Queue:          rivercommon.QueueDefault,
+			})
+			require.NoError(t, err)
+			require.Equal(t, []int64{goodJob1.ID, goodJob2.ID},
+				sliceutil.Map(res.Jobs, func(j *rivertype.JobRow) int64 { return j.ID }))
+			for _, job := range res.Jobs {
+				require.Equal(t, []string{testClientID}, job.AttemptedBy)
+				require.Equal(t, rivertype.JobStateRunning, job.State)
+			}
+
+			require.Len(t, res.UndecodableJobs, len(sqliteJobJSONColumns))
+			undecodableJobsByID := sliceutil.KeyBy(res.UndecodableJobs, func(j *riverdriver.UndecodableJob) (int64, *riverdriver.UndecodableJob) {
+				return j.Job.ID, j
+			})
+			for _, column := range sqliteJobJSONColumns {
+				undecodableJob := undecodableJobsByID[invalidJobIDs[column]]
+				require.NotNil(t, undecodableJob, "expected job with invalid %s to be undecodable", column)
+				require.ErrorContains(t, undecodableJob.DecodeErr, "`"+column+"`")
+				require.Equal(t, 1, undecodableJob.Job.Attempt)
+				require.Equal(t, rivertype.JobStateRunning, undecodableJob.Job.State)
+
+				// The invalid value is left in place.
+				require.Equal(t, sqliteMalformedValue, sqliteJobColumnText(ctx, t, exec, invalidJobIDs[column], column))
+			}
+		})
+
 		// A locked job whose row can't be decoded is returned separately so the
 		// caller can fail its attempt, and doesn't prevent returning the others.
 		t.Run("UndecodableJobsReturnedSeparately", func(t *testing.T) {
@@ -668,6 +720,39 @@ func exerciseJobRead[TTx any](ctx context.Context, t *testing.T, executorWithTx 
 			require.NoError(t, err)
 			require.Equal(t, []int64{stuckJob3.ID},
 				sliceutil.Map(stuckJobs, func(j *rivertype.JobRow) int64 { return j.ID }))
+		})
+
+		// SQLite only: a stuck job with JSON columns that hold invalid JSON is
+		// still returned so that it can be rescued.
+		t.Run("InvalidJSONJobReturned", func(t *testing.T) {
+			t.Parallel()
+
+			exec, bundle := setup(ctx, t)
+			if bundle.driver.DatabaseName() != riverdriver.DatabaseNameSQLite {
+				t.Skip("only SQLite's JSON columns can hold invalid JSON")
+			}
+
+			var (
+				horizon       = time.Now().UTC()
+				beforeHorizon = horizon.Add(-1 * time.Minute)
+			)
+
+			stuckJob1 := testfactory.Job(ctx, t, exec, &testfactory.JobOpts{AttemptedAt: &beforeHorizon, State: new(rivertype.JobStateRunning)})
+			stuckJob2 := testfactory.Job(ctx, t, exec, &testfactory.JobOpts{AttemptedAt: &beforeHorizon, State: new(rivertype.JobStateRunning)})
+
+			for _, column := range sqliteJobJSONColumns {
+				sqliteSetJobColumnMalformed(ctx, t, exec, stuckJob1.ID, column)
+			}
+
+			stuckJobs, err := exec.JobGetStuck(ctx, &riverdriver.JobGetStuckParams{
+				Max:          10,
+				StuckHorizon: horizon,
+			})
+			require.NoError(t, err)
+			require.Equal(t, []int64{stuckJob1.ID, stuckJob2.ID},
+				sliceutil.Map(stuckJobs, func(j *rivertype.JobRow) int64 { return j.ID }))
+			require.Equal(t, stuckJob1.Kind, stuckJobs[0].Kind)
+			require.Nil(t, stuckJobs[0].Tags)
 		})
 
 		// A stuck job whose row can't be fully decoded is still returned so that
