@@ -1,15 +1,26 @@
 //! Persisted metadata stays readable when JSON numbers exceed `f64`.
 
+#![cfg(any(feature = "postgres-tests", feature = "sqlite"))]
+
 mod support;
 
 use riverqueue::{Client, InsertOpts, JobArgs, JobMetadata, JobRow, JobUpdateParams};
+#[cfg(feature = "sqlite")]
+use riverqueue::{Job, JobState, QueueConfig, WorkContext, WorkOutcome, WorkerRegistry};
 use serde::{Deserialize, Serialize};
+#[cfg(feature = "sqlite")]
+use std::{convert::Infallible, time::Duration};
 
 const METADATA: &str = r#"{"zeta":"first","big_integer":123456789012345678901234567890,"beyond_float":1e400,"long_decimal":0.1000000000000000055511151231257827}"#;
 
 #[derive(Clone, Debug, Deserialize, JobArgs, Serialize)]
 #[river(kind = "metadata_exact_insert")]
 struct InsertArgs {}
+
+#[cfg(feature = "sqlite")]
+#[derive(Clone, Debug, Deserialize, JobArgs, Serialize)]
+#[river(kind = "metadata_exact_snooze")]
+struct SnoozeArgs {}
 
 /// Inserts one job with `insert` and one with `insert_many`, both carrying
 /// [`METADATA`] through [`InsertOpts`], and returns the stored rows.
@@ -31,12 +42,12 @@ async fn insert_with_exact_metadata(client: &Client) -> Vec<JobRow> {
     rows
 }
 
-#[cfg(feature = "postgres")]
+#[cfg(feature = "postgres-tests")]
 fn raw_field<'a>(metadata: &'a JobMetadata, key: &str) -> &'a str {
     metadata.get_raw(key).unwrap().get()
 }
 
-#[cfg(feature = "postgres")]
+#[cfg(feature = "postgres-tests")]
 #[tokio::test]
 async fn postgres_reads_metadata_with_large_numbers() {
     use riverqueue::__private::{ExtensionClient, ExtensionInsertParams};
@@ -122,7 +133,7 @@ async fn postgres_reads_metadata_with_large_numbers() {
     schema.cleanup().await;
 }
 
-#[cfg(feature = "postgres")]
+#[cfg(feature = "postgres-tests")]
 #[tokio::test]
 async fn postgres_insert_opts_keep_metadata_number_tokens() {
     use riverqueue::database::PostgresDatabase;
@@ -231,5 +242,56 @@ async fn sqlite_reads_metadata_with_large_numbers() {
         "1e400"
     );
 
+    support::sqlite_cleanup(pool, path).await;
+}
+
+#[cfg(feature = "sqlite")]
+#[tokio::test]
+async fn sqlite_snooze_preserves_large_metadata_numbers() {
+    let (pool, path) = support::sqlite_file_pool(4).await;
+    let mut workers = WorkerRegistry::new();
+    workers
+        .register_fn(|_context: WorkContext, _job: Job<SnoozeArgs>| async {
+            Ok::<_, Infallible>(WorkOutcome::Snooze(Duration::from_hours(1)))
+        })
+        .unwrap();
+    let client = Client::builder(pool.clone())
+        .workers(workers)
+        .queue(
+            "default",
+            QueueConfig::new(1)
+                .with_fetch_cooldown(Duration::from_millis(1))
+                .with_fetch_poll_interval(Duration::from_millis(10)),
+        )
+        .build()
+        .unwrap();
+    let inserted = client.insert(SnoozeArgs {}).await.unwrap();
+    sqlx::query("UPDATE river_job SET metadata = jsonb(?) WHERE id = ?")
+        .bind(METADATA)
+        .bind(inserted.job.row.id)
+        .execute(&pool)
+        .await
+        .unwrap();
+    let mut run = client.start().unwrap();
+    run.wait_ready().await.unwrap();
+    let row = tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            let row = client.jobs().get(inserted.job.row.id).await.unwrap();
+            if row.state == JobState::Scheduled
+                && row.metadata.get::<i64>("snoozes").unwrap() == Some(1)
+            {
+                break row;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .unwrap();
+    run.shutdown().await.unwrap();
+    assert_eq!(row.metadata.get_raw("beyond_float").unwrap().get(), "1e400");
+    assert_eq!(
+        row.metadata.get_raw("long_decimal").unwrap().get(),
+        "0.1000000000000000055511151231257827"
+    );
     support::sqlite_cleanup(pool, path).await;
 }
