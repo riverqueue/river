@@ -247,7 +247,16 @@ wakeup.
 Job lists accept shared ID/kind/metadata/priority/queue/state/tag filters,
 ordering, direction, limits, and opaque `after` cursors. Responses return the
 last-row cursor so page tokens emitted by one language can be consumed by the
-other.
+other. Cursor text must match River Go's `JobListCursor.MarshalText` byte for
+byte: padded URL-safe Base64 of Go's `encoding/json` encoding of `id`, `kind`,
+`queue`, `sort_field`, and `time`, with Go's string escaping and RFC 3339 time
+with trailing fractional zeros trimmed. `job_list_cursor_interchange` and its
+SQLite and multi-engine variants compare cursor text for every sort field and
+resume each engine from the other's cursor, including a
+`raw_insert_no_notify` kind (`conformance_cursor<>&~~~`) that Go escapes and
+whose cursor text always contains `-`. River Go currently decodes only
+standard Base64, so the reference skips resuming from cursor text with `-`
+or `_` until its decoder is fixed.
 
 ## Fault injection
 

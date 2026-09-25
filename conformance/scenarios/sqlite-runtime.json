@@ -10,6 +10,7 @@
     { "evidence": [{ "path": "conformance/harness/sqlite_test.go", "symbol": "verifySQLiteAdvancedRuntime" }], "name": "sqlite_runtime_extensions_resumable_subscriptions", "tier": "runtime" },
     { "evidence": [{ "path": "conformance/harness/runtime_scenarios_test.go", "symbol": "verifyExternalTerminalCompletionRace" }], "name": "sqlite_runtime_external_terminal_completion_race", "tier": "mixed" },
     { "evidence": [{ "path": "conformance/harness/resilience_test.go", "symbol": "TestResilienceSQLiteConformance" }], "name": "sqlite_runtime_go_integer_ranges", "tier": "mixed" },
+    { "evidence": [{ "path": "conformance/harness/storage_scenarios_test.go", "symbol": "verifyJobListCursorInterchange" }], "name": "sqlite_runtime_job_list_cursor_interchange", "tier": "storage" },
     { "evidence": [{ "path": "conformance/harness/sqlite_test.go", "symbol": "verifySQLiteLeadershipFailover" }], "name": "sqlite_runtime_leadership_failover", "tier": "runtime" },
     { "evidence": [{ "path": "conformance/harness/sqlite_test.go", "symbol": "verifySQLiteLifecycle" }], "name": "sqlite_runtime_lifecycle_shutdown", "tier": "runtime" },
     { "evidence": [{ "path": "conformance/harness/coordination_scenarios_test.go", "symbol": "verifyPauseResumeNotification" }], "name": "sqlite_runtime_notification_wakeups", "tier": "mixed" },

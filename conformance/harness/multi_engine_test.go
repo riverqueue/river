@@ -145,6 +145,15 @@ func TestMultiEngineConformance(t *testing.T) {
 		}
 		stopAll(t)
 	})
+	t.Run("multi_engine_job_list_cursor_interchange", func(t *testing.T) {
+		defer scenarios.record(t)
+
+		for _, pair := range candidatePairs(engines) {
+			if pair[0].spec.Implementation < pair[1].spec.Implementation {
+				verifyJobListCursorInterchange(t, pair[0].adapter, pair[1].adapter)
+			}
+		}
+	})
 	t.Run("multi_engine_leader_failover", func(t *testing.T) {
 		defer scenarios.record(t)
 
@@ -356,6 +365,7 @@ func verifySQLiteCandidatePair(t *testing.T, first, second *adapter) {
 	verifyBatchInsertion(t, first, second)
 	verifyDifferentialJobCRUD(t, first, second)
 	verifyDifferentialListCursors(t, first, second, false)
+	verifyJobListCursorInterchange(t, first, second)
 	verifySQLiteTransactions(t, first, second)
 	verifySQLiteTimestampEncoding(t, first, second)
 	verifySQLiteCrossLanguageWork(t, first, second)

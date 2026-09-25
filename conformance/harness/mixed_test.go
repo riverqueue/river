@@ -136,6 +136,11 @@ func TestMixedConformance(t *testing.T) {
 
 		verifyDifferentialListCursors(t, goAdapter, candidateAdapter, true)
 	})
+	t.Run("job_list_cursor_interchange", func(t *testing.T) {
+		defer scenarios.record(t)
+
+		verifyJobListCursorInterchange(t, goAdapter, candidateAdapter)
+	})
 	t.Run("differential_queue_crud", func(t *testing.T) {
 		defer scenarios.record(t)
 
