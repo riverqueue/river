@@ -9,6 +9,10 @@
         "additionalProperties": false,
         "properties": {
           "args": {},
+          "expected_error": {
+            "description": "Contract error the adapter must report instead of a key; set only when expected_sha256 is absent.",
+            "enum": ["rejected"]
+          },
           "expected_sha256": { "pattern": "^[0-9a-f]{64}$", "type": "string" },
           "expected_state_mask": { "maximum": 255, "minimum": 0, "type": "integer" },
           "kind": { "minLength": 1, "type": "string" },
@@ -53,7 +57,11 @@
             ]
           }
         },
-        "required": ["args", "expected_sha256", "expected_state_mask", "kind", "name", "now", "options", "queue", "scheduled_at", "selected_unique_paths"],
+        "oneOf": [
+          { "required": ["expected_sha256"] },
+          { "required": ["expected_error"] }
+        ],
+        "required": ["args", "expected_state_mask", "kind", "name", "now", "options", "queue", "scheduled_at", "selected_unique_paths"],
         "type": "object"
       },
       "minItems": 1,

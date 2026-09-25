@@ -293,6 +293,7 @@ const SQLITE_RUNTIME_CAPABILITIES: &[&str] = &[
 /// Stable JSON-RPC error codes from `conformance/adapter/contract.json`.
 mod error_code {
     pub const DATABASE: i32 = -32_003;
+    pub const INTERNAL: i32 = -32_000;
     pub const INVALID_PARAMS: i32 = -32_602;
     pub const INVALID_REQUEST: i32 = -32_600;
     pub const METHOD_NOT_FOUND: i32 = -32_601;
@@ -518,9 +519,15 @@ fn respond_unique_key(request: &Request) -> Response {
     let result = request
         .params
         .as_deref()
-        .ok_or_else(|| "unique_key requires params".to_owned())
+        .ok_or_else(|| {
+            (
+                error_code::INVALID_PARAMS,
+                "unique_key requires params".to_owned(),
+            )
+        })
         .and_then(|params| {
-            serde_json::from_str::<UniqueKeyParams>(params.get()).map_err(|error| error.to_string())
+            serde_json::from_str::<UniqueKeyParams>(params.get())
+                .map_err(|error| (error_code::INVALID_PARAMS, error.to_string()))
         })
         .and_then(|params| {
             let opts = params.options.to_unique_opts();
@@ -536,23 +543,30 @@ fn respond_unique_key(request: &Request) -> Response {
                     unique_key_for_args::<UniqueDottedSelectedArgs>(&params, &opts)
                 }
                 "conformance_simple" => unique_key_for_args::<UniqueSimpleArgs>(&params, &opts),
-                kind => Err(format!("unsupported unique fixture kind {kind:?}")),
+                kind => Err((
+                    error_code::INVALID_PARAMS,
+                    format!("unsupported unique fixture kind {kind:?}"),
+                )),
             }?;
             Ok(json!({"sha256": hex(&key), "state_mask": unique_states_bitmask(&opts)}))
         });
     match result {
         Ok(result) => Response::success(request.id.clone(), result),
-        Err(error) => Response::error(request.id.clone(), -32_000, error),
+        Err((code, error)) => Response::error(request.id.clone(), code, error),
     }
 }
 
-fn unique_key_for_args<A>(params: &UniqueKeyParams, opts: &UniqueOpts) -> Result<[u8; 32], String>
+fn unique_key_for_args<A>(
+    params: &UniqueKeyParams,
+    opts: &UniqueOpts,
+) -> Result<[u8; 32], (i32, String)>
 where
     A: JobArgs + serde::de::DeserializeOwned,
 {
     // Decode to confirm the fixture matches the job type, as River Go does
     // when it resolves unique struct tags.
-    serde_json::from_str::<A>(params.args.get()).map_err(|error| error.to_string())?;
+    serde_json::from_str::<A>(params.args.get())
+        .map_err(|error| (error_code::REJECTED, error.to_string()))?;
     unique_key(&UniqueKeyInput {
         encoded_args: &params.args,
         kind: A::KIND,
@@ -562,8 +576,13 @@ where
         scheduled_at: params.scheduled_at,
         unique_fields: A::unique_fields(),
     })
-    .map_err(|error| error.to_string())?
-    .ok_or_else(|| "unique fixture options produced no key".to_owned())
+    .map_err(|error| (error_code(&error), error.to_string()))?
+    .ok_or_else(|| {
+        (
+            error_code::INTERNAL,
+            "unique fixture options produced no key".to_owned(),
+        )
+    })
 }
 
 #[derive(Clone, Debug, Deserialize, JobArgs, Serialize)]
@@ -3677,6 +3696,31 @@ mod tests {
         assert_eq!(
             response["result"]["sha256"],
             "fcdf33e0c39c1fc7e956876345a985f2418bd69c6e4d6a5c794abf1e78cdfdb6"
+        );
+    }
+
+    #[test]
+    fn unique_key_rejects_non_object_all_args() {
+        // Go-generated goldens `all_args_array_rejected` and
+        // `all_args_empty_array`.
+        let response_for = |args: &str| {
+            let request: Request = serde_json::from_str(&format!(
+                concat!(
+                    r#"{{"id":1,"jsonrpc":"2.0","method":"unique_key","params":{{"#,
+                    r#""args":{},"kind":"conformance_all_args","now":"2026-01-02T03:04:05.6789Z","#,
+                    r#""options":{{"by_args":true,"by_period_nanos":0,"by_queue":false,"exclude_kind":false}},"#,
+                    r#""queue":"default","scheduled_at":null}}}}"#,
+                ),
+                args
+            ))
+            .unwrap();
+            serde_json::to_value(respond_unique_key(&request)).unwrap()
+        };
+
+        assert_eq!(response_for("[1]")["error"]["code"], error_code::REJECTED);
+        assert_eq!(
+            response_for("[]")["result"]["sha256"],
+            "fe05a58ddb79a8d4544da962582d9a290d59788c920afd3597da3a62e3c1b0ac"
         );
     }
 

@@ -31,6 +31,10 @@ const (
 	uniqueFixturePath    = "conformance/fixtures/unique_keys.json"
 )
 
+// errorNameRejected is the adapter contract error for a request River
+// rejects, such as all-args uniqueness over non-object arguments.
+const errorNameRejected = "rejected"
+
 type allArgs struct {
 	Zeta    string `json:"zeta"`
 	Alpha   string `json:"alpha"`
@@ -211,17 +215,21 @@ type fixture struct {
 }
 
 type fixtureCase struct {
-	Args                     json.RawMessage `json:"args"`
-	ExpectedSHA256           string          `json:"expected_sha256"`
-	ExpectedStateMask        byte            `json:"expected_state_mask"`
-	Kind                     string          `json:"kind"`
-	Name                     string          `json:"name"`
-	Now                      time.Time       `json:"now"`
-	Options                  fixtureOptions  `json:"options"`
-	Queue                    string          `json:"queue"`
-	ScheduledAt              *time.Time      `json:"scheduled_at"`
-	SelectedUniqueComponents [][]string      `json:"selected_unique_components,omitempty"`
-	SelectedUniquePath       []string        `json:"selected_unique_paths"`
+	Args json.RawMessage `json:"args"`
+	// ExpectedError is the contract error name an implementation must report
+	// instead of a key, as Go does for all-args uniqueness over arguments
+	// that don't encode a JSON object. ExpectedSHA256 is empty when it's set.
+	ExpectedError            string         `json:"expected_error,omitempty"`
+	ExpectedSHA256           string         `json:"expected_sha256,omitempty"`
+	ExpectedStateMask        byte           `json:"expected_state_mask"`
+	Kind                     string         `json:"kind"`
+	Name                     string         `json:"name"`
+	Now                      time.Time      `json:"now"`
+	Options                  fixtureOptions `json:"options"`
+	Queue                    string         `json:"queue"`
+	ScheduledAt              *time.Time     `json:"scheduled_at"`
+	SelectedUniqueComponents [][]string     `json:"selected_unique_components,omitempty"`
+	SelectedUniquePath       []string       `json:"selected_unique_paths"`
 }
 
 type fixtureOptions struct {
@@ -234,6 +242,7 @@ type fixtureOptions struct {
 
 type referenceCase struct {
 	args                rivertype.JobArgs
+	expectedError       string
 	name                string
 	now                 time.Time
 	opts                dbunique.UniqueOpts
@@ -372,6 +381,37 @@ func main() {
 			opts:      dbunique.UniqueOpts{ByArgs: true},
 			queue:     "default",
 			typedOnly: true,
+		},
+		{
+			args:  rawAllArgs{`[]`},
+			name:  "all_args_empty_array",
+			now:   now,
+			opts:  dbunique.UniqueOpts{ByArgs: true},
+			queue: "default",
+		},
+		{
+			args:          rawAllArgs{`[1]`},
+			expectedError: errorNameRejected,
+			name:          "all_args_array_rejected",
+			now:           now,
+			opts:          dbunique.UniqueOpts{ByArgs: true},
+			queue:         "default",
+		},
+		{
+			args:          rawAllArgs{`null`},
+			expectedError: errorNameRejected,
+			name:          "all_args_null_rejected",
+			now:           now,
+			opts:          dbunique.UniqueOpts{ByArgs: true},
+			queue:         "default",
+		},
+		{
+			args:          rawAllArgs{`"args"`},
+			expectedError: errorNameRejected,
+			name:          "all_args_scalar_rejected",
+			now:           now,
+			opts:          dbunique.UniqueOpts{ByArgs: true},
+			queue:         "default",
 		},
 		{
 			args: numericBoundaryArgs{
@@ -595,11 +635,15 @@ func main() {
 			ScheduledAt:  reference.scheduledAt,
 			UniqueStates: uniquestates.UniqueStatesToBitmask(states),
 		})
-		if err != nil {
-			fatal(err)
+		switch {
+		case reference.expectedError != "" && err == nil:
+			fatal(fmt.Errorf("unique fixture %s: expected an error", reference.name))
+		case reference.expectedError == "" && err != nil:
+			fatal(fmt.Errorf("unique fixture %s: %w", reference.name, err))
 		}
 		generatedCase := fixtureCase{
 			Args:              encodedArgs,
+			ExpectedError:     reference.expectedError,
 			ExpectedSHA256:    hex.EncodeToString(key),
 			ExpectedStateMask: uniquestates.UniqueStatesToBitmask(states),
 			Kind:              reference.args.Kind(),

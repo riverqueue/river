@@ -201,6 +201,76 @@
       "selected_unique_paths": null
     },
     {
+      "args": [],
+      "expected_sha256": "fe05a58ddb79a8d4544da962582d9a290d59788c920afd3597da3a62e3c1b0ac",
+      "expected_state_mask": 245,
+      "kind": "conformance_all_args",
+      "name": "all_args_empty_array",
+      "now": "2026-01-02T03:04:05.6789Z",
+      "options": {
+        "by_args": true,
+        "by_period_nanos": 0,
+        "by_queue": false,
+        "exclude_kind": false
+      },
+      "queue": "default",
+      "scheduled_at": null,
+      "selected_unique_paths": null
+    },
+    {
+      "args": [
+        1
+      ],
+      "expected_error": "rejected",
+      "expected_state_mask": 245,
+      "kind": "conformance_all_args",
+      "name": "all_args_array_rejected",
+      "now": "2026-01-02T03:04:05.6789Z",
+      "options": {
+        "by_args": true,
+        "by_period_nanos": 0,
+        "by_queue": false,
+        "exclude_kind": false
+      },
+      "queue": "default",
+      "scheduled_at": null,
+      "selected_unique_paths": null
+    },
+    {
+      "args": null,
+      "expected_error": "rejected",
+      "expected_state_mask": 245,
+      "kind": "conformance_all_args",
+      "name": "all_args_null_rejected",
+      "now": "2026-01-02T03:04:05.6789Z",
+      "options": {
+        "by_args": true,
+        "by_period_nanos": 0,
+        "by_queue": false,
+        "exclude_kind": false
+      },
+      "queue": "default",
+      "scheduled_at": null,
+      "selected_unique_paths": null
+    },
+    {
+      "args": "args",
+      "expected_error": "rejected",
+      "expected_state_mask": 245,
+      "kind": "conformance_all_args",
+      "name": "all_args_scalar_rejected",
+      "now": "2026-01-02T03:04:05.6789Z",
+      "options": {
+        "by_args": true,
+        "by_period_nanos": 0,
+        "by_queue": false,
+        "exclude_kind": false
+      },
+      "queue": "default",
+      "scheduled_at": null,
+      "selected_unique_paths": null
+    },
+    {
       "args": {
         "exponent": 1e+100,
         "fraction": 1.25,
