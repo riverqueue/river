@@ -19,6 +19,18 @@ values. Adapters must accept and emit values above `Number.MAX_SAFE_INTEGER`
 without rounding in CRUD parameters, normalized rows, list filters, or opaque
 cursors.
 
+On PostgreSQL the harness also sets `RIVER_CONFORMANCE_APPLICATION_NAME` to a
+name unique to the adapter process: the descriptor's `application_name`
+followed by a process suffix. An adapter should use it as the
+`application_name` of every PostgreSQL connection it opens, report it in the
+handshake's optional `application_name` field, and use it to find its own
+backends in `listener_count`, `connection_count`, and
+`fault_disconnect_listeners`. The harness then keys lock-wait observations and
+`fault_disconnect_application` on that name, so they never count or terminate
+the connections of another process of the same implementation, such as a
+restarted or multi-engine peer. An adapter that doesn't report the name is
+identified by its descriptor's shared `application_name` instead.
+
 The Go implementation is the reference side. By default the candidate is the
 Rust adapter described by [`candidates/rust.json`](candidates/rust.json). A
 JavaScript or future implementation can run the same suite by placing an object
@@ -59,8 +71,11 @@ fields are rejected.
 - `release_build_command` and `release_command` replace the build and
   commands for performance tiers.
 - `application_name` is the PostgreSQL `application_name` of the adapter's
-  connections. It must start with `river-conformance-`; fault injection only
-  terminates connections with that prefix.
+  connections, and the base of the per-process name the harness passes in
+  `RIVER_CONFORMANCE_APPLICATION_NAME`. It must start with
+  `river-conformance-`; fault injection only terminates connections with that
+  prefix. Keep it short enough that the per-process name stays within
+  PostgreSQL's 63 byte limit.
 - `version`, if present, must equal the handshake's implementation version.
 - `profiles` lists the profiles the adapter serves (default
   `portable-storage-v1`, `postgres-full-v1`, and `sqlite-runtime-v1`).
@@ -246,7 +261,8 @@ other.
 - `fault_disconnect_listeners` terminates the adapter's PostgreSQL listener
   backends and the harness waits for reconnection.
 - `fault_disconnect_application` terminates all non-caller connections for one
-  adapter application name, which must start with `river-conformance-`.
+  adapter application name, which must start with `river-conformance-`. The
+  harness passes the target process's own name.
 - `fault_expire_leader` forces the current lease to expire before a replacement
   client starts.
 

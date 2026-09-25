@@ -396,7 +396,7 @@ func TestResilienceSQLiteConformance(t *testing.T) { //nolint:tparallel // Subte
 	candidateSpec := conformanceCandidateSpec(t, repositoryRoot, false)
 	candidateAdapter := startAdapterCommandForProfile(
 		t, repositoryRoot, databaseURL, "sqlite", profileName,
-		candidateSpec.Implementation, candidateSpec.Command,
+		candidateSpec.Implementation, candidateSpec, candidateSpec.Command,
 	)
 	goAdapter.call(t, "migrate", map[string]any{}, nil)
 

@@ -599,7 +599,7 @@
     },
     {
       "capability": "lifecycle",
-      "description": "Describe adapter, implementation, protocol, methods, and capabilities.",
+      "description": "Describe adapter, implementation, protocol, methods, and capabilities. A PostgreSQL adapter that honors RIVER_CONFORMANCE_APPLICATION_NAME reports the name in application_name.",
       "name": "handshake",
       "params": {
         "additionalProperties": false,
@@ -612,6 +612,10 @@
           "adapter_version": {
             "minimum": 1,
             "type": "integer"
+          },
+          "application_name": {
+            "pattern": "^river-conformance-",
+            "type": "string"
           },
           "backend": {
             "enum": [

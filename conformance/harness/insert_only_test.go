@@ -29,9 +29,7 @@ func TestInsertOnlyConformance(t *testing.T) {
 	observer := newPostgresObserver(t, databaseURL)
 	reference := startReferenceAdapter(t, repositoryRoot, databaseURL, "go")
 	candidate := startAdapterCommandForProfile(t, repositoryRoot, databaseURL, "postgres", profileInsertOnly,
-		candidateSpec.Implementation, candidateSpec.Command)
-	candidate.applicationName = candidateSpec.ApplicationName
-	candidate.spec = candidateSpec
+		candidateSpec.Implementation, candidateSpec, candidateSpec.Command)
 	scenarios.attach(reference, candidate)
 
 	t.Run("insert_only_profile_handshake", func(t *testing.T) {

@@ -29,7 +29,7 @@
   "properties": {
     "$schema": { "type": "string" },
     "application_name": {
-      "description": "PostgreSQL application_name of the candidate's connections. The river-conformance- prefix lets fault injection target conformance adapters only.",
+      "description": "PostgreSQL application_name of the candidate's connections, and the base of the per-process name the harness passes in RIVER_CONFORMANCE_APPLICATION_NAME. The river-conformance- prefix lets fault injection target conformance adapters only.",
       "minLength": 1,
       "pattern": "^river-conformance-[a-zA-Z0-9._-]+$",
       "type": "string"

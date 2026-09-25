@@ -336,10 +336,8 @@ func TestMultiEngineSQLiteConformance(t *testing.T) {
 				require.True(t, first.servesProfile(profileSQLiteRuntime) && second.servesProfile(profileSQLiteRuntime),
 					"%s and %s must both declare %s", first.Implementation, second.Implementation, profileSQLiteRuntime)
 				databaseURL := filepath.Join(t.TempDir(), first.Implementation+"-"+second.Implementation+".sqlite")
-				firstAdapter := startAdapterCommandForProfile(t, root, databaseURL, "sqlite", profileSQLiteRuntime, first.Implementation, first.Command)
-				firstAdapter.spec = first
-				secondAdapter := startAdapterCommandForProfile(t, root, databaseURL, "sqlite", profileSQLiteRuntime, second.Implementation, second.Command)
-				secondAdapter.spec = second
+				firstAdapter := startAdapterCommandForProfile(t, root, databaseURL, "sqlite", profileSQLiteRuntime, first.Implementation, first, first.Command)
+				secondAdapter := startAdapterCommandForProfile(t, root, databaseURL, "sqlite", profileSQLiteRuntime, second.Implementation, second, second.Command)
 				scenarios.attach(firstAdapter, secondAdapter)
 				verifySQLiteCandidatePair(t, firstAdapter, secondAdapter)
 			}

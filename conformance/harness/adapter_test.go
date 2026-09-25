@@ -24,8 +24,10 @@ import (
 type adapter struct {
 	*adapterProcess
 
-	// applicationName is the PostgreSQL application_name the adapter uses,
-	// when known. Harness-side observations such as lock waits use it.
+	// applicationName is the PostgreSQL application_name of the adapter's
+	// connections: unique to the process when the adapter reports it in its
+	// handshake, otherwise its descriptor's. Harness observations such as
+	// lock waits, and fault injection, target it. Empty on SQLite.
 	applicationName   string
 	expectedExitError bool
 	name              string
@@ -39,6 +41,7 @@ type adapter struct {
 
 type adapterHandshake struct {
 	AdapterVersion        int            `json:"adapter_version"`
+	ApplicationName       string         `json:"application_name"`
 	Backend               string         `json:"backend"`
 	Capabilities          []string       `json:"capabilities"`
 	Implementation        string         `json:"implementation"`
@@ -336,24 +339,18 @@ func repoRoot(t *testing.T) string {
 }
 
 // startCandidateAdapter starts a candidate adapter from its descriptor on
-// PostgreSQL and records its application name for harness observations.
+// PostgreSQL.
 func startCandidateAdapter(t *testing.T, root, databaseURL, name string, spec adapterSpec, command []string) *adapter {
 	t.Helper()
 
-	started := startAdapterCommand(t, root, databaseURL, name, command)
-	started.applicationName = spec.ApplicationName
-	started.spec = spec
-	return started
+	return startAdapterCommandForProfile(t, root, databaseURL, "postgres", "", name, spec, command)
 }
 
 // startReferenceAdapter starts the Go reference adapter on PostgreSQL.
 func startReferenceAdapter(t *testing.T, root, databaseURL, name string) *adapter {
 	t.Helper()
 
-	started := startAdapterCommand(t, root, databaseURL, name, referenceAdapterCommand(t, root))
-	started.applicationName = referenceApplicationName
-	started.spec = referenceSpec()
-	return started
+	return startReferenceAdapterForProfile(t, root, databaseURL, "postgres", "", name)
 }
 
 // startReferenceAdapterForProfile starts the Go reference adapter for a
@@ -361,9 +358,7 @@ func startReferenceAdapter(t *testing.T, root, databaseURL, name string) *adapte
 func startReferenceAdapterForProfile(t *testing.T, root, databaseURL, databaseKind, profile, name string) *adapter {
 	t.Helper()
 
-	started := startAdapterCommandForProfile(t, root, databaseURL, databaseKind, profile, name, referenceAdapterCommand(t, root))
-	started.spec = referenceSpec()
-	return started
+	return startAdapterCommandForProfile(t, root, databaseURL, databaseKind, profile, name, referenceSpec(), referenceAdapterCommand(t, root))
 }
 
 // startWithTuning starts the adapter's client with params plus whichever
@@ -374,60 +369,51 @@ func (adapter *adapter) startWithTuning(t *testing.T, params, tuning map[string]
 	adapter.call(t, "start", adapter.spec.withStartOptions(params, tuning), nil)
 }
 
-func startAdapterCommand(t *testing.T, root, databaseURL, name string, command []string) *adapter {
-	t.Helper()
-
-	return startAdapterCommandForBackend(t, root, databaseURL, "postgres", name, command)
-}
-
-func startAdapterCommandForBackend(
-	t *testing.T,
-	root, databaseURL, databaseKind, name string,
-	command []string,
-) *adapter {
-	t.Helper()
-
-	require.NotEmpty(t, command)
-	return startAdapterForProfile(t, root, databaseURL, databaseKind, "", name, command[0], command[1:]...)
-}
-
+// startAdapterCommandForProfile starts command as an adapter for the
+// implementation spec describes, on a database kind and profile (empty for
+// the adapter's default).
+//
+// On PostgreSQL the adapter is asked, through
+// RIVER_CONFORMANCE_APPLICATION_NAME, to identify its connections with an
+// application_name unique to the process, and the handshake reports whether
+// it did. Harness observations and fault injection then target this process
+// alone, even while another process of the same implementation is attached
+// to the database. An adapter that doesn't report the name keeps its
+// descriptor's shared application_name.
 func startAdapterCommandForProfile(
 	t *testing.T,
 	root, databaseURL, databaseKind, profile, name string,
+	spec adapterSpec,
 	command []string,
 ) *adapter {
 	t.Helper()
 
 	require.NotEmpty(t, command)
-	return startAdapterForProfile(
-		t, root, databaseURL, databaseKind, profile, name, command[0], command[1:]...,
-	)
-}
-
-func startAdapterForProfile(
-	t *testing.T,
-	root, databaseURL, databaseKind, profile, name, executable string,
-	args ...string,
-) *adapter {
-	t.Helper()
-
 	// Keep cancellation after the adapter's graceful cleanup (LIFO), rather
 	// than using t.Context(), which is cancelled before cleanup begins.
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
-	command := exec.CommandContext(ctx, executable, args...)
-	command.Dir = root
-	command.Env = append(
+	executable, args := command[0], command[1:]
+	process := exec.CommandContext(ctx, executable, args...)
+	process.Dir = root
+	process.Env = append(
 		os.Environ(),
 		"RIVER_CONFORMANCE_DATABASE_KIND="+databaseKind,
 		"RIVER_CONFORMANCE_DATABASE_URL="+databaseURL,
 	)
 	if profile != "" {
-		command.Env = append(command.Env, "RIVER_CONFORMANCE_PROFILE="+profile)
+		process.Env = append(process.Env, "RIVER_CONFORMANCE_PROFILE="+profile)
 	}
-	process, err := startAdapterProcess(command)
+	var requestedApplicationName string
+	if databaseKind == "postgres" {
+		var err error
+		requestedApplicationName, err = processApplicationName(spec.ApplicationName)
+		require.NoError(t, err)
+		process.Env = append(process.Env, "RIVER_CONFORMANCE_APPLICATION_NAME="+requestedApplicationName)
+	}
+	started, err := startAdapterProcess(process)
 	require.NoError(t, err, "start %s adapter", name)
-	adapter := &adapter{adapterProcess: process, name: name}
+	adapter := &adapter{adapterProcess: started, name: name, spec: spec}
 	t.Cleanup(func() {
 		// A killed adapter already exited with an error, but one that must be
 		// killed now was wedged and always fails the test.
@@ -436,6 +422,12 @@ func startAdapterForProfile(
 			t.Errorf("%s adapter exit: %v\nstderr: %s", name, err, adapter.stderr.String())
 		}
 	})
+	if requestedApplicationName != "" {
+		var handshake adapterHandshake
+		adapter.call(t, "handshake", map[string]any{}, &handshake)
+		adapter.applicationName, err = resolveApplicationName(requestedApplicationName, spec.ApplicationName, handshake.ApplicationName)
+		require.NoError(t, err, "%s adapter", name)
+	}
 	return adapter
 }
 

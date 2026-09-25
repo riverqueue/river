@@ -311,6 +311,15 @@ func errorCode(err error) int {
 	}
 }
 
+// isAdapterApplicationName reports whether name may identify a conformance
+// adapter's PostgreSQL connections. Every adapter's name carries the
+// river-conformance- prefix, which fault injection relies on to never
+// terminate other connections, and the harness's own observer name is
+// excluded.
+func isAdapterApplicationName(name string) bool {
+	return strings.HasPrefix(name, "river-conformance-") && name != "river-conformance-harness"
+}
+
 // decodeParams decodes request params strictly: absent params decode as an
 // empty object and unknown fields are rejected, so a harness or protocol
 // mismatch fails loudly instead of being ignored.
@@ -948,13 +957,15 @@ type runningClient struct {
 }
 
 type adapterState struct {
-	barriers     *barrierRegistry
-	clock        *time.Time
-	pool         *pgxpool.Pool
-	profile      string
-	rngSeed      uint64
-	running      *runningClient
-	transactions map[string]pgx.Tx
+	// applicationName identifies this process's PostgreSQL connections.
+	applicationName string
+	barriers        *barrierRegistry
+	clock           *time.Time
+	pool            *pgxpool.Pool
+	profile         string
+	rngSeed         uint64
+	running         *runningClient
+	transactions    map[string]pgx.Tx
 }
 
 type requestHandler interface {
@@ -1038,7 +1049,17 @@ func run(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	poolConfig.ConnConfig.RuntimeParams["application_name"] = "river-conformance-go"
+	// The harness passes a name unique to this process so its observations
+	// and fault injection can't reach another process of the same
+	// implementation attached to the database.
+	applicationName := os.Getenv("RIVER_CONFORMANCE_APPLICATION_NAME")
+	if applicationName == "" {
+		applicationName = "river-conformance-go"
+	}
+	if !isAdapterApplicationName(applicationName) {
+		return fmt.Errorf("RIVER_CONFORMANCE_APPLICATION_NAME %q must name a conformance adapter", applicationName)
+	}
+	poolConfig.ConnConfig.RuntimeParams["application_name"] = applicationName
 	// Fault scenarios terminate this adapter's backends while they sit idle
 	// in the pool. Checking liveness on every acquire keeps a terminated
 	// connection from failing the next request; SQLx pools, used by other
@@ -1057,10 +1078,11 @@ func run(ctx context.Context) error {
 		return fmt.Errorf("unsupported PostgreSQL conformance profile %q", profile)
 	}
 	state := &adapterState{
-		barriers:     newBarrierRegistry(),
-		pool:         pool,
-		profile:      profile,
-		transactions: make(map[string]pgx.Tx),
+		applicationName: applicationName,
+		barriers:        newBarrierRegistry(),
+		pool:            pool,
+		profile:         profile,
+		transactions:    make(map[string]pgx.Tx),
 	}
 	err = runRequestLoop(ctx, state)
 	if state.running != nil {
@@ -1116,6 +1138,7 @@ func (s *adapterState) handle(ctx context.Context, req *request) (any, error) {
 	case "handshake":
 		return map[string]any{
 			"adapter_version":        adapterVersion,
+			"application_name":       s.applicationName,
 			"backend":                "postgres",
 			"capabilities":           profileCapabilities,
 			"implementation":         "go",
@@ -1619,17 +1642,17 @@ func (s *adapterState) handle(ctx context.Context, req *request) (any, error) {
 
 	case "listener_count":
 		var count int
-		err := s.pool.QueryRow(ctx, "SELECT count(*) FROM pg_stat_activity WHERE datname = current_database() AND application_name = 'river-conformance-go' AND query LIKE 'LISTEN %'").Scan(&count)
+		err := s.pool.QueryRow(ctx, "SELECT count(*) FROM pg_stat_activity WHERE datname = current_database() AND application_name = $1 AND query LIKE 'LISTEN %'", s.applicationName).Scan(&count)
 		return map[string]any{"count": count}, err
 
 	case "connection_count":
 		var count int
-		err := s.pool.QueryRow(ctx, "SELECT count(*) FROM pg_stat_activity WHERE datname = current_database() AND application_name = 'river-conformance-go'").Scan(&count)
+		err := s.pool.QueryRow(ctx, "SELECT count(*) FROM pg_stat_activity WHERE datname = current_database() AND application_name = $1", s.applicationName).Scan(&count)
 		return map[string]any{"count": count}, err
 
 	case "fault_disconnect_listeners":
 		var count int
-		err := s.pool.QueryRow(ctx, "SELECT count(*) FROM (SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = current_database() AND application_name = 'river-conformance-go' AND query LIKE 'LISTEN %' AND pid != pg_backend_pid()) AS terminated").Scan(&count)
+		err := s.pool.QueryRow(ctx, "SELECT count(*) FROM (SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = current_database() AND application_name = $1 AND query LIKE 'LISTEN %' AND pid != pg_backend_pid()) AS terminated", s.applicationName).Scan(&count)
 		return map[string]any{"count": count}, err
 
 	case "fault_disconnect_application":
@@ -1639,11 +1662,8 @@ func (s *adapterState) handle(ctx context.Context, req *request) (any, error) {
 		if err := decodeParams(req.Params, &params); err != nil {
 			return nil, err
 		}
-		// Only conformance adapters may be disconnected. Every descriptor's
-		// application name carries this prefix, so the check stays
-		// candidate-neutral.
-		if !strings.HasPrefix(params.ApplicationName, "river-conformance-") ||
-			params.ApplicationName == "river-conformance-harness" {
+		// Only conformance adapters may be disconnected.
+		if !isAdapterApplicationName(params.ApplicationName) {
 			return nil, errors.New("application_name must name a conformance adapter")
 		}
 		var count int
