@@ -26,7 +26,8 @@ use crate::extension::{InsertEndpoint, InsertNext, InsertedJob, InsertedJobs};
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) enum InsertMode {
     /// Inserts rows through the backend's fastest path. On PostgreSQL this is
-    /// `COPY`, which returns no rows and fails on unique conflicts.
+    /// `COPY`, which returns no rows and fails on unique conflicts. SQLite
+    /// skips unique conflicts, like Go's `ON CONFLICT DO NOTHING`.
     Fast,
     /// Inserts rows and returns them, reporting unique conflicts per row.
     Rows,
@@ -155,7 +156,8 @@ impl<'a, A: JobArgs> InsertManyRequest<'a, A> {
     ///
     /// On PostgreSQL this uses `COPY`, so a unique conflict fails the whole
     /// batch instead of returning the existing job. SQLite inserts the jobs in
-    /// one write transaction with the same semantics.
+    /// one write transaction and, like Go's SQLite driver, skips a job whose
+    /// unique key conflicts with an existing one; the count excludes it.
     pub fn fast(self) -> InsertManyFastRequest<'a, A> {
         InsertManyFastRequest { inner: self }
     }
@@ -823,7 +825,13 @@ impl Client {
         let mut rows = Vec::with_capacity(jobs.len());
         for job in jobs {
             let row = self.insert_row(connection.reborrow(), job, now).await?;
-            if mode == InsertMode::Fast && row.unique_skipped_as_duplicate {
+            // Go's PostgreSQL `COPY` fails on a unique conflict, while its
+            // SQLite fast insertion skips the conflicting job.
+            #[cfg(feature = "postgres")]
+            if mode == InsertMode::Fast
+                && row.unique_skipped_as_duplicate
+                && matches!(connection, PilotDatabaseConnection::Postgres(_))
+            {
                 return Err(Error::invalid_job(
                     "fast insertion encountered a unique conflict".to_owned(),
                 ));
@@ -841,7 +849,14 @@ impl Client {
             .collect::<std::collections::BTreeSet<_>>();
         self.notify_insert(connection.reborrow(), queues).await?;
         Ok(match mode {
-            InsertMode::Fast => InsertedJobs::Count(u64::try_from(rows.len()).unwrap_or(u64::MAX)),
+            InsertMode::Fast => InsertedJobs::Count(
+                u64::try_from(
+                    rows.iter()
+                        .filter(|row| !row.unique_skipped_as_duplicate)
+                        .count(),
+                )
+                .unwrap_or(u64::MAX),
+            ),
             InsertMode::Rows => InsertedJobs::Rows(rows),
         })
     }
