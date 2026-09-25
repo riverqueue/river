@@ -47,6 +47,16 @@ func (mapOrderArgs) MarshalJSON() ([]byte, error) { //nolint:unparam // json.Mar
 	return []byte(`{"2":2,"10":10,"zero":-0,"😀":1,"":2}`), nil
 }
 
+// rawAllArgs keeps duplicate members and unusual top-level names intact for
+// Go's all-arguments unique-key oracle.
+type rawAllArgs struct{ text string }
+
+func (rawAllArgs) Kind() string { return "conformance_all_args" }
+
+func (args rawAllArgs) MarshalJSON() ([]byte, error) { //nolint:unparam // json.Marshaler requires an error result.
+	return []byte(args.text), nil
+}
+
 type nestedOrderArgs struct {
 	Nested struct {
 		// Deliberately non-alphabetical: nested struct wire order is significant.
@@ -319,6 +329,28 @@ func main() {
 			now:   now,
 			opts:  dbunique.UniqueOpts{ByArgs: true},
 			queue: "default",
+		},
+		{
+			args:  rawAllArgs{`{"":0,"a.b":1,"@x":2,":lead":3,"!bang":4,"[open":5,"{brace":6,"a\\b":7}`},
+			name:  "all_args_literal_path_syntax",
+			now:   now,
+			opts:  dbunique.UniqueOpts{ByArgs: true},
+			queue: "default",
+		},
+		{
+			args:  rawAllArgs{`{"a\"b":1,"line\n":2,"é":3,"a<b":4,"a&b":5,"a` + string(rune(0x2028)) + `b":6}`},
+			name:  "all_args_escaped_key_encoding",
+			now:   now,
+			opts:  dbunique.UniqueOpts{ByArgs: true},
+			queue: "default",
+		},
+		{
+			args:      rawAllArgs{`{"a":1,"a":2,"b":3}`},
+			name:      "typed_duplicate_top_level_keys",
+			now:       now,
+			opts:      dbunique.UniqueOpts{ByArgs: true},
+			queue:     "default",
+			typedOnly: true,
 		},
 		{
 			args: numericBoundaryArgs{

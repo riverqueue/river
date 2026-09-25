@@ -120,6 +120,56 @@
     },
     {
       "args": {
+        "": 0,
+        "a.b": 1,
+        "@x": 2,
+        ":lead": 3,
+        "!bang": 4,
+        "[open": 5,
+        "{brace": 6,
+        "a\\b": 7
+      },
+      "expected_sha256": "1d254dda1efe1009ffb205ede791d481545d66abb8542e85f0d895415b05cdf9",
+      "expected_state_mask": 245,
+      "kind": "conformance_all_args",
+      "name": "all_args_literal_path_syntax",
+      "now": "2026-01-02T03:04:05.6789Z",
+      "options": {
+        "by_args": true,
+        "by_period_nanos": 0,
+        "by_queue": false,
+        "exclude_kind": false
+      },
+      "queue": "default",
+      "scheduled_at": null,
+      "selected_unique_paths": null
+    },
+    {
+      "args": {
+        "a\"b": 1,
+        "line\n": 2,
+        "é": 3,
+        "a\u003cb": 4,
+        "a\u0026b": 5,
+        "a\u2028b": 6
+      },
+      "expected_sha256": "bab84635792449d758b18950f6f014bfb16d26430e798d84afee9fc9cb793163",
+      "expected_state_mask": 245,
+      "kind": "conformance_all_args",
+      "name": "all_args_escaped_key_encoding",
+      "now": "2026-01-02T03:04:05.6789Z",
+      "options": {
+        "by_args": true,
+        "by_period_nanos": 0,
+        "by_queue": false,
+        "exclude_kind": false
+      },
+      "queue": "default",
+      "scheduled_at": null,
+      "selected_unique_paths": null
+    },
+    {
+      "args": {
         "exponent": 1e+100,
         "fraction": 1.25,
         "maximum": 9223372036854775807,
@@ -466,6 +516,27 @@
   ],
   "protocol_revision": 1,
   "typed_only_cases": [
+    {
+      "args": {
+        "a": 1,
+        "a": 2,
+        "b": 3
+      },
+      "expected_sha256": "f3568e94e18a68ce633bd444fe9ec448382740bcf02b83b210cb68e74220fb5f",
+      "expected_state_mask": 245,
+      "kind": "conformance_all_args",
+      "name": "typed_duplicate_top_level_keys",
+      "now": "2026-01-02T03:04:05.6789Z",
+      "options": {
+        "by_args": true,
+        "by_period_nanos": 0,
+        "by_queue": false,
+        "exclude_kind": false
+      },
+      "queue": "default",
+      "scheduled_at": null,
+      "selected_unique_paths": null
+    },
     {
       "args": {
         "empty": [],

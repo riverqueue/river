@@ -7,6 +7,7 @@
 //!
 //! * With no selected unique fields, every top-level member is hashed with
 //!   keys sorted bytewise and duplicate keys collapsed to their first value.
+//!   An empty array hashes as `{}`; other non-object arguments are rejected.
 //! * With selected fields, each selected dotted path is looked up and written
 //!   into a new object in sorted path order. Missing values are omitted, and
 //!   explicit `null` values are retained. When every selected path is
@@ -17,10 +18,8 @@
 //!   encoded arguments escaped it; any other key is re-encoded with Go's
 //!   `encoding/json` string escaping.
 //!
-//! `gjson` interprets `.`, `*`, `?`, `|`, `#`, `@`, `\`, and a leading `:` as
-//! path syntax, so River Go hashes keys containing them inconsistently, and
-//! it fails on an empty key. Rather than silently diverging, River rejects
-//! such keys when they would participate in a unique key.
+//! Top-level argument names are literal in all-arguments mode, including
+//! empty names and names that would be JSON path syntax in selected mode.
 
 use std::{borrow::Cow, time::Duration};
 
@@ -76,13 +75,15 @@ pub(crate) fn build_unique_key_parts(
     Ok(Some(Sha256::digest(key.as_bytes()).into()))
 }
 
-/// Writes every top-level member sorted by key, like River Go's `@keys`
-/// traversal.
+/// Writes every top-level member sorted by key, like River Go's walk over the
+/// encoded object's members. Like Go, an empty array hashes as `{}` and any
+/// other non-object arguments are rejected.
 fn write_all_args(encoded_args: &str, output: &mut String) -> Result<(), Error> {
-    let mut members = object_members(encoded_args)?;
-    for member in &members {
-        validate_path_segment(&member.key, "argument key")?;
+    if is_empty_array(encoded_args) {
+        output.push_str("{}");
+        return Ok(());
     }
+    let mut members = object_members(encoded_args)?;
     // A stable sort keeps the first of any duplicate keys first; `gjson`
     // resolves a duplicated key to its first value.
     members.sort_by(|left, right| left.key.cmp(&right.key));
@@ -277,9 +278,24 @@ struct Member<'a> {
     value: &'a str,
 }
 
+/// Reports whether `source` is a JSON array with no elements.
+fn is_empty_array(source: &str) -> bool {
+    let mut scanner = Scanner::new(source);
+    scanner.skip_whitespace();
+    if !scanner.eat(b'[') {
+        return false;
+    }
+    scanner.skip_whitespace();
+    if !scanner.eat(b']') {
+        return false;
+    }
+    scanner.skip_whitespace();
+    scanner.position == source.len()
+}
+
 /// Splits a JSON object into its members without reinterpreting values.
 fn object_members(source: &str) -> Result<Vec<Member<'_>>, Error> {
-    let not_object = || unique_args_error("job arguments must encode to a JSON object".to_owned());
+    let not_object = || unique_args_error("unique args must encode a JSON object".to_owned());
     let mut scanner = Scanner::new(source);
     scanner.skip_whitespace();
     if !scanner.eat(b'{') {
@@ -1043,22 +1059,11 @@ mod tests {
     }
 
     #[test]
-    fn rejects_keys_go_cannot_hash_deterministically() {
+    fn hashes_literal_top_level_names() {
         let opts = UniqueOpts::new().by_args();
-        for json in [
-            r#"{"a.b":1}"#,
-            r#"{"a*":1}"#,
-            r#"{"a?":1}"#,
-            r#"{"a|b":1}"#,
-            r##"{"#":1}"##,
-            r#"{"@this":1}"#,
-            r#"{"a\\b":1}"#,
-            r#"{":a":1}"#,
-            r#"{"":1}"#,
-        ] {
+        for json in [r#"{"a.b":1}"#, r#"{"@this":1}"#, r#"{"":1}"#] {
             let raw = RawValue::from_string(json.to_owned()).unwrap();
-            let error = key_for("raw", &[], &raw, &opts).unwrap_err();
-            assert!(error.to_string().contains("River Go"), "{json}: {error}");
+            assert!(key_for("raw", &[], &raw, &opts).is_ok(), "{json}");
         }
 
         let raw = RawValue::from_string(r#"{"a":{"b":1}}"#.to_owned()).unwrap();
@@ -1068,11 +1073,31 @@ mod tests {
     }
 
     #[test]
-    fn rejects_non_object_args() {
+    fn empty_array_all_args_hash_an_empty_object() {
         let opts = UniqueOpts::new().by_args();
-        for json in ["[1]", "1", "null", r#""text""#] {
+        let expected: [u8; 32] = Sha256::digest(b"&kind=raw&args={}").into();
+        for json in ["[]", " [ \n] "] {
             let raw = RawValue::from_string(json.to_owned()).unwrap();
-            assert!(key_for("raw", &[], &raw, &opts).is_err(), "{json}");
+            assert_eq!(
+                key_for("raw", &[], &raw, &opts).unwrap(),
+                expected,
+                "{json}"
+            );
+        }
+    }
+
+    #[test]
+    fn non_object_all_args_are_rejected() {
+        let opts = UniqueOpts::new().by_args();
+        for json in ["[1]", "[[]]", "[{}]", "1", "true", "null", r#""text""#] {
+            let raw = RawValue::from_string(json.to_owned()).unwrap();
+            let error = key_for("raw", &[], &raw, &opts).unwrap_err();
+            assert!(
+                error
+                    .to_string()
+                    .contains("unique args must encode a JSON object"),
+                "{json}: {error}"
+            );
             assert!(key_for("raw", &["a"], &raw, &opts).is_err(), "{json}");
         }
     }
