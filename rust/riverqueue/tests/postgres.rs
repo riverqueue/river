@@ -954,8 +954,8 @@ async fn insert_many_variants_preserve_order_and_transactionality() {
         .jobs()
         .list(
             JobListParams::default()
-                .with_ids(ordered.iter().map(|result| result.job.row.id))
-                .with_order_by(JobListOrderBy::Time),
+                .ids(ordered.iter().map(|result| result.job.row.id))
+                .order_by(JobListOrderBy::Time),
         )
         .await
         .unwrap()
@@ -972,7 +972,7 @@ async fn insert_many_variants_preserve_order_and_transactionality() {
     );
     let finalized_without_states = client
         .jobs()
-        .list(JobListParams::default().with_order_by(JobListOrderBy::FinalizedAt))
+        .list(JobListParams::default().order_by(JobListOrderBy::FinalizedAt))
         .await;
     assert!(matches!(
         finalized_without_states,
@@ -1350,7 +1350,7 @@ async fn migrates_inserts_and_works_a_job() {
     assert_eq!(fast_count, 2);
     let fast_rows = client
         .jobs()
-        .list(JobListParams::default().with_tags_any(["fast-one", "fast-two"]))
+        .list(JobListParams::default().tags_any(["fast-one", "fast-two"]))
         .await
         .unwrap()
         .jobs;
@@ -1602,7 +1602,7 @@ async fn migrates_inserts_and_works_a_job() {
 
     let listed = client
         .jobs()
-        .list(JobListParams::default().with_kinds([EchoArgs::KIND]))
+        .list(JobListParams::default().kinds([EchoArgs::KIND]))
         .await
         .unwrap()
         .jobs;
@@ -2267,7 +2267,7 @@ async fn wait_for_job_matching(client: &Client, predicate: impl Fn(&JobRow) -> b
     loop {
         let rows = client
             .jobs()
-            .list(JobListParams::default().with_limit(10_000))
+            .list(JobListParams::default().limit(10_000))
             .await
             .unwrap()
             .jobs;

@@ -66,7 +66,7 @@ macro_rules! scenarios {
                 .unwrap()
                 .id();
             let listed = jobs
-                .list(JobListParams::default().with_ids([inserted]))
+                .list(JobListParams::default().ids([inserted]))
                 .tx(&mut tx)
                 .await
                 .unwrap();
@@ -87,7 +87,7 @@ macro_rules! scenarios {
                     .contains_key("output")
             );
             let listed = jobs
-                .list(JobListParams::default().with_ids([inserted]))
+                .list(JobListParams::default().ids([inserted]))
                 .await
                 .unwrap();
             assert!(listed.jobs.is_empty());
@@ -97,7 +97,7 @@ macro_rules! scenarios {
             let mut tx = fixture.begin().await;
             jobs.cancel(cancelled).tx(&mut tx).await.unwrap();
             jobs.delete_many(JobDeleteManyParams::matching(
-                JobListParams::default().with_ids([deleted]),
+                JobListParams::default().ids([deleted]),
             ))
             .tx(&mut tx)
             .await
@@ -123,11 +123,7 @@ macro_rules! scenarios {
             let second = fixture.client.insert(args("second")).await.unwrap().id();
 
             let page = jobs
-                .list(
-                    JobListParams::default()
-                        .with_ids([first, second])
-                        .with_limit(1),
-                )
+                .list(JobListParams::default().ids([first, second]).limit(1))
                 .await
                 .unwrap();
             assert_eq!(
@@ -138,9 +134,9 @@ macro_rules! scenarios {
             let page = jobs
                 .list(
                     JobListParams::default()
-                        .with_ids([first, second])
-                        .with_limit(1)
-                        .with_after(cursor),
+                        .ids([first, second])
+                        .limit(1)
+                        .after(cursor),
                 )
                 .await
                 .unwrap();

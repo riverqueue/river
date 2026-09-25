@@ -135,8 +135,8 @@ async fn job_delete_many() {
             .jobs()
             .delete_many(riverqueue::JobDeleteManyParams::matching(
                 riverqueue::JobListParams::default()
-                    .with_ids([running, first, locked, last])
-                    .with_limit(2),
+                    .ids([running, first, locked, last])
+                    .limit(2),
             )),
     )
     .await
@@ -181,11 +181,11 @@ async fn job_list_single_finalized_state_by_time() {
         (SortDirection::Ascending, vec![oldest, middle, newest]),
         (SortDirection::Descending, vec![newest, middle, oldest]),
     ] {
-        let mut params = JobListParams::default()
-            .with_order_by(JobListOrderBy::Time)
-            .with_limit(2);
-        params.states = vec![JobState::Completed];
-        params.direction = direction;
+        let params = JobListParams::default()
+            .order_by(JobListOrderBy::Time)
+            .limit(2)
+            .states([JobState::Completed])
+            .direction(direction);
         let first_page = client.jobs().list(params.clone()).await.unwrap();
         assert_eq!(
             first_page.jobs.iter().map(|job| job.id).collect::<Vec<_>>(),
@@ -194,7 +194,7 @@ async fn job_list_single_finalized_state_by_time() {
         let cursor = first_page.last_cursor.unwrap();
         let second_page = client
             .jobs()
-            .list(params.clone().with_after(cursor))
+            .list(params.clone().after(cursor))
             .await
             .unwrap()
             .jobs;
@@ -205,8 +205,9 @@ async fn job_list_single_finalized_state_by_time() {
     }
 
     // Multiple states keep the generic predicate and still filter correctly.
-    let mut params = JobListParams::default().with_order_by(JobListOrderBy::FinalizedAt);
-    params.states = vec![JobState::Completed, JobState::Discarded];
+    let params = JobListParams::default()
+        .order_by(JobListOrderBy::FinalizedAt)
+        .states([JobState::Completed, JobState::Discarded]);
     let both = client.jobs().list(params).await.unwrap().jobs;
     assert_eq!(both.len(), 4);
 

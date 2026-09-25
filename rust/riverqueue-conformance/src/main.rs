@@ -1608,7 +1608,7 @@ impl Adapter {
                 let queues = self
                     .client()?
                     .queues()
-                    .list(queue_list_params(i32::try_from(limit)?))
+                    .list(queue_list_params(u32::try_from(limit)?))
                     .await?;
                 Ok(json!({
                     "queues": queues.iter().map(normalize_queue).collect::<Vec<_>>()
@@ -2155,7 +2155,7 @@ impl Adapter {
                 })?;
                 let queues = client
                     .queues()
-                    .list(queue_list_params(i32::try_from(limit)?))
+                    .list(queue_list_params(u32::try_from(limit)?))
                     .tx(transaction)
                     .await?;
                 Ok(json!({
@@ -2606,7 +2606,7 @@ impl SqliteAdapter {
                 let queues = self
                     .client()?
                     .queues()
-                    .list(queue_list_params(i32::try_from(limit)?))
+                    .list(queue_list_params(u32::try_from(limit)?))
                     .await?;
                 Ok(json!({
                     "queues": queues.iter().map(normalize_queue).collect::<Vec<_>>()
@@ -2996,7 +2996,7 @@ impl SqliteAdapter {
                 })?;
                 let queues = client
                     .queues()
-                    .list(queue_list_params(i32::try_from(limit)?))
+                    .list(queue_list_params(u32::try_from(limit)?))
                     .tx(transaction)
                     .await?;
                 Ok(json!({
@@ -3137,29 +3137,27 @@ impl InsertOptsParams {
 }
 
 fn list_params(params: &Value) -> Result<JobListParams, Box<dyn std::error::Error + Send + Sync>> {
-    let mut list = JobListParams::default();
+    let mut list = JobListParams::default()
+        .ids(string_or_number_array::<i64>(params, "ids")?)
+        .kinds(string_array(params, "kinds")?)
+        .priorities(string_or_number_array::<i16>(params, "priorities")?)
+        .queues(string_array(params, "queues")?)
+        .tags_all(string_array(params, "tags_all")?)
+        .tags_any(string_array(params, "tags_any")?);
     if let Some(limit) = optional_i64(params, "limit") {
-        list.limit = i32::try_from(limit)?;
+        list = list.limit(u32::try_from(limit)?);
     }
-    list.ids = string_or_number_array::<i64>(params, "ids")?;
-    list.kinds = string_array(params, "kinds")?;
-    list.metadata = params
-        .get("metadata")
-        .cloned()
-        .map(serde_json::from_value)
-        .transpose()?;
+    if let Some(metadata) = params.get("metadata") {
+        list = list.metadata(serde_json::from_value(metadata.clone())?);
+    }
     if let Some(order_by) = params.get("order_by").and_then(Value::as_str) {
-        list.order_by = order_by.parse()?;
+        list = list.order_by(order_by.parse()?);
     }
-    list.priorities = string_or_number_array::<i16>(params, "priorities")?;
-    list.queues = string_array(params, "queues")?;
-    list.tags_all = string_array(params, "tags_all")?;
-    list.tags_any = string_array(params, "tags_any")?;
     if let Some(states) = params.get("states") {
-        list.states = serde_json::from_value(states.clone())?;
+        list = list.states(serde_json::from_value::<Vec<JobState>>(states.clone())?);
     }
     if let Some(direction) = params.get("direction").and_then(Value::as_str) {
-        list.direction = match direction {
+        list = list.direction(match direction {
             "asc" => SortDirection::Ascending,
             "desc" => SortDirection::Descending,
             _ => {
@@ -3167,10 +3165,10 @@ fn list_params(params: &Value) -> Result<JobListParams, Box<dyn std::error::Erro
                     io::Error::other(format!("unsupported direction {direction:?}")).into(),
                 );
             }
-        };
+        });
     }
     if let Some(after) = params.get("after").and_then(Value::as_str) {
-        list.after = Some(JobListCursor::decode(after).map_err(io::Error::other)?);
+        list = list.after(JobListCursor::decode(after).map_err(io::Error::other)?);
     }
     Ok(list)
 }
@@ -3221,8 +3219,8 @@ fn queue_selector(name: String) -> QueueSelector {
     }
 }
 
-fn queue_list_params(limit: i32) -> QueueListParams {
-    QueueListParams::default().with_limit(limit)
+fn queue_list_params(limit: u32) -> QueueListParams {
+    QueueListParams::default().limit(limit)
 }
 
 fn exact_json_tokens(row: &JobRow) -> Result<Value, Box<dyn std::error::Error + Send + Sync>> {
