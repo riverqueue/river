@@ -30,26 +30,16 @@ func JobListCursorFromJob(job *rivertype.JobRow) *JobListCursor {
 }
 
 func jobListCursorFromJobAndParams(job *rivertype.JobRow, listParams *JobListParams) *JobListCursor {
-	// A pointer so that we can detect a condition where we accidentally left
-	// this value unset.
-	var cursorTime *time.Time
-
-	// Don't include a `default` so `exhaustive` lint can detect omissions.
-	switch listParams.sortField {
-	case JobListOrderByID:
-		cursorTime = new(time.Time{})
-	case JobListOrderByTime:
-		cursorTime = new(jobListTimeValue(job))
-	case JobListOrderByFinalizedAt:
-		if job.FinalizedAt != nil {
-			cursorTime = job.FinalizedAt
+	// The cursor's time must come from the same field that the list is ordered
+	// by. For time ordering over multiple states, that's the field of the first
+	// state, which may be different from the one normally associated with the
+	// job's own state. A zero time represents a null field value, or ordering by
+	// ID only.
+	var cursorTime time.Time
+	if timeField := listParams.timeField(); timeField != "" {
+		if value := jobListTimeFieldValue(job, timeField); value != nil {
+			cursorTime = *value
 		}
-	case JobListOrderByScheduledAt:
-		cursorTime = &job.ScheduledAt
-	}
-
-	if cursorTime == nil {
-		panic("invalid sort field")
 	}
 
 	return &JobListCursor{
@@ -57,7 +47,7 @@ func jobListCursorFromJobAndParams(job *rivertype.JobRow, listParams *JobListPar
 		kind:      job.Kind,
 		queue:     job.Queue,
 		sortField: listParams.sortField,
-		time:      *cursorTime,
+		time:      cursorTime,
 	}
 }
 
@@ -148,13 +138,19 @@ const (
 	// JobListOrderByTime specifies that the sort should be by the "best fit"
 	// time field based on listed state. The best fit is determined by looking
 	// at the first value given to JobListParams.States. If multiple states are
-	// specified, the ones after the first will be ignored.
+	// specified, the ones after the first will be ignored, and jobs in all
+	// listed states are sorted by the first state's time field.
 	//
 	// The specific time field used for sorting depends on requested state:
 	//
-	// * States `available`, `retryable`, or `scheduled` use `scheduled_at`.
+	// * States `available`, `pending`, `retryable`, or `scheduled` use
+	//   `scheduled_at`.
 	// * State `running` uses `attempted_at`.
 	// * States `cancelled`, `completed`, or `discarded` use `finalized_at`.
+	//
+	// Jobs where the time field is null, like `finalized_at` for jobs that
+	// haven't been finalized, sort after all others in ascending order and
+	// before all others in descending order.
 	JobListOrderByTime JobListOrderByField = "time"
 )
 
@@ -221,6 +217,54 @@ func (p *JobListParams) copy() *JobListParams {
 	}
 }
 
+// timeField returns the time field that jobs are ordered by, or an empty
+// string when ordering by ID only.
+func (p *JobListParams) timeField() string {
+	// Don't include a `default` so `exhaustive` lint can detect omissions.
+	switch p.sortField {
+	case JobListOrderByID:
+		return ""
+	case JobListOrderByFinalizedAt, JobListOrderByScheduledAt:
+		return string(p.sortField)
+	case JobListOrderByTime:
+		if len(p.states) < 1 {
+			// No state filter lists jobs in all states. Use the same field as
+			// the default states from NewJobListParams, where the first is
+			// `available`.
+			return jobListTimeFieldForState(rivertype.JobStateAvailable)
+		}
+		return jobListTimeFieldForState(p.states[0])
+	}
+
+	return "" // should never happen because OrderBy validates its field
+}
+
+// timeFieldNullable returns true if the given time field may be null for
+// listed jobs.
+func (p *JobListParams) timeFieldNullable(timeField string) bool {
+	switch timeField {
+	case "attempted_at":
+		return true
+	case "finalized_at":
+		// finalized_at is set for exactly the jobs in finalized states. Custom
+		// conditions may bypass the state filter, so they may include jobs with
+		// no finalized_at.
+		if len(p.where) > 0 || len(p.states) < 1 {
+			return true
+		}
+		for _, state := range p.states {
+			// Don't include a `default` so `exhaustive` lint can detect omissions.
+			switch state {
+			case rivertype.JobStateAvailable, rivertype.JobStatePending, rivertype.JobStateRetryable, rivertype.JobStateRunning, rivertype.JobStateScheduled:
+				return true
+			case rivertype.JobStateCancelled, rivertype.JobStateCompleted, rivertype.JobStateDiscarded:
+			}
+		}
+	}
+
+	return false
+}
+
 func (p *JobListParams) toDBParams() (*dblist.JobListParams, error) {
 	orderBy := make([]dblist.JobListOrderBy, 0, 2)
 
@@ -254,18 +298,21 @@ func (p *JobListParams) toDBParams() (*dblist.JobListParams, error) {
 		}
 	}
 
-	var timeField string
-	switch {
-	case p.sortField == JobListOrderByID:
-		// no time field
-
-	case len(p.states) > 0 && p.sortField == JobListOrderByTime:
-		timeField = jobListTimeFieldForState(p.states[0])
-		orderBy = append(orderBy, dblist.JobListOrderBy{Expr: timeField, Order: sortOrder})
-
-	default:
-		timeField = string(p.sortField)
-		orderBy = append(orderBy, dblist.JobListOrderBy{Expr: timeField, Order: sortOrder})
+	// A time field that may be null needs its null ordering to be explicit so
+	// that it's consistent across databases and cursor conditions can match it.
+	// Nulls sort as if larger than any other value, which is the Postgres
+	// default, so ordering on Postgres is unchanged.
+	timeField := p.timeField()
+	timeFieldNullable := p.timeFieldNullable(timeField)
+	if timeField != "" {
+		nulls := dblist.NullsOrderUnspecified
+		if timeFieldNullable {
+			nulls = dblist.NullsOrderLast
+			if sortOrder == dblist.SortOrderDesc {
+				nulls = dblist.NullsOrderFirst
+			}
+		}
+		orderBy = append(orderBy, dblist.JobListOrderBy{Expr: timeField, Nulls: nulls, Order: sortOrder})
 	}
 
 	orderBy = append(orderBy, dblist.JobListOrderBy{Expr: "id", Order: sortOrder})
@@ -303,16 +350,33 @@ func (p *JobListParams) toDBParams() (*dblist.JobListParams, error) {
 
 	if p.after != nil {
 		namedArgs := map[string]any{"after_id": p.after.id}
-		if p.after.time.IsZero() { // order by ID only
+		switch {
+		// Order by ID only. A zero cursor time for a field that can't be null
+		// also comes from ID ordering.
+		case timeField == "" || (p.after.time.IsZero() && !timeFieldNullable):
 			if sortOrder == dblist.SortOrderAsc {
 				where = append(where, dblist.WherePredicate{NamedArgs: namedArgs, SQL: "(id > @after_id)"})
 			} else {
 				where = append(where, dblist.WherePredicate{NamedArgs: namedArgs, SQL: "(id < @after_id)"})
 			}
-		} else {
+
+		// The cursor job's time is null, so nulls sort last ascending and
+		// first descending.
+		case p.after.time.IsZero():
+			if sortOrder == dblist.SortOrderAsc {
+				where = append(where, dblist.WherePredicate{NamedArgs: namedArgs, SQL: fmt.Sprintf(`("%s" IS NULL AND "id" > @after_id)`, timeField)})
+			} else {
+				where = append(where, dblist.WherePredicate{NamedArgs: namedArgs, SQL: fmt.Sprintf(`("%s" IS NOT NULL OR "id" < @after_id)`, timeField)})
+			}
+
+		default:
 			namedArgs["cursor_time"] = p.after.time
 			if sortOrder == dblist.SortOrderAsc {
-				where = append(where, dblist.WherePredicate{NamedArgs: namedArgs, SQL: fmt.Sprintf(`("%s" > @cursor_time OR ("%s" = @cursor_time AND "id" > @after_id))`, timeField, timeField)})
+				var orNull string
+				if timeFieldNullable {
+					orNull = fmt.Sprintf(` OR "%s" IS NULL`, timeField)
+				}
+				where = append(where, dblist.WherePredicate{NamedArgs: namedArgs, SQL: fmt.Sprintf(`("%s" > @cursor_time OR ("%s" = @cursor_time AND "id" > @after_id)%s)`, timeField, timeField, orNull)})
 			} else {
 				where = append(where, dblist.WherePredicate{NamedArgs: namedArgs, SQL: fmt.Sprintf(`("%s" < @cursor_time OR ("%s" = @cursor_time AND "id" < @after_id))`, timeField, timeField)})
 			}
@@ -546,26 +610,19 @@ func jobListTimeFieldForState(state rivertype.JobState) string {
 	return "created_at" // should never happen
 }
 
-func jobListTimeValue(job *rivertype.JobRow) time.Time {
-	// Don't include a `default` so `exhaustive` lint can detect omissions.
-	switch job.State {
-	case rivertype.JobStateAvailable, rivertype.JobStatePending, rivertype.JobStateRetryable, rivertype.JobStateScheduled:
-		return job.ScheduledAt
-
-	case rivertype.JobStateRunning:
-		if job.AttemptedAt == nil {
-			// This should never happen unless a job has been manually manipulated.
-			return job.CreatedAt
-		}
-		return *job.AttemptedAt
-
-	case rivertype.JobStateCancelled, rivertype.JobStateCompleted, rivertype.JobStateDiscarded:
-		if job.FinalizedAt == nil {
-			// This should never happen unless a job has been manually manipulated.
-			return job.CreatedAt
-		}
-		return *job.FinalizedAt
+// jobListTimeFieldValue returns the value of the given time field on a job, or
+// nil if the field is null.
+func jobListTimeFieldValue(job *rivertype.JobRow, timeField string) *time.Time {
+	switch timeField {
+	case "attempted_at":
+		return job.AttemptedAt
+	case "created_at":
+		return &job.CreatedAt
+	case "finalized_at":
+		return job.FinalizedAt
+	case "scheduled_at":
+		return &job.ScheduledAt
 	}
 
-	return job.CreatedAt // should never happen
+	panic("invalid time field: " + timeField)
 }

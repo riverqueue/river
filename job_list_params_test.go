@@ -54,99 +54,66 @@ func Test_JobListCursor_jobListCursorFromJobAndParams(t *testing.T) {
 		require.Zero(t, cursor.time)
 	})
 
-	for i, state := range []rivertype.JobState{
-		rivertype.JobStateAvailable,
-		rivertype.JobStateRetryable,
-		rivertype.JobStateScheduled,
-	} {
-		t.Run(fmt.Sprintf("OrderByTimeScheduledAtUsedFor%sJob", state), func(t *testing.T) {
-			t.Parallel()
+	now := time.Date(2026, 9, 9, 12, 0, 0, 0, time.UTC)
 
-			now := time.Now().UTC()
-			jobRow := &rivertype.JobRow{
-				CreatedAt:   now.Add(-11 * time.Second),
-				ID:          int64(i),
-				Kind:        "test_kind",
-				Queue:       "test_queue",
-				State:       state,
-				ScheduledAt: now.Add(-10 * time.Second),
-			}
-
-			cursor := jobListCursorFromJobAndParams(jobRow, NewJobListParams().OrderBy(JobListOrderByTime, SortOrderAsc))
-			require.Equal(t, jobRow.ID, cursor.id)
-			require.Equal(t, jobRow.Kind, cursor.kind)
-			require.Equal(t, jobRow.Queue, cursor.queue)
-			require.Equal(t, jobRow.ScheduledAt, cursor.time)
-		})
-	}
-
-	for i, state := range []rivertype.JobState{
-		rivertype.JobStateCancelled,
-		rivertype.JobStateCompleted,
-		rivertype.JobStateDiscarded,
-	} {
-		t.Run(fmt.Sprintf("OrderByTimeFinalizedAtUsedFor%sJob", state), func(t *testing.T) {
-			t.Parallel()
-
-			now := time.Now().UTC()
-			jobRow := &rivertype.JobRow{
-				AttemptedAt: new(now.Add(-5 * time.Second)),
-				CreatedAt:   now.Add(-11 * time.Second),
-				FinalizedAt: new(now.Add(-1 * time.Second)),
-				ID:          int64(i),
-				Kind:        "test_kind",
-				Queue:       "test_queue",
-				State:       state,
-				ScheduledAt: now.Add(-10 * time.Second),
-			}
-
-			cursor := jobListCursorFromJobAndParams(jobRow, NewJobListParams().OrderBy(JobListOrderByTime, SortOrderAsc))
-			require.Equal(t, jobRow.ID, cursor.id)
-			require.Equal(t, jobRow.Kind, cursor.kind)
-			require.Equal(t, jobRow.Queue, cursor.queue)
-			require.Equal(t, *jobRow.FinalizedAt, cursor.time)
-		})
-	}
-
-	t.Run("OrderByTimeRunningJobUsesAttemptedAt", func(t *testing.T) {
-		t.Parallel()
-
-		now := time.Now().UTC()
-		jobRow := &rivertype.JobRow{
+	// Each time field has a distinct value so the test can tell which one the
+	// cursor used.
+	jobRowWithState := func(state rivertype.JobState) *rivertype.JobRow {
+		return &rivertype.JobRow{
 			AttemptedAt: new(now.Add(-5 * time.Second)),
 			CreatedAt:   now.Add(-11 * time.Second),
+			FinalizedAt: new(now.Add(-1 * time.Second)),
 			ID:          4,
-			Kind:        "test",
-			Queue:       "test",
-			State:       rivertype.JobStateRunning,
+			Kind:        "test_kind",
+			Queue:       "test_queue",
 			ScheduledAt: now.Add(-10 * time.Second),
+			State:       state,
 		}
+	}
 
-		cursor := jobListCursorFromJobAndParams(jobRow, NewJobListParams().OrderBy(JobListOrderByTime, SortOrderAsc))
-		require.Equal(t, jobRow.ID, cursor.id)
-		require.Equal(t, jobRow.Kind, cursor.kind)
-		require.Equal(t, jobRow.Queue, cursor.queue)
-		require.Equal(t, *jobRow.AttemptedAt, cursor.time)
-	})
+	for _, tt := range []struct {
+		name     string
+		jobState rivertype.JobState
+		params   *JobListParams
+		wantTime time.Time
+	}{
+		{"OrderByFinalizedAt", rivertype.JobStateCompleted, NewJobListParams().OrderBy(JobListOrderByFinalizedAt, SortOrderAsc), now.Add(-1 * time.Second)},
+		{"OrderByScheduledAt", rivertype.JobStateCompleted, NewJobListParams().OrderBy(JobListOrderByScheduledAt, SortOrderAsc), now.Add(-10 * time.Second)},
+		{"OrderByTimeCancelled", rivertype.JobStateCancelled, NewJobListParams().States(rivertype.JobStateCancelled).OrderBy(JobListOrderByTime, SortOrderAsc), now.Add(-1 * time.Second)},
+		{"OrderByTimeCompleted", rivertype.JobStateCompleted, NewJobListParams().States(rivertype.JobStateCompleted).OrderBy(JobListOrderByTime, SortOrderAsc), now.Add(-1 * time.Second)},
+		{"OrderByTimeDefaultStates", rivertype.JobStateCompleted, NewJobListParams().OrderBy(JobListOrderByTime, SortOrderAsc), now.Add(-10 * time.Second)},
+		{"OrderByTimeDiscarded", rivertype.JobStateDiscarded, NewJobListParams().States(rivertype.JobStateDiscarded).OrderBy(JobListOrderByTime, SortOrderAsc), now.Add(-1 * time.Second)},
+		{"OrderByTimeMixedStatesUsesFirst", rivertype.JobStateCompleted, NewJobListParams().States(rivertype.JobStateRunning, rivertype.JobStateCompleted).OrderBy(JobListOrderByTime, SortOrderAsc), now.Add(-5 * time.Second)},
+		{"OrderByTimeRetryable", rivertype.JobStateRetryable, NewJobListParams().States(rivertype.JobStateRetryable).OrderBy(JobListOrderByTime, SortOrderAsc), now.Add(-10 * time.Second)},
+		{"OrderByTimeRunning", rivertype.JobStateRunning, NewJobListParams().States(rivertype.JobStateRunning).OrderBy(JobListOrderByTime, SortOrderAsc), now.Add(-5 * time.Second)},
+		{"OrderByTimeScheduled", rivertype.JobStateScheduled, NewJobListParams().States(rivertype.JobStateScheduled).OrderBy(JobListOrderByTime, SortOrderAsc), now.Add(-10 * time.Second)},
+		{"OrderByTimeWithoutStates", rivertype.JobStateRunning, NewJobListParams().States().OrderBy(JobListOrderByTime, SortOrderAsc), now.Add(-10 * time.Second)},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
 
-	t.Run("OrderByTimeUnknownJobStateUsesCreatedAt", func(t *testing.T) {
+			jobRow := jobRowWithState(tt.jobState)
+
+			cursor := jobListCursorFromJobAndParams(jobRow, tt.params)
+			require.Equal(t, jobRow.ID, cursor.id)
+			require.Equal(t, jobRow.Kind, cursor.kind)
+			require.Equal(t, jobRow.Queue, cursor.queue)
+			require.Equal(t, tt.params.sortField, cursor.sortField)
+			require.Equal(t, tt.wantTime, cursor.time)
+		})
+	}
+
+	t.Run("OrderByTimeNullTimeField", func(t *testing.T) {
 		t.Parallel()
 
-		now := time.Now().UTC()
-		jobRow := &rivertype.JobRow{
-			CreatedAt:   now.Add(-11 * time.Second),
-			ID:          4,
-			Kind:        "test",
-			Queue:       "test",
-			State:       rivertype.JobState("unknown_fake_state"),
-			ScheduledAt: now.Add(-10 * time.Second),
-		}
+		jobRow := jobRowWithState(rivertype.JobStateAvailable)
+		jobRow.FinalizedAt = nil
 
-		cursor := jobListCursorFromJobAndParams(jobRow, NewJobListParams().OrderBy(JobListOrderByTime, SortOrderAsc))
+		// A null time field is represented by a zero time.
+		cursor := jobListCursorFromJobAndParams(jobRow, NewJobListParams().
+			States(rivertype.JobStateCompleted, rivertype.JobStateAvailable).OrderBy(JobListOrderByTime, SortOrderAsc))
 		require.Equal(t, jobRow.ID, cursor.id)
-		require.Equal(t, jobRow.Kind, cursor.kind)
-		require.Equal(t, jobRow.Queue, cursor.queue)
-		require.Equal(t, jobRow.CreatedAt, cursor.time)
+		require.Zero(t, cursor.time)
 	})
 }
 
@@ -481,6 +448,100 @@ func Test_JobListParams_toDBParamsFinalizedIndex(t *testing.T) {
 				})
 			}
 		}
+	}
+}
+
+func Test_JobListParams_toDBParamsNullableTimeField(t *testing.T) {
+	t.Parallel()
+
+	cursorTime := time.Date(2026, 9, 9, 12, 0, 0, 0, time.UTC)
+
+	// Nulls sort as the largest values, so they're last ascending and first
+	// descending. Cursor conditions must include or exclude them to match.
+	for _, tt := range []struct {
+		name          string
+		params        *JobListParams
+		wantOrderBy   string
+		wantAfterNull string
+		wantAfterTime string
+	}{
+		{
+			"AttemptedAtAsc",
+			NewJobListParams().States(rivertype.JobStateRunning).OrderBy(JobListOrderByTime, SortOrderAsc),
+			"attempted_at ASC NULLS LAST, id ASC",
+			`("attempted_at" IS NULL AND "id" > @after_id)`,
+			`("attempted_at" > @cursor_time OR ("attempted_at" = @cursor_time AND "id" > @after_id) OR "attempted_at" IS NULL)`,
+		},
+		{
+			"AttemptedAtDesc",
+			NewJobListParams().States(rivertype.JobStateRunning).OrderBy(JobListOrderByTime, SortOrderDesc),
+			"attempted_at DESC NULLS FIRST, id DESC",
+			`("attempted_at" IS NOT NULL OR "id" < @after_id)`,
+			`("attempted_at" < @cursor_time OR ("attempted_at" = @cursor_time AND "id" < @after_id))`,
+		},
+		{
+			"FinalizedAtMixedStatesAsc",
+			NewJobListParams().States(rivertype.JobStateCompleted, rivertype.JobStateAvailable).OrderBy(JobListOrderByTime, SortOrderAsc),
+			"finalized_at ASC NULLS LAST, id ASC",
+			`("finalized_at" IS NULL AND "id" > @after_id)`,
+			`("finalized_at" > @cursor_time OR ("finalized_at" = @cursor_time AND "id" > @after_id) OR "finalized_at" IS NULL)`,
+		},
+		{
+			"FinalizedAtMixedStatesDesc",
+			NewJobListParams().States(rivertype.JobStateCompleted, rivertype.JobStateAvailable).OrderBy(JobListOrderByTime, SortOrderDesc),
+			"finalized_at DESC NULLS FIRST, id DESC",
+			`("finalized_at" IS NOT NULL OR "id" < @after_id)`,
+			`("finalized_at" < @cursor_time OR ("finalized_at" = @cursor_time AND "id" < @after_id))`,
+		},
+		{
+			"FinalizedAtWithCondition",
+			NewJobListParams().States(rivertype.JobStateCompleted).OrderBy(JobListOrderByTime, SortOrderAsc).Where("true"),
+			"finalized_at ASC NULLS LAST, id ASC",
+			`("finalized_at" IS NULL AND "id" > @after_id)`,
+			`("finalized_at" > @cursor_time OR ("finalized_at" = @cursor_time AND "id" > @after_id) OR "finalized_at" IS NULL)`,
+		},
+		{
+			"FinalizedStates",
+			NewJobListParams().OrderBy(JobListOrderByFinalizedAt, SortOrderAsc),
+			"finalized_at ASC, id ASC",
+			"",
+			`("finalized_at" > @cursor_time OR ("finalized_at" = @cursor_time AND "id" > @after_id))`,
+		},
+		{
+			"ScheduledAt",
+			NewJobListParams().States(rivertype.JobStateAvailable, rivertype.JobStateCompleted).OrderBy(JobListOrderByTime, SortOrderAsc),
+			"scheduled_at ASC, id ASC",
+			"",
+			`("scheduled_at" > @cursor_time OR ("scheduled_at" = @cursor_time AND "id" > @after_id))`,
+		},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			// Returns the order clause and the cursor condition, which comes last.
+			convert := func(t *testing.T, params *JobListParams) (string, string) {
+				t.Helper()
+
+				dbParams, err := params.toDBParams()
+				require.NoError(t, err)
+				driverParams, err := dblist.JobMakeDriverParams(context.Background(), dbParams, riverpgxv5.New(nil))
+				require.NoError(t, err)
+				return driverParams.OrderByClause, dbParams.Where[len(dbParams.Where)-1].SQL
+			}
+
+			orderBy, afterTime := convert(t, tt.params.After(&JobListCursor{id: 42, time: cursorTime}))
+			require.Equal(t, tt.wantOrderBy, orderBy)
+			require.Equal(t, tt.wantAfterTime, afterTime)
+
+			// A zero cursor time is a null time field when the field can be
+			// null. Otherwise, it's from an ID ordered list.
+			_, afterNull := convert(t, tt.params.After(&JobListCursor{id: 42}))
+			if tt.wantAfterNull == "" {
+				require.Equal(t, "(id > @after_id)", afterNull)
+			} else {
+				require.Equal(t, tt.wantAfterNull, afterNull)
+			}
+		})
 	}
 }
 
