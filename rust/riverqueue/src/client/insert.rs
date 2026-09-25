@@ -539,7 +539,7 @@ impl Client {
     pub(super) fn prepare_periodic(
         &self,
         kind: &str,
-        unique_fields: &[&str],
+        unique_fields: &[&[&str]],
         encoded_args: Box<RawValue>,
         mut opts: InsertParams,
         target: DateTime<Utc>,
@@ -559,7 +559,7 @@ impl Client {
     pub(super) fn prepare_encoded(
         &self,
         kind: &str,
-        unique_fields: &[&str],
+        unique_fields: &[&[&str]],
         encoded_args: Box<RawValue>,
         opts: InsertParams,
         now: DateTime<Utc>,

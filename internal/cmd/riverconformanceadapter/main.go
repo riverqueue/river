@@ -397,6 +397,7 @@ type uniqueDottedSelectedArgs struct {
 	//nolint:tagliatelle // literal dotted names distinguish them from nested paths
 	Literal string                   `json:"user.id,omitempty" river:"unique"`
 	User    uniqueDottedSelectedUser `json:"user"`
+	Unicode string                   `json:"é,omitempty"       river:"unique"`
 }
 
 func (uniqueDottedSelectedArgs) Kind() string { return "conformance_dotted_selected_args" }
@@ -817,10 +818,11 @@ type uniqueKeyParams struct {
 
 	// Fixture expectations and documentation passed through unchanged by
 	// the harness; the adapter ignores them.
-	ExpectedSHA256      string   `json:"expected_sha256"`
-	ExpectedStateMask   int      `json:"expected_state_mask"`
-	Name                string   `json:"name"`
-	SelectedUniquePaths []string `json:"selected_unique_paths"`
+	ExpectedSHA256           string     `json:"expected_sha256"`
+	ExpectedStateMask        int        `json:"expected_state_mask"`
+	Name                     string     `json:"name"`
+	SelectedUniqueComponents [][]string `json:"selected_unique_components"`
+	SelectedUniquePaths      []string   `json:"selected_unique_paths"`
 }
 
 func (p uniqueKeyParams) jobArgs() (rivertype.JobArgs, error) {

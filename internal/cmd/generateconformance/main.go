@@ -100,6 +100,7 @@ type dottedSelectedArgs struct {
 	//nolint:tagliatelle // literal dotted names distinguish them from nested paths
 	Literal string             `json:"user.id,omitempty" river:"unique"`
 	User    dottedSelectedUser `json:"user"`
+	Unicode string             `json:"é,omitempty"       river:"unique"`
 }
 
 func (dottedSelectedArgs) Kind() string { return "conformance_dotted_selected_args" }
@@ -204,16 +205,17 @@ type fixture struct {
 }
 
 type fixtureCase struct {
-	Args               json.RawMessage `json:"args"`
-	ExpectedSHA256     string          `json:"expected_sha256"`
-	ExpectedStateMask  byte            `json:"expected_state_mask"`
-	Kind               string          `json:"kind"`
-	Name               string          `json:"name"`
-	Now                time.Time       `json:"now"`
-	Options            fixtureOptions  `json:"options"`
-	Queue              string          `json:"queue"`
-	ScheduledAt        *time.Time      `json:"scheduled_at"`
-	SelectedUniquePath []string        `json:"selected_unique_paths"`
+	Args                     json.RawMessage `json:"args"`
+	ExpectedSHA256           string          `json:"expected_sha256"`
+	ExpectedStateMask        byte            `json:"expected_state_mask"`
+	Kind                     string          `json:"kind"`
+	Name                     string          `json:"name"`
+	Now                      time.Time       `json:"now"`
+	Options                  fixtureOptions  `json:"options"`
+	Queue                    string          `json:"queue"`
+	ScheduledAt              *time.Time      `json:"scheduled_at"`
+	SelectedUniqueComponents [][]string      `json:"selected_unique_components,omitempty"`
+	SelectedUniquePath       []string        `json:"selected_unique_paths"`
 }
 
 type fixtureOptions struct {
@@ -395,7 +397,7 @@ func main() {
 			now:                 now,
 			opts:                dbunique.UniqueOpts{ByArgs: true},
 			queue:               "default",
-			selectedUniquePaths: []string{"user.id", `user\.id`},
+			selectedUniquePaths: []string{"user.id", `user\.id`, "é"},
 		},
 		{
 			args:                dottedSelectedArgs{User: dottedSelectedUser{ID: "nested"}},
@@ -403,7 +405,15 @@ func main() {
 			now:                 now,
 			opts:                dbunique.UniqueOpts{ByArgs: true},
 			queue:               "default",
-			selectedUniquePaths: []string{"user.id", `user\.id`},
+			selectedUniquePaths: []string{"user.id", `user\.id`, "é"},
+		},
+		{
+			args:                dottedSelectedArgs{Unicode: "café"},
+			name:                "selected_unicode_field_name",
+			now:                 now,
+			opts:                dbunique.UniqueOpts{ByArgs: true},
+			queue:               "default",
+			selectedUniquePaths: []string{"user.id", `user\.id`, "é"},
 		},
 		{
 			args: collectionsArgs{
@@ -584,9 +594,10 @@ func main() {
 				ByState:       reference.opts.ByState,
 				ExcludeKind:   reference.opts.ExcludeKind,
 			},
-			Queue:              reference.queue,
-			ScheduledAt:        reference.scheduledAt,
-			SelectedUniquePath: reference.selectedUniquePaths,
+			Queue:                    reference.queue,
+			ScheduledAt:              reference.scheduledAt,
+			SelectedUniqueComponents: makeSelectedComponents(reference.selectedUniquePaths),
+			SelectedUniquePath:       reference.selectedUniquePaths,
 		}
 		if reference.typedOnly {
 			generated.TypedOnlyCases = append(generated.TypedOnlyCases, generatedCase)
@@ -598,6 +609,36 @@ func main() {
 	writeGenerated(*check, uniqueFixturePath, generated)
 	writeGenerated(*check, protocolFixturePath, makeProtocolFixture(now))
 	writeGenerated(*check, maintenanceFixturePath, makeMaintenanceFixture())
+}
+
+// makeSelectedComponents keeps the fixture independent of gjson's escaped
+// path spelling. Each inner slice is one path of decoded JSON field names.
+func makeSelectedComponents(paths []string) [][]string {
+	if len(paths) == 0 {
+		return nil
+	}
+	components := make([][]string, 0, len(paths))
+	for _, path := range paths {
+		var parts []string
+		var part strings.Builder
+		for index := 0; index < len(path); index++ {
+			switch path[index] {
+			case '\\':
+				index++
+				if index < len(path) {
+					part.WriteByte(path[index])
+				}
+			case '.':
+				parts = append(parts, part.String())
+				part.Reset()
+			default:
+				part.WriteByte(path[index])
+			}
+		}
+		parts = append(parts, part.String())
+		components = append(components, parts)
+	}
+	return components
 }
 
 func makeProtocolFixture(now time.Time) protocolFixture {

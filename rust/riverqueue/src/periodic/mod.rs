@@ -115,7 +115,7 @@ pub(crate) struct PeriodicInsert {
     pub(crate) encoded_args: Box<serde_json::value::RawValue>,
     pub(crate) kind: &'static str,
     pub(crate) opts: InsertOpts,
-    pub(crate) unique_fields: &'static [&'static str],
+    pub(crate) unique_fields: &'static [&'static [&'static str]],
 }
 
 /// Type-erased periodic job definition.

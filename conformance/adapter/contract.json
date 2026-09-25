@@ -2467,6 +2467,14 @@
               "null"
             ]
           },
+          "selected_unique_components": {
+            "description": "Decoded JSON field-name paths for selected argument fixtures.",
+            "items": {
+              "items": { "type": "string" },
+              "type": "array"
+            },
+            "type": "array"
+          },
           "selected_unique_paths": {
             "description": "Fixture documentation; adapters ignore it.",
             "items": {

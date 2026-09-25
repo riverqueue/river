@@ -625,6 +625,8 @@ struct UniqueDottedSelectedUser {
 struct UniqueDottedSelectedArgs {
     #[serde(default, rename = "user.id")]
     literal: String,
+    #[serde(default, rename = "é")]
+    unicode: String,
     #[serde(default)]
     user: UniqueDottedSelectedUser,
 }
@@ -632,8 +634,8 @@ struct UniqueDottedSelectedArgs {
 impl JobArgs for UniqueDottedSelectedArgs {
     const KIND: &'static str = "conformance_dotted_selected_args";
 
-    fn unique_fields() -> &'static [&'static str] {
-        &["user.id", "user\\.id"]
+    fn unique_fields() -> &'static [&'static [&'static str]] {
+        &[&["user", "id"], &["user.id"], &["é"]]
     }
 }
 
