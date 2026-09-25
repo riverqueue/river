@@ -191,6 +191,41 @@ func Test_JobListCursor_MarshalJSON(t *testing.T) {
 	})
 }
 
+func Test_JobListCursor_UnmarshalText(t *testing.T) {
+	t.Parallel()
+
+	// These kinds make the cursor's encoded JSON contain the two characters
+	// specific to URL-safe base64. The decoder must accept both when a cursor
+	// produced by MarshalText is used to request the next page.
+	for _, tt := range []struct {
+		kind       string
+		name       string
+		wantSymbol string
+	}{
+		{kind: "a~", name: "Minus", wantSymbol: "-"},
+		{kind: "a·o·", name: "Underscore", wantSymbol: "_"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			cursor := &JobListCursor{
+				id:        1,
+				kind:      tt.kind,
+				queue:     "default",
+				sortField: JobListOrderByID,
+			}
+
+			text, err := cursor.MarshalText()
+			require.NoError(t, err)
+			require.Contains(t, string(text), tt.wantSymbol)
+
+			decoded := &JobListCursor{}
+			require.NoError(t, decoded.UnmarshalText(text))
+			require.Equal(t, cursor, decoded)
+		})
+	}
+}
+
 func Test_JobListParams_toDBParams(t *testing.T) {
 	t.Parallel()
 
