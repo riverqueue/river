@@ -292,7 +292,10 @@ pub(super) async fn run_queue(
     notify_queue_metadata(&inner, &queue, &metadata).await;
     let permits = Arc::new(Semaphore::new(config.max_workers));
     let mut jobs = JoinSet::new();
-    let mut last_fetch = tokio::time::Instant::now() - config.fetch_cooldown;
+    // `None` until the first fetch, which needs no cooldown. Subtracting the
+    // cooldown from now instead would panic for a cooldown longer than the
+    // monotonic clock's age, as on a freshly booted macOS host.
+    let mut last_fetch: Option<tokio::time::Instant> = None;
     let mut heartbeat = tokio::time::interval(QUEUE_HEARTBEAT_INTERVAL);
     let mut poll = tokio::time::interval(config.fetch_poll_interval);
     let mut queue_config_poll = tokio::time::interval(QUEUE_CONFIG_POLL_INTERVAL);
@@ -365,9 +368,13 @@ pub(super) async fn run_queue(
         if !should_fetch || paused {
             continue;
         }
-        let since_fetch = last_fetch.elapsed();
-        if let Some(remaining) = config.fetch_cooldown.checked_sub(since_fetch) {
-            tokio::time::sleep(remaining).await;
+        if let Some(remaining) = last_fetch
+            .and_then(|last_fetch| config.fetch_cooldown.checked_sub(last_fetch.elapsed()))
+        {
+            tokio::select! {
+                () = fetch_cancel.cancelled() => break,
+                () = tokio::time::sleep(remaining) => {}
+            }
         }
         // A stop can be requested while another branch above was selected or
         // during the cooldown. Go's fetch query fails once its context is
@@ -409,7 +416,7 @@ pub(super) async fn run_queue(
                     rows
                 }
                 (Err(fetch_error), Err(second_fetch_error)) => {
-                    last_fetch = tokio::time::Instant::now();
+                    last_fetch = Some(tokio::time::Instant::now());
                     error!(
                         error = %fetch_error,
                         secondary_error = %second_fetch_error,
@@ -422,13 +429,13 @@ pub(super) async fn run_queue(
             match fetch_jobs(&inner, &queue, available).await {
                 Ok(rows) => rows,
                 Err(fetch_error) => {
-                    last_fetch = tokio::time::Instant::now();
+                    last_fetch = Some(tokio::time::Instant::now());
                     error!(error = %fetch_error, "River job fetch failed; retrying");
                     continue;
                 }
             }
         };
-        last_fetch = tokio::time::Instant::now();
+        last_fetch = Some(tokio::time::Instant::now());
         let FetchedJobs { rows, undecodable } = rows;
         // Like River Go, a claimed job whose row couldn't be fully decoded
         // gets an executor that fails its attempt with the decode error
