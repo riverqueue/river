@@ -1785,3 +1785,201 @@ async fn sqlite_fetches_and_discards_unregistered_kinds() {
 
     run.shutdown().await.unwrap();
 }
+
+/// An extension that claims every available job itself and records the jobs
+/// its set-state hook sees.
+#[derive(Clone, Default)]
+struct ClaimingPilot {
+    set_state_ids: Arc<Mutex<Vec<i64>>>,
+    set_state_rows: Arc<Mutex<Vec<i64>>>,
+}
+
+#[async_trait]
+impl Pilot for ClaimingPilot {
+    fn intercepts_fetch(&self) -> bool {
+        true
+    }
+
+    fn intercepts_job_set_state(&self) -> bool {
+        true
+    }
+
+    async fn claim_jobs(
+        &self,
+        connection: DatabaseConnection<'_>,
+        params: &FetchParams,
+    ) -> Result<Option<Vec<riverqueue::__private::ClaimedJob>>, PilotError> {
+        use sqlx::Row as _;
+
+        let connection = connection
+            .into_sqlite()
+            .ok_or_else(|| std::io::Error::other("expected a SQLite connection"))?;
+        let ids: Vec<i64> = sqlx::query_scalar(
+            "SELECT id FROM river_job WHERE state = 'available' AND queue = ? \
+             ORDER BY priority, scheduled_at, id LIMIT ?",
+        )
+        .bind(&params.queue)
+        .bind(params.maximum)
+        .fetch_all(&mut *connection)
+        .await?;
+        let mut claimed = Vec::new();
+        for id in ids {
+            sqlx::query(
+                "UPDATE river_job SET state = 'running', attempt = attempt + 1, \
+                 attempted_at = ?, \
+                 attempted_by = jsonb_insert(coalesce(attempted_by, jsonb('[]')), '$[#]', ?) \
+                 WHERE id = ?",
+            )
+            .bind(riverqueue::__private::sqlite_timestamp(chrono::Utc::now()))
+            .bind(&params.client_id)
+            .bind(id)
+            .execute(&mut *connection)
+            .await?;
+            let row = sqlx::query(sqlx::AssertSqlSafe(format!(
+                "SELECT {} FROM river_job WHERE id = ?",
+                riverqueue::__private::SQLITE_JOB_COLUMNS
+            )))
+            .bind(id)
+            .fetch_one(&mut *connection)
+            .await?;
+            assert_eq!(row.get::<i64, _>("id"), id);
+            claimed.push(riverqueue::__private::claimed_sqlite_job(&row));
+        }
+        Ok(Some(claimed))
+    }
+
+    async fn after_jobs_set_state(
+        &self,
+        _connection: DatabaseConnection<'_>,
+        params: &JobSetStateParams,
+    ) -> Result<(), PilotError> {
+        self.set_state_ids
+            .lock()
+            .unwrap()
+            .extend_from_slice(params.job_ids);
+        self.set_state_rows
+            .lock()
+            .unwrap()
+            .extend(params.jobs.iter().map(|job| job.id));
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Deserialize, JobArgs, Serialize)]
+#[river(kind = "rust_sqlite_self_deleting")]
+struct SelfDeletingArgs {}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn extension_claimed_rows_fail_undecodable_attempts_like_river_claims() {
+    let (pool, database_path) = setup_file_pool(Duration::from_secs(5)).await;
+    let pilot = ClaimingPilot::default();
+    let client = Client::builder(pool.clone())
+        .id("sqlite-extension-claimer")
+        .pilot(pilot.clone())
+        .queue(
+            "default",
+            QueueConfig::new(2)
+                .with_fetch_cooldown(Duration::from_millis(1))
+                .with_fetch_poll_interval(Duration::from_millis(10)),
+        )
+        .workers(runtime_workers(Arc::new(Semaphore::new(0))))
+        .build()
+        .unwrap();
+    let good = client.insert(RuntimeArgs { value: 1 }).await.unwrap();
+    let bad = client
+        .insert(RuntimeArgs { value: 2 })
+        .opts(InsertOpts::default().with_max_attempts(1))
+        .await
+        .unwrap();
+    sqlx::query("UPDATE river_job SET tags = jsonb('{\"not\":\"an array\"}') WHERE id = ?")
+        .bind(bad.id())
+        .execute(&pool)
+        .await
+        .unwrap();
+
+    let mut failed = client.subscribe(&[EventKind::JobFailed]).unwrap();
+    let mut run = client.start().unwrap();
+    let event = tokio::time::timeout(Duration::from_secs(10), failed.recv())
+        .await
+        .expect("undecodable claimed job did not fail")
+        .unwrap();
+    let event = event.as_job().unwrap();
+    assert_eq!(event.job.id, bad.id());
+    let (state, errors): (String, String) =
+        sqlx::query_as("SELECT state, json(errors) FROM river_job WHERE id = ?")
+            .bind(bad.id())
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(state, "discarded");
+    assert!(
+        errors.contains("job row couldn't be decoded: "),
+        "unexpected attempt errors {errors}"
+    );
+    tokio::time::timeout(Duration::from_secs(10), async {
+        loop {
+            let state: String = sqlx::query_scalar("SELECT state FROM river_job WHERE id = ?")
+                .bind(good.id())
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+            if state == "completed" {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("decodable claimed job did not complete");
+    run.shutdown().await.unwrap();
+    pool.close().await;
+    remove_sqlite_files(&database_path);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn set_state_extension_sees_jobs_deleted_while_worked() {
+    let (pool, database_path) = setup_file_pool(Duration::from_secs(5)).await;
+    let pilot = ClaimingPilot::default();
+    let mut workers = WorkerRegistry::new();
+    let delete_pool = pool.clone();
+    workers
+        .register_fn(move |_context: WorkContext, job: Job<SelfDeletingArgs>| {
+            let pool = delete_pool.clone();
+            async move {
+                sqlx::query("DELETE FROM river_job WHERE id = ?")
+                    .bind(job.row.id)
+                    .execute(&pool)
+                    .await?;
+                Ok::<_, sqlx::Error>(WorkOutcome::Complete)
+            }
+        })
+        .unwrap();
+    let client = Client::builder(pool.clone())
+        .id("sqlite-set-state-deleted")
+        .pilot(pilot.clone())
+        .queue(
+            "default",
+            QueueConfig::new(1)
+                .with_fetch_cooldown(Duration::from_millis(1))
+                .with_fetch_poll_interval(Duration::from_millis(10)),
+        )
+        .workers(workers)
+        .build()
+        .unwrap();
+    let deleted = client.insert(SelfDeletingArgs {}).await.unwrap();
+
+    let mut run = client.start().unwrap();
+    tokio::time::timeout(Duration::from_secs(10), async {
+        while !pilot.set_state_ids.lock().unwrap().contains(&deleted.id()) {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("set-state extension never saw the deleted job");
+    run.shutdown().await.unwrap();
+
+    // The job's row is gone, so only its ID reaches the extension.
+    assert!(!pilot.set_state_rows.lock().unwrap().contains(&deleted.id()));
+    pool.close().await;
+    remove_sqlite_files(&database_path);
+}

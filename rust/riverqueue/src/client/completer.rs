@@ -538,6 +538,7 @@ pub(super) async fn persist_completion_batch(
             after_jobs_set_state(
                 inner,
                 PilotDatabaseConnection::Sqlite(&mut transaction),
+                &batch.iter().map(|update| update.job_id).collect::<Vec<_>>(),
                 &rows,
             )
             .await?;
@@ -643,6 +644,7 @@ pub(super) async fn persist_completion_batch(
             after_jobs_set_state(
                 inner,
                 PilotDatabaseConnection::Postgres(&mut transaction),
+                &batch.iter().map(|update| update.job_id).collect::<Vec<_>>(),
                 &rows,
             )
             .await?;
@@ -673,10 +675,12 @@ fn decode_completion_rows(records: &[PgRow]) -> Vec<JobRow> {
 pub(crate) async fn after_jobs_set_state(
     inner: &ClientInner,
     connection: PilotDatabaseConnection<'_>,
+    job_ids: &[i64],
     rows: &[JobRow],
 ) -> Result<(), Error> {
     let params = JobSetStateParams {
         database: inner.pilot_database_config(),
+        job_ids,
         jobs: rows,
     };
     inner
