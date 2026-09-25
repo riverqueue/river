@@ -286,7 +286,9 @@ impl Supervisor {
             let _ = ready.send(result);
             Ok(())
         });
-        self.spawn_service(Service::Maintenance, Duration::ZERO, None);
+        if !inner.leader_election_disabled {
+            self.spawn_service(Service::Maintenance, Duration::ZERO, None);
+        }
         for index in 0..inner.pilot.runtime_services().len() {
             self.spawn_service(Service::Extension(index), Duration::ZERO, None);
         }

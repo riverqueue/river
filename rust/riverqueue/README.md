@@ -228,7 +228,11 @@ hour, or to the job timeout plus one hour when a job timeout is configured, and
 must not be shorter than the job timeout. As in Go, the leader discards stuck
 jobs of kinds its own worker registry does not know, so clients that share a
 schema but register different kinds can discard each other's stuck jobs while
-leading; keep worker registries aligned across such a fleet. The same
+leading; keep worker registries aligned across such a fleet, or build the
+clients that don't know every kind with
+`ClientBuilder::without_leader_election`, like Go's
+`Config.LeaderElectionDisabled`. Those clients keep working their queues but
+never become leader, so at least one other client must stay eligible. The same
 leader-owned services run on SQLite, where they act on rows written by any
 implementation, exactly as Go's SQLite driver does.
 

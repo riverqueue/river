@@ -222,6 +222,7 @@ pub(crate) struct PeriodicRegistry {
 #[derive(Clone)]
 pub struct PeriodicJobs {
     changed: Arc<Notify>,
+    leader_election_disabled: bool,
     pub(crate) registry: Arc<Mutex<PeriodicRegistry>>,
 }
 
@@ -246,7 +247,10 @@ impl fmt::Debug for PeriodicJobs {
 }
 
 impl PeriodicJobs {
-    pub(crate) fn from_jobs(jobs: Vec<PeriodicJob>) -> Result<Self, Error> {
+    pub(crate) fn from_jobs(
+        jobs: Vec<PeriodicJob>,
+        leader_election_disabled: bool,
+    ) -> Result<Self, Error> {
         validate_jobs(&jobs, &HashSet::new())?;
         let mut registry = PeriodicRegistry::default();
         for job in jobs {
@@ -254,6 +258,7 @@ impl PeriodicJobs {
         }
         Ok(Self {
             changed: Arc::new(Notify::new()),
+            leader_election_disabled,
             registry: Arc::new(Mutex::new(registry)),
         })
     }
@@ -271,6 +276,17 @@ impl PeriodicJobs {
 
     fn notify_changed(&self) {
         self.changed.notify_waiters();
+    }
+
+    /// Rejects additions to a client that never leads, which would never
+    /// enqueue them.
+    fn ensure_electable(&self) -> Result<(), Error> {
+        if self.leader_election_disabled {
+            return Err(Error::configuration(
+                "periodic jobs can't be added when leader election is disabled".to_owned(),
+            ));
+        }
+        Ok(())
     }
 
     /// Returns the earliest scheduled occurrence, or now when a job still
@@ -292,7 +308,19 @@ impl PeriodicJobs {
     }
 
     /// Adds one periodic job and returns its removal handle.
+    ///
+    /// Adding or removing periodic jobs affects only this client, which
+    /// enqueues them only while it's the elected leader. To make sure a
+    /// periodic job is fully enabled or disabled, change it on every client
+    /// eligible for leader election across all processes.
+    ///
+    /// # Errors
+    ///
+    /// Returns a configuration error when the job's identifier is invalid or
+    /// already configured, or when the client was built with
+    /// [`ClientBuilder::without_leader_election`](crate::ClientBuilder::without_leader_election).
     pub fn add(&self, job: PeriodicJob) -> Result<PeriodicJobHandle, Error> {
+        self.ensure_electable()?;
         let mut registry = self.lock();
         let ids = registry
             .entries
@@ -307,7 +335,15 @@ impl PeriodicJobs {
     }
 
     /// Adds many jobs atomically after validating their identifiers.
+    ///
+    /// Like [`PeriodicJobs::add`], this affects only this client.
+    ///
+    /// # Errors
+    ///
+    /// Returns the same errors as [`PeriodicJobs::add`]; no job is added
+    /// when any is rejected.
     pub fn add_many(&self, jobs: Vec<PeriodicJob>) -> Result<Vec<PeriodicJobHandle>, Error> {
+        self.ensure_electable()?;
         let mut registry = self.lock();
         let ids = registry
             .entries
@@ -508,7 +544,7 @@ mod tests {
 
     #[test]
     fn dynamic_registration_is_atomic_and_removable() {
-        let jobs = PeriodicJobs::from_jobs(Vec::new()).unwrap();
+        let jobs = PeriodicJobs::from_jobs(Vec::new(), false).unwrap();
         let first = jobs.add(job("first")).unwrap();
         let added = jobs.add_many(vec![job("second"), job("third")]).unwrap();
         assert_eq!(added.len(), 2);
@@ -531,13 +567,16 @@ mod tests {
     async fn insert_failure_does_not_advance_next_run() {
         let attempts = Arc::new(AtomicUsize::new(0));
         let constructed = Arc::clone(&attempts);
-        let jobs = PeriodicJobs::from_jobs(vec![PeriodicJob::new(
-            IntervalSchedule::new(Duration::from_secs(1)).unwrap(),
-            move || {
-                constructed.fetch_add(1, Ordering::SeqCst);
-                TestArgs
-            },
-        )])
+        let jobs = PeriodicJobs::from_jobs(
+            vec![PeriodicJob::new(
+                IntervalSchedule::new(Duration::from_secs(1)).unwrap(),
+                move || {
+                    constructed.fetch_add(1, Ordering::SeqCst);
+                    TestArgs
+                },
+            )],
+            false,
+        )
         .unwrap();
         // Nothing listens on this port, so every insertion fails.
         let pool = PgPoolOptions::new()
@@ -562,7 +601,7 @@ mod tests {
 
     #[test]
     fn static_registration_rejects_invalid_identifiers() {
-        assert!(PeriodicJobs::from_jobs(vec![job("duplicate"), job("duplicate")]).is_err());
-        assert!(PeriodicJobs::from_jobs(vec![job("")]).is_err());
+        assert!(PeriodicJobs::from_jobs(vec![job("duplicate"), job("duplicate")], false).is_err());
+        assert!(PeriodicJobs::from_jobs(vec![job("")], false).is_err());
     }
 }
