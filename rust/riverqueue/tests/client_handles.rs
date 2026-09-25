@@ -474,4 +474,33 @@ mod sqlite {
     }
 
     scenarios!();
+
+    /// SQLite delivers notifications through an outbox table, which shows
+    /// that a resignation request is sent only when its transaction commits.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn resign_requests_are_sent_when_the_transaction_commits() {
+        let fixture = Fixture::new().await;
+        let requests = async || -> i64 {
+            sqlx::query_scalar("SELECT count(*) FROM river_notification WHERE topic = ?")
+                .bind(riverqueue::protocol::NOTIFICATION_TOPIC_LEADERSHIP)
+                .fetch_one(&fixture.pool)
+                .await
+                .unwrap()
+        };
+
+        let mut tx = fixture.begin().await;
+        fixture.client.request_resign().tx(&mut tx).await.unwrap();
+        tx.rollback().await.unwrap();
+        assert_eq!(requests().await, 0);
+
+        let mut tx = fixture.begin().await;
+        fixture.client.request_resign().tx(&mut tx).await.unwrap();
+        tx.commit().await.unwrap();
+        assert_eq!(requests().await, 1);
+
+        fixture.client.request_resign().await.unwrap();
+        assert_eq!(requests().await, 2);
+
+        fixture.cleanup().await;
+    }
 }

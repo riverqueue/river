@@ -1656,7 +1656,7 @@ impl Adapter {
                     let transaction = self.transactions.get_mut(handle).ok_or_else(|| {
                         AdapterError::not_found(format!("transaction {handle:?} not found"))
                     })?;
-                    client.request_resign_tx(transaction).await?;
+                    client.request_resign().tx(transaction).await?;
                 } else {
                     self.client()?.request_resign().await?;
                 }
@@ -2668,7 +2668,7 @@ impl SqliteAdapter {
                     let transaction = self.transactions.get_mut(handle).ok_or_else(|| {
                         AdapterError::not_found(format!("transaction {handle:?} not found"))
                     })?;
-                    client.request_resign_tx(transaction).await?;
+                    client.request_resign().tx(transaction).await?;
                 } else {
                     self.client()?.request_resign().await?;
                 }

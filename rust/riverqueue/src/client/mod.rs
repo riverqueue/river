@@ -14,6 +14,7 @@ mod producer;
 mod queues;
 mod record;
 mod request;
+mod resign;
 mod run;
 #[cfg(test)]
 mod tests;
@@ -38,6 +39,7 @@ pub(crate) use self::record::FieldErrors;
 pub(crate) use self::record::{DecodedJob, UndecodableJob, saturating_i16, tolerant_row};
 #[cfg(feature = "postgres")]
 pub(crate) use self::record::{JobRecord, decode_job_row, job_projection};
+pub use self::resign::ResignRequest;
 pub use self::run::{RunHandle, Stopper};
 #[allow(clippy::wildcard_imports, unused_imports)]
 use self::{
@@ -456,38 +458,6 @@ impl Client {
             }
         });
         Ok(EventReceiver::new(dropped, receiver))
-    }
-}
-
-impl Client {
-    /// Requests that the current leader resign after committing an internal
-    /// transaction.
-    pub async fn request_resign(&self) -> Result<(), Error> {
-        let mut session = crate::storage::Session::begin(
-            &self.inner.database,
-            crate::storage::Access::Transaction,
-        )
-        .await?;
-        session.storage(&self.inner).leader_request_resign().await?;
-        session.commit().await?;
-        if !self.inner.database.supports_listener() {
-            let _ = self
-                .inner
-                .queue_notifications
-                .send(RuntimeNotification::LeadershipRequestResign);
-        }
-        Ok(())
-    }
-
-    /// Requests leader resignation in a caller-managed transaction.
-    pub async fn request_resign_tx<'executor, E>(&self, connection: E) -> Result<(), Error>
-    where
-        E: DatabaseTransactionExecutor<'executor>,
-    {
-        let connection = self.inner.transaction_connection(connection)?;
-        crate::storage::Storage::new(&self.inner, connection)
-            .leader_request_resign()
-            .await
     }
 }
 
