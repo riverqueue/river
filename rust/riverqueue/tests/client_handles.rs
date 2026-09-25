@@ -37,6 +37,131 @@ fn args(name: &str) -> HandleArgs {
 /// Defines each scenario for one backend's `Fixture`.
 macro_rules! scenarios {
     () => {
+        // Like Go, a claim appends the client to at most the 100 most
+        // recent `attempted_by` entries.
+        #[tokio::test(flavor = "multi_thread")]
+        async fn attempted_by_keeps_the_most_recent_hundred_clients() {
+            let fixture = Fixture::new().await;
+            let id = fixture
+                .client
+                .insert(args("attempted_by"))
+                .await
+                .unwrap()
+                .id();
+            let previous = (1..=100)
+                .map(|index| format!("client-{index}"))
+                .collect::<Vec<_>>();
+            fixture.set_attempted_by(id, &previous).await;
+            let client = fixture
+                .builder()
+                .id("attempted-by-worker")
+                .workers(workers())
+                .queue("default", fast_queue())
+                .build()
+                .unwrap();
+            let mut run = client.start().unwrap();
+            wait_for_completion(&client, id).await;
+            run.shutdown().await.unwrap();
+
+            let attempted_by = client.jobs().get(id).await.unwrap().attempted_by;
+            let mut expected = previous[1..].to_vec();
+            expected.push("attempted-by-worker".to_owned());
+            assert_eq!(attempted_by, expected);
+            fixture.cleanup().await;
+        }
+
+        // A worker that returns successfully after its job is cancelled
+        // completes the job, as in Go.
+        #[tokio::test(flavor = "multi_thread")]
+        async fn cancelled_job_that_succeeds_is_completed() {
+            let fixture = Fixture::new().await;
+            let (started_sender, mut started) = tokio::sync::mpsc::unbounded_channel();
+            let mut workers = WorkerRegistry::new();
+            workers
+                .register_fn(move |context: WorkContext, job: Job<BlockingArgs>| {
+                    let started_sender = started_sender.clone();
+                    async move {
+                        let _ = started_sender.send(job.id());
+                        context.cancellation_token().cancelled().await;
+                        Ok::<_, Infallible>(WorkOutcome::Complete)
+                    }
+                })
+                .unwrap();
+            let client = fixture
+                .builder()
+                .without_notifications()
+                .workers(workers)
+                .queue("default", fast_queue())
+                .build()
+                .unwrap();
+            let mut run = client.start().unwrap();
+            let id = client.insert(BlockingArgs {}).await.unwrap().id();
+            tokio::time::timeout(Duration::from_secs(10), started.recv())
+                .await
+                .expect("job starts")
+                .unwrap();
+            client.jobs().cancel(id).await.unwrap();
+            wait_for_completion(&client, id).await;
+            run.shutdown().await.unwrap();
+            fixture.cleanup().await;
+        }
+
+        // Jobs are fetched by priority, then scheduled time, then ID, as in
+        // Go.
+        #[tokio::test(flavor = "multi_thread")]
+        async fn fetches_by_priority_then_schedule_then_id() {
+            let fixture = Fixture::new().await;
+            let base = chrono::Utc::now() - chrono::Duration::minutes(10);
+            let mut ids = Vec::new();
+            for (name, priority, minutes) in [
+                ("p2_early", 2, 0),
+                ("p1_late", 1, 5),
+                ("p1_early_first", 1, 1),
+                ("p1_early_second", 1, 1),
+                ("p4_earliest", 4, -5),
+            ] {
+                let id = fixture
+                    .client
+                    .insert(args(name))
+                    .opts(
+                        InsertOpts::default()
+                            .with_priority(priority)
+                            .with_scheduled_at(base + chrono::Duration::minutes(minutes)),
+                    )
+                    .await
+                    .unwrap()
+                    .id();
+                ids.push(id);
+            }
+            let worked = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+            let mut workers = WorkerRegistry::new();
+            let recorder = std::sync::Arc::clone(&worked);
+            workers
+                .register_fn(move |_context: WorkContext, job: Job<HandleArgs>| {
+                    let recorder = std::sync::Arc::clone(&recorder);
+                    async move {
+                        recorder.lock().unwrap().push(job.id());
+                        Ok::<_, Infallible>(WorkOutcome::Complete)
+                    }
+                })
+                .unwrap();
+            let client = fixture
+                .builder()
+                .workers(workers)
+                .queue("default", fast_queue())
+                .build()
+                .unwrap();
+            let mut run = client.start().unwrap();
+            wait_for_completion(&client, ids[4]).await;
+            run.shutdown().await.unwrap();
+
+            assert_eq!(
+                *worked.lock().unwrap(),
+                [ids[2], ids[3], ids[1], ids[0], ids[4]]
+            );
+            fixture.cleanup().await;
+        }
+
         // Port of Go's `CancelRunningJobPollOnly`: with no listener, the
         // cancelling client must wake its own running attempt.
         #[tokio::test(flavor = "multi_thread")]
@@ -548,6 +673,18 @@ mod postgres {
             .unwrap();
         }
 
+        async fn set_attempted_by(&self, id: i64, attempted_by: &[String]) {
+            sqlx::query(sqlx::AssertSqlSafe(format!(
+                "UPDATE {} SET attempted_by = $2 WHERE id = $1",
+                self.schema.table("river_job")
+            )))
+            .bind(id)
+            .bind(attempted_by)
+            .execute(&self.pool)
+            .await
+            .unwrap();
+        }
+
         async fn cleanup(self) {
             self.schema.cleanup().await;
         }
@@ -594,6 +731,15 @@ mod sqlite {
         async fn insert_queue(&self, name: &str) {
             sqlx::query("INSERT INTO river_queue (name, metadata) VALUES (?, jsonb('{}'))")
                 .bind(name)
+                .execute(&self.pool)
+                .await
+                .unwrap();
+        }
+
+        async fn set_attempted_by(&self, id: i64, attempted_by: &[String]) {
+            sqlx::query("UPDATE river_job SET attempted_by = jsonb(?) WHERE id = ?")
+                .bind(serde_json::to_string(attempted_by).unwrap())
+                .bind(id)
                 .execute(&self.pool)
                 .await
                 .unwrap();
