@@ -238,6 +238,10 @@ impl QueueConfig {
 }
 
 /// Builder for a River client.
+#[allow(
+    clippy::struct_excessive_bools,
+    reason = "each flag is an independent configuration option, not a state"
+)]
 pub struct ClientBuilder {
     pub(super) database: Database,
     pub(super) default_max_attempts: i16,
@@ -246,6 +250,7 @@ pub struct ClientBuilder {
     pub(super) id: String,
     pub(super) job_stuck_threshold: Duration,
     pub(super) job_timeout: Option<Duration>,
+    pub(crate) leader_election_disabled: bool,
     pub(super) maintenance: MaintenanceConfig,
     pub(super) insert_middleware: Vec<Arc<dyn crate::extension::DynInsertMiddleware>>,
     pub(super) periodic_jobs: Vec<PeriodicJob>,
@@ -270,6 +275,7 @@ impl std::fmt::Debug for ClientBuilder {
             .field("worker_kinds", &self.workers.kinds())
             .field("hook_count", &self.hooks.len())
             .field("periodic_job_count", &self.periodic_jobs.len())
+            .field("leader_election_disabled", &self.leader_election_disabled)
             .finish_non_exhaustive()
     }
 }
@@ -319,6 +325,10 @@ impl ClientBuilder {
     }
 
     /// Configures leader-owned maintenance services.
+    ///
+    /// Has no effect on a client built with
+    /// [`without_leader_election`](Self::without_leader_election), which
+    /// never runs them.
     #[must_use]
     pub fn maintenance(mut self, maintenance: MaintenanceConfig) -> Self {
         self.maintenance = maintenance;
@@ -333,6 +343,10 @@ impl ClientBuilder {
     }
 
     /// Adds a periodic job to the initial client configuration.
+    ///
+    /// Only the elected leader enqueues periodic jobs, so a client built
+    /// with [`without_leader_election`](Self::without_leader_election)
+    /// rejects them when built.
     #[must_use]
     pub fn periodic_job(mut self, job: PeriodicJob) -> Self {
         self.periodic_jobs.push(job);
@@ -351,6 +365,35 @@ impl ClientBuilder {
     #[must_use]
     pub fn without_notifications(mut self) -> Self {
         self.poll_only = true;
+        self
+    }
+
+    /// Keeps this client out of leader election, like Go's
+    /// `Config.LeaderElectionDisabled`.
+    ///
+    /// The client still fetches and works jobs from its queues, sends and
+    /// receives notifications, and runs extension runtime services, but it
+    /// never becomes leader, so it never runs leader-owned maintenance: the
+    /// scheduler, the periodic job enqueuer, the stuck job rescuer, the job
+    /// and queue cleaners, the reindexer, and extension maintenance
+    /// services. This suits clients dedicated to particular queues that
+    /// should spend their resources only on those queues' jobs.
+    ///
+    /// At least one other started client using the same database and schema,
+    /// in any River implementation, must remain eligible to lead. Otherwise
+    /// scheduled jobs and retries never become available, periodic jobs are
+    /// never enqueued, stuck jobs are never rescued, and finalized jobs are
+    /// never deleted. This client stays ineligible even when no other client
+    /// is running.
+    ///
+    /// Such a client can't configure periodic jobs: [`ClientBuilder::build`]
+    /// fails when any were added with [`periodic_job`](Self::periodic_job),
+    /// and [`PeriodicJobs::add`] and [`PeriodicJobs::add_many`] fail on its
+    /// [`Client::periodic_jobs`]. It still works periodic jobs that a leader
+    /// enqueues in its queues.
+    #[must_use]
+    pub fn without_leader_election(mut self) -> Self {
+        self.leader_election_disabled = true;
         self
     }
 
@@ -528,7 +571,13 @@ impl ClientBuilder {
                 })
         });
 
-        let periodic_jobs = PeriodicJobs::from_jobs(self.periodic_jobs)?;
+        if self.leader_election_disabled && !self.periodic_jobs.is_empty() {
+            return Err(Error::configuration(
+                "periodic jobs must be empty when leader election is disabled".to_owned(),
+            ));
+        }
+        let periodic_jobs =
+            PeriodicJobs::from_jobs(self.periodic_jobs, self.leader_election_disabled)?;
         #[cfg(feature = "postgres")]
         let schema = self
             .database
@@ -550,6 +599,7 @@ impl ClientBuilder {
                 id: self.id,
                 job_stuck_threshold: self.job_stuck_threshold,
                 job_timeout: self.job_timeout,
+                leader_election_disabled: self.leader_election_disabled,
                 maintenance,
                 insert_middleware: self.insert_middleware,
                 periodic_jobs,

@@ -117,6 +117,10 @@ const PARALLEL_FETCH_MINIMUM: usize = 1_000;
 const QUEUE_CONFIG_POLL_INTERVAL: Duration = Duration::from_secs(2);
 const QUEUE_HEARTBEAT_INTERVAL: Duration = Duration::from_secs(30);
 
+#[allow(
+    clippy::struct_excessive_bools,
+    reason = "each flag is an independent configuration option, not a state"
+)]
 pub(crate) struct ClientInner {
     completion_sender: Mutex<Option<mpsc::WeakSender<CompletionUpdate>>>,
     pub(crate) database: Database,
@@ -128,6 +132,7 @@ pub(crate) struct ClientInner {
     pub(crate) id: String,
     job_stuck_threshold: Duration,
     pub(crate) job_timeout: Option<Duration>,
+    leader_election_disabled: bool,
     pub(crate) maintenance: MaintenanceConfig,
     insert_middleware: Vec<Arc<dyn crate::extension::DynInsertMiddleware>>,
     pub(crate) periodic_jobs: PeriodicJobs,
@@ -336,6 +341,7 @@ impl Client {
             id: default_client_id(),
             job_stuck_threshold: JOB_STUCK_THRESHOLD_DEFAULT,
             job_timeout: Some(JOB_TIMEOUT_DEFAULT),
+            leader_election_disabled: false,
             maintenance: MaintenanceConfig::default(),
             insert_middleware: Vec::new(),
             periodic_jobs: Vec::new(),
@@ -368,6 +374,13 @@ impl Client {
 
 impl Client {
     /// Returns the dynamic periodic-job bundle for this client.
+    ///
+    /// Only the elected leader enqueues periodic jobs, so jobs added here
+    /// take effect only while this client leads. To fully enable or disable a
+    /// periodic job, change it on every client eligible for leader election.
+    /// A client built with
+    /// [`without_leader_election`](ClientBuilder::without_leader_election)
+    /// rejects additions.
     #[must_use]
     pub fn periodic_jobs(&self) -> PeriodicJobs {
         self.inner.periodic_jobs.clone()

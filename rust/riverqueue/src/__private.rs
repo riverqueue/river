@@ -26,12 +26,25 @@ pub use crate::database::erased::{Database, ErasedExecutor, ErasedTransaction};
 
 /// Builder operations reserved for River's own companion crates.
 pub trait ClientBuilderExt: Sized {
+    /// Returns whether the client will stay out of leader election, as set
+    /// by `ClientBuilder::without_leader_election`.
+    ///
+    /// Such a client never runs [`Pilot::maintenance_services`], and River
+    /// rejects its own periodic jobs when it's built. A companion crate that
+    /// configures leader-owned work of its own, such as additional periodic
+    /// jobs, should reject that configuration the same way.
+    fn leader_election_disabled(&self) -> bool;
+
     /// Installs a pilot from a companion crate.
     #[must_use]
     fn pilot<P: Pilot>(self, pilot: P) -> Self;
 }
 
 impl ClientBuilderExt for crate::ClientBuilder {
+    fn leader_election_disabled(&self) -> bool {
+        self.leader_election_disabled
+    }
+
     fn pilot<P: Pilot>(self, pilot: P) -> Self {
         self.with_pilot(pilot)
     }
@@ -747,12 +760,15 @@ pub trait Pilot: Send + Sync + 'static {
         Ok(())
     }
 
-    /// Leader-owned services contributed by the extension.
+    /// Leader-owned services contributed by the extension. River runs them
+    /// only while the client is leader, and never on a client built with
+    /// `ClientBuilder::without_leader_election`.
     fn maintenance_services(&self) -> Vec<std::sync::Arc<dyn MaintenanceService>> {
         Vec::new()
     }
 
-    /// Per-client services contributed by the extension.
+    /// Per-client services contributed by the extension. River runs them on
+    /// every started client, including one without leader election.
     fn runtime_services(&self) -> Vec<std::sync::Arc<dyn RuntimeService>> {
         Vec::new()
     }
