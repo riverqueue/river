@@ -282,7 +282,10 @@ async fn extension_notify_many_is_transactional() {
         .await
         .unwrap();
     listener
-        .listen(&database.schema.notification_topic("river_insert"))
+        .listen(&format!(
+            "{}.river_insert",
+            database.schema.as_deref().unwrap()
+        ))
         .await
         .unwrap();
 

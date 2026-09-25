@@ -92,16 +92,6 @@ impl SchemaName {
             format!("{}.", quote_identifier(schema))
         })
     }
-
-    /// Fully qualified PostgreSQL notification channel.
-    #[doc(hidden)]
-    #[must_use]
-    pub fn notification_topic(&self, topic: &str) -> String {
-        match &self.0 {
-            Some(schema) => format!("{schema}.{topic}"),
-            None => format!("public.{topic}"),
-        }
-    }
 }
 
 /// Quotes a PostgreSQL identifier, doubling embedded quotes like Go's
@@ -147,10 +137,6 @@ mod tests {
     fn schema_name_validates_and_qualifies() {
         let schema = SchemaName::new("river_test").unwrap();
         assert_eq!(schema.qualify("river_job"), "\"river_test\".\"river_job\"");
-        assert_eq!(
-            schema.notification_topic("river_insert"),
-            "river_test.river_insert"
-        );
 
         // Go quotes any schema with `SafeIdentifier`, so Rust accepts the
         // same names and escapes embedded quotes.
@@ -158,10 +144,6 @@ mod tests {
         assert_eq!(
             hyphenated.qualify("river_job"),
             "\"river-prod\".\"river_job\""
-        );
-        assert_eq!(
-            hyphenated.notification_topic("river_insert"),
-            "river-prod.river_insert"
         );
         assert_eq!(
             SchemaName::new("MyRiver").unwrap().migration_prefix(),
