@@ -101,13 +101,18 @@ impl WorkContext {
     }
 
     /// Records the job's output under River's reserved output metadata key,
-    /// where [`JobRow::output`] and River UI read it.
+    /// where [`JobRow::output`] and River UI read it. Like River Go, output
+    /// is limited to 32 MB of JSON, but should be kept much smaller.
     ///
     /// # Errors
     ///
-    /// Returns an error when `output` can't be serialized to JSON.
+    /// Returns an error when `output` can't be serialized to JSON or its JSON
+    /// is larger than 32 MB.
     pub fn record_output(&self, output: impl Serialize) -> Result<(), serde_json::Error> {
-        self.metadata_set(crate::METADATA_KEY_OUTPUT, output)
+        let output = serde_json::to_value(output)?;
+        check_output_size(&output).map_err(<serde_json::Error as serde::ser::Error>::custom)?;
+        self.insert_metadata(crate::METADATA_KEY_OUTPUT.to_owned(), output);
+        Ok(())
     }
 
     pub(crate) fn insert_metadata(&self, key: String, value: Value) {
@@ -848,6 +853,23 @@ impl WorkerRegistry {
     }
 }
 
+/// Maximum encoded size of recorded output (Go `maxOutputSizeBytes`).
+const MAX_OUTPUT_BYTES: usize = 32 * 1024 * 1024;
+
+/// Rejects output whose JSON is larger than River Go allows.
+pub(crate) fn check_output_size(output: &Value) -> Result<(), String> {
+    let size = crate::encoding::to_go_string(output)
+        .map_err(|error| error.to_string())?
+        .len();
+    if size > MAX_OUTPUT_BYTES {
+        return Err(format!(
+            "output is too large: {size} bytes (max {} MB)",
+            MAX_OUTPUT_BYTES / 1024 / 1024
+        ));
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use std::{
@@ -1321,5 +1343,21 @@ mod tests {
         let debug = format!("{registry:?}");
         assert!(debug.contains(FunctionJobArgs::KIND));
         assert!(!debug.contains("dyn ErasedWorker"));
+    }
+
+    #[test]
+    fn recorded_output_is_limited_like_go() {
+        let context = crate::__private::work_context(tokio_util::sync::CancellationToken::new());
+        let limit = super::MAX_OUTPUT_BYTES;
+        // A JSON string's two quotes count toward the limit.
+        context.record_output("x".repeat(limit - 2)).unwrap();
+        let error = context.record_output("x".repeat(limit - 1)).unwrap_err();
+        assert!(error.to_string().contains("output is too large"), "{error}");
+        assert_eq!(
+            context.metadata_updates()[crate::METADATA_KEY_OUTPUT]
+                .as_str()
+                .map(str::len),
+            Some(limit - 2)
+        );
     }
 }

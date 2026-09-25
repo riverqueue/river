@@ -215,8 +215,10 @@ impl<'a> Jobs<'a> {
     /// # Errors
     ///
     /// Returns [`Error::NotFound`] when the job doesn't exist,
-    /// [`Error::DatabaseMismatch`] for a transaction from another backend, and
-    /// [`Error::Database`] when the database operation fails.
+    /// [`Error::InvalidJob`] when the output's JSON is larger than 32 MB (as
+    /// in River Go), [`Error::DatabaseMismatch`] for a transaction from
+    /// another backend, and [`Error::Database`] when the database operation
+    /// fails.
     pub fn update(&self, id: i64, params: JobUpdateParams) -> JobUpdateRequest<'a> {
         JobUpdateRequest {
             client: self.client,
