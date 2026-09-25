@@ -233,7 +233,7 @@
       "type": "string"
     }
   },
-  "adapter_version": 13,
+  "adapter_version": 14,
   "errors": [
     {
       "code": -32700,
@@ -1356,6 +1356,79 @@
           "decimal",
           "integer",
           "negative"
+        ]
+      }
+    },
+    {
+      "capability": "job_crud",
+      "description": "Read a job's JSON and timestamp columns exactly as the database renders them: SQLite `json(column)` and `CAST(column AS TEXT)`, PostgreSQL `column::text`. SQLite keeps each JSON string's escapes and member order as written, so this compares the bytes implementations write.",
+      "name": "raw_job_row",
+      "params": {
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "$ref": "#/$defs/job_id"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id"
+        ]
+      },
+      "result": {
+        "additionalProperties": false,
+        "properties": {
+          "args": {
+            "type": "string"
+          },
+          "attempted_at": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "attempted_by": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "created_at": {
+            "type": "string"
+          },
+          "errors": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "finalized_at": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "metadata": {
+            "type": "string"
+          },
+          "scheduled_at": {
+            "type": "string"
+          },
+          "tags": {
+            "type": "string"
+          }
+        },
+        "type": "object",
+        "required": [
+          "args",
+          "attempted_at",
+          "attempted_by",
+          "created_at",
+          "errors",
+          "finalized_at",
+          "metadata",
+          "scheduled_at",
+          "tags"
         ]
       }
     },

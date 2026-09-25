@@ -38,7 +38,7 @@ use sqlx::{
 };
 use tokio::sync::watch;
 
-const ADAPTER_VERSION: u32 = 13;
+const ADAPTER_VERSION: u32 = 14;
 const PROTOCOL_REVISION: u32 = 1;
 
 const ADAPTER_METHODS: &[&str] = &[
@@ -75,6 +75,7 @@ const ADAPTER_METHODS: &[&str] = &[
     "raw_insert_full_row",
     "raw_insert_no_notify",
     "raw_job_exact_json",
+    "raw_job_row",
     "raw_job_timestamps",
     "request_resign",
     "reset",
@@ -167,6 +168,7 @@ const SQLITE_ADAPTER_METHODS: &[&str] = &[
     "migrate",
     "raw_insert_exact_json",
     "raw_job_exact_json",
+    "raw_job_row",
     "raw_job_timestamps",
     "reset",
     "retry",
@@ -231,6 +233,7 @@ const SQLITE_RUNTIME_METHODS: &[&str] = &[
     "raw_insert_exact_json",
     "raw_insert_no_notify",
     "raw_job_exact_json",
+    "raw_job_row",
     "raw_job_timestamps",
     "request_resign",
     "reset",
@@ -454,6 +457,21 @@ impl ContractParams {
             _ => Ok(()),
         }
     }
+}
+
+/// A job's JSON and timestamp columns as the database renders them, for
+/// byte-level comparison across implementations.
+#[derive(sqlx::FromRow, Serialize)]
+struct RawJobRow {
+    args: String,
+    attempted_at: Option<String>,
+    attempted_by: Option<String>,
+    created_at: String,
+    errors: Option<String>,
+    finalized_at: Option<String>,
+    metadata: String,
+    scheduled_at: String,
+    tags: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -1885,6 +1903,20 @@ impl Adapter {
                     .await?;
                 exact_json_tokens(&row)
             }
+            "raw_job_row" => {
+                let row = sqlx::query_as::<_, RawJobRow>(
+                    "SELECT args::text AS args, attempted_at::text AS attempted_at, \
+                     attempted_by::text AS attempted_by, created_at::text AS created_at, \
+                     errors::text AS errors, finalized_at::text AS finalized_at, \
+                     metadata::text AS metadata, scheduled_at::text AS scheduled_at, \
+                     tags::text AS tags FROM river_job WHERE id = $1",
+                )
+                .bind(required_i64(&params, "id")?)
+                .fetch_optional(&self.pool)
+                .await?
+                .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "job not found"))?;
+                Ok(serde_json::to_value(row)?)
+            }
             "raw_job_timestamps" => {
                 let id = required_i64(&params, "id")?;
                 let (created_at, scheduled_at) = sqlx::query_as::<_, (String, String)>(
@@ -2638,6 +2670,20 @@ impl SqliteAdapter {
                     return Err(AdapterError::not_found("running job not found").into());
                 }
                 Ok(normalize_job(&self.client()?.jobs().get(id).await?))
+            }
+            "raw_job_row" => {
+                let row = sqlx::query_as::<_, RawJobRow>(
+                    "SELECT json(args) AS args, CAST(attempted_at AS TEXT) AS attempted_at, \
+                     json(attempted_by) AS attempted_by, CAST(created_at AS TEXT) AS created_at, \
+                     json(errors) AS errors, CAST(finalized_at AS TEXT) AS finalized_at, \
+                     json(metadata) AS metadata, CAST(scheduled_at AS TEXT) AS scheduled_at, \
+                     json(tags) AS tags FROM river_job WHERE id = ?",
+                )
+                .bind(required_i64(&params, "id")?)
+                .fetch_optional(&self.pool)
+                .await?
+                .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "job not found"))?;
+                Ok(serde_json::to_value(row)?)
             }
             "raw_job_timestamps" => {
                 let id = required_i64(&params, "id")?;
