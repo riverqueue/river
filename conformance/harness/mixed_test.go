@@ -314,6 +314,11 @@ func TestMixedConformance(t *testing.T) {
 
 		verifyGracefulLeaderFailover(t, pair)
 	})
+	t.Run("leader_election_disabled_both_directions", func(t *testing.T) {
+		defer scenarios.record(t)
+
+		pair.eachDirection(func(disabled, eligible *adapter) { verifyLeaderElectionDisabled(t, disabled, eligible) })
+	})
 	t.Run("listener_backend_disconnect_reconnect", func(t *testing.T) {
 		defer scenarios.record(t)
 

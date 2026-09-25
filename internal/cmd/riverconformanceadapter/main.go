@@ -1814,19 +1814,20 @@ func (s *adapterState) handle(ctx context.Context, req *request) (any, error) {
 			maintenanceParams
 			startTuningParams
 
-			ClientID            string  `json:"client_id"`
-			ErrorHandlerCancel  bool    `json:"error_handler_cancel"`
-			FetchPollIntervalMS *uint64 `json:"fetch_poll_interval_ms"`
-			Instrumented        bool    `json:"instrumented"`
-			JobStuckThresholdMS *uint64 `json:"job_stuck_threshold_ms"`
-			JobTimeoutMS        *uint64 `json:"job_timeout_ms"`
-			MaxWorkers          int     `json:"max_workers"`
-			PeriodicRunOnStart  bool    `json:"periodic_run_on_start"`
-			PollOnly            bool    `json:"poll_only"`
-			Queue               string  `json:"queue"`
-			RescueAfterMS       *uint64 `json:"rescue_after_ms"`
-			RetryDelayMS        *uint64 `json:"retry_delay_ms"`
-			Schema              string  `json:"schema"`
+			ClientID               string  `json:"client_id"`
+			ErrorHandlerCancel     bool    `json:"error_handler_cancel"`
+			FetchPollIntervalMS    *uint64 `json:"fetch_poll_interval_ms"`
+			Instrumented           bool    `json:"instrumented"`
+			JobStuckThresholdMS    *uint64 `json:"job_stuck_threshold_ms"`
+			JobTimeoutMS           *uint64 `json:"job_timeout_ms"`
+			LeaderElectionDisabled bool    `json:"leader_election_disabled"`
+			MaxWorkers             int     `json:"max_workers"`
+			PeriodicRunOnStart     bool    `json:"periodic_run_on_start"`
+			PollOnly               bool    `json:"poll_only"`
+			Queue                  string  `json:"queue"`
+			RescueAfterMS          *uint64 `json:"rescue_after_ms"`
+			RetryDelayMS           *uint64 `json:"retry_delay_ms"`
+			Schema                 string  `json:"schema"`
 		}
 		if err := decodeParams(req.Params, &params); err != nil {
 			return nil, err
@@ -1842,21 +1843,22 @@ func (s *adapterState) handle(ctx context.Context, req *request) (any, error) {
 		}
 		probe := &runtimeProbe{}
 		client, err := newWorkerClient(s.pool, s.barriers, workerClientConfig{
-			errorHandlerCancel:  params.ErrorHandlerCancel,
-			fetchPollIntervalMS: params.FetchPollIntervalMS,
-			id:                  params.ClientID,
-			instrumented:        params.Instrumented,
-			jobStuckThresholdMS: params.JobStuckThresholdMS,
-			jobTimeoutMS:        params.JobTimeoutMS,
-			maintenance:         params.maintenanceParams,
-			maxWorkers:          params.MaxWorkers,
-			periodicRunOnStart:  params.PeriodicRunOnStart,
-			pollOnly:            params.PollOnly,
-			probe:               probe,
-			queue:               params.Queue,
-			rescueAfterMS:       params.RescueAfterMS,
-			retryDelayMS:        params.RetryDelayMS,
-			schema:              params.Schema,
+			errorHandlerCancel:     params.ErrorHandlerCancel,
+			fetchPollIntervalMS:    params.FetchPollIntervalMS,
+			id:                     params.ClientID,
+			instrumented:           params.Instrumented,
+			jobStuckThresholdMS:    params.JobStuckThresholdMS,
+			jobTimeoutMS:           params.JobTimeoutMS,
+			leaderElectionDisabled: params.LeaderElectionDisabled,
+			maintenance:            params.maintenanceParams,
+			maxWorkers:             params.MaxWorkers,
+			periodicRunOnStart:     params.PeriodicRunOnStart,
+			pollOnly:               params.PollOnly,
+			probe:                  probe,
+			queue:                  params.Queue,
+			rescueAfterMS:          params.RescueAfterMS,
+			retryDelayMS:           params.RetryDelayMS,
+			schema:                 params.Schema,
 		})
 		if err != nil {
 			return nil, err
@@ -2769,19 +2771,20 @@ func (s *sqliteAdapterState) handle(ctx context.Context, req *request) (any, err
 			maintenanceParams
 			startTuningParams
 
-			ClientID            string  `json:"client_id"`
-			ErrorHandlerCancel  bool    `json:"error_handler_cancel"`
-			FetchPollIntervalMS *uint64 `json:"fetch_poll_interval_ms"`
-			Instrumented        bool    `json:"instrumented"`
-			JobStuckThresholdMS *uint64 `json:"job_stuck_threshold_ms"`
-			JobTimeoutMS        *uint64 `json:"job_timeout_ms"`
-			MaxWorkers          int     `json:"max_workers"`
-			PeriodicRunOnStart  bool    `json:"periodic_run_on_start"`
-			PollOnly            bool    `json:"poll_only"`
-			Queue               string  `json:"queue"`
-			RescueAfterMS       *uint64 `json:"rescue_after_ms"`
-			RetryDelayMS        *uint64 `json:"retry_delay_ms"`
-			Schema              string  `json:"schema"`
+			ClientID               string  `json:"client_id"`
+			ErrorHandlerCancel     bool    `json:"error_handler_cancel"`
+			FetchPollIntervalMS    *uint64 `json:"fetch_poll_interval_ms"`
+			Instrumented           bool    `json:"instrumented"`
+			JobStuckThresholdMS    *uint64 `json:"job_stuck_threshold_ms"`
+			JobTimeoutMS           *uint64 `json:"job_timeout_ms"`
+			LeaderElectionDisabled bool    `json:"leader_election_disabled"`
+			MaxWorkers             int     `json:"max_workers"`
+			PeriodicRunOnStart     bool    `json:"periodic_run_on_start"`
+			PollOnly               bool    `json:"poll_only"`
+			Queue                  string  `json:"queue"`
+			RescueAfterMS          *uint64 `json:"rescue_after_ms"`
+			RetryDelayMS           *uint64 `json:"retry_delay_ms"`
+			Schema                 string  `json:"schema"`
 		}
 		if err := decodeParams(req.Params, &params); err != nil {
 			return nil, err
@@ -2803,7 +2806,8 @@ func (s *sqliteAdapterState) handle(ctx context.Context, req *request) (any, err
 			errorHandlerCancel: params.ErrorHandlerCancel, fetchPollIntervalMS: params.FetchPollIntervalMS,
 			id: params.ClientID, instrumented: params.Instrumented,
 			jobStuckThresholdMS: params.JobStuckThresholdMS, jobTimeoutMS: params.JobTimeoutMS,
-			maintenance: params.maintenanceParams, maxWorkers: params.MaxWorkers, periodicRunOnStart: params.PeriodicRunOnStart,
+			leaderElectionDisabled: params.LeaderElectionDisabled, maintenance: params.maintenanceParams,
+			maxWorkers: params.MaxWorkers, periodicRunOnStart: params.PeriodicRunOnStart,
 			pollOnly: params.PollOnly, probe: probe, queue: params.Queue, rescueAfterMS: params.RescueAfterMS,
 			retryDelayMS: params.RetryDelayMS,
 		})
@@ -3194,21 +3198,22 @@ func (s *adapterState) clientForSchema(schema string) (*river.Client[pgx.Tx], er
 }
 
 type workerClientConfig struct {
-	errorHandlerCancel  bool
-	fetchPollIntervalMS *uint64
-	id                  string
-	instrumented        bool
-	jobStuckThresholdMS *uint64
-	jobTimeoutMS        *uint64
-	maintenance         maintenanceParams
-	maxWorkers          int
-	periodicRunOnStart  bool
-	pollOnly            bool
-	probe               *runtimeProbe
-	queue               string
-	rescueAfterMS       *uint64
-	retryDelayMS        *uint64
-	schema              string
+	errorHandlerCancel     bool
+	fetchPollIntervalMS    *uint64
+	id                     string
+	instrumented           bool
+	jobStuckThresholdMS    *uint64
+	jobTimeoutMS           *uint64
+	leaderElectionDisabled bool
+	maintenance            maintenanceParams
+	maxWorkers             int
+	periodicRunOnStart     bool
+	pollOnly               bool
+	probe                  *runtimeProbe
+	queue                  string
+	rescueAfterMS          *uint64
+	retryDelayMS           *uint64
+	schema                 string
 }
 
 // maintenanceParams are optional `start` parameters that tune leader-owned
@@ -3323,12 +3328,13 @@ func newWorkerConfig(pool *pgxpool.Pool, barriers *barrierRegistry, config worke
 		return nil, err
 	}
 	riverConfig := &river.Config{
-		ErrorHandler:      nil,
-		FetchCooldown:     time.Millisecond,
-		FetchPollInterval: 10 * time.Millisecond,
-		ID:                config.id,
-		Logger:            adapterLogger(),
-		PollOnly:          config.pollOnly,
+		ErrorHandler:           nil,
+		FetchCooldown:          time.Millisecond,
+		FetchPollInterval:      10 * time.Millisecond,
+		ID:                     config.id,
+		LeaderElectionDisabled: config.leaderElectionDisabled,
+		Logger:                 adapterLogger(),
+		PollOnly:               config.pollOnly,
 		Queues: map[string]river.QueueConfig{
 			config.queue: {MaxWorkers: config.maxWorkers},
 		},

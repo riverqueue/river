@@ -1627,6 +1627,10 @@
             "minimum": 1,
             "type": "integer"
           },
+          "leader_election_disabled": {
+            "description": "Keep the client out of leader election, like Go's `Config.LeaderElectionDisabled`: it works jobs but never becomes leader or runs leader-owned maintenance. Combined with `periodic_run_on_start`, the start is rejected.",
+            "type": "boolean"
+          },
           "max_workers": {
             "minimum": 1,
             "type": "integer"

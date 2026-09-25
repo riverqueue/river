@@ -1927,6 +1927,13 @@ impl Adapter {
                     builder = builder.without_notifications();
                 }
                 if params
+                    .get("leader_election_disabled")
+                    .and_then(Value::as_bool)
+                    .unwrap_or(false)
+                {
+                    builder = builder.without_leader_election();
+                }
+                if params
                     .get("instrumented")
                     .and_then(Value::as_bool)
                     .unwrap_or(false)
@@ -2770,6 +2777,13 @@ impl SqliteAdapter {
                     );
                 if poll_only {
                     builder = builder.without_notifications();
+                }
+                if params
+                    .get("leader_election_disabled")
+                    .and_then(Value::as_bool)
+                    .unwrap_or(false)
+                {
+                    builder = builder.without_leader_election();
                 }
                 if params
                     .get("instrumented")

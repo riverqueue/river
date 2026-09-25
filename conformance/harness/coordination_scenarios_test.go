@@ -433,6 +433,89 @@ func verifyGracefulLeaderFailover(t *testing.T, pair mixedPair) {
 	leaderAdapter.call(t, "stop", map[string]any{}, nil)
 }
 
+// verifyLeaderElectionDisabled starts a client with leader election disabled
+// alongside an eligible client of another implementation. The disabled
+// client must reject periodic jobs, work the periodic job the eligible
+// leader enqueues into its queue, run no leader-only maintenance, and never
+// become leader, including after the eligible leader stops and after the
+// disabled client restarts. Where the implementation allows it, the disabled
+// client uses a short election interval, so one that still took part in
+// elections would become leader within the scenario.
+func verifyLeaderElectionDisabled(t *testing.T, disabled, eligible *adapter) {
+	t.Helper()
+
+	// SQLite can't filter job lists by metadata, so periodic jobs are
+	// selected from the full list.
+	periodicJobs := func() []normalizedJob {
+		var result struct {
+			Jobs []normalizedJob `json:"jobs"`
+		}
+		disabled.call(t, "list", map[string]any{"limit": 100}, &result)
+		var periodic []normalizedJob
+		for _, job := range result.Jobs {
+			if job.Metadata["river:periodic_job_id"] == "conformance-periodic" {
+				periodic = append(periodic, job)
+			}
+		}
+		return periodic
+	}
+	disabledID := disabled.spec.Implementation + "-election-disabled"
+	eligibleID := eligible.spec.Implementation + "-election-eligible"
+	disabledParams := map[string]any{
+		"client_id": disabledID, "instrumented": true, "leader_election_disabled": true, "max_workers": 1,
+	}
+	fastElection := map[string]any{"elect_interval_ms": 20}
+	disabled.call(t, "reset", map[string]any{}, nil)
+
+	disabled.requireCallError(t, "start", map[string]any{
+		"client_id": disabledID, "leader_election_disabled": true, "periodic_run_on_start": true,
+	}, "rejected")
+	disabled.startWithTuning(t, disabledParams, fastElection)
+	var marker normalizedJob
+	eligible.call(t, "insert", map[string]any{"message": "before an eligible client starts"}, &marker)
+	disabled.call(t, "wait", map[string]any{"id": marker.ID}, &marker)
+	require.Equal(t, []string{disabledID}, marker.AttemptedBy)
+	require.Empty(t, readLeader(t, eligible).LeaderID, "a client with leader election disabled became leader")
+
+	// The eligible client works a separate queue, so only the disabled
+	// client works the periodic job it enqueues into the default queue.
+	eligible.startWithTuning(t, map[string]any{
+		"client_id": eligibleID, "instrumented": true, "max_workers": 1,
+		"periodic_run_on_start": true, "queue": "election_eligible",
+	}, fastElection)
+	require.Equal(t, eligibleID, waitForLeader(t, disabled, ""))
+	waitForRuntimeStats(t, eligible, func(stats runtimeStats) bool { return stats.PeriodicStarts == 1 })
+	deadline := time.Now().Add(5 * time.Second)
+	for len(periodicJobs()) == 0 && time.Now().Before(deadline) {
+		time.Sleep(10 * time.Millisecond)
+	}
+	enqueued := periodicJobs()
+	require.Len(t, enqueued, 1, "the eligible leader did not enqueue its periodic job")
+	periodic := enqueued[0]
+	disabled.call(t, "wait", map[string]any{"id": periodic.ID}, &periodic)
+	require.Equal(t, "completed", periodic.State)
+	require.Equal(t, []string{disabledID}, periodic.AttemptedBy)
+	stats := waitForRuntimeStats(t, disabled, func(runtimeStats) bool { return true })
+	require.Zero(t, stats.PeriodicStarts, "a client with leader election disabled ran the periodic enqueuer")
+
+	eligible.call(t, "stop", map[string]any{}, nil)
+	for _, step := range []string{"after the eligible leader stops", "after a restart"} {
+		if step == "after a restart" {
+			disabled.call(t, "stop", map[string]any{}, nil)
+			disabled.startWithTuning(t, disabledParams, fastElection)
+		}
+		eligible.call(t, "insert", map[string]any{"message": step}, &marker)
+		disabled.call(t, "wait", map[string]any{"id": marker.ID}, &marker)
+		require.Equal(t, "completed", marker.State)
+		require.Equal(t, []string{disabledID}, marker.AttemptedBy)
+		require.Empty(t, readLeader(t, eligible).LeaderID, "a client with leader election disabled became leader %s", step)
+	}
+	stats = waitForRuntimeStats(t, disabled, func(runtimeStats) bool { return true })
+	require.Zero(t, stats.PeriodicStarts, "a client with leader election disabled ran the periodic enqueuer")
+	require.Len(t, periodicJobs(), 1)
+	disabled.call(t, "stop", map[string]any{}, nil)
+}
+
 // verifyListenerReconnect terminates each worker's listener backend and then
 // all of its database connections, and requires a notification round trip
 // from the other implementation after each fault.

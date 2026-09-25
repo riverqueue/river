@@ -177,6 +177,11 @@ func TestMixedSQLiteRuntimeConformance(t *testing.T) {
 
 		verifySQLiteLeadershipFailover(t, goAdapter, candidateAdapter)
 	})
+	t.Run("sqlite_runtime_leader_election_disabled", func(t *testing.T) {
+		defer scenarios.record(t)
+
+		pair.eachDirection(func(disabled, eligible *adapter) { verifyLeaderElectionDisabled(t, disabled, eligible) })
+	})
 	t.Run("sqlite_runtime_periodic_scheduler", func(t *testing.T) {
 		defer scenarios.record(t)
 

@@ -599,6 +599,19 @@
       "source": "client.go:river.Config.JobTimeout"
     },
     {
+      "applicability": "protocol_visible",
+      "area": "config",
+      "detail": "bool",
+      "id": "config.LeaderElectionDisabled",
+      "rationale": "A client kept out of leader election never writes river_leader or runs leader-owned maintenance while it works jobs alongside eligible clients of any implementation, and rejects periodic jobs.",
+      "scenarios": [
+        "leader_election_disabled_both_directions",
+        "multi_engine_leader_election_disabled",
+        "sqlite_runtime_leader_election_disabled"
+      ],
+      "source": "client.go:river.Config.LeaderElectionDisabled"
+    },
+    {
       "applicability": "api_equivalent",
       "area": "config",
       "detail": "*slog.Logger",
