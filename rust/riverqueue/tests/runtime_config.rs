@@ -304,10 +304,8 @@ async fn setup_runtime(database_url: &str) -> (Client, Arc<RuntimeCounts>) {
 async fn completion_burst_does_not_lag_large_subscription() {
     const JOB_COUNT: usize = 6_000;
 
-    let Ok(database_url) = std::env::var("RIVER_RUST_DATABASE_URL") else {
-        eprintln!("skipping PostgreSQL runtime test without RIVER_RUST_DATABASE_URL");
-        return;
-    };
+    let database_url = std::env::var("RIVER_RUST_DATABASE_URL")
+        .expect("RIVER_RUST_DATABASE_URL must point at a disposable test database");
 
     let pool = PgPool::connect(&database_url).await.unwrap();
     let schema = riverqueue::database::SchemaName::new("rust_runtime_burst_test").unwrap();
@@ -404,10 +402,8 @@ async fn completion_burst_does_not_lag_large_subscription() {
 
 #[tokio::test]
 async fn extension_claimed_outcomes_use_postgres_completion_batcher() {
-    let Ok(database_url) = std::env::var("RIVER_RUST_DATABASE_URL") else {
-        eprintln!("skipping PostgreSQL runtime test without RIVER_RUST_DATABASE_URL");
-        return;
-    };
+    let database_url = std::env::var("RIVER_RUST_DATABASE_URL")
+        .expect("RIVER_RUST_DATABASE_URL must point at a disposable test database");
     let pool = PgPool::connect(&database_url).await.unwrap();
     let schema = riverqueue::database::SchemaName::new("rust_extension_completion_test").unwrap();
     sqlx::raw_sql(AssertSqlSafe(
@@ -817,10 +813,8 @@ async fn next_queue_event(receiver: &mut EventReceiver) -> EventKind {
 
 #[tokio::test]
 async fn poll_only_and_subscription_configuration() {
-    let Ok(database_url) = std::env::var("RIVER_RUST_DATABASE_URL") else {
-        eprintln!("skipping PostgreSQL runtime test without RIVER_RUST_DATABASE_URL");
-        return;
-    };
+    let database_url = std::env::var("RIVER_RUST_DATABASE_URL")
+        .expect("RIVER_RUST_DATABASE_URL must point at a disposable test database");
     let (client, counts) = setup_runtime(&database_url).await;
     let mut completed = client
         .subscribe_config(

@@ -579,10 +579,8 @@ async fn cancellation_wins_over_rescheduling_completion_updates() {
 async fn concurrent_unique_inserts_return_the_conflicting_job() {
     const INSERT_COUNT: usize = 32;
 
-    let Ok(database_url) = std::env::var("RIVER_RUST_DATABASE_URL") else {
-        eprintln!("skipping PostgreSQL runtime test without RIVER_RUST_DATABASE_URL");
-        return;
-    };
+    let database_url = std::env::var("RIVER_RUST_DATABASE_URL")
+        .expect("RIVER_RUST_DATABASE_URL must point at a disposable test database");
     let pool = PgPool::connect(&database_url).await.unwrap();
     let schema = SchemaName::new("rust_unique_concurrency_test").unwrap();
     sqlx::raw_sql(
@@ -689,10 +687,8 @@ async fn concurrent_unique_inserts_return_the_conflicting_job() {
     reason = "one backend regression verifies atomic selection, ordering, row updates, and decode rollback"
 )]
 async fn extension_claim_returns_ordered_rows_and_rolls_back_decode_errors() {
-    let Ok(database_url) = std::env::var("RIVER_RUST_DATABASE_URL") else {
-        eprintln!("skipping PostgreSQL claim test without RIVER_RUST_DATABASE_URL");
-        return;
-    };
+    let database_url = std::env::var("RIVER_RUST_DATABASE_URL")
+        .expect("RIVER_RUST_DATABASE_URL must point at a disposable test database");
     let pool = PgPool::connect(&database_url).await.unwrap();
     let schema = SchemaName::new("rust_extension_claim_test").unwrap();
     sqlx::raw_sql(
