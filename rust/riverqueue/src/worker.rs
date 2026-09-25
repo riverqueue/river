@@ -17,7 +17,7 @@ use tokio::sync::oneshot;
 use tokio_util::sync::CancellationToken;
 
 use crate::{
-    BoxError, Client, Error, Job, JobArgs, JobRow, JobUpdateParams, WorkError,
+    BoxError, Client, Error, Job, JobArgs, JobMetadata, JobRow, JobUpdateParams, WorkError,
     database::DatabaseTransactionExecutor,
 };
 
@@ -367,7 +367,7 @@ impl WorkContext {
         client: Client,
         cancellation: CancellationToken,
         job_id: i64,
-        metadata: &Map<String, Value>,
+        metadata: &JobMetadata,
     ) -> Self {
         let state = ResumableState::from_metadata(metadata);
         Self {
@@ -471,20 +471,26 @@ impl Default for ResumableState {
 }
 
 impl ResumableState {
-    fn from_metadata(metadata: &Map<String, Value>) -> Self {
+    fn from_metadata(metadata: &JobMetadata) -> Self {
         let mut state = Self::default();
         state.resume_step = metadata
-            .get(crate::METADATA_KEY_RESUMABLE_STEP)
-            .and_then(Value::as_str)
-            .filter(|step| !step.is_empty())
-            .map(str::to_owned);
+            .get::<String>(crate::METADATA_KEY_RESUMABLE_STEP)
+            .ok()
+            .flatten()
+            .filter(|step| !step.is_empty());
         state.resume_matched = state.resume_step.is_none();
-        match metadata.get(crate::METADATA_KEY_RESUMABLE_CURSOR) {
-            Some(Value::Object(cursors)) => {
-                state.cursors.clone_from(cursors);
-                state.had_cursors = !cursors.is_empty();
+        match metadata.get_raw(crate::METADATA_KEY_RESUMABLE_CURSOR) {
+            Some(raw) if raw.get().starts_with('{') => {
+                if let Ok(cursors) = serde_json::from_str::<Map<String, Value>>(raw.get()) {
+                    state.had_cursors = !cursors.is_empty();
+                    state.cursors = cursors;
+                } else {
+                    state.failure = Some(WorkError::new(Box::new(Error::invalid_job(
+                        "river:resumable_cursor cannot be decoded",
+                    ))));
+                }
             }
-            Some(Value::Array(_)) => {
+            Some(raw) if raw.get().starts_with('[') => {
                 state.failure = Some(WorkError::new(Box::new(Error::invalid_job(
                     "river:resumable_cursor must be an object when present",
                 ))));
@@ -854,7 +860,7 @@ mod tests {
 
     use chrono::Utc;
     use serde::{Deserialize, Serialize};
-    use serde_json::{Map, json};
+    use serde_json::json;
 
     use super::*;
     use crate::JobState;
@@ -907,7 +913,7 @@ mod tests {
             id: 1,
             kind: kind.to_owned(),
             max_attempts: 25,
-            metadata: Map::new(),
+            metadata: JobMetadata::default(),
             priority: 1,
             queue: "default".to_owned(),
             scheduled_at: now,
@@ -922,7 +928,7 @@ mod tests {
     async fn resumable_context_runs_without_a_checkpoint() {
         for metadata in [json!({}), json!({"river:resumable_step": ""})] {
             let mut row = job_row(FunctionJobArgs::KIND, false);
-            row.metadata = metadata.as_object().unwrap().clone();
+            row.metadata = metadata.as_object().unwrap().clone().into();
             let context = WorkContext::for_test_job(&row);
             let mut ran = false;
             context
@@ -946,7 +952,8 @@ mod tests {
         })
         .as_object()
         .unwrap()
-        .clone();
+        .clone()
+        .into();
         let context = WorkContext::for_test_job(&row);
         context
             .resumable_step("first", || async {

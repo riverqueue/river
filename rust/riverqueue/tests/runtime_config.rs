@@ -11,10 +11,10 @@ use std::{
 };
 
 use riverqueue::{
-    BoxError, Client, EventKind, EventRecvError, Extensions, Hook, InsertContext, InsertMiddleware,
-    InsertNext, InsertOpts, InsertedJobs, Job, JobArgs, JobRow, JobState, Metric, PeriodicJobs,
-    Plugin, QueueConfig, SubscribeConfig, WorkContext, WorkError, WorkMiddleware, WorkNext,
-    WorkOutcome, Worker, WorkerRegistry, database::PostgresDatabase,
+    BoxError, Client, EventKind, EventReceiver, EventRecvError, Extensions, Hook, InsertContext,
+    InsertMiddleware, InsertNext, InsertOpts, InsertedJobs, Job, JobArgs, JobRow, JobState, Metric,
+    PeriodicJobs, Plugin, QueueConfig, SubscribeConfig, WorkContext, WorkError, WorkMiddleware,
+    WorkNext, WorkOutcome, Worker, WorkerRegistry, database::PostgresDatabase,
 };
 use riverqueue_migrate::PostgresMigrator;
 use serde::{Deserialize, Serialize};
@@ -188,7 +188,8 @@ impl InsertMiddleware for RuntimeInsertMiddleware {
         for job in &mut jobs {
             job.opts
                 .metadata
-                .insert("middleware".to_owned(), true.into());
+                .insert("middleware", true)
+                .expect("boolean metadata serializes");
         }
         let inserted = next.run(jobs).await?;
         match &inserted {
@@ -469,7 +470,10 @@ async fn extension_claimed_outcomes_use_postgres_completion_batcher() {
     let event = event.as_job().unwrap();
     assert_eq!(event.job.id, inserted.job.row.id);
     assert_eq!(event.job.state, JobState::Completed);
-    assert_eq!(event.job.metadata["shared_completion"], true);
+    assert_eq!(
+        event.job.metadata.get::<bool>("shared_completion").unwrap(),
+        Some(true)
+    );
     assert!(event.statistics.is_some());
 
     run.shutdown().await.unwrap();
@@ -563,12 +567,21 @@ async fn external_terminal_state_wins_worker_completion_race() {
         let event = event.as_job().unwrap();
         assert_eq!(event.job.id, inserted.job.row.id);
         assert_eq!(event.job.state, external_state);
-        assert_eq!(event.job.metadata["worker_completion"], true);
+        assert_eq!(
+            event.job.metadata.get::<bool>("worker_completion").unwrap(),
+            Some(true)
+        );
 
         let row = client.jobs().get(inserted.job.row.id).await.unwrap();
         assert_eq!(row.state, external_state);
-        assert_eq!(row.metadata["external_terminal"], true);
-        assert_eq!(row.metadata["worker_completion"], true);
+        assert_eq!(
+            row.metadata.get::<bool>("external_terminal").unwrap(),
+            Some(true)
+        );
+        assert_eq!(
+            row.metadata.get::<bool>("worker_completion").unwrap(),
+            Some(true)
+        );
     }
 
     run_handle.shutdown().await.unwrap();
@@ -794,6 +807,14 @@ async fn shutdown_waits_for_active_work_and_soft_stop_escalates() {
         .unwrap();
 }
 
+async fn next_queue_event(receiver: &mut EventReceiver) -> EventKind {
+    tokio::time::timeout(Duration::from_secs(2), receiver.recv())
+        .await
+        .unwrap()
+        .unwrap()
+        .kind()
+}
+
 #[tokio::test]
 async fn poll_only_and_subscription_configuration() {
     let Ok(database_url) = std::env::var("RIVER_RUST_DATABASE_URL") else {
@@ -830,7 +851,15 @@ async fn poll_only_and_subscription_configuration() {
     );
     let inserted = client.insert(RuntimeArgs {}).await.unwrap();
     assert_eq!(inserted.job.row.max_attempts, 7);
-    assert_eq!(inserted.job.row.metadata["middleware"], true);
+    assert!(
+        inserted
+            .job
+            .row
+            .metadata
+            .get::<bool>("middleware")
+            .unwrap()
+            .unwrap()
+    );
     let event = tokio::time::timeout(Duration::from_secs(2), completed.recv())
         .await
         .unwrap()
@@ -861,29 +890,17 @@ async fn poll_only_and_subscription_configuration() {
         .unwrap();
     client.queues().pause("default").await.unwrap();
     assert_eq!(
-        tokio::time::timeout(Duration::from_secs(2), transitions.recv())
-            .await
-            .unwrap()
-            .unwrap()
-            .kind(),
+        next_queue_event(&mut transitions).await,
         EventKind::QueuePaused
     );
     client.queues().resume("default").await.unwrap();
     assert_eq!(
-        tokio::time::timeout(Duration::from_secs(2), transitions.recv())
-            .await
-            .unwrap()
-            .unwrap()
-            .kind(),
+        next_queue_event(&mut transitions).await,
         EventKind::QueueResumed
     );
     client.queues().pause("default").await.unwrap();
     assert_eq!(
-        tokio::time::timeout(Duration::from_secs(2), transitions.recv())
-            .await
-            .unwrap()
-            .unwrap()
-            .kind(),
+        next_queue_event(&mut transitions).await,
         EventKind::QueuePaused
     );
     assert!(matches!(

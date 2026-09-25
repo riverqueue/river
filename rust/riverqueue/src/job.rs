@@ -4,11 +4,14 @@ use std::time::Duration;
 
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
-use serde_json::{Map, Value, value::RawValue};
+use serde_json::value::RawValue;
 
 use crate::{PRIORITY_DEFAULT, QUEUE_DEFAULT};
 
 mod attempt_error;
+mod metadata;
+
+pub use metadata::JobMetadata;
 
 /// Arguments for a typed River job.
 pub trait JobArgs: DeserializeOwned + Send + Serialize + Sync + 'static {
@@ -144,7 +147,7 @@ impl AttemptError {
 #[derive(Clone, Debug, Default)]
 pub struct InsertOpts {
     max_attempts: Option<i16>,
-    metadata: Option<Map<String, Value>>,
+    metadata: Option<JobMetadata>,
     pending: Option<bool>,
     priority: Option<i16>,
     queue: Option<String>,
@@ -176,7 +179,7 @@ impl InsertOpts {
 
     /// Returns the configured metadata replacement.
     #[must_use]
-    pub fn metadata(&self) -> Option<&Map<String, Value>> {
+    pub const fn metadata(&self) -> Option<&JobMetadata> {
         self.metadata.as_ref()
     }
 
@@ -224,9 +227,14 @@ impl InsertOpts {
     }
 
     /// Replaces arbitrary JSON object metadata.
+    ///
+    /// Accepts a [`JobMetadata`] or a `serde_json::Map`. Build a
+    /// [`JobMetadata`] from JSON text (for example with `str::parse`) to keep
+    /// number tokens, such as `1e400` or integers wider than 64 bits, that
+    /// `serde_json::Value` can't represent exactly.
     #[must_use]
-    pub fn with_metadata(mut self, metadata: Map<String, Value>) -> Self {
-        self.metadata = Some(metadata);
+    pub fn with_metadata(mut self, metadata: impl Into<JobMetadata>) -> Self {
+        self.metadata = Some(metadata.into());
         self
     }
 
@@ -319,7 +327,7 @@ impl InsertOpts {
     ) -> InsertParams {
         let mut resolved = InsertParams {
             max_attempts: client_max_attempts,
-            metadata: Map::new(),
+            metadata: JobMetadata::default(),
             pending: false,
             priority: PRIORITY_DEFAULT,
             queue: QUEUE_DEFAULT.to_owned(),
@@ -344,7 +352,7 @@ pub struct InsertParams {
     /// Maximum number of attempts, including the first.
     pub max_attempts: i16,
     /// Arbitrary JSON object metadata.
-    pub metadata: Map<String, Value>,
+    pub metadata: JobMetadata,
     /// Insert in the pending state.
     pub pending: bool,
     /// Priority from one (highest) through four (lowest).
@@ -460,10 +468,9 @@ impl<A> Job<A> {
 /// and member order) are preserved when a row is read and passed along. Use
 /// [`JobRow::decode_args`] to decode them into a typed value.
 ///
-/// Metadata is decoded into a [`serde_json::Map`]. It is exact for strings,
-/// booleans, and integers within the `i64`/`u64` range; other numbers are
-/// approximated as `f64` in this view. River merges metadata updates in the
-/// database, so values it does not change are never rewritten.
+/// Metadata retains the database's JSON text, including numbers outside the
+/// range of [`serde_json::Value`]. Read individual fields through
+/// [`JobMetadata::get_raw`] or [`JobMetadata::get`].
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[non_exhaustive]
 pub struct JobRow {
@@ -488,7 +495,7 @@ pub struct JobRow {
     /// Maximum attempts.
     pub max_attempts: i16,
     /// Arbitrary and River-reserved metadata.
-    pub metadata: Map<String, Value>,
+    pub metadata: JobMetadata,
     /// Priority from one through four.
     pub priority: i16,
     /// Queue name.
@@ -528,7 +535,7 @@ impl JobRow {
             id,
             kind: kind.into(),
             max_attempts: crate::MAX_ATTEMPTS_DEFAULT,
-            metadata: Map::new(),
+            metadata: JobMetadata::default(),
             priority: crate::PRIORITY_DEFAULT,
             queue: crate::QUEUE_DEFAULT.to_owned(),
             scheduled_at: now,
@@ -548,10 +555,19 @@ impl JobRow {
         serde_json::from_str(self.encoded_args.get())
     }
 
+    /// Decodes recorded output from metadata into a caller-selected type.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the stored output cannot deserialize as `T`.
+    pub fn decode_output<T: DeserializeOwned>(&self) -> Result<Option<T>, serde_json::Error> {
+        self.metadata.get(crate::METADATA_KEY_OUTPUT)
+    }
+
     /// Returns recorded output from metadata.
     #[must_use]
-    pub fn output(&self) -> Option<&Value> {
-        self.metadata.get(crate::METADATA_KEY_OUTPUT)
+    pub fn output(&self) -> Option<&RawValue> {
+        self.metadata.get_raw(crate::METADATA_KEY_OUTPUT)
     }
 }
 

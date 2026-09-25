@@ -2,7 +2,9 @@
 //!
 //! Each scenario runs against PostgreSQL (in a unique schema, failing rather
 //! than skipping when `RIVER_RUST_DATABASE_URL` is unset) and SQLite (in a
-//! temporary file).
+//! temporary file). PostgreSQL scenarios build only with `postgres-tests`.
+
+#![cfg(any(feature = "postgres-tests", feature = "sqlite"))]
 
 mod support;
 
@@ -53,7 +55,10 @@ macro_rules! scenarios {
                 .tx(&mut tx)
                 .await
                 .unwrap();
-            assert_eq!(row.metadata["output"], "rolled back");
+            assert_eq!(
+                row.metadata.get::<String>("output").unwrap().as_deref(),
+                Some("rolled back")
+            );
             // Reads in the transaction see its uncommitted writes.
             assert!(matches!(
                 jobs.get(deleted).tx(&mut tx).await,
@@ -369,7 +374,7 @@ async fn paused(client: &Client) -> Vec<String> {
         .collect()
 }
 
-#[cfg(feature = "postgres")]
+#[cfg(feature = "postgres-tests")]
 mod postgres {
     use sqlx::{PgPool, Postgres, Transaction};
 

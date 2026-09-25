@@ -973,7 +973,11 @@ async fn out_of_range_snooze_is_clamped_and_cancel_time_matches_go() {
 
     // River Go writes `cancel_attempted_at` as `time.Time` JSON.
     let cancelled = client.jobs().cancel(snoozed.id).await.unwrap();
-    let cancel_attempted_at = cancelled.metadata["cancel_attempted_at"].as_str().unwrap();
+    let cancel_attempted_at = cancelled
+        .metadata
+        .get::<String>("cancel_attempted_at")
+        .unwrap()
+        .unwrap();
     assert!(cancel_attempted_at.ends_with('Z'), "{cancel_attempted_at}");
     if let Some((_, fraction)) = cancel_attempted_at.trim_end_matches('Z').split_once('.') {
         assert!(
@@ -981,7 +985,7 @@ async fn out_of_range_snooze_is_clamped_and_cancel_time_matches_go() {
             "trailing zeros are trimmed: {cancel_attempted_at}"
         );
     }
-    chrono::DateTime::parse_from_rfc3339(cancel_attempted_at).unwrap();
+    chrono::DateTime::parse_from_rfc3339(&cancel_attempted_at).unwrap();
 
     schema.drop().await;
 }

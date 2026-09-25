@@ -767,6 +767,48 @@ func verifyJobRowRoundTrip(t *testing.T, goAdapter, candidateAdapter *adapter) {
 	}
 }
 
+// verifyLargeMetadataRoundTrip keeps large numeric values in a string-valued
+// RPC parameter so neither adapter's JSON-RPC decoder can round them before
+// the database sees them.
+func verifyLargeMetadataRoundTrip(t *testing.T, goAdapter, candidateAdapter *adapter) {
+	t.Helper()
+
+	const metadataJSON = `{"negative":-9223372036854775808,"big_integer":123456789012345678901234567890,"beyond_float":1e400,"long_decimal":0.1000000000000000055511151231257827}`
+	type exactTokens struct {
+		BigInteger  string `json:"big_integer"`
+		BeyondFloat string `json:"beyond_float"`
+		LongDecimal string `json:"long_decimal"`
+	}
+	for _, pair := range []struct {
+		writer *adapter
+		reader *adapter
+	}{
+		{writer: goAdapter, reader: candidateAdapter},
+		{writer: candidateAdapter, reader: goAdapter},
+	} {
+		pair.writer.call(t, "reset", map[string]any{}, nil)
+		var inserted struct {
+			ID int64 `json:"id"`
+		}
+		pair.writer.call(t, "raw_insert_exact_json", map[string]any{"metadata_json": metadataJSON}, &inserted)
+		read := func(actor *adapter) exactTokens {
+			t.Helper()
+			var tokens exactTokens
+			actor.call(t, "raw_job_exact_json", map[string]any{"id": inserted.ID}, &tokens)
+			return tokens
+		}
+		before := read(pair.writer)
+		require.Equal(t, before, read(pair.reader))
+		require.Equal(t, "123456789012345678901234567890", before.BigInteger)
+		require.Equal(t, "0.1000000000000000055511151231257827", before.LongDecimal)
+		require.NotEmpty(t, before.BeyondFloat)
+
+		pair.reader.call(t, "update", map[string]any{"id": inserted.ID, "output": "preserved"}, nil)
+		require.Equal(t, before, read(pair.writer))
+		require.Equal(t, before, read(pair.reader))
+	}
+}
+
 // verifyTransactionalJobCRUD runs job CRUD inside one implementation's
 // transaction and observes commit and rollback from the other.
 func verifyTransactionalJobCRUD(t *testing.T, goAdapter, candidateAdapter *adapter) {

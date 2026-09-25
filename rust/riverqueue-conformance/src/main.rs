@@ -16,10 +16,10 @@ use riverqueue::{
     AttemptError, BoxError, Client, CronSchedule, DefaultRetryPolicy, ErrorHandler,
     ErrorHandlerDecision, EventKind, EventReceiver, Extensions, Hook, InsertContext,
     InsertMiddleware, InsertNext, InsertOpts, InsertResult, InsertedJobs, IntervalSchedule, Job,
-    JobArgs, JobDeleteManyParams, JobListCursor, JobListParams, JobListResult, JobRow, JobState,
-    JobUpdateParams, MaintenanceConfig, PeriodicJob, PeriodicJobOpts, PeriodicJobs, Plugin, Queue,
-    QueueConfig, QueueListParams, QueueSelector, QueueUpdateParams, RetryPolicy, RunHandle,
-    SortDirection, SubscribeConfig, UniqueOpts, WorkCancelled, WorkContext, WorkError,
+    JobArgs, JobDeleteManyParams, JobListCursor, JobListParams, JobListResult, JobMetadata, JobRow,
+    JobState, JobUpdateParams, MaintenanceConfig, PeriodicJob, PeriodicJobOpts, PeriodicJobs,
+    Plugin, Queue, QueueConfig, QueueListParams, QueueSelector, QueueUpdateParams, RetryPolicy,
+    RunHandle, SortDirection, SubscribeConfig, UniqueOpts, WorkCancelled, WorkContext, WorkError,
     WorkMiddleware, WorkNext, WorkOutcome, WorkResult, Worker, WorkerRegistry,
     database::{PostgresDatabase, PostgresReindexConfig, PostgresReindexSchedule, SqliteDatabase},
     encoding::encode_args,
@@ -1142,7 +1142,7 @@ struct InsertParams {
 struct InsertOptsParams {
     max_attempts: Option<i16>,
     #[serde(default)]
-    metadata: Map<String, Value>,
+    metadata: JobMetadata,
     #[serde(default)]
     pending: bool,
     priority: Option<i16>,
@@ -1821,16 +1821,18 @@ impl Adapter {
                 Ok(normalize_job(&self.client()?.jobs().get(id).await?))
             }
             "raw_insert_exact_json" => {
+                let metadata_json = params.get("metadata_json").and_then(Value::as_str);
                 let id = sqlx::query_scalar::<_, i64>(
                     r#"INSERT INTO river_job (id, args, kind, max_attempts, metadata)
                        VALUES (
                            COALESCE($1, nextval(pg_get_serial_sequence('river_job', 'id'))),
                            '{"decimal":0.12345678901234567890123456789,"integer":9223372036854775807}'::jsonb,
                            'conformance_exact_json', 25,
-                           '{"negative":-9223372036854775808}'::jsonb
+                           COALESCE($2::jsonb, '{"negative":-9223372036854775808}'::jsonb)
                        ) RETURNING id"#,
                 )
 				.bind(optional_i64(&params, "id"))
+                .bind(metadata_json)
                 .fetch_one(&self.pool)
                 .await?;
                 Ok(json!({"id": id}))
@@ -2492,16 +2494,18 @@ impl SqliteAdapter {
                 Ok(normalize_job(&self.client()?.jobs().get(id).await?))
             }
             "raw_insert_exact_json" => {
+                let metadata_json = params.get("metadata_json").and_then(Value::as_str);
                 let id = sqlx::query_scalar::<_, i64>(
                     r#"INSERT INTO river_job (id, args, kind, max_attempts, metadata)
                        VALUES (
                            ?1,
                            jsonb('{"decimal":0.12345678901234567890123456789,"integer":9223372036854775807}'),
                            'conformance_exact_json', 25,
-                           jsonb('{"negative":-9223372036854775808}')
+                           jsonb(COALESCE(?2, '{"negative":-9223372036854775808}'))
                        ) RETURNING id"#,
                 )
 				.bind(optional_i64(&params, "id"))
+                .bind(metadata_json)
                 .fetch_one(&self.pool)
                 .await?;
                 Ok(json!({"id": id}))
@@ -3143,7 +3147,7 @@ fn retry_row(
     row.attempted_by = vec!["conformance".to_owned()];
     row.errors = vec![AttemptError::new(now, 1, "previous failure"); previous_errors];
     row.max_attempts = 1_000;
-    row.metadata = Map::new();
+    row.metadata = Map::new().into();
     row.state = JobState::Retryable;
     Ok(row)
 }
@@ -3280,19 +3284,26 @@ fn exact_json_tokens(row: &JobRow) -> Result<Value, Box<dyn std::error::Error + 
     };
     let negative = row
         .metadata
-        .get("negative")
-        .map(Value::to_string)
+        .get_raw("negative")
+        .map(|raw| raw.get().to_owned())
         .ok_or_else(|| io::Error::other("exact JSON key \"negative\" not found"))?;
-    Ok(json!({
+    let mut result = json!({
         "decimal": arg_token("decimal")?,
         "integer": arg_token("integer")?,
         "negative": negative,
-    }))
+    });
+    for key in ["big_integer", "beyond_float", "long_decimal"] {
+        if let Some(raw) = row.metadata.get_raw(key) {
+            result[key] = Value::String(raw.get().to_owned());
+        }
+    }
+    Ok(result)
 }
 
 fn normalize_job(row: &JobRow) -> Value {
     let mut metadata = row.metadata.clone();
     metadata.remove(riverqueue::METADATA_KEY_UNIQUE_NONCE);
+    let metadata = metadata.to_map().ok();
     json!({
         "args": row.encoded_args,
         "attempt": row.attempt,

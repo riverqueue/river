@@ -62,7 +62,7 @@ impl<A: JobArgs> TestJobBuilder<A> {
         row.attempted_at = Some(now);
         row.attempted_by = vec!["riverqueue-test".to_owned()];
         row.max_attempts = max_attempts;
-        row.metadata = self.metadata;
+        row.metadata = self.metadata.into();
         row.priority = priority;
         row.queue = queue;
         row.state = self.state;
@@ -337,7 +337,7 @@ mod tests {
         assert_eq!(job.row.id, 99);
         assert_eq!(job.row.kind, TestArgs::KIND);
         assert_eq!(job.row.max_attempts, 7);
-        assert_eq!(job.row.metadata["test"], true);
+        assert_eq!(job.row.metadata.get::<bool>("test").unwrap(), Some(true));
         assert_eq!(job.row.priority, 3);
         assert_eq!(job.row.queue, "testing");
         assert_eq!(job.row.state, JobState::Retryable);

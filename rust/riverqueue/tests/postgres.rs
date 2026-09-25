@@ -533,7 +533,13 @@ impl Worker<TransactionalArgs> for TransactionalWorker {
         let mut transaction = self.pool.begin().await?;
         let completed = context.job_complete_tx(&mut transaction).await?;
         assert_eq!(completed.state, JobState::Completed);
-        assert_eq!(completed.metadata["transactional_completion"], true);
+        assert_eq!(
+            completed
+                .metadata
+                .get::<bool>("transactional_completion")
+                .unwrap(),
+            Some(true)
+        );
         transaction.commit().await?;
         Ok(WorkOutcome::Complete)
     }
@@ -783,7 +789,10 @@ async fn extension_claim_returns_ordered_rows_and_rolls_back_decode_errors() {
         assert_eq!(row.state, JobState::Running);
         assert_eq!(row.attempt, 1);
         assert_eq!(row.attempted_by, ["postgres-extension-claimer"]);
-        assert_eq!(row.metadata["claim"], "leader");
+        assert_eq!(
+            row.metadata.get::<String>("claim").unwrap().as_deref(),
+            Some("leader")
+        );
     }
 
     let invalid = client.insert(FailArgs {}).await.unwrap();
@@ -1357,11 +1366,14 @@ async fn migrates_inserts_and_works_a_job() {
         .jobs;
     assert_eq!(fast_rows.len(), 2);
     assert!(fast_rows.iter().any(|row| row.state == JobState::Pending));
-    assert!(
-        fast_rows
-            .iter()
-            .any(|row| row.metadata.get("source") == Some(&serde_json::json!("copy")))
-    );
+    assert!(fast_rows.iter().any(|row| {
+        row.metadata
+            .get::<String>("source")
+            .ok()
+            .flatten()
+            .as_deref()
+            == Some("copy")
+    }));
 
     let inserted = client
         .insert(EchoArgs {
@@ -1426,8 +1438,8 @@ async fn migrates_inserts_and_works_a_job() {
     assert_eq!(row.attempt, 1);
     assert_eq!(row.attempted_by, ["rust-conformance-client"]);
     assert_eq!(
-        row.output(),
-        Some(&serde_json::json!({"message": "from Rust"}))
+        row.decode_output::<serde_json::Value>().unwrap(),
+        Some(serde_json::json!({"message": "from Rust"}))
     );
     loop {
         let event = tokio::time::timeout(Duration::from_secs(1), completed_events.recv())
@@ -1454,7 +1466,14 @@ async fn migrates_inserts_and_works_a_job() {
         .await
         .unwrap();
     let resumable = wait_for_state(&client, resumable.job.row.id, JobState::Completed).await;
-    assert_eq!(resumable.metadata["river:resumable_step"], "first");
+    assert_eq!(
+        resumable
+            .metadata
+            .get::<String>("river:resumable_step")
+            .unwrap()
+            .as_deref(),
+        Some("first")
+    );
     assert_eq!(resumable_first_runs.load(Ordering::SeqCst), 1);
     assert_eq!(resumable_second_runs.load(Ordering::SeqCst), 2);
 
@@ -1616,7 +1635,10 @@ async fn migrates_inserts_and_works_a_job() {
         )
         .await
         .unwrap();
-    assert_eq!(updated.output(), Some(&serde_json::json!({"ok": true})));
+    assert_eq!(
+        updated.decode_output::<serde_json::Value>().unwrap(),
+        Some(serde_json::json!({"ok": true}))
+    );
 
     let retried = client.jobs().retry(failed.id).await.unwrap();
     assert_eq!(retried.state, JobState::Available);
@@ -1784,10 +1806,18 @@ async fn migrates_inserts_and_works_a_job() {
     .unwrap();
     let mut maintenance_handle = maintenance_client.start().unwrap();
     let periodic = wait_for_job_matching(&maintenance_client, |row| {
-        row.metadata.get("river:periodic_job_id") == Some(&serde_json::json!("rust-periodic"))
+        row.metadata
+            .get::<String>("river:periodic_job_id")
+            .ok()
+            .flatten()
+            .as_deref()
+            == Some("rust-periodic")
     })
     .await;
-    assert_eq!(periodic.metadata["periodic"], true);
+    assert_eq!(
+        periodic.metadata.get::<bool>("periodic").unwrap(),
+        Some(true)
+    );
     wait_for_state(
         &maintenance_client,
         scheduled.job.row.id,
@@ -1800,8 +1830,20 @@ async fn migrates_inserts_and_works_a_job() {
         JobState::Completed,
     )
     .await;
-    assert_eq!(transactional.metadata["transactional_completion"], true);
-    assert_eq!(transactional.metadata["extension_handled"], true);
+    assert_eq!(
+        transactional
+            .metadata
+            .get::<bool>("transactional_completion")
+            .unwrap(),
+        Some(true)
+    );
+    assert_eq!(
+        transactional
+            .metadata
+            .get::<bool>("extension_handled")
+            .unwrap(),
+        Some(true)
+    );
     assert!(pilot_fetches.load(Ordering::SeqCst) > 0);
     assert!(pilot_completions.load(Ordering::SeqCst) > 0);
     assert_eq!(
@@ -1810,13 +1852,18 @@ async fn migrates_inserts_and_works_a_job() {
             .get(scheduled.job.row.id)
             .await
             .unwrap()
-            .metadata["extension_handled"],
-        true
+            .metadata
+            .get::<bool>("extension_handled")
+            .unwrap(),
+        Some(true)
     );
     assert_eq!(pilot_maintenance_starts.load(Ordering::SeqCst), 1);
     assert_eq!(pilot_runtime_starts.load(Ordering::SeqCst), 1);
     let rescued = wait_for_state(&maintenance_client, stuck_id, JobState::Discarded).await;
-    assert_eq!(rescued.metadata["river:rescue_count"], 1);
+    assert_eq!(
+        rescued.metadata.get::<i64>("river:rescue_count").unwrap(),
+        Some(1)
+    );
     assert_eq!(
         rescued.errors.last().unwrap().error,
         "Stuck job rescued by JobRescuer"
@@ -2022,10 +2069,22 @@ async fn rescuer_honors_worker_timeout_and_retry_overrides() {
     let mut handle = client.start().unwrap();
 
     let default_timeout = wait_for_state(&client, default_timeout_id, JobState::Discarded).await;
-    assert_eq!(default_timeout.metadata["river:rescue_count"], 1);
+    assert_eq!(
+        default_timeout
+            .metadata
+            .get::<i64>("river:rescue_count")
+            .unwrap(),
+        Some(1)
+    );
     assert_eq!(default_timeout.errors.len(), 1);
     let retry_override = wait_for_state(&client, retry_override_id, JobState::Retryable).await;
-    assert_eq!(retry_override.metadata["river:rescue_count"], 1);
+    assert_eq!(
+        retry_override
+            .metadata
+            .get::<i64>("river:rescue_count")
+            .unwrap(),
+        Some(1)
+    );
     assert_eq!(retry_override.errors.len(), 1);
     assert!(
         retry_override.scheduled_at > chrono::Utc::now() + chrono::Duration::minutes(90),
@@ -2129,9 +2188,20 @@ async fn resumable_cursor_and_transactional_checkpoints() {
     let mut handle = client.start().unwrap();
 
     let first_failure = wait_for_state(&client, job_ids["cursor_retry"], JobState::Retryable).await;
-    assert_eq!(first_failure.metadata["river:resumable_step"], "validate");
     assert_eq!(
-        first_failure.metadata["river:resumable_cursor"]["process"],
+        first_failure
+            .metadata
+            .get::<String>("river:resumable_step")
+            .unwrap()
+            .as_deref(),
+        Some("validate")
+    );
+    assert_eq!(
+        first_failure
+            .metadata
+            .get::<serde_json::Value>("river:resumable_cursor")
+            .unwrap()
+            .unwrap()["process"],
         serde_json::json!({"offset": 42})
     );
     assert_eq!(first_failure.errors.len(), 1);
@@ -2147,15 +2217,30 @@ async fn resumable_cursor_and_transactional_checkpoints() {
     let committed_cursor =
         wait_for_state(&client, job_ids["commit_cursor"], JobState::Completed).await;
     assert_eq!(
-        committed_cursor.metadata["river:resumable_step"],
-        "tx_cursor"
+        committed_cursor
+            .metadata
+            .get::<String>("river:resumable_step")
+            .unwrap()
+            .as_deref(),
+        Some("tx_cursor")
     );
     assert_eq!(
-        committed_cursor.metadata["river:resumable_cursor"]["tx_cursor"],
+        committed_cursor
+            .metadata
+            .get::<serde_json::Value>("river:resumable_cursor")
+            .unwrap()
+            .unwrap()["tx_cursor"],
         serde_json::json!({"offset": 7})
     );
     let committed_step = wait_for_state(&client, job_ids["commit_step"], JobState::Completed).await;
-    assert_eq!(committed_step.metadata["river:resumable_step"], "tx_step");
+    assert_eq!(
+        committed_step
+            .metadata
+            .get::<String>("river:resumable_step")
+            .unwrap()
+            .as_deref(),
+        Some("tx_step")
+    );
     assert!(
         !committed_step
             .metadata

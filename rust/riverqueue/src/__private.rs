@@ -483,7 +483,7 @@ pub struct JobInsertParams<'insert> {
     /// Stable job kind.
     pub kind: &'insert mut String,
     /// Arbitrary job metadata.
-    pub metadata: &'insert mut Map<String, Value>,
+    pub metadata: &'insert mut crate::JobMetadata,
     /// Queue in which the job will run.
     pub queue: &'insert mut String,
     /// Initial state: available, pending, or scheduled. An extension may
@@ -867,7 +867,7 @@ pub struct ExtensionInsertParams {
     /// Maximum attempts, including the first.
     pub max_attempts: i16,
     /// Arbitrary job metadata.
-    pub metadata: Map<String, Value>,
+    pub metadata: crate::JobMetadata,
     /// Priority from one through four.
     pub priority: i16,
     /// Queue in which the job runs.
@@ -928,7 +928,7 @@ pub struct JobRowParts {
     pub finalized_at: Option<DateTime<Utc>>,
     pub kind: String,
     pub max_attempts: i16,
-    pub metadata: Map<String, Value>,
+    pub metadata: crate::JobMetadata,
     pub priority: i16,
     pub queue: String,
     pub scheduled_at: DateTime<Utc>,

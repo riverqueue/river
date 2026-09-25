@@ -480,7 +480,7 @@ pub(super) async fn persist_result(
                     JobState::Scheduled
                 };
                 let mut metadata = metadata_updates;
-                let snoozes = go_json_int(row.metadata.get("snoozes")).wrapping_add(1);
+                let snoozes = go_json_int(row.metadata.get_raw("snoozes")).wrapping_add(1);
                 metadata.insert("snoozes".to_owned(), Value::from(snoozes));
                 (
                     state,
@@ -633,7 +633,7 @@ pub(crate) fn default_retry_delay(row: &JobRow, now: DateTime<Utc>, seed: u64) -
 /// the Go executor uses to read the `snoozes` counter. Numbers truncate toward
 /// zero, numeric strings of optional sign and digits parse, `true` is one, and
 /// everything else is zero.
-fn go_json_int(value: Option<&Value>) -> i64 {
+fn go_json_int(value: Option<&serde_json::value::RawValue>) -> i64 {
     fn parse_digits(text: &str) -> Option<i64> {
         let (negative, digits) = text
             .strip_prefix('-')
@@ -656,11 +656,13 @@ fn go_json_int(value: Option<&Value>) -> i64 {
     }
 
     const MAX_SAFE_INTEGER: f64 = 9_007_199_254_740_991.0;
-    match value {
-        Some(Value::Bool(true)) => 1,
-        Some(Value::String(text)) => parse_digits(text).unwrap_or(0),
-        Some(Value::Number(number)) => {
-            let raw = number.to_string();
+    match value.map(serde_json::value::RawValue::get) {
+        Some("true") => 1,
+        Some(raw) if raw.starts_with('"') => serde_json::from_str::<String>(raw)
+            .ok()
+            .and_then(|text| parse_digits(&text))
+            .unwrap_or(0),
+        Some(raw) if raw.starts_with(['-', '0', '1', '2', '3', '4', '5', '6', '7', '8', '9']) => {
             let float = raw.parse::<f64>().unwrap_or(0.0);
             if (-MAX_SAFE_INTEGER..=MAX_SAFE_INTEGER).contains(&float) {
                 #[expect(
@@ -673,7 +675,7 @@ fn go_json_int(value: Option<&Value>) -> i64 {
                 clippy::cast_possible_truncation,
                 reason = "Go falls back to a float conversion for huge numbers"
             )]
-            parse_digits(&raw).unwrap_or(float as i64)
+            parse_digits(raw).unwrap_or(float as i64)
         }
         _ => 0,
     }
@@ -681,8 +683,8 @@ fn go_json_int(value: Option<&Value>) -> i64 {
 
 #[cfg(test)]
 mod go_json_int_tests {
+    use crate::JobMetadata;
     use serde::Deserialize;
-    use serde_json::{Map, Value};
 
     use super::go_json_int;
 
@@ -694,7 +696,7 @@ mod go_json_int_tests {
     #[derive(Deserialize)]
     struct SnoozeCounter {
         expected_snoozes: i64,
-        metadata: Map<String, Value>,
+        metadata: JobMetadata,
         name: String,
     }
 
@@ -707,7 +709,7 @@ mod go_json_int_tests {
         assert!(!fixture.snooze_counters.is_empty());
         for case in fixture.snooze_counters {
             assert_eq!(
-                go_json_int(case.metadata.get("snoozes")).wrapping_add(1),
+                go_json_int(case.metadata.get_raw("snoozes")).wrapping_add(1),
                 case.expected_snoozes,
                 "{}",
                 case.name

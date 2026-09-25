@@ -65,6 +65,7 @@ func TestMixedSQLiteConformance(t *testing.T) {
 		defer scenarios.record(t)
 
 		verifyDifferentialJobCRUD(t, goAdapter, candidateAdapter)
+		verifyLargeMetadataRoundTrip(t, goAdapter, candidateAdapter)
 		verifyBulkDeleteSafety(t, goAdapter, candidateAdapter)
 		verifyDifferentialListCursors(t, goAdapter, candidateAdapter, false)
 	})

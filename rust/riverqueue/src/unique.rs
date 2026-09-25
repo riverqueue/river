@@ -278,9 +278,10 @@ fn write_sjson_key(key: &str, output: &mut String) {
 }
 
 /// One member of a JSON object with its unescaped key and raw value text.
-struct Member<'a> {
-    key: Cow<'a, str>,
-    value: &'a str,
+pub(crate) struct Member<'a> {
+    pub(crate) key: Cow<'a, str>,
+    pub(crate) raw_key: &'a str,
+    pub(crate) value: &'a str,
 }
 
 /// Reports whether `source` is a JSON array with no elements.
@@ -299,7 +300,7 @@ fn is_empty_array(source: &str) -> bool {
 }
 
 /// Splits a JSON object into its members without reinterpreting values.
-fn object_members(source: &str) -> Result<Vec<Member<'_>>, Error> {
+pub(crate) fn object_members(source: &str) -> Result<Vec<Member<'_>>, Error> {
     let not_object = || unique_args_error("unique args must encode a JSON object".to_owned());
     let mut scanner = Scanner::new(source);
     scanner.skip_whitespace();
@@ -322,6 +323,7 @@ fn object_members(source: &str) -> Result<Vec<Member<'_>>, Error> {
         let value = scanner.value().ok_or_else(not_object)?;
         members.push(Member {
             key: unescape_key(key)?,
+            raw_key: key,
             value,
         });
         scanner.skip_whitespace();

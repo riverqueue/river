@@ -171,7 +171,7 @@ fn retry_row(error_count: usize) -> JobRow {
         id: 42,
         kind: "retry_test".to_owned(),
         max_attempts: 1_000,
-        metadata: Map::new(),
+        metadata: Map::new().into(),
         priority: 1,
         queue: "default".to_owned(),
         scheduled_at: now,

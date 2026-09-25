@@ -25,7 +25,10 @@
     "id": { "minimum": 1, "type": "integer" },
     "kind": { "type": "string" },
     "max_attempts": { "minimum": 1, "type": "integer" },
-    "metadata": { "type": "object" },
+    "metadata": {
+      "description": "Null when metadata contains numbers outside the normalized JSON decoder's range; use raw_job_exact_json for exact tokens.",
+      "type": ["object", "null"]
+    },
     "priority": { "maximum": 4, "minimum": 1, "type": "integer" },
     "queue": { "type": "string" },
     "scheduled_at": { "format": "date-time", "type": "string" },

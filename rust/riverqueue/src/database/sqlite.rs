@@ -23,7 +23,7 @@ use sqlx::{AssertSqlSafe, FromRow, QueryBuilder, Sqlite, SqliteConnection};
 use sqlx::sqlite::SqliteRow;
 
 use crate::{
-    AttemptError, JobRow, JobState, METADATA_KEY_UNIQUE_NONCE, Queue,
+    AttemptError, JobMetadata, JobRow, JobState, METADATA_KEY_UNIQUE_NONCE, Queue,
     client::{DecodedJob, FieldErrors, UndecodableJob, go_time_json, saturating_i16, tolerant_row},
     query::{JobListKeyset, JobListSqlPart},
 };
@@ -83,7 +83,7 @@ pub(crate) struct InsertJob<'a> {
     pub id: Option<i64>,
     pub kind: &'a str,
     pub max_attempts: i16,
-    pub metadata: &'a Map<String, Value>,
+    pub metadata: &'a JobMetadata,
     pub priority: i16,
     pub queue: &'a str,
     pub scheduled_at: DateTime<Utc>,
@@ -249,12 +249,9 @@ impl JobRecord {
         );
         let metadata = errors.field(
             "metadata",
-            serde_json::from_str::<Value>(&self.metadata)
-                .map_err(|error| error.to_string())
-                .and_then(|metadata| match metadata {
-                    Value::Object(metadata) => Ok(metadata),
-                    _ => Err("not a JSON object".to_owned()),
-                }),
+            self.metadata
+                .parse::<JobMetadata>()
+                .map_err(|error| error.to_string()),
         );
         let tags = errors.field("tags", decode_json_strings(Some(&self.tags)));
         let unique_states = errors.field(
@@ -406,10 +403,7 @@ pub(crate) async fn insert(
 ) -> Result<InsertedJob, BackendError> {
     let mut metadata = params.metadata.clone();
     if let Some(nonce) = params.unique_nonce {
-        metadata.insert(
-            METADATA_KEY_UNIQUE_NONCE.to_owned(),
-            Value::String(nonce.to_owned()),
-        );
+        metadata.insert(METADATA_KEY_UNIQUE_NONCE, Value::String(nonce.to_owned()))?;
     }
     let attempted_by = json_text(params.attempted_by)?;
     let encoded_args = json_text(params.encoded_args)?;
@@ -471,8 +465,10 @@ pub(crate) async fn insert(
     let job = record.into_job()?;
     let unique_skipped_as_duplicate = params.unique_nonce.is_some_and(|nonce| {
         job.metadata
-            .get(METADATA_KEY_UNIQUE_NONCE)
-            .and_then(Value::as_str)
+            .get::<String>(METADATA_KEY_UNIQUE_NONCE)
+            .ok()
+            .flatten()
+            .as_deref()
             != Some(nonce)
     });
     Ok(InsertedJob {
@@ -1727,7 +1723,7 @@ mod tests {
             .with_nanosecond(123_800_000)
             .unwrap();
         let args = serde_json::value::to_raw_value(&json!({"message": "hello"})).unwrap();
-        let metadata = Map::new();
+        let metadata = JobMetadata::default();
         let tags = vec!["mail".to_owned()];
         let unique_key = [7_u8; 32];
         let insert_params = InsertJob {
@@ -1826,7 +1822,10 @@ mod tests {
         .unwrap()
         .unwrap();
         assert_eq!(completed.state, JobState::Completed);
-        assert_eq!(completed.output(), Some(&json!({"sent": true})));
+        assert_eq!(
+            completed.output().map(serde_json::value::RawValue::get),
+            Some(r#"{"sent":true}"#)
+        );
 
         let listed = list(
             &mut connection,
@@ -1859,7 +1858,7 @@ mod tests {
         let mut connection = pool.acquire().await.unwrap();
         let now = Utc::now();
         let args = serde_json::value::to_raw_value(&json!({})).unwrap();
-        let metadata = Map::new();
+        let metadata = JobMetadata::default();
         let scheduled = insert(
             &mut connection,
             &InsertJob {
@@ -2019,7 +2018,7 @@ mod tests {
                 id: None,
                 kind: "attempt_history",
                 max_attempts: 25,
-                metadata: &Map::new(),
+                metadata: &JobMetadata::default(),
                 priority: 1,
                 queue: "default",
                 scheduled_at: now,
@@ -2077,7 +2076,7 @@ mod tests {
                 id: None,
                 kind: "undecodable",
                 max_attempts: 25,
-                metadata: &Map::new(),
+                metadata: &JobMetadata::default(),
                 priority: 1,
                 queue: "default",
                 scheduled_at: now,
@@ -2290,7 +2289,7 @@ mod tests {
                 id: None,
                 kind: "late_completion",
                 max_attempts: 25,
-                metadata: &Map::from_iter([("winner".to_owned(), json!(true))]),
+                metadata: &JobMetadata::from(Map::from_iter([("winner".to_owned(), json!(true))])),
                 priority: 1,
                 queue: "default",
                 scheduled_at: now,
@@ -2339,8 +2338,8 @@ mod tests {
             assert_eq!(completion.state, terminal);
             let row = get(&mut connection, inserted.id).await.unwrap().unwrap();
             assert_eq!(row.state, terminal);
-            assert_eq!(row.metadata["winner"], true);
-            assert_eq!(row.metadata["stale"], true);
+            assert_eq!(row.metadata.get::<bool>("winner").unwrap(), Some(true));
+            assert_eq!(row.metadata.get::<bool>("stale").unwrap(), Some(true));
         }
     }
 

@@ -253,9 +253,7 @@ impl Pilot for SqlitePilot {
                 .bind(&*params.queue)
                 .fetch_one(&mut *connection)
                 .await?;
-        params
-            .metadata
-            .insert("pilot_insert".to_owned(), serde_json::json!(marker));
+        params.metadata.insert("pilot_insert", marker)?;
         sqlx::query("INSERT INTO pilot_effect (operation, job_id) VALUES ('insert', 0)")
             .execute(&mut *connection)
             .await?;
@@ -525,7 +523,14 @@ async fn extension_claimed_outcomes_use_canonical_completion_pipeline() {
             .unwrap();
         let job_event = event.as_job().unwrap();
         assert!(job_event.statistics.is_some());
-        assert_eq!(job_event.job.metadata["shared_completion"], true);
+        assert_eq!(
+            job_event
+                .job
+                .metadata
+                .get::<bool>("shared_completion")
+                .unwrap(),
+            Some(true)
+        );
         received.insert(job_event.job.id, (event.kind(), job_event.job.state));
     }
     assert_eq!(
@@ -670,9 +675,7 @@ async fn sqlite_pilot_completion_continue_and_mark_are_atomic() {
         let row = client.jobs().get(inserted.job.row.id).await.unwrap();
         assert_eq!(row.state, JobState::Completed);
         assert_eq!(
-            row.metadata
-                .get("pilot_handled")
-                .and_then(serde_json::Value::as_bool),
+            row.metadata.get::<bool>("pilot_handled").unwrap(),
             matches!(behavior, CompletionBehavior::Mark).then_some(true)
         );
         let effects: i64 = sqlx::query_scalar(
@@ -965,7 +968,10 @@ async fn sqlite_extension_claim_returns_ordered_rows_and_rolls_back_decode_error
         assert_eq!(row.state, JobState::Running);
         assert_eq!(row.attempt, 1);
         assert_eq!(row.attempted_by, ["sqlite-extension-claimer"]);
-        assert_eq!(row.metadata["claim"], "leader-50");
+        assert_eq!(
+            row.metadata.get::<String>("claim").unwrap().as_deref(),
+            Some("leader-50")
+        );
     }
     assert_eq!(
         client.jobs().get(leader.job.row.id).await.unwrap().state,
@@ -1092,7 +1098,16 @@ async fn sqlite_pilot_insert_uses_the_insertion_transaction() {
         .tx(&mut transaction)
         .await
         .unwrap();
-    assert_eq!(inserted.job.row.metadata["pilot_insert"], "uncommitted");
+    assert_eq!(
+        inserted
+            .job
+            .row
+            .metadata
+            .get::<String>("pilot_insert")
+            .unwrap()
+            .as_deref(),
+        Some("uncommitted")
+    );
     transaction.commit().await.unwrap();
 
     assert_eq!(pilot.insert_calls.load(Ordering::SeqCst), 1);
@@ -1176,7 +1191,7 @@ async fn sqlite_reinsert_preserves_wire_fields_and_runs_the_canonical_pipeline()
             .unwrap();
     let stored_raw_args: serde_json::Value = serde_json::from_str(&stored_raw_args).unwrap();
     assert_eq!(stored_raw_args["B"]["A"]["raw"], true);
-    let original = producer
+    let mut original = producer
         .insert(RuntimeArgs { value: 41 })
         .opts(
             InsertOpts::default()
@@ -1192,6 +1207,16 @@ async fn sqlite_reinsert_preserves_wire_fields_and_runs_the_canonical_pipeline()
         .unwrap()
         .job
         .row;
+    sqlx::query("UPDATE river_job SET metadata = jsonb_patch(metadata, jsonb('{\"beyond_float\":1e400}')) WHERE id = ?")
+        .bind(original.id)
+        .execute(&pool)
+        .await
+        .unwrap();
+    original.metadata = producer.jobs().get(original.id).await.unwrap().metadata;
+    assert_eq!(
+        original.metadata.get_raw("beyond_float").unwrap().get(),
+        "1e400"
+    );
     assert_eq!(original.encoded_args.get(), r#"{"value":41}"#);
     let stored_source_args: String =
         sqlx::query_scalar("SELECT json(args) FROM river_job WHERE id = ?")
@@ -1250,8 +1275,28 @@ async fn sqlite_reinsert_preserves_wire_fields_and_runs_the_canonical_pipeline()
     assert_eq!(reinserted.job.kind, "x");
     assert_eq!(reinserted.job.unique_key, original.unique_key);
     assert_eq!(reinserted.job.unique_states, original.unique_states);
-    assert_eq!(reinserted.job.metadata["source"], true);
-    assert_eq!(reinserted.job.metadata["pilot_insert"], "default");
+    assert_eq!(
+        reinserted
+            .job
+            .metadata
+            .get_raw("beyond_float")
+            .unwrap()
+            .get(),
+        "1e400"
+    );
+    assert_eq!(
+        reinserted.job.metadata.get::<bool>("source").unwrap(),
+        Some(true)
+    );
+    assert_eq!(
+        reinserted
+            .job
+            .metadata
+            .get::<String>("pilot_insert")
+            .unwrap()
+            .as_deref(),
+        Some("default")
+    );
     assert!(!reinserted.unique_skipped_as_duplicate);
     assert_eq!(pilot.insert_calls.load(Ordering::SeqCst), 2);
 
@@ -1500,7 +1545,10 @@ async fn sqlite_runs_jobs_and_persists_output() {
     );
     let row = client.jobs().get(inserted.job.row.id).await.unwrap();
     assert_eq!(row.state, JobState::Completed);
-    assert_eq!(row.output(), Some(&serde_json::json!({"doubled": 42})));
+    assert_eq!(
+        row.output().map(serde_json::value::RawValue::get),
+        Some(r#"{"doubled":42}"#)
+    );
 
     run.shutdown().await.unwrap();
 }
