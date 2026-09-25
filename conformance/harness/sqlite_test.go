@@ -167,6 +167,11 @@ func TestMixedSQLiteRuntimeConformance(t *testing.T) {
 
 		verifySQLiteTransactionalNotification(t, goAdapter, candidateAdapter)
 	})
+	t.Run("sqlite_runtime_job_list_cursor_interchange", func(t *testing.T) {
+		defer scenarios.record(t)
+
+		verifyJobListCursorInterchange(t, goAdapter, candidateAdapter)
+	})
 	t.Run("sqlite_runtime_leadership_failover", func(t *testing.T) {
 		defer scenarios.record(t)
 

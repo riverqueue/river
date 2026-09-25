@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -592,6 +593,133 @@ func verifyDifferentialListCursors(t *testing.T, goAdapter, candidateAdapter *ad
 		pair.writer.call(t, "list", pageParams(readerPage.Cursor), &writerSecondPage)
 		require.Equal(t, writerSecondPage, readerSecondPage)
 		require.Equal(t, []int64{paginationIDs[0]}, jobIDs(writerSecondPage.Jobs))
+	}
+}
+
+// jobListCursorKind is a job kind that Go's `encoding/json` escapes (`<`,
+// `>`, and `&` become `\u003c`, `\u003e`, and `\u0026`) and whose cursor
+// text always contains `-`, wherever the kind falls in the Base64 groups:
+// one of three consecutive `~` bytes ends a group, and its low six bits
+// encode as `-`.
+const jobListCursorKind = "conformance_cursor<>&~~~"
+
+// verifyJobListCursorInterchange checks that job-list cursors are
+// interchangeable for each sort field: both engines emit byte-identical
+// cursor text for the same page, and each resumes from the other's cursor
+// to the same next page, in both directions.
+//
+// Mixed-state time ordering is not covered: River Go takes each job's own
+// state field for its cursor, while candidates use the list's field.
+func verifyJobListCursorInterchange(t *testing.T, first, second *adapter) {
+	t.Helper()
+
+	type jobPage struct {
+		Cursor *string         `json:"cursor"`
+		Jobs   []normalizedJob `json:"jobs"`
+	}
+	type listCase struct {
+		kind    string
+		orderBy string
+		states  []string
+	}
+	const echoKind = "conformance_echo"
+	for _, pair := range []struct {
+		reader *adapter
+		writer *adapter
+	}{
+		{reader: second, writer: first},
+		{reader: first, writer: second},
+	} {
+		pair.writer.call(t, "reset", map[string]any{}, nil)
+		idsByKind := make(map[string][]int64, 2)
+		for index := range 3 {
+			// Scheduled times have fractional seconds that Go encodes with
+			// trailing zeros trimmed, like `.12`.
+			var scheduled, raw normalizedJob
+			pair.writer.call(t, "insert", map[string]any{
+				"message": fmt.Sprintf("cursor %d", index),
+				"opts": map[string]any{
+					"scheduled_at": fmt.Sprintf("2099-01-01T00:00:0%d.%d2Z", index+1, index+1),
+				},
+			}, &scheduled)
+			idsByKind[echoKind] = append(idsByKind[echoKind], scheduled.ID)
+			// A raw row's `scheduled_at` comes from a column default that
+			// SQLite stores in a non-canonical format, so this kind is
+			// ordered only by ID until it is cancelled.
+			pair.writer.call(t, "raw_insert_no_notify", map[string]any{
+				"kind": jobListCursorKind, "message": fmt.Sprintf("cursor %d", index),
+			}, &raw)
+			idsByKind[jobListCursorKind] = append(idsByKind[jobListCursorKind], raw.ID)
+		}
+
+		verifyCases := func(cases []listCase) {
+			for _, current := range cases {
+				for _, direction := range []string{"asc", "desc"} {
+					description := fmt.Sprintf("%s -> %s: kind %s ordered by %s %s",
+						pair.writer.name, pair.reader.name, current.kind, current.orderBy, direction)
+					expected := slices.Clone(idsByKind[current.kind])
+					if direction == "desc" {
+						slices.Reverse(expected)
+					}
+					params := func(after *string) map[string]any {
+						params := map[string]any{
+							"direction": direction,
+							"kinds":     []string{current.kind},
+							"limit":     2,
+							"order_by":  current.orderBy,
+						}
+						if current.states != nil {
+							params["states"] = current.states
+						}
+						if after != nil {
+							params["after"] = *after
+						}
+						return params
+					}
+
+					var readerPage, writerPage jobPage
+					pair.writer.call(t, "list", params(nil), &writerPage)
+					pair.reader.call(t, "list", params(nil), &readerPage)
+					require.Equal(t, expected[:2], jobIDs(writerPage.Jobs), description)
+					require.Equal(t, writerPage, readerPage, description)
+					require.NotNil(t, writerPage.Cursor, description)
+					cursor := *writerPage.Cursor
+					if current.kind == jobListCursorKind {
+						require.Contains(t, cursor, "-", description)
+					}
+
+					// River Go decodes cursors with the standard Base64
+					// alphabet although it encodes them URL-safe, so it
+					// rejects cursor text containing `-` or `_` until the
+					// upstream fix lands.
+					if pair.reader.spec.Implementation == referenceSpec().Implementation &&
+						strings.ContainsAny(cursor, "-_") {
+						continue
+					}
+					var resumed jobPage
+					pair.reader.call(t, "list", params(&cursor), &resumed)
+					require.Equal(t, expected[2:], jobIDs(resumed.Jobs), description)
+				}
+			}
+		}
+		verifyCases([]listCase{
+			{kind: echoKind, orderBy: "id"},
+			{kind: echoKind, orderBy: "scheduled_at", states: []string{"scheduled"}},
+			{kind: echoKind, orderBy: "time", states: []string{"scheduled"}},
+			{kind: jobListCursorKind, orderBy: "id"},
+		})
+		// Cancelling in ID order sets increasing `finalized_at` times.
+		for _, kind := range []string{echoKind, jobListCursorKind} {
+			for _, id := range idsByKind[kind] {
+				pair.writer.call(t, "cancel", map[string]any{"id": id}, nil)
+			}
+		}
+		verifyCases([]listCase{
+			{kind: echoKind, orderBy: "finalized_at", states: []string{"cancelled"}},
+			{kind: echoKind, orderBy: "time", states: []string{"cancelled"}},
+			{kind: jobListCursorKind, orderBy: "finalized_at", states: []string{"cancelled"}},
+			{kind: jobListCursorKind, orderBy: "time", states: []string{"cancelled"}},
+		})
 	}
 }
 
