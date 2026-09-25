@@ -77,7 +77,7 @@ stale.
 
 | Area | `protocol_visible` | `api_equivalent` | `driver_specific` | `internal` | `not_applicable` | `unclassified` | Total |
 |---|---:|---:|---:|---:|---:|---:|---:|
-| [`config`](#config) | 12 | 15 | 0 | 2 | 5 | 0 | 34 |
+| [`config`](#config) | 13 | 15 | 0 | 2 | 5 | 0 | 35 |
 | [`insert_opts`](#insert_opts) | 8 | 0 | 0 | 0 | 0 | 0 | 8 |
 | [`unique_opts`](#unique_opts) | 5 | 0 | 0 | 0 | 0 | 0 | 5 |
 | [`queue_config`](#queue_config) | 0 | 3 | 0 | 0 | 0 | 0 | 3 |
@@ -115,6 +115,7 @@ Exported fields of `river.Config`.
 | `config.JobStuckHandler` | api_equivalent | `stuck_job_detection` (TestMixedConformance) | Language-native callback invoked when a timed-out job does not return; lets the client open a replacement worker slot. |
 | `config.JobStuckThreshold` | api_equivalent | `stuck_job_detection` (TestMixedConformance) | In-process grace period after JobTimeout before a job is treated as stuck and its slot replaced. Observable only as extra concurrency, not in persisted rows. |
 | `config.JobTimeout` | protocol_visible | `timeout_cancellation` (TestMixedConformance) | Timed-out attempts are cancelled and recorded as errors with retry scheduling, which other implementations observe. |
+| `config.LeaderElectionDisabled` | protocol_visible | `leader_election_disabled_both_directions` (TestMixedConformance)<br>`multi_engine_leader_election_disabled` (TestMultiEngineConformance)<br>`sqlite_runtime_leader_election_disabled` (TestMixedSQLiteRuntimeConformance) | A client kept out of leader election never writes river_leader or runs leader-owned maintenance while it works jobs alongside eligible clients of any implementation, and rejects periodic jobs. |
 | `config.Logger` | api_equivalent |  | Each implementation uses its own logging facility. |
 | `config.MaxAttempts` | api_equivalent |  | Client-wide default applied to inserted rows' max_attempts (25). Implementations expose an equivalent default; the per-insert value is classified as insert_opts.MaxAttempts. |
 | `config.Middleware` | api_equivalent |  | Registration of global middleware in each language's idiom. Middleware ordering semantics are exercised through plugin registration in extension_hook_middleware_order. |

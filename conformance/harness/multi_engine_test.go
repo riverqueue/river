@@ -154,6 +154,15 @@ func TestMultiEngineConformance(t *testing.T) {
 			}
 		}
 	})
+	t.Run("multi_engine_leader_election_disabled", func(t *testing.T) {
+		defer scenarios.record(t)
+
+		// Candidate pairs come in both orders, so every candidate runs with
+		// leader election disabled next to every other candidate.
+		for _, pair := range candidatePairs(engines) {
+			verifyLeaderElectionDisabled(t, pair[0].adapter, pair[1].adapter)
+		}
+	})
 	t.Run("multi_engine_leader_failover", func(t *testing.T) {
 		defer scenarios.record(t)
 
@@ -377,6 +386,7 @@ func verifySQLiteCandidatePair(t *testing.T, first, second *adapter) {
 		verifyRemoteCancelNotification(t, controller, worker)
 	})
 	verifySQLiteLeadershipFailover(t, first, second)
+	pair.eachDirection(func(disabled, eligible *adapter) { verifyLeaderElectionDisabled(t, disabled, eligible) })
 	verifyResumableInteroperability(t, first, second)
 }
 
