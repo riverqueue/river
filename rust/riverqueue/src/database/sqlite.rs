@@ -23,9 +23,9 @@ use sqlx::{AssertSqlSafe, FromRow, QueryBuilder, Sqlite, SqliteConnection};
 use sqlx::sqlite::SqliteRow;
 
 use crate::{
-    AttemptError, JobListOrderBy, JobRow, JobState, METADATA_KEY_UNIQUE_NONCE, Queue,
-    SortDirection,
+    AttemptError, JobRow, JobState, METADATA_KEY_UNIQUE_NONCE, Queue,
     client::{DecodedJob, FieldErrors, UndecodableJob, go_time_json, saturating_i16, tolerant_row},
+    query::{JobListKeyset, JobListSqlPart},
 };
 
 pub(crate) const JOB_COLUMNS: &str = r#"
@@ -124,16 +124,13 @@ pub(crate) struct ClaimFilteredJobs<'a> {
 
 #[derive(Clone, Debug, Default)]
 pub(crate) struct ListJobs<'a> {
-    pub after_id: Option<i64>,
-    pub after_time: Option<DateTime<Utc>>,
-    pub direction: SortDirection,
     /// Excludes running jobs before applying the limit, as bulk deletion does.
     pub exclude_running: bool,
     pub ids: &'a [i64],
+    pub keyset: JobListKeyset,
     pub kinds: &'a [&'a str],
     pub limit: i32,
     pub metadata: Option<&'a Map<String, Value>>,
-    pub order_by: JobListOrderBy,
     pub priorities: &'a [i16],
     pub queues: &'a [&'a str],
     pub states: &'a [JobState],
@@ -729,49 +726,22 @@ pub(crate) async fn list(
 
     let mut query =
         QueryBuilder::<Sqlite>::new(format!("SELECT {JOB_COLUMNS} FROM river_job WHERE true"));
-    if let Some(after_id) = params.after_id {
-        let comparison = match params.direction {
-            SortDirection::Ascending => ">",
-            SortDirection::Descending => "<",
-        };
-        let sort_field = match params.order_by {
-            JobListOrderBy::FinalizedAt => "finalized_at",
-            JobListOrderBy::Id => "id",
-            JobListOrderBy::ScheduledAt => "scheduled_at",
-            JobListOrderBy::Time if params.states.is_empty() => "id",
-            JobListOrderBy::Time => match params.states[0] {
-                JobState::Available
-                | JobState::Pending
-                | JobState::Retryable
-                | JobState::Scheduled => "scheduled_at",
-                JobState::Running => "attempted_at",
-                JobState::Cancelled | JobState::Completed | JobState::Discarded => "finalized_at",
-            },
-        };
-        if sort_field == "id" {
-            query
-                .push(" AND id ")
-                .push(comparison)
-                .push(" ")
-                .push_bind(after_id);
-        } else if let Some(after_time) = params.after_time {
-            let after_time = sqlite_time(after_time);
-            query
-                .push(" AND (")
-                .push(sort_field)
-                .push(" ")
-                .push(comparison)
-                .push(" ")
-                .push_bind(&after_time)
-                .push(" OR (")
-                .push(sort_field)
-                .push(" = ")
-                .push_bind(after_time)
-                .push(" AND id ")
-                .push(comparison)
-                .push(" ")
-                .push_bind(after_id)
-                .push("))");
+    if let Some(after) = params.keyset.after_sql() {
+        query.push(" AND ");
+        for part in after {
+            match part {
+                JobListSqlPart::AfterId => {
+                    query.push_bind(params.keyset.after_id().expect("cursor has an ID"));
+                }
+                JobListSqlPart::AfterTime => {
+                    query.push_bind(sqlite_time(
+                        params.keyset.after_time().expect("cursor has a time"),
+                    ));
+                }
+                JobListSqlPart::Sql(sql) => {
+                    query.push(sql);
+                }
+            }
         }
     }
     if params.exclude_running {
@@ -838,27 +808,7 @@ pub(crate) async fn list(
         }
         separated.push_unseparated("))");
     }
-    let sort_field = match params.order_by {
-        JobListOrderBy::FinalizedAt => "finalized_at",
-        JobListOrderBy::Id => "id",
-        JobListOrderBy::ScheduledAt => "scheduled_at",
-        JobListOrderBy::Time if params.states.is_empty() => "id",
-        JobListOrderBy::Time => match params.states[0] {
-            JobState::Available | JobState::Pending | JobState::Retryable | JobState::Scheduled => {
-                "scheduled_at"
-            }
-            JobState::Running => "attempted_at",
-            JobState::Cancelled | JobState::Completed | JobState::Discarded => "finalized_at",
-        },
-    };
-    let direction = match params.direction {
-        SortDirection::Ascending => " ASC",
-        SortDirection::Descending => " DESC",
-    };
-    query.push(" ORDER BY ").push(sort_field).push(direction);
-    if sort_field != "id" {
-        query.push(", id").push(direction);
-    }
+    query.push(" ORDER BY ").push(params.keyset.order_sql());
     query.push(" LIMIT ").push_bind(params.limit);
 
     let records = query

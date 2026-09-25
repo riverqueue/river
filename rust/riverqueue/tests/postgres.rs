@@ -965,10 +965,11 @@ async fn insert_many_variants_preserve_order_and_transactionality() {
             .iter()
             .map(|row| row.id)
             .collect::<Vec<_>>(),
-        ordered
-            .iter()
-            .map(|result| result.job.row.id)
-            .collect::<Vec<_>>()
+        [
+            ordered[2].job.row.id,
+            ordered[0].job.row.id,
+            ordered[1].job.row.id,
+        ]
     );
     let finalized_without_states = client
         .jobs()
