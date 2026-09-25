@@ -219,11 +219,11 @@ WHERE
         SELECT id
         FROM /* TEMPLATE: schema */river_job
         WHERE
-            (state = 'cancelled' AND finalized_at < cast(?1 AS text)) OR
-            (state = 'completed' AND finalized_at < cast(?2 AS text)) OR
-            (state = 'discarded' AND finalized_at < cast(?3 AS text))
+            (state = 'cancelled' AND cast(?1 AS boolean) AND finalized_at < cast(?2 AS text)) OR
+            (state = 'completed' AND cast(?3 AS boolean) AND finalized_at < cast(?4 AS text)) OR
+            (state = 'discarded' AND cast(?5 AS boolean) AND finalized_at < cast(?6 AS text))
         ORDER BY id
-        LIMIT ?4
+        LIMIT ?7
     )
     -- This is really awful, but unless the ` + "`" + `sqlc.slice` + "`" + ` appears as the very
     -- last parameter in the query things will fail if it includes more than one
@@ -239,14 +239,17 @@ WHERE
     -- charts buggy, and there's little interest from the maintainers in fixing
     -- any of it. We already started using it though, so plough on.
     AND (
-        cast(?5 AS boolean)
+        cast(?8 AS boolean)
         OR river_job.queue NOT IN (/*SLICE:queues_excluded*/?)
     )
 `
 
 type JobDeleteBeforeParams struct {
+	CancelledDoDelete           bool
 	CancelledFinalizedAtHorizon string
+	CompletedDoDelete           bool
 	CompletedFinalizedAtHorizon string
+	DiscardedDoDelete           bool
 	DiscardedFinalizedAtHorizon string
 	Max                         int64
 	QueuesExcludedEmpty         bool
@@ -256,8 +259,11 @@ type JobDeleteBeforeParams struct {
 func (q *Queries) JobDeleteBefore(ctx context.Context, db DBTX, arg *JobDeleteBeforeParams) (sql.Result, error) {
 	query := jobDeleteBefore
 	var queryParams []interface{}
+	queryParams = append(queryParams, arg.CancelledDoDelete)
 	queryParams = append(queryParams, arg.CancelledFinalizedAtHorizon)
+	queryParams = append(queryParams, arg.CompletedDoDelete)
 	queryParams = append(queryParams, arg.CompletedFinalizedAtHorizon)
+	queryParams = append(queryParams, arg.DiscardedDoDelete)
 	queryParams = append(queryParams, arg.DiscardedFinalizedAtHorizon)
 	queryParams = append(queryParams, arg.Max)
 	queryParams = append(queryParams, arg.QueuesExcludedEmpty)

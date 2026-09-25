@@ -98,9 +98,9 @@ WHERE
         SELECT id
         FROM /* TEMPLATE: schema */river_job
         WHERE
-            (state = 'cancelled' AND finalized_at < cast(@cancelled_finalized_at_horizon AS text)) OR
-            (state = 'completed' AND finalized_at < cast(@completed_finalized_at_horizon AS text)) OR
-            (state = 'discarded' AND finalized_at < cast(@discarded_finalized_at_horizon AS text))
+            (state = 'cancelled' AND cast(@cancelled_do_delete AS boolean) AND finalized_at < cast(@cancelled_finalized_at_horizon AS text)) OR
+            (state = 'completed' AND cast(@completed_do_delete AS boolean) AND finalized_at < cast(@completed_finalized_at_horizon AS text)) OR
+            (state = 'discarded' AND cast(@discarded_do_delete AS boolean) AND finalized_at < cast(@discarded_finalized_at_horizon AS text))
         ORDER BY id
         LIMIT @max
     )

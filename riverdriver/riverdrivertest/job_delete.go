@@ -196,6 +196,39 @@ func exerciseJobDelete[TTx any](ctx context.Context, t *testing.T, executorWithT
 			require.NoError(t, err)
 		})
 
+		t.Run("DoDeleteFalse", func(t *testing.T) {
+			t.Parallel()
+
+			exec, _ := setup(ctx, t)
+
+			var (
+				cancelledJob = testfactory.Job(ctx, t, exec, &testfactory.JobOpts{FinalizedAt: &beforeHorizon, State: new(rivertype.JobStateCancelled)})
+				completedJob = testfactory.Job(ctx, t, exec, &testfactory.JobOpts{FinalizedAt: &beforeHorizon, State: new(rivertype.JobStateCompleted)})
+				discardedJob = testfactory.Job(ctx, t, exec, &testfactory.JobOpts{FinalizedAt: &beforeHorizon, State: new(rivertype.JobStateDiscarded)})
+			)
+
+			// Discarded jobs are kept even though they're older than their
+			// horizon because their deletion is disabled.
+			numDeleted, err := exec.JobDeleteBefore(ctx, &riverdriver.JobDeleteBeforeParams{
+				CancelledDoDelete:           true,
+				CancelledFinalizedAtHorizon: horizon,
+				CompletedDoDelete:           true,
+				CompletedFinalizedAtHorizon: horizon,
+				DiscardedDoDelete:           false,
+				DiscardedFinalizedAtHorizon: horizon,
+				Max:                         1_000,
+			})
+			require.NoError(t, err)
+			require.Equal(t, 2, numDeleted)
+
+			_, err = exec.JobGetByID(ctx, &riverdriver.JobGetByIDParams{ID: cancelledJob.ID})
+			require.ErrorIs(t, err, rivertype.ErrNotFound)
+			_, err = exec.JobGetByID(ctx, &riverdriver.JobGetByIDParams{ID: completedJob.ID})
+			require.ErrorIs(t, err, rivertype.ErrNotFound)
+			_, err = exec.JobGetByID(ctx, &riverdriver.JobGetByIDParams{ID: discardedJob.ID})
+			require.NoError(t, err)
+		})
+
 		t.Run("QueuesExcluded", func(t *testing.T) {
 			t.Parallel()
 
