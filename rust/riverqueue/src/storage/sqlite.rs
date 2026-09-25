@@ -34,21 +34,16 @@ impl SqliteBackend<'_> {
             .iter()
             .map(String::as_str)
             .collect::<Vec<_>>();
-        let cursor_id = params
-            .after
-            .as_ref()
-            .map(|cursor| cursor.id)
-            .or(params.after_id);
         sqlite::list(
             self.connection,
             &sqlite::ListJobs {
-                after_id: cursor_id,
-                after_time: params.after.as_ref().and_then(|cursor| cursor.sort_time),
+                after_id: params.cursor_id(),
+                after_time: params.cursor_time(),
                 direction: params.direction,
                 exclude_running,
                 ids: &params.ids,
                 kinds: &kinds,
-                limit: params.limit,
+                limit: i32::try_from(params.limit).unwrap_or(i32::MAX),
                 metadata: params.metadata.as_ref(),
                 order_by: params.order_by,
                 priorities: &params.priorities,
@@ -227,8 +222,8 @@ impl Backend for SqliteBackend<'_> {
             .map_err(database_error)
     }
 
-    async fn queue_list(&mut self, limit: i32) -> Result<Vec<Queue>, Error> {
-        sqlite::queue_list(self.connection, limit)
+    async fn queue_list(&mut self, limit: u32) -> Result<Vec<Queue>, Error> {
+        sqlite::queue_list(self.connection, i32::try_from(limit).unwrap_or(i32::MAX))
             .await
             .map_err(database_error)
     }

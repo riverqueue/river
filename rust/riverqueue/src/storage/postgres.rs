@@ -279,12 +279,12 @@ impl Backend for PostgresBackend<'_> {
         .transpose()
     }
 
-    async fn queue_list(&mut self, limit: i32) -> Result<Vec<Queue>, Error> {
+    async fn queue_list(&mut self, limit: u32) -> Result<Vec<Queue>, Error> {
         let table = self.schema.qualify("river_queue");
         sqlx::query_as::<_, QueueRecord>(AssertSqlSafe(format!(
             "SELECT * FROM {table} ORDER BY name LIMIT $1"
         )))
-        .bind(limit)
+        .bind(i64::from(limit))
         .fetch_all(&mut *self.connection)
         .await?
         .into_iter()
@@ -468,12 +468,6 @@ fn bind_job_list<'query>(
     query: sqlx::query::QueryAs<'query, Postgres, JobRecord, sqlx::postgres::PgArguments>,
     params: &'query JobListParams,
 ) -> sqlx::query::QueryAs<'query, Postgres, JobRecord, sqlx::postgres::PgArguments> {
-    let cursor_id = params
-        .after
-        .as_ref()
-        .map(|cursor| cursor.id)
-        .or(params.after_id);
-    let cursor_time = params.after.as_ref().and_then(|cursor| cursor.sort_time);
     let states = params
         .states
         .iter()
@@ -492,7 +486,7 @@ fn bind_job_list<'query>(
         .bind(&params.tags_all)
         .bind(&params.tags_any)
         .bind(metadata)
-        .bind(cursor_time)
-        .bind(cursor_id)
-        .bind(params.limit)
+        .bind(params.cursor_time())
+        .bind(params.cursor_id())
+        .bind(i64::from(params.limit))
 }

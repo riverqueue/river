@@ -22,10 +22,8 @@ pub struct Queue {
 
 /// Parameters for listing queues.
 #[derive(Clone, Debug)]
-#[non_exhaustive]
 pub struct QueueListParams {
-    /// Maximum rows, from one through 10,000.
-    pub limit: i32,
+    pub(crate) limit: u32,
 }
 
 impl Default for QueueListParams {
@@ -35,9 +33,10 @@ impl Default for QueueListParams {
 }
 
 impl QueueListParams {
-    /// Sets the maximum returned rows.
+    /// Sets the maximum number of queues returned, from one through 10,000.
+    /// Defaults to 100. Listing fails with a limit outside that range.
     #[must_use]
-    pub const fn with_limit(mut self, limit: i32) -> Self {
+    pub const fn limit(mut self, limit: u32) -> Self {
         self.limit = limit;
         self
     }

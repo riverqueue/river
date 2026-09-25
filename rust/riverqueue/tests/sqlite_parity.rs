@@ -95,8 +95,8 @@ async fn job_delete_many() {
         .jobs()
         .delete_many(riverqueue::JobDeleteManyParams::matching(
             riverqueue::JobListParams::default()
-                .with_ids([running, first, second, third])
-                .with_limit(2),
+                .ids([running, first, second, third])
+                .limit(2),
         ))
         .await
         .unwrap();

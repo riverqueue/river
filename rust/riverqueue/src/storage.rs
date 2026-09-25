@@ -91,7 +91,7 @@ pub(crate) trait Backend {
 
     async fn queue_get(&mut self, name: &str) -> Result<Option<Queue>, Error>;
 
-    async fn queue_list(&mut self, limit: i32) -> Result<Vec<Queue>, Error>;
+    async fn queue_list(&mut self, limit: u32) -> Result<Vec<Queue>, Error>;
 
     /// Pauses or resumes the named queue, or every queue for
     /// [`QUEUE_ALL`], returning how many queues matched.
@@ -195,7 +195,7 @@ impl Backend for AnyBackend<'_> {
         dispatch!(self, backend => backend.queue_get(name).await)
     }
 
-    async fn queue_list(&mut self, limit: i32) -> Result<Vec<Queue>, Error> {
+    async fn queue_list(&mut self, limit: u32) -> Result<Vec<Queue>, Error> {
         dispatch!(self, backend => backend.queue_list(limit).await)
     }
 

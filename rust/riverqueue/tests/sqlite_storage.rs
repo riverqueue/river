@@ -108,8 +108,8 @@ async fn job_list_time_without_states_uses_id_and_finalized_requires_states() {
     .await;
 
     let params = JobListParams::default()
-        .with_ids([first, second])
-        .with_order_by(JobListOrderBy::Time);
+        .ids([first, second])
+        .order_by(JobListOrderBy::Time);
     let rows = client.jobs().list(params.clone()).await.unwrap().jobs;
     assert_eq!(
         rows.iter().map(|row| row.id).collect::<Vec<_>>(),
@@ -118,7 +118,7 @@ async fn job_list_time_without_states_uses_id_and_finalized_requires_states() {
     let cursor = JobListCursor::from_job(&rows[0], &params).unwrap();
     let page = client
         .jobs()
-        .list(params.clone().with_after(cursor))
+        .list(params.clone().after(cursor))
         .await
         .unwrap()
         .jobs;
@@ -126,7 +126,7 @@ async fn job_list_time_without_states_uses_id_and_finalized_requires_states() {
 
     let error = client
         .jobs()
-        .list(JobListParams::default().with_order_by(JobListOrderBy::FinalizedAt))
+        .list(JobListParams::default().order_by(JobListOrderBy::FinalizedAt))
         .await
         .unwrap_err();
     assert!(matches!(error, Error::InvalidJob(_)));
@@ -177,11 +177,11 @@ async fn job_crud_preserves_sqlite_semantics() {
     assert_eq!(running.state, JobState::Running);
     assert_eq!(running.tags, ["running", "shared"]);
 
-    let mut list_params = JobListParams::default()
-        .with_ids([delete_id, retry_id, running_id])
-        .with_limit(2)
-        .with_order_by(JobListOrderBy::ScheduledAt);
-    list_params.direction = SortDirection::Descending;
+    let list_params = JobListParams::default()
+        .ids([delete_id, retry_id, running_id])
+        .limit(2)
+        .order_by(JobListOrderBy::ScheduledAt)
+        .direction(SortDirection::Descending);
     let first_page = client.jobs().list(list_params.clone()).await.unwrap();
     assert_eq!(
         first_page.jobs.iter().map(|job| job.id).collect::<Vec<_>>(),
@@ -194,8 +194,12 @@ async fn job_crud_preserves_sqlite_semantics() {
             .unwrap()
             .encode()
     );
-    list_params.after = Some(last_cursor);
-    let second_page = client.jobs().list(list_params).await.unwrap().jobs;
+    let second_page = client
+        .jobs()
+        .list(list_params.after(last_cursor))
+        .await
+        .unwrap()
+        .jobs;
     assert_eq!(
         second_page.iter().map(|job| job.id).collect::<Vec<_>>(),
         [delete_id]
@@ -339,7 +343,7 @@ async fn job_delete_many_is_atomic_and_skips_running_jobs() {
         Err(Error::InvalidJob(_))
     ));
     let params =
-        JobDeleteManyParams::matching(JobListParams::default().with_ids([first, second, running]));
+        JobDeleteManyParams::matching(JobListParams::default().ids([first, second, running]));
     let mut transaction = pool.begin().await.unwrap();
     let rolled_back = client
         .jobs()

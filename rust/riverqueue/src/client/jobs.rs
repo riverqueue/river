@@ -153,19 +153,21 @@ impl<'a> Jobs<'a> {
     /// Lists jobs matching the parameters, one page at a time.
     ///
     /// Pass the result's [`last_cursor`](JobListResult::last_cursor) to
-    /// [`JobListParams::with_after`] with otherwise identical parameters to
-    /// request the next page:
+    /// [`JobListParams::after`] with otherwise identical parameters to request
+    /// the next page:
     ///
     /// ```no_run
     /// # use riverqueue::{JobListParams, JobState};
     /// # async fn example(client: riverqueue::Client) -> Result<(), riverqueue::Error> {
-    /// let params = JobListParams::default().with_limit(100);
+    /// let params = JobListParams::default()
+    ///     .states([JobState::Completed])
+    ///     .limit(100);
     /// let mut page = client.jobs().list(params.clone()).await?;
     /// while let Some(cursor) = page.last_cursor.take() {
     ///     for job in &page.jobs {
     ///         println!("{} {:?}", job.id, job.state);
     ///     }
-    ///     page = client.jobs().list(params.clone().with_after(cursor)).await?;
+    ///     page = client.jobs().list(params.clone().after(cursor)).await?;
     /// }
     /// # Ok(())
     /// # }

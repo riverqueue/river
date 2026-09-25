@@ -259,48 +259,54 @@ impl JobDeleteManyParams {
 pub struct JobListResult {
     /// Jobs in the requested order.
     pub jobs: Vec<JobRow>,
-    /// Cursor after the last job, to request the next page with the same
-    /// parameters. `None` when the page is empty.
+    /// Cursor after the last job, to request the next page by passing it
+    /// to [`JobListParams::after`] with otherwise identical parameters.
+    /// `None` when the page is empty.
     pub last_cursor: Option<JobListCursor>,
 }
 
 /// Filters and pagination for listing jobs.
+///
+/// Filters combine with AND, and each list-valued filter matches any of its
+/// values. Unset filters match every job:
+///
+/// ```
+/// # use riverqueue::{JobListOrderBy, JobListParams, JobState, SortDirection};
+/// let params = JobListParams::default()
+///     .queues(["email"])
+///     .states([JobState::Completed])
+///     .order_by(JobListOrderBy::Time)
+///     .direction(SortDirection::Descending)
+///     .limit(50);
+/// ```
 #[derive(Clone, Debug)]
-#[non_exhaustive]
 pub struct JobListParams {
-    /// Return rows after this stable keyset cursor.
-    pub after: Option<JobListCursor>,
-    /// Return IDs greater than this cursor.
-    pub after_id: Option<i64>,
-    /// Match any of these IDs.
-    pub ids: Vec<i64>,
-    /// Match any of these kinds.
-    pub kinds: Vec<String>,
-    /// Maximum rows, from one through 10,000.
-    pub limit: i32,
-    /// Require metadata to contain this JSON object.
-    pub metadata: Option<Map<String, Value>>,
-    /// Stable primary sort field.
-    pub order_by: JobListOrderBy,
-    /// Match any of these priorities.
-    pub priorities: Vec<i16>,
-    /// Match any of these queues.
-    pub queues: Vec<String>,
-    /// Match any of these states.
-    pub states: Vec<JobState>,
-    /// Sort and cursor direction.
-    pub direction: SortDirection,
-    /// Require every tag.
-    pub tags_all: Vec<String>,
-    /// Require at least one tag.
-    pub tags_any: Vec<String>,
+    pub(crate) direction: SortDirection,
+    pub(crate) ids: Vec<i64>,
+    pub(crate) kinds: Vec<String>,
+    pub(crate) limit: u32,
+    pub(crate) metadata: Option<Map<String, Value>>,
+    pub(crate) order_by: JobListOrderBy,
+    pub(crate) priorities: Vec<i16>,
+    pub(crate) queues: Vec<String>,
+    pub(crate) start: Option<JobListStart>,
+    pub(crate) states: Vec<JobState>,
+    pub(crate) tags_all: Vec<String>,
+    pub(crate) tags_any: Vec<String>,
+}
+
+/// Where a job listing starts. A listing continues either from a keyset
+/// cursor or after an ID, never both.
+#[derive(Clone, Debug)]
+pub(crate) enum JobListStart {
+    Cursor(JobListCursor),
+    Id(i64),
 }
 
 impl Default for JobListParams {
     fn default() -> Self {
         Self {
-            after: None,
-            after_id: None,
+            direction: SortDirection::Ascending,
             ids: Vec::new(),
             kinds: Vec::new(),
             limit: 100,
@@ -308,8 +314,8 @@ impl Default for JobListParams {
             order_by: JobListOrderBy::Id,
             priorities: Vec::new(),
             queues: Vec::new(),
+            start: None,
             states: Vec::new(),
-            direction: SortDirection::Ascending,
             tags_all: Vec::new(),
             tags_any: Vec::new(),
         }
@@ -317,44 +323,99 @@ impl Default for JobListParams {
 }
 
 impl JobListParams {
-    /// Sets the keyset cursor after which rows are returned.
+    /// Returns jobs after a cursor from a previous page, usually that page's
+    /// [`JobListResult::last_cursor`]. The cursor must come from a listing
+    /// with the same ordering. Replaces any [`after_id`](Self::after_id).
     #[must_use]
-    pub fn with_after(mut self, cursor: JobListCursor) -> Self {
-        self.after = Some(cursor);
+    pub fn after(mut self, cursor: JobListCursor) -> Self {
+        self.start = Some(JobListStart::Cursor(cursor));
         self
     }
 
-    /// Restricts results to explicit IDs.
+    /// Returns jobs whose ID comes after `id` in the sort direction.
+    /// Replaces any [`after`](Self::after) cursor.
     #[must_use]
-    pub fn with_ids(mut self, ids: impl IntoIterator<Item = i64>) -> Self {
+    pub fn after_id(mut self, id: i64) -> Self {
+        self.start = Some(JobListStart::Id(id));
+        self
+    }
+
+    /// Sets the sort and cursor direction. Defaults to ascending.
+    #[must_use]
+    pub const fn direction(mut self, direction: SortDirection) -> Self {
+        self.direction = direction;
+        self
+    }
+
+    /// Matches jobs with any of these IDs.
+    #[must_use]
+    pub fn ids(mut self, ids: impl IntoIterator<Item = i64>) -> Self {
         self.ids = ids.into_iter().collect();
         self
     }
 
-    /// Restricts results to job kinds.
+    /// Matches jobs of any of these kinds.
     #[must_use]
-    pub fn with_kinds(mut self, kinds: impl IntoIterator<Item = impl Into<String>>) -> Self {
+    pub fn kinds(mut self, kinds: impl IntoIterator<Item = impl Into<String>>) -> Self {
         self.kinds = kinds.into_iter().map(Into::into).collect();
         self
     }
 
-    /// Sets the maximum returned rows.
+    /// Sets the maximum number of jobs returned, from one through 10,000.
+    /// Defaults to 100. Listing fails with a limit outside that range.
     #[must_use]
-    pub const fn with_limit(mut self, limit: i32) -> Self {
+    pub const fn limit(mut self, limit: u32) -> Self {
         self.limit = limit;
         self
     }
 
-    /// Sets the stable primary ordering.
+    /// Matches jobs whose metadata contains this JSON object, like
+    /// PostgreSQL's `@>` operator.
     #[must_use]
-    pub const fn with_order_by(mut self, order_by: JobListOrderBy) -> Self {
+    pub fn metadata(mut self, metadata: Map<String, Value>) -> Self {
+        self.metadata = Some(metadata);
+        self
+    }
+
+    /// Sets the field jobs are ordered by, with ID breaking ties. Defaults
+    /// to [`JobListOrderBy::Id`].
+    #[must_use]
+    pub const fn order_by(mut self, order_by: JobListOrderBy) -> Self {
         self.order_by = order_by;
         self
     }
 
-    /// Requires at least one of the supplied tags.
+    /// Matches jobs with any of these priorities.
     #[must_use]
-    pub fn with_tags_any(mut self, tags: impl IntoIterator<Item = impl Into<String>>) -> Self {
+    pub fn priorities(mut self, priorities: impl IntoIterator<Item = i16>) -> Self {
+        self.priorities = priorities.into_iter().collect();
+        self
+    }
+
+    /// Matches jobs in any of these queues.
+    #[must_use]
+    pub fn queues(mut self, queues: impl IntoIterator<Item = impl Into<String>>) -> Self {
+        self.queues = queues.into_iter().map(Into::into).collect();
+        self
+    }
+
+    /// Matches jobs in any of these states.
+    #[must_use]
+    pub fn states(mut self, states: impl IntoIterator<Item = JobState>) -> Self {
+        self.states = states.into_iter().collect();
+        self
+    }
+
+    /// Matches jobs that have every one of these tags.
+    #[must_use]
+    pub fn tags_all(mut self, tags: impl IntoIterator<Item = impl Into<String>>) -> Self {
+        self.tags_all = tags.into_iter().map(Into::into).collect();
+        self
+    }
+
+    /// Matches jobs that have at least one of these tags.
+    #[must_use]
+    pub fn tags_any(mut self, tags: impl IntoIterator<Item = impl Into<String>>) -> Self {
         self.tags_any = tags.into_iter().map(Into::into).collect();
         self
     }
@@ -362,8 +423,7 @@ impl JobListParams {
     /// Whether at least one narrowing predicate was supplied.
     #[must_use]
     pub fn has_filter(&self) -> bool {
-        self.after_id.is_some()
-            || self.after.is_some()
+        self.start.is_some()
             || !self.ids.is_empty()
             || !self.kinds.is_empty()
             || self.metadata.is_some()
@@ -374,14 +434,33 @@ impl JobListParams {
             || !self.tags_any.is_empty()
     }
 
+    /// Returns the keyset cursor to continue after, if any.
+    pub(crate) const fn cursor(&self) -> Option<&JobListCursor> {
+        match &self.start {
+            Some(JobListStart::Cursor(cursor)) => Some(cursor),
+            Some(JobListStart::Id(_)) | None => None,
+        }
+    }
+
+    /// Returns the ID to continue after, from either a cursor or an ID.
+    pub(crate) const fn cursor_id(&self) -> Option<i64> {
+        match &self.start {
+            Some(JobListStart::Cursor(cursor)) => Some(cursor.id),
+            Some(JobListStart::Id(id)) => Some(*id),
+            None => None,
+        }
+    }
+
+    /// Returns the cursor's sort time, if it has one.
+    pub(crate) fn cursor_time(&self) -> Option<DateTime<Utc>> {
+        self.cursor().and_then(|cursor| cursor.sort_time)
+    }
+
     pub(crate) fn validate(&self) -> Result<(), String> {
         if !(1..=10_000).contains(&self.limit) {
             return Err("job list limit must be between 1 and 10000".to_owned());
         }
-        if self.after.is_some() && self.after_id.is_some() {
-            return Err("job list cannot specify both after and after_id".to_owned());
-        }
-        if let Some(cursor) = &self.after
+        if let Some(cursor) = self.cursor()
             && cursor.order_by != self.order_by
         {
             return Err("job list cursor sort field does not match list ordering".to_owned());
@@ -400,7 +479,7 @@ impl JobListParams {
                     .to_owned(),
             );
         }
-        if self.after.as_ref().is_some_and(|cursor| {
+        if self.cursor().is_some_and(|cursor| {
             self.order_by != JobListOrderBy::Id
                 && !(self.order_by == JobListOrderBy::Time && self.states.is_empty())
                 && cursor.sort_time.is_none()
@@ -512,6 +591,45 @@ mod tests {
     }
 
     #[test]
+    fn a_later_start_replaces_an_earlier_one() {
+        let cursor = JobListCursor::decode(
+            &JobListCursor {
+                id: 7,
+                kind: "kind".to_owned(),
+                order_by: JobListOrderBy::Id,
+                queue: "default".to_owned(),
+                sort_time: None,
+            }
+            .encode(),
+        )
+        .unwrap();
+
+        let params = JobListParams::default().after(cursor.clone()).after_id(3);
+        assert_eq!(params.cursor_id(), Some(3));
+        assert!(params.cursor().is_none());
+        assert!(params.validate().is_ok());
+
+        let params = JobListParams::default().after_id(3).after(cursor);
+        assert_eq!(params.cursor_id(), Some(7));
+        assert!(params.cursor().is_some());
+        assert!(params.has_filter());
+    }
+
+    #[test]
+    fn limits_outside_the_supported_range_are_rejected() {
+        for limit in [0, 10_001, u32::MAX] {
+            assert_eq!(
+                JobListParams::default()
+                    .limit(limit)
+                    .validate()
+                    .unwrap_err(),
+                "job list limit must be between 1 and 10000"
+            );
+        }
+        assert!(JobListParams::default().limit(10_000).validate().is_ok());
+    }
+
+    #[test]
     fn defaults_do_not_filter_states() {
         let params = JobListParams::default();
 
@@ -521,10 +639,7 @@ mod tests {
 
     #[test]
     fn finalized_order_requires_terminal_states() {
-        let params = JobListParams {
-            order_by: JobListOrderBy::FinalizedAt,
-            ..JobListParams::default()
-        };
+        let params = JobListParams::default().order_by(JobListOrderBy::FinalizedAt);
 
         assert_eq!(
             params.validate().unwrap_err(),
