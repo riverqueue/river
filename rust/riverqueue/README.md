@@ -237,8 +237,9 @@ leader-owned services run on SQLite, where they act on rows written by any
 implementation, exactly as Go's SQLite driver does.
 
 Periodic jobs are scheduled from the time each term begins, and `run_on_start`
-jobs are inserted once per gained term. When a periodic insert fails, Go skips
-that occurrence; Rust keeps it due and retries it after one second.
+jobs are inserted once per gained term. As in Go, an occurrence whose insert
+fails is logged and skipped, and a client that loses leadership stops
+inserting immediately.
 
 ## Database support
 
