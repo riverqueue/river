@@ -231,6 +231,14 @@ impl ClientInner {
         &self.database
     }
 
+    /// Whether this client receives notifications from other clients, which
+    /// needs a backend listener and a client that isn't poll-only. When it
+    /// doesn't, it wakes its own runtime directly after committing a change,
+    /// like Go's `notifyProducerWithoutListener*` helpers.
+    pub(crate) const fn listens_for_notifications(&self) -> bool {
+        self.database.supports_listener() && !self.poll_only
+    }
+
     #[cfg(feature = "postgres")]
     #[cfg_attr(
         not(feature = "sqlite"),
