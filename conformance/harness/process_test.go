@@ -27,6 +27,13 @@ const (
 	// reaped, including adapterPipeCloseDelay.
 	adapterKillTimeout = 15 * time.Second
 
+	// adapterRequestTimeout bounds how long an adapter may take to answer
+	// one request. Every adapter-side wait is bounded well below it (the
+	// reference's `wait` gives up after ten seconds), so it only fires for
+	// an adapter that has stopped making progress, well before `go test`'s
+	// own timeout would abort the whole run without naming it.
+	adapterRequestTimeout = 2 * time.Minute
+
 	// maxApplicationNameLength is PostgreSQL's application_name limit
 	// (NAMEDATALEN - 1). The server silently truncates longer names.
 	maxApplicationNameLength = 63
@@ -38,25 +45,44 @@ const (
 	adapterPipeCloseDelay = 5 * time.Second
 )
 
-// errAdapterExitTimeout reports an adapter that had to be killed because it
-// didn't exit within its time bound.
-var errAdapterExitTimeout = errors.New("adapter did not exit")
+var (
+	// errAdapterExitTimeout reports an adapter that had to be killed because
+	// it didn't exit within its time bound.
+	errAdapterExitTimeout = errors.New("adapter did not exit")
+
+	// errAdapterStopped reports an adapter whose output ended while the
+	// harness waited for a response.
+	errAdapterStopped = errors.New("adapter stopped")
+
+	// errAdapterUnresponsive reports an adapter that didn't answer a request
+	// within adapterRequestTimeout.
+	errAdapterUnresponsive = errors.New("adapter did not answer")
+)
 
 // adapterProcessSequence numbers the adapter processes this harness process
 // starts, so each gets its own application_name.
 var adapterProcessSequence atomic.Int64 //nolint:gochecknoglobals // shared by every test in the process
 
 // adapterProcess is one running adapter child process and its protocol
-// pipes. Its exit status is collected at most once, by whichever of kill or
+// pipes. A goroutine reads output lines so a response can be awaited with a
+// bound. The exit status is collected at most once, by whichever of kill or
 // shutdown first waits for it.
 type adapterProcess struct {
-	command  *exec.Cmd
-	exitErr  error
-	exited   chan struct{}
-	input    io.WriteCloser
-	output   *bufio.Scanner
-	stderr   lockedBuffer
-	waitOnce sync.Once
+	command *exec.Cmd
+	exitErr error
+	exited  chan struct{}
+	input   io.WriteCloser
+	lines   chan []byte
+	output  *os.File
+	// readErr is the output read error, if any, once lines is closed.
+	readErr     error
+	released    chan struct{}
+	releaseOnce sync.Once
+	stderr      lockedBuffer
+	// unresponsive is set once a request times out. The next line of output
+	// may answer the abandoned request, so no later exchange can be trusted.
+	unresponsive error
+	waitOnce     sync.Once
 }
 
 // startAdapterProcess starts command with its stdin and stdout connected to
@@ -66,23 +92,58 @@ func startAdapterProcess(command *exec.Cmd) (*adapterProcess, error) {
 	if err != nil {
 		return nil, err
 	}
-	output, err := command.StdoutPipe()
+	// The harness owns the stdout pipe rather than using StdoutPipe, which
+	// Wait closes as soon as the process exits, possibly before its last
+	// output has been read.
+	output, outputWriter, err := os.Pipe()
 	if err != nil {
 		return nil, err
 	}
 	process := &adapterProcess{
-		command: command,
-		exited:  make(chan struct{}),
-		input:   input,
-		output:  bufio.NewScanner(output),
+		command:  command,
+		exited:   make(chan struct{}),
+		input:    input,
+		lines:    make(chan []byte),
+		output:   output,
+		released: make(chan struct{}),
 	}
-	process.output.Buffer(make([]byte, 64*1024), 4*1024*1024)
+	command.Stdout = outputWriter
 	command.Stderr = &process.stderr
 	command.WaitDelay = adapterPipeCloseDelay
-	if err := command.Start(); err != nil {
+	err = command.Start()
+	// The child holds its own copy of the write end; closing the harness's
+	// copy lets the output reach EOF once the child is gone.
+	_ = outputWriter.Close()
+	if err != nil {
+		_ = output.Close()
 		return nil, err
 	}
+	go process.readLines()
 	return process, nil
+}
+
+// exchange writes one request line and waits up to timeout for the next
+// line of output. Once a request times out, the process is out of step with
+// the protocol, so every later exchange fails with the same error.
+func (process *adapterProcess) exchange(request []byte, timeout time.Duration) ([]byte, error) {
+	if process.unresponsive != nil {
+		return nil, process.unresponsive
+	}
+	if _, err := process.input.Write(append(request, '\n')); err != nil {
+		return nil, fmt.Errorf("write request: %w", err)
+	}
+	timer := time.NewTimer(timeout)
+	defer timer.Stop()
+	select {
+	case line, ok := <-process.lines:
+		if !ok {
+			return nil, errors.Join(errAdapterStopped, process.readErr)
+		}
+		return line, nil
+	case <-timer.C:
+		process.unresponsive = fmt.Errorf("%w within %s", errAdapterUnresponsive, timeout)
+		return nil, process.unresponsive
+	}
 }
 
 // kill kills the process and waits up to timeout for it to be reaped.
@@ -96,12 +157,39 @@ func (process *adapterProcess) kill(timeout time.Duration) error {
 	return nil
 }
 
+// readLines delivers each line of output to exchange until the output ends
+// or the process is released.
+func (process *adapterProcess) readLines() {
+	defer close(process.lines)
+	scanner := bufio.NewScanner(process.output)
+	scanner.Buffer(make([]byte, 64*1024), 4*1024*1024)
+	for scanner.Scan() {
+		select {
+		case process.lines <- bytes.Clone(scanner.Bytes()):
+		case <-process.released:
+			return
+		}
+	}
+	process.readErr = scanner.Err()
+}
+
+// release stops reading output from a process that has exited. A descendant
+// that inherited stdout could otherwise keep the reader open.
+func (process *adapterProcess) release() {
+	process.releaseOnce.Do(func() {
+		close(process.released)
+		_ = process.output.Close()
+	})
+}
+
 // shutdown closes the process's stdin, which asks an adapter to exit, and
 // waits up to exitTimeout for it to do so. An adapter still running after
 // that is killed and reported with errAdapterExitTimeout, so one wedged
 // adapter fails its test instead of hanging the whole run. Otherwise
 // shutdown returns any error closing stdin joined with the exit error.
 func (process *adapterProcess) shutdown(exitTimeout time.Duration) error {
+	defer process.release()
+
 	closeErr := process.input.Close()
 	if !process.waitForExit(exitTimeout) {
 		return errors.Join(
@@ -112,7 +200,7 @@ func (process *adapterProcess) shutdown(exitTimeout time.Duration) error {
 	return errors.Join(closeErr, process.exitErr)
 }
 
-// waitForExit waits up to timeout for the process to exit and its pipes to
+// waitForExit waits up to timeout for the process to exit and its stderr to
 // close, and reports whether it did. The exit status is recorded in exitErr.
 func (process *adapterProcess) waitForExit(timeout time.Duration) bool {
 	process.waitOnce.Do(func() {
@@ -200,6 +288,47 @@ func TestAdapterProcess(t *testing.T) {
 		return process
 	}
 
+	t.Run("ExchangeReportsStoppedAdapter", func(t *testing.T) {
+		t.Parallel()
+
+		process := start(t, "exit_on_request")
+
+		_, err := process.exchange([]byte("request"), adapterRequestTimeout)
+		require.ErrorIs(t, err, errAdapterStopped)
+		require.NoError(t, process.shutdown(adapterExitTimeout))
+	})
+
+	t.Run("ExchangeReturnsResponse", func(t *testing.T) {
+		t.Parallel()
+
+		process := start(t, "echo")
+
+		for _, request := range []string{"first", "second"} {
+			response, err := process.exchange([]byte(request), adapterRequestTimeout)
+			require.NoError(t, err)
+			require.Equal(t, request, string(response))
+		}
+		require.NoError(t, process.shutdown(adapterExitTimeout))
+	})
+
+	t.Run("ExchangeTimesOutUnresponsiveAdapter", func(t *testing.T) {
+		t.Parallel()
+
+		process := start(t, "ignore_requests")
+
+		_, err := process.exchange([]byte("first"), 100*time.Millisecond)
+		require.ErrorIs(t, err, errAdapterUnresponsive)
+		require.EqualError(t, err, "adapter did not answer within 100ms")
+
+		// A later request would be matched with the abandoned one's answer,
+		// so it fails immediately without being sent.
+		startedAt := time.Now()
+		_, err = process.exchange([]byte("second"), adapterRequestTimeout)
+		require.ErrorIs(t, err, errAdapterUnresponsive)
+		require.Less(t, time.Since(startedAt), time.Second)
+		require.NoError(t, process.shutdown(adapterExitTimeout))
+	})
+
 	t.Run("KillReapsProcess", func(t *testing.T) {
 		t.Parallel()
 
@@ -246,8 +375,8 @@ func TestAdapterProcess(t *testing.T) {
 
 // TestAdapterProcessFake is not a test on its own. TestAdapterProcess runs
 // the test binary with RIVER_CONFORMANCE_FAKE_ADAPTER set to make this
-// function behave like an adapter that exits, fails, or wedges once its
-// stdin closes.
+// function behave like an adapter that answers, ignores, or stops on
+// requests, and that exits, fails, or wedges once its stdin closes.
 func TestAdapterProcessFake(t *testing.T) {
 	t.Parallel()
 
@@ -255,9 +384,17 @@ func TestAdapterProcessFake(t *testing.T) {
 	if behavior == "" {
 		return
 	}
-	_, _ = io.Copy(io.Discard, os.Stdin)
+	input := bufio.NewScanner(os.Stdin)
+	for input.Scan() {
+		switch behavior {
+		case "echo":
+			fmt.Println(input.Text())
+		case "exit_on_request":
+			os.Exit(0)
+		}
+	}
 	switch behavior {
-	case "exit_on_eof":
+	case "echo", "exit_on_eof", "ignore_requests":
 		os.Exit(0)
 	case "fail_on_eof":
 		os.Exit(3)
