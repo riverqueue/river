@@ -23,7 +23,10 @@ pub trait JobArgs: DeserializeOwned + Send + Serialize + Sync + 'static {
         &[]
     }
 
-    /// Job-type insertion defaults.
+    /// Job-type insertion defaults. Options set for a single insertion
+    /// replace these, except that metadata keys starting with `river:`,
+    /// which River and its add-on crates reserve, are kept unless the
+    /// per-call metadata sets the same key.
     fn default_insert_opts() -> InsertOpts {
         InsertOpts::default()
     }
@@ -230,6 +233,10 @@ impl InsertOpts {
 
     /// Replaces arbitrary JSON object metadata.
     ///
+    /// Per-call metadata replaces the job type's default metadata, but keeps
+    /// its reserved `river:` keys that the per-call metadata doesn't set, so
+    /// options an add-on crate declares for a job type survive.
+    ///
     /// Accepts a [`JobMetadata`] or a `serde_json::Map`. Build a
     /// [`JobMetadata`] from JSON text (for example with `str::parse`) to keep
     /// number tokens, such as `1e400` or integers wider than 64 bits, that
@@ -337,8 +344,13 @@ impl InsertOpts {
             tags: Vec::new(),
             unique: UniqueOpts::default(),
         };
+        let default_metadata = job_defaults.metadata.clone();
+        let call_sets_metadata = call_overrides.metadata.is_some();
         resolved.apply(job_defaults);
         resolved.apply(call_overrides);
+        if call_sets_metadata && let Some(default_metadata) = default_metadata {
+            resolved.metadata.keep_reserved_members(&default_metadata);
+        }
         resolved
     }
 }
@@ -861,6 +873,33 @@ mod tests {
         assert_eq!(resolved.priority, 2);
         assert_eq!(resolved.queue, "job_queue");
         assert_eq!(resolved.scheduled_at, None);
+    }
+
+    #[test]
+    fn per_call_metadata_keeps_reserved_default_members() {
+        let defaults = InsertOpts::default().with_metadata(
+            r#"{"team":"a","river:addon":{"key":1e400},"river:shared":"default"}"#
+                .parse::<JobMetadata>()
+                .unwrap(),
+        );
+        let resolved = InsertOpts::resolve(
+            7,
+            defaults.clone(),
+            InsertOpts::default().with_metadata(
+                r#"{"call":true,"river:shared":"call"}"#.parse::<JobMetadata>().unwrap(),
+            ),
+        );
+        assert_eq!(
+            resolved.metadata.as_raw().get(),
+            r#"{"call":true,"river:shared":"call","river:addon":{"key":1e400}}"#
+        );
+
+        // Without per-call metadata, the defaults apply unchanged.
+        let resolved = InsertOpts::resolve(7, defaults, InsertOpts::default());
+        assert_eq!(
+            resolved.metadata.as_raw().get(),
+            r#"{"team":"a","river:addon":{"key":1e400},"river:shared":"default"}"#
+        );
     }
 
     #[test]

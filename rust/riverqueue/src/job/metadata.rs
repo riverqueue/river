@@ -114,6 +114,20 @@ impl JobMetadata {
         Ok(())
     }
 
+    /// Adds the reserved `river:` members of `defaults` that this object
+    /// doesn't set, keeping their value text.
+    pub(crate) fn keep_reserved_members(&mut self, defaults: &Self) {
+        let members = crate::unique::object_members(defaults.0.get()).expect("validated object");
+        for member in members {
+            if member.key.starts_with("river:") && !self.contains_key(&member.key) {
+                let value = RawValue::from_string(member.value.to_owned())
+                    .expect("member of a validated object");
+                self.insert(&member.key, &value)
+                    .expect("raw JSON values serialize");
+            }
+        }
+    }
+
     /// Consumes the metadata and returns its exact JSON object.
     #[must_use]
     pub fn into_raw(self) -> Box<RawValue> {
