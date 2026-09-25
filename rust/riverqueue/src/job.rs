@@ -710,6 +710,10 @@ impl UniqueOpts {
     }
 
     /// Includes encoded arguments in the unique key.
+    ///
+    /// The arguments must encode to a JSON object. As in River Go, an empty
+    /// array is treated as `{}` and inserting any other non-object arguments
+    /// fails.
     #[must_use]
     pub const fn by_args(mut self) -> Self {
         self.by_args = true;
