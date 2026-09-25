@@ -9,6 +9,38 @@ import (
 	"github.com/riverqueue/river/rivertype"
 )
 
+func TestEscapePathComponent(t *testing.T) {
+	t.Parallel()
+
+	for _, tt := range []struct {
+		key      string
+		expected string
+	}{
+		{key: "", expected: ""},
+		{key: "user_id", expected: "user_id"},
+		{key: "user-id", expected: "user-id"},
+		{key: "UserID", expected: "UserID"},
+		{key: "123", expected: "123"},
+		{key: "-1", expected: "-1"},
+		{key: "a b", expected: "a b"},
+		{key: "éλ", expected: "éλ"},
+		{key: "a:b", expected: "a:b"},
+		{key: ":x", expected: `\:x`},
+		{key: "::x", expected: `\::x`},
+		{key: "user.id", expected: `user\.id`},
+		{key: "alice@example.com", expected: `alice\@example\.com`},
+		{key: "!x", expected: `\!x`},
+		{key: "[x]", expected: `\[x\]`},
+		{key: "{x}", expected: `\{x\}`},
+		{key: "a*b?c#d|e", expected: `a\*b\?c\#d\|e`},
+		{key: `a\b`, expected: `a\\b`},
+		{key: ":a.b", expected: `\:a\.b`},
+		{key: "$x", expected: `\$x`},
+	} {
+		require.Equal(t, tt.expected, escapePathComponent(tt.key), "key: %q", tt.key)
+	}
+}
+
 func TestExtractValues(t *testing.T) {
 	t.Parallel()
 
@@ -77,6 +109,12 @@ func TestExtractValues(t *testing.T) {
 			encodedArgs:    []byte(`{}`),
 			uniqueKeys:     []string{"a", "b"},
 			expectedValues: []string{"undefined", "undefined"},
+		},
+		{
+			name:           "EscapedPathComponents",
+			encodedArgs:    []byte(`{"user.id":"u1","alice@example.com":2,":x":3,"x":4,"user":{"id":"nested"}}`),
+			uniqueKeys:     []string{`user\.id`, `alice\@example\.com`, `\:x`, "x", "user.id"},
+			expectedValues: []string{`"u1"`, "2", "3", "4", `"nested"`},
 		},
 	}
 
