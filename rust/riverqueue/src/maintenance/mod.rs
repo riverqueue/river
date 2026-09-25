@@ -29,6 +29,11 @@ mod scheduler;
 #[cfg(all(test, feature = "postgres-tests"))]
 mod tests;
 
+#[cfg(feature = "postgres")]
+pub(crate) use cleaner::postgres_delete_finalized_jobs;
+#[cfg(feature = "sqlite")]
+pub(crate) use cleaner::sqlite_delete_finalized_jobs;
+
 use std::{
     hash::{BuildHasher, Hasher},
     sync::{Arc, Mutex},

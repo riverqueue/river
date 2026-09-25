@@ -212,6 +212,76 @@ pub async fn notify_many(
     }
 }
 
+/// Filters for [`delete_finalized_jobs`], mirroring the job cleaner's query.
+///
+/// Each horizon deletes jobs in that state finalized before it; `None` keeps
+/// jobs in that state, however old.
+#[doc(hidden)]
+#[derive(Clone, Debug, Default)]
+#[non_exhaustive]
+pub struct FinalizedJobDeleteParams {
+    /// Delete cancelled jobs finalized before this time.
+    pub cancelled_before: Option<DateTime<Utc>>,
+    /// Delete completed jobs finalized before this time.
+    pub completed_before: Option<DateTime<Utc>>,
+    /// Delete discarded jobs finalized before this time.
+    pub discarded_before: Option<DateTime<Utc>>,
+    /// Maximum jobs to delete, lowest IDs first.
+    pub limit: i64,
+    /// Queues whose jobs are kept.
+    pub queues_excluded: Vec<String>,
+    /// When set, only jobs in these queues are deleted.
+    pub queues_included: Option<Vec<String>>,
+}
+
+impl FinalizedJobDeleteParams {
+    /// Creates filters that delete nothing until a horizon is set.
+    #[must_use]
+    pub fn new(limit: i64) -> Self {
+        Self {
+            limit,
+            ..Self::default()
+        }
+    }
+}
+
+/// Deletes finalized jobs with River's job cleaner query, on a caller's
+/// connection, and returns how many were deleted.
+///
+/// Add-on crates use it for cleaner passes of their own, such as per-queue
+/// retention, so their deletions match River's exactly, including keeping a
+/// state whose horizon is `None` on every backend. It runs no timeout or
+/// cancellation of its own.
+///
+/// # Errors
+///
+/// Returns an error when the connection and configuration name different
+/// backends or when the database rejects the statement.
+#[doc(hidden)]
+pub async fn delete_finalized_jobs(
+    connection: DatabaseConnection<'_>,
+    database: &DatabaseConfig,
+    params: &FinalizedJobDeleteParams,
+) -> Result<u64, PilotError> {
+    match (connection, database) {
+        #[cfg(feature = "postgres")]
+        (DatabaseConnection::Postgres(connection), DatabaseConfig::Postgres { schema }) => Ok(
+            crate::maintenance::postgres_delete_finalized_jobs(connection, schema, params).await?,
+        ),
+        #[cfg(feature = "sqlite")]
+        (DatabaseConnection::Sqlite(connection), DatabaseConfig::Sqlite) => {
+            Ok(crate::maintenance::sqlite_delete_finalized_jobs(connection, params).await?)
+        }
+        #[allow(unreachable_patterns)]
+        (connection, database) => Err(format!(
+            "deletion connection {:?} does not match database {:?}",
+            connection.kind(),
+            database.kind()
+        )
+        .into()),
+    }
+}
+
 /// Error type used across the exact-version internal pilot seam.
 pub type PilotError = Box<dyn std::error::Error + Send + Sync>;
 
