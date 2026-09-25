@@ -784,11 +784,7 @@ pub(crate) async fn list(
         separated.push_unseparated(")");
     }
     if let Some(metadata) = params.metadata {
-        let metadata = json_text(metadata)?;
-        query
-            .push(" AND json_patch(json(metadata), json(")
-            .push_bind(metadata)
-            .push(")) = json(metadata)");
+        push_contains_object(&mut query, "metadata", metadata, &mut 0);
     }
     for tag in params.tags_all {
         query
@@ -812,6 +808,83 @@ pub(crate) async fn list(
         .fetch_all(&mut *connection)
         .await?;
     records.into_iter().map(JobRecord::into_job).collect()
+}
+
+/// Pushes conditions that the JSON object `source` (an SQL expression)
+/// contains `fragment`, with PostgreSQL's `jsonb @>` semantics: each key must
+/// be present with a contained value. Keys and scalars are bound, so no JSON
+/// path quoting is involved.
+fn push_contains_object(
+    query: &mut QueryBuilder<Sqlite>,
+    source: &str,
+    fragment: &Map<String, Value>,
+    aliases: &mut usize,
+) {
+    for (key, value) in fragment {
+        let alias = format!("contains_{aliases}");
+        *aliases += 1;
+        query.push(format!(
+            " AND EXISTS (SELECT 1 FROM json_each({source}) AS {alias} WHERE {alias}.key = "
+        ));
+        query.push_bind(key.clone());
+        query.push(" AND ");
+        push_contains_value(query, &alias, value, aliases);
+        query.push(")");
+    }
+}
+
+/// Pushes a condition that the `json_each` row `alias` contains `fragment`.
+/// Like PostgreSQL, scalars match only scalars of the same type (numbers
+/// compare numerically), objects match objects containing every key, and an
+/// array matches an array containing each of its elements.
+fn push_contains_value(
+    query: &mut QueryBuilder<Sqlite>,
+    alias: &str,
+    fragment: &Value,
+    aliases: &mut usize,
+) {
+    match fragment {
+        Value::Null => {
+            query.push(format!("{alias}.type = 'null'"));
+        }
+        Value::Bool(true) => {
+            query.push(format!("{alias}.type = 'true'"));
+        }
+        Value::Bool(false) => {
+            query.push(format!("{alias}.type = 'false'"));
+        }
+        Value::Number(number) => {
+            query.push(format!(
+                "{alias}.type IN ('integer', 'real') AND {alias}.value = "
+            ));
+            if let Some(integer) = number.as_i64() {
+                query.push_bind(integer);
+            } else {
+                query.push_bind(number.as_f64().unwrap_or(f64::NAN));
+            }
+        }
+        Value::String(string) => {
+            query.push(format!("{alias}.type = 'text' AND {alias}.value = "));
+            query.push_bind(string.clone());
+        }
+        Value::Object(object) => {
+            query.push(format!("{alias}.type = 'object'"));
+            push_contains_object(query, &format!("{alias}.value"), object, aliases);
+        }
+        Value::Array(elements) => {
+            query.push(format!("{alias}.type = 'array'"));
+            for element in elements {
+                let element_alias = format!("contains_{aliases}");
+                *aliases += 1;
+                query.push(format!(
+                    " AND EXISTS (SELECT 1 FROM json_each({alias}.value) AS {element_alias} \
+                     WHERE "
+                ));
+                push_contains_value(query, &element_alias, element, aliases);
+                query.push(")");
+            }
+        }
+    }
 }
 
 /// Marks cancellation intent. A running job stays running so its worker can
