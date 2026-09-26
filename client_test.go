@@ -5896,6 +5896,164 @@ func Test_Client_JobUpdateTx(t *testing.T) {
 	})
 }
 
+func Test_Client_JobWaitFinalized(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+
+	type testBundle struct {
+		client *Client[pgx.Tx]
+		driver *riverpgxv5.Driver
+		exec   riverdriver.Executor
+		schema string
+	}
+
+	setup := func(t *testing.T) *testBundle {
+		t.Helper()
+
+		var (
+			dbPool = riversharedtest.DBPool(ctx, t)
+			driver = riverpgxv5.New(dbPool)
+			schema = riverdbtest.TestSchema(ctx, t, driver, nil)
+		)
+		client, err := NewClient(driver, &Config{Logger: riversharedtest.Logger(t), Schema: schema})
+		require.NoError(t, err)
+
+		return &testBundle{
+			client: client,
+			driver: driver,
+			exec:   driver.GetExecutor(),
+			schema: schema,
+		}
+	}
+
+	t.Run("AlreadyFinalized", func(t *testing.T) {
+		t.Parallel()
+
+		for _, state := range []rivertype.JobState{rivertype.JobStateCancelled, rivertype.JobStateCompleted, rivertype.JobStateDiscarded} {
+			t.Run(string(state), func(t *testing.T) {
+				t.Parallel()
+
+				bundle := setup(t)
+
+				job := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{
+					Metadata: []byte(`{"output":{"answer":42}}`),
+					Schema:   bundle.schema,
+					State:    &state,
+				})
+
+				waitCtx, cancel := context.WithTimeout(ctx, riversharedtest.WaitTimeout())
+				defer cancel()
+				finalized, err := bundle.client.JobWaitFinalized(waitCtx, job.ID)
+				require.NoError(t, err)
+				require.Equal(t, job.ID, finalized.ID)
+				require.Equal(t, state, finalized.State)
+				require.NotNil(t, finalized.FinalizedAt)
+				require.JSONEq(t, `{"answer":42}`, string(finalized.Output()))
+			})
+		}
+	})
+
+	t.Run("CancellationDoesNotCancelJob", func(t *testing.T) {
+		t.Parallel()
+
+		bundle := setup(t)
+
+		job := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{Schema: bundle.schema})
+
+		waitCtx, cancel := context.WithTimeout(ctx, 50*time.Millisecond)
+		defer cancel()
+		finalized, err := bundle.client.JobWaitFinalized(waitCtx, job.ID)
+		require.ErrorIs(t, err, context.DeadlineExceeded)
+		require.Nil(t, finalized)
+
+		job, err = bundle.client.JobGet(ctx, job.ID)
+		require.NoError(t, err)
+		require.Equal(t, rivertype.JobStateAvailable, job.State)
+	})
+
+	t.Run("CompletedByAnotherClient", func(t *testing.T) {
+		t.Parallel()
+
+		bundle := setup(t)
+
+		config := newTestConfig(t, bundle.schema)
+		config.PollOnly = true
+		workerClient, err := NewClient(bundle.driver, config)
+		require.NoError(t, err)
+		startClient(ctx, t, workerClient)
+
+		insertRes, err := bundle.client.Insert(ctx, noOpArgs{}, nil)
+		require.NoError(t, err)
+		waitCtx, cancel := context.WithTimeout(ctx, riversharedtest.WaitTimeout())
+		defer cancel()
+		finalized, err := bundle.client.JobWaitFinalized(waitCtx, insertRes.Job.ID)
+		require.NoError(t, err)
+		require.Equal(t, insertRes.Job.ID, finalized.ID)
+		require.Equal(t, rivertype.JobStateCompleted, finalized.State)
+		require.Equal(t, 1, finalized.Attempt)
+	})
+
+	t.Run("FinalizationMustCommit", func(t *testing.T) {
+		t.Parallel()
+
+		bundle := setup(t)
+
+		job := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{Schema: bundle.schema, State: new(rivertype.JobStateRunning)})
+
+		finalizeInTxFunc := func() riverdriver.ExecutorTx {
+			execTx, err := bundle.exec.Begin(ctx)
+			require.NoError(t, err)
+			t.Cleanup(func() { _ = execTx.Rollback(ctx) })
+			_, err = execTx.JobSetStateIfRunningMany(ctx, &riverdriver.JobSetStateIfRunningManyParams{
+				ID:              []int64{job.ID},
+				Attempt:         []*int{nil},
+				ErrData:         [][]byte{nil},
+				FinalizedAt:     []*time.Time{new(time.Now())},
+				MetadataDoMerge: []bool{false},
+				MetadataUpdates: [][]byte{nil},
+				ScheduledAt:     []*time.Time{nil},
+				Schema:          bundle.schema,
+				State:           []rivertype.JobState{rivertype.JobStateCompleted},
+			})
+			require.NoError(t, err)
+			return execTx
+		}
+
+		execTx := finalizeInTxFunc()
+		waitCtx, cancel := context.WithTimeout(ctx, 50*time.Millisecond)
+		defer cancel()
+		finalized, err := bundle.client.JobWaitFinalized(waitCtx, job.ID)
+		require.ErrorIs(t, err, context.DeadlineExceeded)
+		require.Nil(t, finalized)
+		require.NoError(t, execTx.Rollback(ctx))
+
+		persisted, err := bundle.client.JobGet(ctx, job.ID)
+		require.NoError(t, err)
+		require.Equal(t, rivertype.JobStateRunning, persisted.State)
+
+		execTx = finalizeInTxFunc()
+		require.NoError(t, execTx.Commit(ctx))
+		waitCtx, cancel = context.WithTimeout(ctx, riversharedtest.WaitTimeout())
+		defer cancel()
+		finalized, err = bundle.client.JobWaitFinalized(waitCtx, job.ID)
+		require.NoError(t, err)
+		require.Equal(t, rivertype.JobStateCompleted, finalized.State)
+	})
+
+	t.Run("NotFound", func(t *testing.T) {
+		t.Parallel()
+
+		bundle := setup(t)
+
+		waitCtx, cancel := context.WithTimeout(ctx, riversharedtest.WaitTimeout())
+		defer cancel()
+		job, err := bundle.client.JobWaitFinalized(waitCtx, 0)
+		require.ErrorIs(t, err, rivertype.ErrNotFound)
+		require.Nil(t, job)
+	})
+}
+
 func Test_Client_ErrorHandler(t *testing.T) {
 	t.Parallel()
 

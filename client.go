@@ -735,6 +735,7 @@ type Client[TTx any] struct {
 	pluginLookupByJob     *pluginlookup.JobPluginLookup
 	pluginLookupGlobal    *pluginlookup.PluginLookup
 	insertNotifyLimiter   *notifylimiter.Limiter
+	jobWaiter             *jobWaiter
 	notifier              *notifier.Notifier // may be nil in poll-only mode
 	periodicJobs          *PeriodicJobBundle
 	pilot                 riverpilot.Pilot
@@ -867,6 +868,7 @@ func NewClient[TTx any](driver riverdriver.Driver[TTx], config *Config) (*Client
 		},
 		config:               config,
 		driver:               driver,
+		jobWaiter:            newJobWaiter(driver.GetExecutor, config.Schema),
 		pluginLookupByJob:    pluginLookupByJob,
 		pluginLookupGlobal:   pluginLookupGlobal,
 		producersByQueueName: make(map[string]*producer),
@@ -1716,6 +1718,32 @@ func (c *Client[TTx]) jobUpdate(ctx context.Context, exec riverdriver.Executor, 
 		Metadata:        metadataUpdatesBytes,
 		Schema:          c.config.Schema,
 	})
+}
+
+// JobWaitFinalized waits until the job with the given ID is observed in a
+// finalized state (cancelled, completed, or discarded), and returns its persisted
+// row. A cancelled or discarded job is returned with a nil error; callers should
+// inspect State to determine the job's outcome. Retried and snoozed jobs continue
+// waiting until they finalize.
+//
+// The job is checked immediately, then polled approximately every 250 milliseconds.
+// Concurrent calls on the same client share a single poll loop that batches
+// database queries for all jobs being waited on. The client does not need to be
+// started or configured with workers, and the job may be executed by another
+// client. Stop and StopAndCancel do not cancel waits.
+//
+// Cancelling ctx stops only this wait, without cancelling the job. Database
+// errors are returned to the caller. ErrNotFound is returned if the job does not
+// exist or is deleted before its finalized state is observed. Commit any
+// transaction that inserts the job before calling JobWaitFinalized.
+//
+// This method observes current state, not completion history. If a finalized job
+// is manually retried before being observed, the wait continues for that execution.
+func (c *Client[TTx]) JobWaitFinalized(ctx context.Context, id int64) (*rivertype.JobRow, error) {
+	if !c.driver.PoolIsSet() {
+		return nil, errNoDriverDBPool
+	}
+	return c.jobWaiter.wait(ctx, id)
 }
 
 // ID returns the unique ID of this client as set in its config or

@@ -10,6 +10,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 
 - Added `Config.LeaderElectionDisabled` to let a client work jobs without participating in leader election or running maintenance services. Other eligible clients in the same database and schema continue handling scheduling, retries, periodic enqueueing, rescue, and cleanup. [PR #1382](https://github.com/riverqueue/river/pull/1382).
+- Added `Client.JobWaitFinalized` to wait for a job to reach a cancelled, completed, or discarded state using shared, batched polling. It works across clients and with clients that don't run workers, and supports context cancellation. [PR #1393](https://github.com/riverqueue/river/pull/1393).
 
 ### Changed
 
