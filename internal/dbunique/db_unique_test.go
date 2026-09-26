@@ -22,6 +22,60 @@ func (a JobArgsStaticKind) Kind() string {
 	return a.kind
 }
 
+func TestAppendSortedObject(t *testing.T) {
+	t.Parallel()
+
+	t.Run("Encodes", func(t *testing.T) {
+		t.Parallel()
+
+		// Compare exact bytes: equivalent JSON with different key escaping or
+		// whitespace would change the hashes of jobs inserted before upgrading.
+		for _, tt := range []struct {
+			name          string
+			encodedObject string
+			expected      string
+		}{
+			{name: "ASCIIHTML", encodedObject: `{"a\u003cb\u0026c\u003e":1}`, expected: `{"a<b&c>":1}`},
+			{name: "Colon", encodedObject: `{"x":2,":x":1}`, expected: `{":x":1,"x":2}`},
+			{name: "ControlCharacters", encodedObject: `{"line\nbreak":1,"\u0000":2}`, expected: `{"\u0000":2,"line\nbreak":1}`},
+			{name: "DEL", encodedObject: `{"\u007f":1}`, expected: "{\"\x7f\":1}"},
+			{name: "DuplicateKeys", encodedObject: `{"a":1,"\u0061":2}`, expected: `{"a":1}`},
+			{name: "EmptyArray", encodedObject: `[]`, expected: `{}`},
+			{name: "EmptyInput", encodedObject: ``, expected: `{}`},
+			{name: "EmptyKey", encodedObject: `{"a":2,"":1}`, expected: `{"":1,"a":2}`},
+			{name: "EmptyObject", encodedObject: `{}`, expected: `{}`},
+			{name: "EscapedKey", encodedObject: `{"quote\"slash\\":1}`, expected: `{"quote\"slash\\":1}`},
+			{name: "LiteralAndNestedKeys", encodedObject: `{"file.name":"a","file":{"name":"b"}}`, expected: `{"file":{"name":"b"},"file.name":"a"}`},
+			{name: "NumericKeys", encodedObject: `{"10":2,"0":1}`, expected: `{"0":1,"10":2}`},
+			{name: "RawValues", encodedObject: `{"b":null,"a":{"y":1, "x":[1, 2]}}`, expected: `{"a":{"y":1, "x":[1, 2]},"b":null}`},
+			{name: "UnicodeHTML", encodedObject: `{"\u00e9\u003c":1}`, expected: `{"é\u003c":1}`},
+			{name: "UnicodeSeparators", encodedObject: `{"\u2029":2,"\u2028":1}`, expected: `{"\u2028":1,"\u2029":2}`},
+		} {
+			t.Run(tt.name, func(t *testing.T) {
+				t.Parallel()
+
+				encoded, err := appendSortedObject(nil, []byte(tt.encodedObject))
+				require.NoError(t, err)
+				require.Equal(t, tt.expected, string(encoded))
+			})
+		}
+	})
+
+	t.Run("RejectsNonObjectArgs", func(t *testing.T) {
+		t.Parallel()
+
+		for _, encodedArgs := range []string{`null`, `[1,2]`, `"str"`, `true`, `123`} {
+			args := JobArgsStaticKind{kind: "kind"}
+			_, err := UniqueKey(&riversharedtest.TimeStub{}, &UniqueOpts{ByArgs: true}, &rivertype.JobInsertParams{
+				Args:        args,
+				EncodedArgs: []byte(encodedArgs),
+				Kind:        args.Kind(),
+			})
+			require.EqualError(t, err, "unique args must encode a JSON object", "encoded args: %s", encodedArgs)
+		}
+	})
+}
+
 func TestUniqueKey(t *testing.T) {
 	t.Parallel()
 
@@ -100,6 +154,88 @@ func TestUniqueKey(t *testing.T) {
 			},
 			uniqueOpts:   UniqueOpts{ByArgs: true},
 			expectedJSON: `&kind=worker_1&args={"Recipient":"john@example.com","Subject":"Another Test Email"}`,
+		},
+		{
+			name: "ByArgsUniqueWithUnnamedJSONTagUsesFieldName",
+			argsFunc: func() rivertype.JobArgs {
+				//nolint:tagliatelle // non-snake keys are intentional
+				type EmailJobArgs struct {
+					JobArgsStaticKind
+
+					Recipient  string `json:",omitempty" river:"unique"`
+					Subject    string `json:"subject"    river:"unique"`
+					TemplateID int
+				}
+				return EmailJobArgs{
+					JobArgsStaticKind: JobArgsStaticKind{kind: "worker_1"},
+					Recipient:         "john@example.com",
+					Subject:           "Another Test Email",
+					TemplateID:        102,
+				}
+			},
+			uniqueOpts:   UniqueOpts{ByArgs: true},
+			expectedJSON: `&kind=worker_1&args={"Recipient":"john@example.com","subject":"Another Test Email"}`,
+		},
+		{
+			name: "ByArgsWithCompatibleJSONNames",
+			argsFunc: func() rivertype.JobArgs {
+				//nolint:tagliatelle // Exercise names whose escaped sort order differs.
+				type Nested struct {
+					Amount int    `json:"a&b" river:"unique"`
+					Upper  string `json:"Y"   river:"unique"`
+				}
+				//nolint:tagliatelle // Exercise valid names whose escaping must not change hashes.
+				type Args struct {
+					JobArgsStaticKind
+
+					Dollar  string `json:"$x"     river:"unique"`
+					Nested  Nested `json:"nested"`
+					Unicode string `json:"é<"     river:"unique"`
+					Upper   string `json:"Y"      river:"unique"`
+				}
+				return Args{
+					JobArgsStaticKind: JobArgsStaticKind{kind: "worker_1"},
+					Dollar:            "dollar",
+					Nested:            Nested{Amount: 1, Upper: "nested"},
+					Unicode:           "unicode",
+					Upper:             "upper",
+				}
+			},
+			uniqueOpts: UniqueOpts{ByArgs: true},
+			// Preserve the old byte ordering even though escaped `\$x` sorts after `Y`.
+			expectedJSON: `&kind=worker_1&args={"$x":"dollar","Y":"upper","nested":{"Y":"nested","a&b":1},"é\u003c":"unicode"}`,
+		},
+		{
+			name: "ByArgsUniqueWithPathSyntaxInJSONTags",
+			argsFunc: func() rivertype.JobArgs {
+				type Nested struct {
+					Value string `json:"inner@key" river:"unique"`
+				}
+				//nolint:tagliatelle // non-snake keys are intentional
+				type PathSyntaxJobArgs struct {
+					JobArgsStaticKind
+
+					Bang    string `json:"!bang"               river:"unique"`
+					Colon   string `json:":x"                  river:"unique"`
+					Email   string `json:"alice@example.com"   river:"unique"`
+					Literal string `json:"outer.key.inner@key" river:"unique"`
+					Nested  Nested `json:"outer.key"`
+					UserID  string `json:"user.id"             river:"unique"`
+					X       string `json:"x"                   river:"unique"`
+				}
+				return PathSyntaxJobArgs{
+					JobArgsStaticKind: JobArgsStaticKind{kind: "worker_1"},
+					Bang:              "bang",
+					Colon:             "colon",
+					Email:             "email",
+					Literal:           "literal",
+					Nested:            Nested{Value: "nested"},
+					UserID:            "u1",
+					X:                 "x",
+				}
+			},
+			uniqueOpts:   UniqueOpts{ByArgs: true},
+			expectedJSON: `&kind=worker_1&args={"!bang":"bang",":x":"colon","alice@example.com":"email","outer.key":{"inner@key":"nested"},"outer.key.inner@key":"literal","user.id":"u1","x":"x"}`,
 		},
 		{
 			name: "ByArgsWithPointerToStruct",
@@ -343,6 +479,15 @@ func TestUniqueKey(t *testing.T) {
 			uniqueOpts: UniqueOpts{ByArgs: true},
 			// args JSON should be sorted alphabetically:
 			expectedJSON: `&kind=worker_3&args={"count":10,"description":"A generic job without unique fields."}`,
+		},
+		{
+			name:     "ByArgsWithNoUniqueFieldsAndLiteralKeys",
+			argsFunc: func() rivertype.JobArgs { return JobArgsStaticKind{kind: "worker_3"} },
+			modifyInsertParamsFunc: func(params *rivertype.JobInsertParams) {
+				params.EncodedArgs = []byte(`{"x":"x","file.name":"file","alice@example.com":"email",":x":"colon","[x":"bracket","{x":"brace","":"empty"}`)
+			},
+			uniqueOpts:   UniqueOpts{ByArgs: true},
+			expectedJSON: `&kind=worker_3&args={"":"empty",":x":"colon","[x":"bracket","alice@example.com":"email","file.name":"file","x":"x","{x":"brace"}`,
 		},
 		{
 			name: "ByArgsWithEmptyEncodedArgs",
