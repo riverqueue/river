@@ -140,10 +140,49 @@ jobs:
     timeout-minutes: 10
 
     steps:
-      - uses: ikalnytskyi/action-setup-postgres@v8
-        with:
-          database: river_dev
-          password: postgres
+      # CLI tests use each runner's bundled PostgreSQL version; the database
+      # test matrix above covers supported PostgreSQL versions separately.
+      # GitHub's Linux image includes PostgreSQL with its service disabled.
+      - name: Set up PostgreSQL (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo systemctl start postgresql.service
+          sudo -u postgres psql -c "ALTER USER postgres WITH PASSWORD 'postgres'"
+          sudo -u postgres createdb river_dev
+
+      # GitHub's Windows image exposes its PostgreSQL binaries via PGBIN.
+      - name: Set up PostgreSQL (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        env:
+          PGPASSWORD: postgres
+        run: |
+          # GitHub sets ErrorActionPreference to Stop, but native executables
+          # also need this flag for a nonzero exit to stop the script immediately.
+          $PSNativeCommandUseErrorActionPreference = $true
+
+          # Create our own cluster instead of using the image's preconfigured
+          # service and data directory. RUNNER_TEMP is isolated to this job.
+          $pgData = Join-Path $env:RUNNER_TEMP 'postgres'
+          $pgLog = Join-Path $env:RUNNER_TEMP 'postgres.log'
+          $pgPasswordFile = Join-Path $env:RUNNER_TEMP 'postgres-password'
+
+          # initdb reads the initial password from a file; createdb uses
+          # PGPASSWORD. Both match the postgres credentials in DATABASE_URL.
+          $env:PGPASSWORD | Set-Content -Path $pgPasswordFile -Encoding utf8
+
+          # Require password authentication rather than initdb's default trust,
+          # and use a consistent encoding and locale across runner images.
+          & "$env:PGBIN\initdb.exe" --pgdata="$pgData" --username=postgres --pwfile="$pgPasswordFile" --auth=scram-sha-256 --encoding=UTF8 --locale=C
+
+          # Start a background server on loopback, redirect its output to a log,
+          # and wait for it to accept connections before creating river_dev.
+          & "$env:PGBIN\pg_ctl.exe" --pgdata="$pgData" --log="$pgLog" --options="-h 127.0.0.1 -p 5432" --wait start
+          & "$env:PGBIN\createdb.exe" --host=127.0.0.1 --port=5432 --username=postgres river_dev
+
+          # Later steps invoke psql directly, including from Bash. GITHUB_PATH
+          # adds the bundled client tools to PATH for all subsequent steps.
+          $env:PGBIN | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
 
       - uses: actions/setup-go@v6
         with:
