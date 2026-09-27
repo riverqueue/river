@@ -72,10 +72,24 @@ pub(crate) const NOTIFICATION_BATCH_SIZE: i64 = 256;
 pub(crate) enum BackendError {
     #[error("invalid SQLite River row: {0}")]
     InvalidRow(String),
-    #[error("SQLite query failed: {0}")]
+    #[error(transparent)]
     Sqlx(#[from] sqlx::Error),
-    #[error("SQLite River JSON failed: {0}")]
+    #[error("invalid SQLite River JSON")]
     Json(#[from] serde_json::Error),
+}
+
+/// Reports SQLite failures the way PostgreSQL's reach callers: as SQLx's own
+/// error, with stored values River can't decode as [`sqlx::Error::Decode`].
+impl From<BackendError> for sqlx::Error {
+    fn from(error: BackendError) -> Self {
+        match error {
+            BackendError::Sqlx(error) => error,
+            BackendError::InvalidRow(message) => {
+                Self::Decode(format!("invalid SQLite River row: {message}").into())
+            }
+            BackendError::Json(error) => Self::Decode(Box::new(error)),
+        }
+    }
 }
 
 #[derive(Clone, Debug)]

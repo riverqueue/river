@@ -73,7 +73,7 @@ impl Backend for PostgresBackend<'_> {
                 return Err(super::job_not_running(
                     state
                         .parse()
-                        .map_err(|error| Error::Database(Box::new(error)))?,
+                        .map_err(|error| sqlx::Error::Decode(Box::new(error)))?,
                 ));
             }
         }

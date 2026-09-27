@@ -588,7 +588,7 @@ impl LeaderStore for DatabaseLeaderStore {
 
 #[cfg(feature = "sqlite")]
 fn sqlite_error(error: sqlite::BackendError) -> Error {
-    Error::Database(Box::new(error))
+    Error::Database(error.into())
 }
 
 #[allow(dead_code, reason = "only reachable when no backend feature matches")]

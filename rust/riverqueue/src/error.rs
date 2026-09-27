@@ -169,10 +169,15 @@ pub enum Error {
     #[error(transparent)]
     Configuration(ConfigurationError),
 
-    /// A database operation failed. The payload is the database driver's
-    /// error, such as an [`sqlx::Error`].
+    /// A database operation failed.
+    ///
+    /// The payload is SQLx's error on either backend, so a caller can match a
+    /// failure such as [`sqlx::Error::PoolTimedOut`] or inspect
+    /// [`sqlx::Error::Database`] for a constraint violation. A stored row
+    /// River can't decode is reported as [`sqlx::Error::Decode`] or
+    /// [`sqlx::Error::ColumnDecode`].
     #[error(transparent)]
-    Database(BoxError),
+    Database(#[from] sqlx::Error),
 
     /// A transactional executor belongs to another database backend.
     #[error(transparent)]
@@ -322,12 +327,6 @@ pub(crate) fn panic_message(panic: &Box<dyn std::any::Any + Send>) -> &str {
         .unwrap_or("non-string panic payload")
 }
 
-impl From<sqlx::Error> for Error {
-    fn from(error: sqlx::Error) -> Self {
-        Self::Database(Box::new(error))
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use std::error::Error as _;
@@ -342,11 +341,7 @@ mod tests {
     #[test]
     fn database_errors_are_transparent() {
         let error = Error::from(sqlx::Error::RowNotFound);
-        let Error::Database(inner) = &error else {
-            panic!("expected a database error");
-        };
-
-        assert!(inner.downcast_ref::<sqlx::Error>().is_some());
+        assert!(matches!(error, Error::Database(sqlx::Error::RowNotFound)));
         assert_eq!(report(&error), sqlx::Error::RowNotFound.to_string());
     }
 

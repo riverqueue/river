@@ -395,7 +395,7 @@ fn is_non_retryable_completion_error(error: &Error) -> bool {
         // A database error is transparent, so its driver error appears in
         // the chain only through the variant.
         if let Some(Error::Database(inner)) = current.downcast_ref::<Error>() {
-            current = &**inner;
+            current = inner;
         }
         if matches!(
             current.downcast_ref::<sqlx::Error>(),

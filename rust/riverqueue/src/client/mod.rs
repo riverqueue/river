@@ -161,7 +161,7 @@ pub(crate) struct ClientInner {
 
 #[cfg(feature = "sqlite")]
 fn sqlite_backend_error(error: crate::database::sqlite::BackendError) -> Error {
-    Error::Database(Box::new(error))
+    Error::Database(error.into())
 }
 
 #[cfg(feature = "postgres")]

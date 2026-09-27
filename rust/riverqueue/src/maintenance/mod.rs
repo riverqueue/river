@@ -182,7 +182,7 @@ impl From<sqlx::Error> for MaintenanceError {
 #[cfg(feature = "sqlite")]
 impl From<crate::database::sqlite::BackendError> for MaintenanceError {
     fn from(error: crate::database::sqlite::BackendError) -> Self {
-        Self::Failed(Error::Database(Box::new(error)))
+        Self::Failed(Error::Database(error.into()))
     }
 }
 

@@ -346,6 +346,31 @@ impl MaintenanceService for LeadershipService {
 }
 
 /// The current leader's lease expiry, which each successful renewal moves.
+#[tokio::test]
+async fn sqlite_database_errors_are_sqlx_errors() {
+    let pool = setup().await;
+    let client = Client::builder(pool.clone()).build().unwrap();
+    let inserted = client.insert(UnknownArgs {}).await.unwrap();
+    sqlx::query("UPDATE river_job SET metadata = jsonb('[]') WHERE id = ?")
+        .bind(inserted.job.row.id)
+        .execute(&pool)
+        .await
+        .unwrap();
+
+    let error = client.jobs().get(inserted.job.row.id).await.unwrap_err();
+    assert!(
+        matches!(&error, riverqueue::Error::Database(sqlx::Error::Decode(_))),
+        "{error:?}"
+    );
+
+    pool.close().await;
+    let error = client.jobs().get(inserted.job.row.id).await.unwrap_err();
+    assert!(
+        matches!(error, riverqueue::Error::Database(sqlx::Error::PoolClosed)),
+        "{error:?}"
+    );
+}
+
 async fn leader_expires_at(pool: &sqlx::SqlitePool) -> Option<String> {
     sqlx::query_scalar("SELECT CAST(expires_at AS TEXT) FROM river_leader")
         .fetch_optional(pool)

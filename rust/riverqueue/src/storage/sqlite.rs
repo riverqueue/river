@@ -291,5 +291,5 @@ impl Backend for SqliteBackend<'_> {
 }
 
 fn database_error(error: sqlite::BackendError) -> Error {
-    Error::Database(Box::new(error))
+    Error::Database(error.into())
 }
