@@ -297,7 +297,7 @@ impl Client {
     ///     .await?;
     /// println!("inserted job {}", inserted.id());
     ///
-    /// let mut tx = pool.begin().await?;
+    /// let mut tx = riverqueue::database::begin_postgres(&pool).await?;
     /// client
     ///     .insert(SendEmail { address: "admin@example.com".to_owned() })
     ///     .opts(InsertOpts::default().with_queue("email"))

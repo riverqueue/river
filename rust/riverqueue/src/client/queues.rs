@@ -20,7 +20,7 @@ use crate::{Queue, QueueListParams, QueueSelector, QueueUpdateParams};
 /// # async fn example(client: riverqueue::Client, pool: sqlx::PgPool) -> Result<(), riverqueue::Error> {
 /// client.queues().pause("email").await?;
 ///
-/// let mut tx = pool.begin().await?;
+/// let mut tx = riverqueue::database::begin_postgres(&pool).await?;
 /// client.queues().resume(QueueSelector::All).tx(&mut tx).await?;
 /// tx.commit().await?;
 /// # Ok(())

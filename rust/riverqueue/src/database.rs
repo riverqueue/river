@@ -24,25 +24,71 @@ use thiserror::Error;
 /// the future beginning it is dropped after `BEGIN` reaches the server but
 /// before that answer arrives, for example because a `select!` or timeout
 /// around it fires, SQLx never queues a `ROLLBACK` and the connection goes
-/// back to the pool idle in a transaction. River begins every transaction on
-/// its own task instead: if the caller stops waiting, the task still
-/// finishes, and dropping the finished transaction rolls it back.
+/// back to the pool idle in a transaction. This function begins the
+/// transaction on its own task instead: if the caller stops waiting, the task
+/// still finishes, and dropping the finished transaction rolls it back.
+///
+/// River begins its own transactions this way. Use it in place of
+/// [`PgPool::begin`] wherever the begin may be cancelled, including inside
+/// workers, whose futures River drops when they outlive the job stuck
+/// threshold after cancellation.
+///
+/// # Examples
+///
+/// ```no_run
+/// # async fn example(pool: sqlx::PgPool) -> Result<(), sqlx::Error> {
+/// let mut transaction = riverqueue::database::begin_postgres(&pool).await?;
+/// sqlx::query("SELECT 1").execute(&mut *transaction).await?;
+/// transaction.commit().await?;
+/// # Ok(())
+/// # }
+/// ```
+///
+/// # Errors
+///
+/// Returns the error from acquiring a connection or beginning the
+/// transaction, or an I/O error when the runtime is shutting down.
+///
+/// # Panics
+///
+/// Resumes a panic from the task beginning the transaction.
 #[cfg(feature = "postgres")]
-pub(crate) async fn begin_postgres(
-    pool: &PgPool,
-) -> Result<Transaction<'static, Postgres>, sqlx::Error> {
+pub async fn begin_postgres(pool: &PgPool) -> Result<Transaction<'static, Postgres>, sqlx::Error> {
     let pool = pool.clone();
     run_to_completion(async move { pool.begin().await }).await
 }
 
-/// Begins a SQLite transaction that may write, with the same protection as
-/// [`begin_postgres`] against being abandoned half-started.
+/// Begins a SQLite transaction that may write, protected like
+/// `begin_postgres` against being abandoned half-started.
 ///
-/// `BEGIN IMMEDIATE` takes the write lock up front, so a transaction that
-/// reads before writing can't fail with `SQLITE_BUSY_SNAPSHOT` when another
-/// connection commits in between.
+/// It begins with `BEGIN IMMEDIATE`, which takes the write lock up front, so
+/// a transaction that reads before writing can't fail with
+/// `SQLITE_BUSY_SNAPSHOT` when another connection commits in between. Use it
+/// for transactions passed to River's `.tx` that may write, in place of
+/// [`SqlitePool::begin`], whose deferred transactions can.
+///
+/// # Examples
+///
+/// ```no_run
+/// # async fn example(pool: sqlx::SqlitePool) -> Result<(), sqlx::Error> {
+/// let mut transaction = riverqueue::database::begin_sqlite_write(&pool).await?;
+/// sqlx::query("SELECT 1").execute(&mut *transaction).await?;
+/// transaction.commit().await?;
+/// # Ok(())
+/// # }
+/// ```
+///
+/// # Errors
+///
+/// Returns the error from acquiring a connection or beginning the
+/// transaction, including `SQLITE_BUSY` when the write lock stays held past
+/// the busy timeout, or an I/O error when the runtime is shutting down.
+///
+/// # Panics
+///
+/// Resumes a panic from the task beginning the transaction.
 #[cfg(feature = "sqlite")]
-pub(crate) async fn begin_sqlite_write(
+pub async fn begin_sqlite_write(
     pool: &SqlitePool,
 ) -> Result<Transaction<'static, Sqlite>, sqlx::Error> {
     let pool = pool.clone();

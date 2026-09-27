@@ -20,7 +20,7 @@ use crate::{JobDeleteManyParams, JobListCursor, JobListParams, JobListResult, Jo
 /// # async fn example(client: riverqueue::Client, pool: sqlx::PgPool) -> Result<(), riverqueue::Error> {
 /// let job = client.jobs().get(42).await?;
 ///
-/// let mut tx = pool.begin().await?;
+/// let mut tx = riverqueue::database::begin_postgres(&pool).await?;
 /// client.jobs().cancel(job.id).tx(&mut tx).await?;
 /// tx.commit().await?;
 /// # Ok(())
@@ -85,7 +85,7 @@ impl<'a> Jobs<'a> {
     ///
     /// ```no_run
     /// # async fn example(client: riverqueue::Client, pool: sqlx::PgPool) -> Result<(), riverqueue::Error> {
-    /// let mut tx = pool.begin().await?;
+    /// let mut tx = riverqueue::database::begin_postgres(&pool).await?;
     /// // ... business writes in `tx` ...
     /// client.jobs().complete(42).tx(&mut tx).await?;
     /// tx.commit().await?;

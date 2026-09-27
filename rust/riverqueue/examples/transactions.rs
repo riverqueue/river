@@ -36,7 +36,9 @@ async fn confirm_order(
         .expect("this example uses PostgreSQL")
         .clone();
 
-    let mut transaction = pool.begin().await?;
+    // River drops a worker that ignores cancellation for too long, so begin
+    // with River's helper, which can't be abandoned halfway.
+    let mut transaction = riverqueue::database::begin_postgres(&pool).await?;
     sqlx::query("UPDATE example_orders SET confirmed = true WHERE id = $1")
         .bind(job.args.order_id)
         .execute(&mut *transaction)
@@ -69,7 +71,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let mut run = client.start()?;
 
     // Insert the order and its job together.
-    let mut transaction = pool.begin().await?;
+    let mut transaction = riverqueue::database::begin_postgres(&pool).await?;
     let order_id: i64 =
         sqlx::query_scalar("INSERT INTO example_orders DEFAULT VALUES RETURNING id")
             .fetch_one(&mut *transaction)

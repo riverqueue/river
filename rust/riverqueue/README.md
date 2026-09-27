@@ -114,18 +114,21 @@ Chain `.tx(&mut transaction)` onto an insertion, or onto any request from
 `client.jobs()` or `client.queues()`, to run it in the same SQL transaction as
 application writes. Notifications become visible only on commit, and jobs do
 not survive rollback. With a multi-connection SQLite pool, start transactions
-that may write with `pool.begin_with("BEGIN IMMEDIATE")`. SQLite's ordinary
-deferred `begin()` can establish a read snapshot that cannot be upgraded after
-another connection commits, producing `SQLITE_BUSY_SNAPSHOT` even when a busy
-timeout is set. River starts its own SQLite writer transactions in immediate
-mode; callers choose the mode of transactions passed to `.tx`.
+that may write with `riverqueue::database::begin_sqlite_write(&pool)`, which
+uses `BEGIN IMMEDIATE`. SQLite's ordinary deferred `begin()` can establish a
+read snapshot that cannot be upgraded after another connection commits,
+producing `SQLITE_BUSY_SNAPSHOT` even when a busy timeout is set. River starts
+its own SQLite writer transactions in immediate mode; callers choose the mode
+of transactions passed to `.tx`.
 
 Don't abandon a `pool.begin()` future partway, for example inside a
 `select!` or timeout that can fire first. SQLx 0.9 records a transaction only
 after the server answers `BEGIN`, so a begin dropped between the two leaves
-its connection back in the pool still inside a transaction. River begins its
-own transactions on a separate task for this reason; run your own begins to
-completion, or on a spawned task, before reacting to cancellation.
+its connection back in the pool still inside a transaction. That includes
+begins inside workers: River drops a worker's future when it ignores
+cancellation past the job stuck threshold. `riverqueue::database::begin_postgres`
+and `begin_sqlite_write` begin on a separate task, as River does for its own
+transactions, so they're safe to abandon.
 
 ## Managing jobs and queues
 
@@ -146,7 +149,7 @@ for job in &page.jobs {
     client.jobs().retry(job.id).await?;
 }
 
-let mut transaction = pool.begin().await?;
+let mut transaction = riverqueue::database::begin_postgres(&pool).await?;
 client.queues().pause(QueueSelector::All).tx(&mut transaction).await?;
 transaction.commit().await?;
 
