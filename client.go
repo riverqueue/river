@@ -153,6 +153,19 @@ type Config struct {
 	// Defaults to 100 ms.
 	FetchCooldown time.Duration
 
+	// FetchOnlyKnownKinds restricts job fetching to kinds registered in Workers,
+	// including kind aliases. Jobs of other kinds remain available without
+	// consuming attempts, allowing clients with different workers to share a queue.
+	//
+	// This option only affects fetching. A leader's rescuer still handles stuck
+	// jobs across all queues and discards those whose kinds it doesn't know.
+	// Clients with partial worker registries should use LeaderElectionDisabled,
+	// with another eligible client that has all job kinds registered.
+	//
+	// Defaults to false, so unknown kinds are fetched and fail with an
+	// UnknownJobKindError as usual.
+	FetchOnlyKnownKinds bool
+
 	// FetchPollInterval is the amount of time between periodic fetches for new
 	// jobs. Typically new jobs will be picked up ~immediately after insert via
 	// LISTEN/NOTIFY, but this provides a fallback.
@@ -533,6 +546,7 @@ func (c *Config) WithDefaults() *Config {
 		DiscardedJobRetentionPeriod: cmp.Or(c.DiscardedJobRetentionPeriod, riversharedmaintenance.DiscardedJobRetentionPeriodDefault),
 		ErrorHandler:                c.ErrorHandler,
 		FetchCooldown:               cmp.Or(c.FetchCooldown, FetchCooldownDefault),
+		FetchOnlyKnownKinds:         c.FetchOnlyKnownKinds,
 		FetchPollInterval:           cmp.Or(c.FetchPollInterval, FetchPollIntervalDefault),
 		ID:                          valutil.ValOrDefaultFunc(c.ID, func() string { return defaultClientID(time.Now().UTC()) }),
 		Hooks:                       c.Hooks,
@@ -2344,6 +2358,7 @@ func (c *Client[TTx]) producerAdd(queueName string, queueConfig QueueConfig) (*p
 		Completer:                    c.completer,
 		ErrorHandler:                 c.config.ErrorHandler,
 		FetchCooldown:                cmp.Or(queueConfig.FetchCooldown, c.config.FetchCooldown),
+		FetchOnlyKnownKinds:          c.config.FetchOnlyKnownKinds,
 		FetchPollInterval:            cmp.Or(queueConfig.FetchPollInterval, c.config.FetchPollInterval),
 		PluginLookupByJob:            c.pluginLookupByJob,
 		PluginLookupGlobal:           c.pluginLookupGlobal,

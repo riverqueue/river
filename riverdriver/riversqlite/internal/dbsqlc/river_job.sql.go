@@ -350,28 +350,37 @@ WHERE id IN (
     WHERE
         priority >= 0
         AND river_job.queue = ?2
+        AND (NOT cast(?3 AS boolean) OR kind IN (SELECT value FROM json_each(cast(?4 AS blob))))
         AND scheduled_at <= coalesce(cast(?1 AS text), datetime('now', 'subsec'))
         AND state = 'available'
     ORDER BY
         priority ASC,
         scheduled_at ASC,
         id ASC
-    LIMIT ?3
+    LIMIT ?5
 )
 RETURNING id, json(args), attempt, attempted_at, json(attempted_by), created_at, json(errors), finalized_at, kind, max_attempts, json(metadata), priority, queue, state, scheduled_at, json(tags), unique_key, unique_states
 `
 
 type JobGetAvailableParams struct {
-	Now       *string
-	Queue     string
-	MaxToLock int64
+	Now        *string
+	Queue      string
+	KindFilter bool
+	Kind       []byte
+	MaxToLock  int64
 }
 
 // Differs from the Postgres version in that we don't have `FOR UPDATE SKIP
 // LOCKED`. It doesn't exist in SQLite, but more aptly, there's only one writer
 // on SQLite at a time, so nothing else has the rows locked.
 func (q *Queries) JobGetAvailable(ctx context.Context, db DBTX, arg *JobGetAvailableParams) ([]*RiverJob, error) {
-	rows, err := db.QueryContext(ctx, jobGetAvailable, arg.Now, arg.Queue, arg.MaxToLock)
+	rows, err := db.QueryContext(ctx, jobGetAvailable,
+		arg.Now,
+		arg.Queue,
+		arg.KindFilter,
+		arg.Kind,
+		arg.MaxToLock,
+	)
 	if err != nil {
 		return nil, err
 	}

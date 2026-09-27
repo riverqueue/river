@@ -336,6 +336,7 @@ func (e *Executor) JobDeleteMany(ctx context.Context, params *riverdriver.JobDel
 func (e *Executor) JobGetAvailable(ctx context.Context, params *riverdriver.JobGetAvailableParams) ([]*rivertype.JobRow, error) {
 	jobs, err := dbsqlc.New().JobGetAvailable(schemaTemplateParam(ctx, params.Schema), e.dbtx, &dbsqlc.JobGetAvailableParams{
 		AttemptedBy:    params.ClientID,
+		Kind:           params.Kind,
 		MaxAttemptedBy: int32(min(params.MaxAttemptedBy, math.MaxInt32)), //nolint:gosec
 		MaxToLock:      int32(min(params.MaxToLock, math.MaxInt32)),      //nolint:gosec
 		Now:            params.Now,
