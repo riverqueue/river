@@ -53,6 +53,10 @@ impl SqliteMigrator {
     }
 
     /// Returns applied main-line versions in ascending order.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::Sqlite`] when the query fails.
     pub async fn existing_versions(&self) -> Result<Vec<i64>, Error> {
         let exists: bool = sqlx::query_scalar(
             "SELECT EXISTS (SELECT 1 FROM sqlite_schema WHERE type = 'table' AND name = 'river_migration')",
@@ -86,6 +90,15 @@ impl SqliteMigrator {
     }
 
     /// Applies up or down migrations with target, step, and dry-run controls.
+    ///
+    /// Each migration runs in its own transaction, so a failure leaves the
+    /// migrations before it applied.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::Invalid`] when the options are inconsistent, for
+    /// example a target version that doesn't exist or, when migrating down,
+    /// isn't applied, and [`Error::Sqlite`] when a migration fails.
     pub async fn migrate(
         &self,
         direction: Direction,
@@ -117,7 +130,11 @@ impl SqliteMigrator {
         })
     }
 
-    /// Applies all outstanding up migrations.
+    /// Applies all outstanding up migrations and returns their versions.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::Sqlite`] when a migration fails.
     pub async fn migrate_up(&self) -> Result<Vec<i64>, Error> {
         Ok(self
             .migrate(Direction::Up, MigrateOpts::default())
@@ -129,6 +146,11 @@ impl SqliteMigrator {
     }
 
     /// Checks that every migration through an optional target is applied.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::Invalid`] when the target version doesn't exist and
+    /// [`Error::Sqlite`] when reading the applied versions fails.
     pub async fn validate(&self, target_version: Option<i64>) -> Result<ValidateResult, Error> {
         validate_target(&SQLITE_MIGRATIONS, target_version, false)?;
         let applied = self.existing_versions().await?;

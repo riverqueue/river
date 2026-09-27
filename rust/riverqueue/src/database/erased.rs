@@ -98,6 +98,10 @@ impl Database {
     }
 
     /// Erases and validates an executor before a backend operation uses it.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::DatabaseMismatch`] for an executor of another backend.
     pub fn executor<'executor, E>(
         &self,
         executor: E,
@@ -112,6 +116,11 @@ impl Database {
 
     /// Erases and validates an actual SQLx transaction while preserving its
     /// transaction-only capability for exact-version companion crates.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::DatabaseMismatch`] for a transaction of another
+    /// backend.
     pub fn transaction<'executor, E>(
         &self,
         transaction: E,

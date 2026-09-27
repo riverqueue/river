@@ -208,6 +208,11 @@ impl ExtensionClient<'_> {
     }
 
     /// Inserts an encoded job through River's exact-version extension seam.
+    ///
+    /// # Errors
+    ///
+    /// Returns the errors of an ordinary insertion: invalid options, an
+    /// extension failure, or a database error.
     pub async fn insert_raw(
         &self,
         kind: &str,
@@ -226,6 +231,11 @@ impl ExtensionClient<'_> {
 
     /// Inserts an encoded job with already-resolved parameters through River's
     /// exact-version extension seam.
+    ///
+    /// # Errors
+    ///
+    /// Returns the errors of an ordinary insertion: invalid options, an
+    /// extension failure, or a database error.
     pub async fn insert_raw_params(
         &self,
         kind: &str,
@@ -241,6 +251,11 @@ impl ExtensionClient<'_> {
     }
 
     /// Inserts an encoded job inside a caller-managed transaction.
+    ///
+    /// # Errors
+    ///
+    /// Returns the errors of an ordinary insertion: invalid options, an
+    /// extension failure, or a database error.
     pub async fn insert_raw_tx<'executor, E>(
         &self,
         connection: E,
@@ -263,6 +278,11 @@ impl ExtensionClient<'_> {
 
     /// Inserts an encoded job with already-resolved parameters inside a
     /// caller-managed transaction.
+    ///
+    /// # Errors
+    ///
+    /// Returns the errors of an ordinary insertion: invalid options, an
+    /// extension failure, or a database error.
     pub async fn insert_raw_params_tx<'executor, E>(
         &self,
         connection: E,
@@ -328,6 +348,11 @@ impl ExtensionClient<'_> {
     /// retaining the supplied creation, schedule, and uniqueness wire values.
     /// Insertion middleware, begin hooks, insertion interception, and the
     /// backend notification all run exactly once.
+    ///
+    /// # Errors
+    ///
+    /// Returns the errors of an ordinary insertion: invalid options, an
+    /// extension failure, or a database error.
     pub async fn insert_tx<'executor, E>(
         &self,
         transaction: E,

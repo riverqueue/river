@@ -50,6 +50,10 @@ impl<A: JobArgs> TestJobBuilder<A> {
     }
 
     /// Builds the typed test job.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the arguments can't be encoded as JSON.
     pub fn build(self) -> Result<Job<A>, Error> {
         let now = Utc::now();
         let encoded_args = riverqueue::encoding::encode_args(&self.args)?;

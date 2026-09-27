@@ -131,6 +131,11 @@ pub struct CronSchedule {
 
 impl CronSchedule {
     /// Parses a standard five-field cron expression or descriptor.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error for an expression robfig/cron's `ParseStandard`
+    /// rejects, and for a `CRON_TZ=` zone this build can't resolve.
     pub fn parse(expression: &str) -> Result<Self, CronScheduleParseError> {
         expression.parse()
     }

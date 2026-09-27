@@ -146,6 +146,11 @@ impl WorkContext {
     /// steps do not define a checkpoint order. A step may fail with any error
     /// convertible into [`BoxError`], including `anyhow::Error`; it is
     /// returned as the source of [`Error::ResumableStep`].
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::ResumableStep`] with the step's error, and a runtime
+    /// error when the context doesn't belong to a job being worked.
     pub async fn resumable_step<F, Fut, E>(&self, name: &str, step: F) -> Result<(), Error>
     where
         E: Into<BoxError>,
@@ -172,6 +177,11 @@ impl WorkContext {
     /// Runs a named resumable step with the last cursor recorded for that step.
     ///
     /// Errors are handled as in [`WorkContext::resumable_step`].
+    ///
+    /// # Errors
+    ///
+    /// Returns the errors of [`WorkContext::resumable_step`], and a runtime
+    /// error when the recorded cursor can't be decoded as `T`.
     pub async fn resumable_step_with_cursor<T, F, Fut, E>(
         &self,
         name: &str,
@@ -238,6 +248,11 @@ impl WorkContext {
     }
 
     /// Persists the current resumable step in a caller-managed transaction.
+    ///
+    /// # Errors
+    ///
+    /// Returns a runtime error outside a resumable step, and the database
+    /// error when the update fails.
     pub async fn resumable_set_step_tx<'executor, E>(&self, connection: E) -> Result<JobRow, Error>
     where
         E: DatabaseTransactionExecutor<'executor>,
@@ -248,6 +263,12 @@ impl WorkContext {
 
     /// Persists the current resumable step and cursor in a caller-managed
     /// transaction.
+    ///
+    /// # Errors
+    ///
+    /// Returns a runtime error outside a resumable cursor step, a JSON error
+    /// when the cursor can't be encoded, and the database error when the update
+    /// fails.
     pub async fn resumable_set_step_cursor_tx<'executor, T, E>(
         &self,
         connection: E,
@@ -759,6 +780,11 @@ impl WorkerRegistry {
     }
 
     /// Registers one worker, rejecting duplicate kinds.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::Configuration`] when a worker for the same kind is
+    /// already registered.
     pub fn register<A, W>(&mut self, worker: W) -> Result<&mut Self, Error>
     where
         A: JobArgs,

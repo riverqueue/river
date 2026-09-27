@@ -57,6 +57,10 @@ impl JobListCursor {
     }
 
     /// Decodes an opaque cursor emitted by either matched implementation.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when `encoded` isn't a cursor River emitted.
     pub fn decode(encoded: &str) -> Result<Self, JobListCursorError> {
         encoded.parse()
     }
