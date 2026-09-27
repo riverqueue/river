@@ -378,3 +378,58 @@ async fn periodic_jobs_run_at_their_target_unless_scheduled_explicitly() {
     pending.pending = true;
     assert_eq!(prepare(pending).state, JobState::Pending);
 }
+
+/// Like River Go's completer stop path, a client stopping during an outage
+/// gives up on its unwritten completions after the first failed batch, even
+/// when the backlog is too full for the batcher to receive the end of its
+/// channel, instead of retrying every batch until the database returns.
+#[cfg(feature = "sqlite")]
+#[tokio::test(flavor = "multi_thread")]
+async fn completer_abandons_its_backlog_when_a_batch_fails_during_shutdown() {
+    // Without River's tables, every completion write fails and is retried.
+    let pool = sqlx::SqlitePool::connect_lazy("sqlite::memory:").unwrap();
+    let client = Client::builder(pool).build().unwrap();
+    let inner = Arc::clone(&client.inner);
+    // More than a full backlog plus the batch in flight.
+    let updates = COMPLETION_BACKLOG_LIMIT + 2 * COMPLETION_BATCH_SIZE;
+    let (sender, receiver) = mpsc::channel(updates);
+    let now = std::time::Instant::now();
+    for job_id in 0..i64::try_from(updates).unwrap() {
+        let cancellation = CancellationToken::new();
+        inner
+            .running
+            .lock()
+            .unwrap()
+            .insert(job_id, cancellation.clone());
+        sender
+            .try_send(CompletionUpdate {
+                attempt: None,
+                cancellation,
+                error: None,
+                event_kind: JobEventKind::Completed,
+                finalized_at: Some(Utc::now()),
+                job_id,
+                metadata: Map::new(),
+                scheduled_at: None,
+                state: JobState::Completed,
+                timing: CompletionTiming {
+                    completion_started: now,
+                    queue_wait_duration: Duration::ZERO,
+                    run_duration: Duration::ZERO,
+                },
+            })
+            .unwrap_or_else(|_| panic!("the channel has room"));
+    }
+    // Every producer has stopped.
+    drop(sender);
+
+    // One batch's retry cycle sleeps about three seconds.
+    tokio::time::timeout(
+        Duration::from_secs(30),
+        run_completion_batcher(Arc::clone(&inner), receiver),
+    )
+    .await
+    .expect("the completer stops after the first failed batch")
+    .unwrap();
+    assert!(inner.running.lock().unwrap().is_empty());
+}

@@ -14,13 +14,13 @@ use std::collections::{HashSet, VecDeque};
 use futures_util::FutureExt as _;
 
 /// Most updates written by one statement, matching River Go.
-const COMPLETION_BATCH_SIZE: usize = 5_000;
+pub(super) const COMPLETION_BATCH_SIZE: usize = 5_000;
 /// How long sparse results coalesce before they are written.
 const COMPLETION_BATCH_DELAY: Duration = Duration::from_millis(10);
 /// Ready and deferred updates held before the batcher stops accepting more.
 /// The bounded channel then applies backpressure to workers, as River Go's
 /// backlog wait does.
-const COMPLETION_BACKLOG_LIMIT: usize = COMPLETION_BATCH_SIZE * 2;
+pub(super) const COMPLETION_BACKLOG_LIMIT: usize = COMPLETION_BATCH_SIZE * 2;
 /// Most concurrent batch writes River OSS issues on PostgreSQL.
 #[cfg(feature = "postgres")]
 const COMPLETION_POSTGRES_CONCURRENCY: usize = 2;
@@ -107,7 +107,8 @@ pub(super) struct CompletionBatcher {
     ready: HashMap<i64, CompletionUpdate>,
     ready_order: VecDeque<i64>,
     /// Set once a batch fails during shutdown; remaining updates are then
-    /// abandoned instead of retried indefinitely, like River Go's stop path.
+    /// abandoned without being attempted, like River Go's stop path, which
+    /// stops flushing at the first error.
     stop_retrying: bool,
     tasks: JoinSet<BatchOutcome>,
     task_ids: HashMap<tokio::task::Id, Vec<i64>>,
@@ -231,6 +232,36 @@ impl CompletionBatcher {
         }
     }
 
+    /// Discards every update not yet written: ready ones, and any still
+    /// queued in `receiver`, whose senders are all gone once shutdown
+    /// abandons the backlog. Returns whether `receiver` is exhausted.
+    fn abandon_backlog(&mut self, receiver: &mut mpsc::Receiver<CompletionUpdate>) -> bool {
+        let mut abandoned = 0_usize;
+        for job_id in std::mem::take(&mut self.ready_order) {
+            if let Some(update) = self.ready.remove(&job_id) {
+                self.discard(&update);
+                abandoned += 1;
+            }
+        }
+        let exhausted = loop {
+            match receiver.try_recv() {
+                Ok(update) => {
+                    self.discard(&update);
+                    abandoned += 1;
+                }
+                Err(mpsc::error::TryRecvError::Disconnected) => break true,
+                Err(mpsc::error::TryRecvError::Empty) => break false,
+            }
+        };
+        if abandoned > 0 {
+            error!(
+                num_jobs = abandoned,
+                "River client stopping after a completion error; abandoning unwritten job completions for the rescuer"
+            );
+        }
+        exhausted
+    }
+
     /// Marks a job's batch finished and promotes a deferred successor.
     fn release(&mut self, job_id: i64) {
         self.in_flight.remove(&job_id);
@@ -246,6 +277,9 @@ impl CompletionBatcher {
         tokio::pin!(coalesce);
         let mut coalescing = false;
         loop {
+            if self.stop_retrying && self.abandon_backlog(&mut receiver) {
+                accepting = false;
+            }
             self.start_ready_batches(!accepting);
             if self.ready.is_empty() {
                 self.flush_due = false;
@@ -269,7 +303,13 @@ impl CompletionBatcher {
                 },
                 joined = self.tasks.join_next_with_id(), if !self.tasks.is_empty() => {
                     if let Some(joined) = joined {
-                        if !accepting && joined.as_ref().is_ok_and(|(_, (_, result))| result.is_err()) {
+                        // Every sender is gone once the client is stopping,
+                        // even while a full backlog keeps the batcher from
+                        // receiving the channel's end, which an outage
+                        // would otherwise postpone until the database
+                        // returns.
+                        let stopping = !accepting || receiver.is_closed();
+                        if stopping && joined.as_ref().is_ok_and(|(_, (_, result))| result.is_err()) {
                             self.stop_retrying = true;
                         }
                         self.finish(joined);
