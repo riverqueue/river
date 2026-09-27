@@ -885,14 +885,16 @@ pub(crate) async fn cancel(
     id: i64,
     now: DateTime<Utc>,
 ) -> Result<Option<JobRow>, BackendError> {
-    let cancel_attempted_at = json_text(&go_time_json(now))?;
+    // Like River Go, bind the time as SQL text, which SQLite stores as a raw
+    // JSONB string rather than one parsed from JSON text.
+    let cancel_attempted_at = go_time_json(now);
     let sql = format!(
         r#"
         UPDATE river_job
         SET
             state = CASE WHEN state = 'running' THEN state ELSE 'cancelled' END,
             finalized_at = CASE WHEN state = 'running' THEN finalized_at ELSE ? END,
-            metadata = jsonb_set(metadata, '$.cancel_attempted_at', jsonb(?))
+            metadata = jsonb_set(metadata, '$.cancel_attempted_at', cast(? AS text))
         WHERE id = ?
           AND state NOT IN ('cancelled', 'completed', 'discarded')
           AND finalized_at IS NULL
