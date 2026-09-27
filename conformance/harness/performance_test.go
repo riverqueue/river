@@ -39,22 +39,25 @@ func TestPerformanceGate(t *testing.T) { //nolint:paralleltest // Owns the share
 	candidateAdapter := startCandidateAdapter(t, root, databaseURL, candidateSpec.Implementation+"-performance", candidateSpec, candidateSpec.Command)
 	goAdapter.call(t, "migrate", map[string]any{}, nil)
 
-	for _, mode := range []string{"enqueue", "worker", "mixed"} {
-		_ = runAdapterBenchmark(t, goAdapter, mode, max(20, jobs/10))
-		_ = runAdapterBenchmark(t, candidateAdapter, mode, max(20, jobs/10))
-		gateModeWithRetries(t, mode, func() []benchmarkMetrics {
-			return []benchmarkMetrics{
-				medianBenchmark(t, goAdapter, mode, jobs),
-				medianBenchmark(t, candidateAdapter, mode, jobs),
-			}
-		}, func(metrics []benchmarkMetrics) []string {
-			return benchmarkViolations(mode, candidateSpec, metrics[1], metrics[0])
-		}, func(metrics []benchmarkMetrics) {
-			t.Logf("%s: Go %.1f jobs/s p95=%s; %s %.1f jobs/s p95=%s",
-				mode, metrics[0].throughput, metrics[0].p95,
-				candidateSpec.Implementation, metrics[1].throughput, metrics[1].p95)
+	for _, mode := range []string{"enqueue", "worker", "mixed"} { //nolint:paralleltest // Modes share the conformance database.
+		t.Run("release_"+mode+"_performance", func(t *testing.T) {
+			defer scenarios.record(t)
+
+			_ = runAdapterBenchmark(t, goAdapter, mode, max(20, jobs/10))
+			_ = runAdapterBenchmark(t, candidateAdapter, mode, max(20, jobs/10))
+			gateModeWithRetries(t, mode, func() []benchmarkMetrics {
+				return []benchmarkMetrics{
+					medianBenchmark(t, goAdapter, mode, jobs),
+					medianBenchmark(t, candidateAdapter, mode, jobs),
+				}
+			}, func(metrics []benchmarkMetrics) []string {
+				return benchmarkViolations(mode, candidateSpec, metrics[1], metrics[0])
+			}, func(metrics []benchmarkMetrics) {
+				t.Logf("%s: Go %.1f jobs/s p95=%s; %s %.1f jobs/s p95=%s",
+					mode, metrics[0].throughput, metrics[0].p95,
+					candidateSpec.Implementation, metrics[1].throughput, metrics[1].p95)
+			})
 		})
-		scenarios.pass("release_" + mode + "_performance")
 	}
 }
 
@@ -164,6 +167,32 @@ func TestMixedSoak(t *testing.T) { //nolint:paralleltest // Owns the shared Post
 	// Checked after the adapters are built and started, so the budget
 	// accounts for that setup.
 	requireSoakBudget(t, "RIVER_CONFORMANCE_SOAK_DURATION", duration)
+
+	// The soak samples each adapter's connection count after every round;
+	// the pool bound scenario judges the samples once the soak is over.
+	maxConnections := make(map[string]int)
+	t.Run("mixed_soak", func(t *testing.T) { //nolint:paralleltest // Shares the conformance database.
+		defer scenarios.record(t)
+
+		runMixedSoak(t, goAdapter, candidateAdapter, duration, maxConnections)
+	})
+
+	t.Run("mixed_connection_pool_bound", func(t *testing.T) { //nolint:paralleltest // Shares the conformance database.
+		defer scenarios.record(t)
+
+		for _, adapter := range []*adapter{goAdapter, candidateAdapter} {
+			count, ok := maxConnections[adapter.name]
+			require.True(t, ok, "mixed_soak must sample %s connections first", adapter.name)
+			require.LessOrEqual(t, count, 20, "%s database connections grew without bound", adapter.name)
+		}
+	})
+}
+
+// runMixedSoak inserts from both adapters and works on the candidate until
+// duration elapses, recording each adapter's largest connection count.
+func runMixedSoak(t *testing.T, goAdapter, candidateAdapter *adapter, duration time.Duration, maxConnections map[string]int) {
+	t.Helper()
+
 	deadline := time.Now().Add(duration)
 	jobsCompleted := 0
 	for time.Now().Before(deadline) {
@@ -190,13 +219,12 @@ func TestMixedSoak(t *testing.T) { //nolint:paralleltest // Owns the shared Post
 				Count int `json:"count"`
 			}
 			adapter.call(t, "connection_count", map[string]any{}, &connections)
-			require.LessOrEqual(t, connections.Count, 20, "%s database connections grew without bound", adapter.name)
+			maxConnections[adapter.name] = max(maxConnections[adapter.name], connections.Count)
 		}
 	}
 	goAdapter.call(t, "stop", map[string]any{}, nil)
 	candidateAdapter.call(t, "stop", map[string]any{}, nil)
 	t.Logf("completed %d mixed jobs over %s", jobsCompleted, duration)
-	scenarios.pass("mixed_connection_pool_bound", "mixed_soak")
 }
 
 func medianMetrics(runs []benchmarkMetrics) benchmarkMetrics {
