@@ -1,9 +1,11 @@
 package jobexecutor
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"strings"
 	"testing"
 	"time"
@@ -910,6 +912,53 @@ func TestJobExecutor_Execute(t *testing.T) {
 		_ = riversharedtest.WaitOrTimeout(t, bundle.updateCh)
 
 		riversharedtest.WaitOrTimeout(t, informProducerUnstuckReceived)
+	})
+
+	t.Run("StuckDetectionLogsWorkerTimeout", func(t *testing.T) {
+		t.Parallel()
+
+		executor, bundle := setup(t)
+
+		// A client timeout long enough that stuck detection can't be firing on
+		// it, so the logged timeout below can only have come from the work unit.
+		executor.ClientJobTimeout = 1 * time.Minute
+		executor.StuckThresholdOverride = 1 * time.Nanosecond // must be greater than 0 to take effect
+
+		var logBuf bytes.Buffer
+		executor.Logger = slog.New(slog.NewTextHandler(&logBuf, &slog.HandlerOptions{Level: slog.LevelWarn}))
+
+		var (
+			informProducerStuckReceived   = make(chan struct{})
+			informProducerUnstuckReceived = make(chan struct{})
+		)
+		executor.ProducerCallbacks.Stuck = func(ctx context.Context, jobRow *rivertype.JobRow) {
+			close(informProducerStuckReceived)
+		}
+		executor.ProducerCallbacks.Unstuck = func() {
+			close(informProducerUnstuckReceived)
+		}
+
+		workUnit := &customizableWorkUnit{
+			timeout: 5 * time.Millisecond,
+			work: func() error {
+				riversharedtest.WaitOrTimeout(t, informProducerStuckReceived)
+				return nil
+			},
+		}
+
+		executor.WorkUnit = (&workUnitFactory{
+			workUnit: workUnit,
+		}).MakeUnit(bundle.jobRow)
+
+		executor.Execute(ctx)
+		_ = riversharedtest.WaitOrTimeout(t, bundle.updateCh)
+
+		// The unstuck callback runs after the stuck log line is written, so
+		// the buffer is safe to read from here.
+		riversharedtest.WaitOrTimeout(t, informProducerUnstuckReceived)
+
+		require.Contains(t, logBuf.String(), "Job appears to be stuck")
+		require.Contains(t, logBuf.String(), "timeout=5ms")
 	})
 
 	t.Run("Panic", func(t *testing.T) {
