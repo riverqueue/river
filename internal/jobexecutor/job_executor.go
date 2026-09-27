@@ -298,7 +298,7 @@ func (e *JobExecutor) watchStuck(ctx context.Context, jobTimeout time.Duration) 
 	// immune to all context cancellations _except_ the one where it's
 	// cancelled because we leave JobExecutor.execute.
 	//
-	// This shadows the context outside the e.ClientJobTimeout > 0 check.
+	// This shadows the context outside the jobTimeout > 0 check.
 	ctx, cancel := context.WithCancel(context.WithoutCancel(ctx))
 
 	go func() {
@@ -314,7 +314,7 @@ func (e *JobExecutor) watchStuck(ctx context.Context, jobTimeout time.Duration) 
 			e.Logger.WarnContext(ctx, e.Name+": Job appears to be stuck",
 				slog.Int64("job_id", e.JobRow.ID),
 				slog.String("kind", e.JobRow.Kind),
-				slog.Duration("timeout", e.ClientJobTimeout),
+				slog.Duration("timeout", jobTimeout),
 			)
 
 			// context cancelled as we leave JobExecutor.execute
