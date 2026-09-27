@@ -225,6 +225,88 @@ macro_rules! scenarios {
             fixture.cleanup().await;
         }
 
+        // Each delete-many filter deletes exactly the jobs it matches.
+        #[tokio::test(flavor = "multi_thread")]
+        async fn delete_many_filters_by_kind_queue_priority_and_state() {
+            let fixture = Fixture::new().await;
+            let client = fixture.builder().build().unwrap();
+            let jobs = client.jobs();
+
+            let plain = client.insert(args("plain")).await.unwrap().id();
+            let other_kind = client.insert(FloatArgs { value: 1.0 }).await.unwrap().id();
+            let other_queue = client
+                .insert(args("other_queue"))
+                .opts(InsertOpts::default().with_queue("delete_many_other"))
+                .await
+                .unwrap()
+                .id();
+            let urgent = client
+                .insert(args("urgent"))
+                .opts(InsertOpts::default().with_priority(2))
+                .await
+                .unwrap()
+                .id();
+            let cancelled = client.insert(args("cancelled")).await.unwrap().id();
+            jobs.cancel(cancelled).await.unwrap();
+
+            let deleted_ids = |rows: Vec<riverqueue::JobRow>| {
+                let mut ids = rows.into_iter().map(|row| row.id).collect::<Vec<_>>();
+                ids.sort_unstable();
+                ids
+            };
+            let delete =
+                |params: JobListParams| jobs.delete_many(JobDeleteManyParams::matching(params));
+            assert_eq!(
+                deleted_ids(
+                    delete(JobListParams::default().kinds([FloatArgs::KIND]))
+                        .await
+                        .unwrap()
+                ),
+                [other_kind]
+            );
+            assert_eq!(
+                deleted_ids(
+                    delete(JobListParams::default().queues(["delete_many_other"]))
+                        .await
+                        .unwrap()
+                ),
+                [other_queue]
+            );
+            assert_eq!(
+                deleted_ids(
+                    delete(JobListParams::default().priorities([2]))
+                        .await
+                        .unwrap()
+                ),
+                [urgent]
+            );
+            assert_eq!(
+                deleted_ids(
+                    delete(JobListParams::default().states([JobState::Cancelled]))
+                        .await
+                        .unwrap()
+                ),
+                [cancelled]
+            );
+            // Combined filters must all match.
+            assert!(
+                delete(
+                    JobListParams::default()
+                        .kinds([HandleArgs::KIND])
+                        .states([JobState::Cancelled])
+                )
+                .await
+                .unwrap()
+                .is_empty()
+            );
+            let remaining = jobs.list(JobListParams::default()).await.unwrap().jobs;
+            assert_eq!(
+                remaining.iter().map(|row| row.id).collect::<Vec<_>>(),
+                [plain]
+            );
+            fixture.cleanup().await;
+        }
+
         // Jobs are fetched by priority, then scheduled time, then ID, as in
         // Go.
         #[tokio::test(flavor = "multi_thread")]
