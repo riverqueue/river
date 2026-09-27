@@ -18,9 +18,11 @@ apply River's migrations, and start a client:
 ```rust,no_run
 use riverqueue::{
     BoxError, Client, Job, JobArgs, QueueConfig, WorkContext, WorkOutcome, WorkerRegistry,
-    migrate::PostgresMigrator,
 };
+# #[cfg(feature = "postgres")]
+use riverqueue::migrate::PostgresMigrator;
 use serde::{Deserialize, Serialize};
+# #[cfg(feature = "postgres")]
 use sqlx::PgPool;
 
 #[derive(Clone, Debug, Deserialize, JobArgs, Serialize)]
@@ -29,6 +31,7 @@ struct SendEmail {
     address: String,
 }
 
+# #[cfg(feature = "postgres")]
 async fn send_email(
     context: WorkContext,
     job: Job<SendEmail>,
@@ -38,6 +41,7 @@ async fn send_email(
     Ok(WorkOutcome::Complete)
 }
 
+# #[cfg(feature = "postgres")]
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let pool = PgPool::connect(&std::env::var("DATABASE_URL")?).await?;
@@ -66,6 +70,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     run.wait().await?;
     Ok(())
 }
+# #[cfg(not(feature = "postgres"))]
+# fn main() {}
 ```
 
 Migrations must be applied before any client starts. `Client::start` must run
@@ -140,6 +146,7 @@ take `.tx(&mut transaction)` like insertions:
 
 ```rust,no_run
 # use riverqueue::{Client, JobListParams, JobState, QueueConfig, QueueSelector};
+# #[cfg(feature = "postgres")]
 # async fn example(client: Client, pool: sqlx::PgPool) -> Result<(), riverqueue::Error> {
 let page = client
     .jobs()
@@ -271,8 +278,10 @@ connection or deliberately use a shared-cache URI:
 use std::{str::FromStr, time::Duration};
 
 use riverqueue::Client;
+# #[cfg(feature = "sqlite")]
 use sqlx::sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePoolOptions};
 
+# #[cfg(feature = "sqlite")]
 # async fn example() -> Result<(), Box<dyn std::error::Error>> {
 let options = SqliteConnectOptions::from_str("sqlite://river.db")?
     .create_if_missing(true)

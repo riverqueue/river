@@ -403,6 +403,7 @@ impl<T> IntoDatabase for T where T: private::IntoDatabaseSealed {}
 /// A transaction borrowed mutably is accepted:
 ///
 /// ```no_run
+/// # #[cfg(feature = "postgres")]
 /// # async fn example(
 /// #     client: &riverqueue::Client,
 /// #     pool: &sqlx::PgPool,

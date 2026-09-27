@@ -17,6 +17,7 @@ use crate::{Queue, QueueListParams, QueueSelector, QueueUpdateParams};
 ///
 /// ```no_run
 /// # use riverqueue::QueueSelector;
+/// # #[cfg(feature = "postgres")]
 /// # async fn example(client: riverqueue::Client, pool: sqlx::PgPool) -> Result<(), riverqueue::Error> {
 /// client.queues().pause("email").await?;
 ///

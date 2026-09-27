@@ -17,6 +17,7 @@ use crate::{JobDeleteManyParams, JobListCursor, JobListParams, JobListResult, Jo
 /// awaited, or in a caller-managed transaction after `.tx(&mut tx)`:
 ///
 /// ```no_run
+/// # #[cfg(feature = "postgres")]
 /// # async fn example(client: riverqueue::Client, pool: sqlx::PgPool) -> Result<(), riverqueue::Error> {
 /// let job = client.jobs().get(42).await?;
 ///
@@ -84,6 +85,7 @@ impl<'a> Jobs<'a> {
     /// the work context.
     ///
     /// ```no_run
+    /// # #[cfg(feature = "postgres")]
     /// # async fn example(client: riverqueue::Client, pool: sqlx::PgPool) -> Result<(), riverqueue::Error> {
     /// let mut tx = riverqueue::database::begin_postgres(&pool).await?;
     /// // ... business writes in `tx` ...

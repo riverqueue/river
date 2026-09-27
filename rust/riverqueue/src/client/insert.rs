@@ -291,6 +291,7 @@ impl Client {
     ///     address: String,
     /// }
     ///
+    /// # #[cfg(feature = "postgres")]
     /// # async fn example(client: Client, pool: sqlx::PgPool) -> Result<(), Box<dyn std::error::Error>> {
     /// let inserted = client
     ///     .insert(SendEmail { address: "user@example.com".to_owned() })

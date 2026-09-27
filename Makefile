@@ -158,9 +158,11 @@ test/conformance/multi-engine/soak: ## Run direct multi-engine soak
 	go test -tags riverconformance ./conformance/harness -run '^TestMultiEngineSoak$$' -count=1 -timeout $(CONFORMANCE_SOAK_TIMEOUT)
 
 .PHONY: doc/rust
-doc/rust: ## Build Rust API documentation and compiled examples
+doc/rust: ## Build Rust API documentation, compiled examples, and doctests for each backend feature set
 	cd rust && RUSTDOCFLAGS="-D warnings" cargo doc --workspace --all-features --no-deps --locked
 	cd rust && RUSTDOCFLAGS="-D warnings" cargo test --workspace --all-features --doc --locked
+	cd rust && RUSTDOCFLAGS="-D warnings" cargo test -p riverqueue -p riverqueue-migrate -p riverqueue-cli -p riverqueue-test --no-default-features --features postgres --doc --locked
+	cd rust && RUSTDOCFLAGS="-D warnings" cargo test -p riverqueue -p riverqueue-migrate -p riverqueue-cli -p riverqueue-test --no-default-features --features sqlite --doc --locked
 	cd rust && cargo check --workspace --examples --all-features --locked
 
 .PHONY: check/rust/dependencies
