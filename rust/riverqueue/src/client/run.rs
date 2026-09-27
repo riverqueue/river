@@ -105,7 +105,8 @@ impl Client {
         let supervisor = Supervisor {
             fetch_cancel: stopper.fetch_cancel.clone(),
             inner: Arc::clone(&inner),
-            restarts: HashMap::new(),
+            notifier_ready: Arc::new(Mutex::new(None)),
+            restarts: RestartBackoff::default(),
             services: HashMap::new(),
             tasks: JoinSet::new(),
             work_cancel: stopper.work_cancel.clone(),
@@ -151,12 +152,40 @@ impl Service {
     }
 }
 
+/// How long a restarted service must run before a failure counts as a new
+/// outage whose backoff starts over, rather than as another failure in a row.
+/// It exceeds the longest restart backoff (about 70 seconds).
+const SERVICE_RESTART_RESET_AFTER: Duration = Duration::from_mins(2);
+
+/// Consecutive failures of each restartable service.
+#[derive(Debug, Default)]
+struct RestartBackoff {
+    attempts: HashMap<Service, u32>,
+}
+
+impl RestartBackoff {
+    /// Records a failure of `service` after it ran for `ran_for`, returning
+    /// the one-based restart attempt and the backoff before it. Like River
+    /// Go's services, which reset their error counts once they succeed, a
+    /// service that ran for a while before failing starts its backoff over.
+    fn failed(&mut self, service: Service, ran_for: Duration) -> (u32, Duration) {
+        let attempt = self.attempts.entry(service).or_default();
+        if ran_for >= SERVICE_RESTART_RESET_AFTER {
+            *attempt = 0;
+        }
+        *attempt += 1;
+        (*attempt, exponential_backoff(*attempt))
+    }
+}
+
 /// Runs a started client's services and restarts the ones that fail.
 struct Supervisor {
     fetch_cancel: CancellationToken,
     inner: Arc<ClientInner>,
-    restarts: HashMap<Service, u32>,
-    services: HashMap<tokio::task::Id, Service>,
+    notifier_ready: ReadySlot,
+    restarts: RestartBackoff,
+    /// Each running service and when its current run started.
+    services: HashMap<tokio::task::Id, (Service, tokio::time::Instant)>,
     tasks: JoinSet<Result<(), Error>>,
     work_cancel: CancellationToken,
 }
@@ -193,7 +222,7 @@ impl Supervisor {
                 Ok((task_id, outcome)) => (task_id, outcome),
                 Err(join_error) => (join_error.id(), Err(Error::from_join(join_error))),
             };
-            let Some(service) = self.services.remove(&task_id) else {
+            let Some((service, started_at)) = self.services.remove(&task_id) else {
                 continue;
             };
             let stopping = self.fetch_cancel.is_cancelled();
@@ -221,17 +250,15 @@ impl Supervisor {
                     self.work_cancel.cancel();
                 }
                 outcome => {
-                    let attempt = self.restarts.entry(service).or_default();
-                    *attempt += 1;
-                    let delay = exponential_backoff(*attempt);
+                    let (attempt, delay) = self.restarts.failed(service, started_at.elapsed());
                     error!(
                         service = service.name(),
-                        attempt = *attempt,
+                        attempt,
                         error = %outcome.err().map_or_else(|| "exited unexpectedly".to_owned(), |error| error.to_string()),
                         sleep_duration = ?delay,
                         "River service failed; restarting after backoff"
                     );
-                    self.spawn_service(service, delay, None);
+                    self.spawn_service(service, delay);
                 }
             }
         }
@@ -269,16 +296,23 @@ impl Supervisor {
         if inner.poll_only {
             let _ = notifier_ready_sender.send(Ok(()));
         } else {
-            self.spawn_service(
-                Service::Notifier,
-                Duration::ZERO,
-                Some(notifier_ready_sender),
-            );
+            *self
+                .notifier_ready
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(notifier_ready_sender);
+            self.spawn_service(Service::Notifier, Duration::ZERO);
         }
         // Not a service: it ends once both parts report, or once either
-        // part stops first, which leaves the client not ready.
+        // part stops first, which leaves the client not ready. The
+        // supervisor keeps the notifier's readiness across restarts, so the
+        // client's stop ends the wait.
+        let stopped = self.fetch_cancel.clone();
         self.tasks.spawn(async move {
-            let result = match notifier_ready.await {
+            let notifier_ready = tokio::select! {
+                () = stopped.cancelled() => return Ok(()),
+                notifier_ready = notifier_ready => notifier_ready,
+            };
+            let result = match notifier_ready {
                 Ok(Ok(())) if queues_ready.await.is_ok() => Ok(()),
                 Ok(Err(message)) => Err(message),
                 Ok(Ok(())) | Err(_) => return Ok(()),
@@ -287,10 +321,10 @@ impl Supervisor {
             Ok(())
         });
         if !inner.leader_election_disabled {
-            self.spawn_service(Service::Maintenance, Duration::ZERO, None);
+            self.spawn_service(Service::Maintenance, Duration::ZERO);
         }
         for index in 0..inner.pilot.runtime_services().len() {
-            self.spawn_service(Service::Extension(index), Duration::ZERO, None);
+            self.spawn_service(Service::Extension(index), Duration::ZERO);
         }
     }
 
@@ -299,12 +333,13 @@ impl Supervisor {
         F: std::future::Future<Output = Result<(), Error>> + Send + 'static,
     {
         let handle = self.tasks.spawn(task);
-        self.services.insert(handle.id(), service);
+        self.services
+            .insert(handle.id(), (service, tokio::time::Instant::now()));
     }
 
     /// Starts a restartable service after `delay`, unless the client stops
     /// first.
-    fn spawn_service(&mut self, service: Service, delay: Duration, ready: Option<ReadySender>) {
+    fn spawn_service(&mut self, service: Service, delay: Duration) {
         let inner = Arc::clone(&self.inner);
         let cancel = self.fetch_cancel.child_token();
         let run: std::pin::Pin<Box<dyn std::future::Future<Output = Result<(), Error>> + Send>> =
@@ -314,22 +349,39 @@ impl Supervisor {
                     cancel.clone(),
                     inner.queue_notifications.subscribe(),
                 )),
-                Service::Notifier => match inner.database.kind() {
-                    #[cfg(feature = "postgres")]
-                    DatabaseKind::Postgres => Box::pin(run_notifications(
-                        Arc::clone(&inner),
-                        cancel.clone(),
-                        inner.queue_notifications.clone(),
-                        ready,
-                    )),
-                    #[cfg(feature = "sqlite")]
-                    DatabaseKind::Sqlite => Box::pin(run_sqlite_notifications(
-                        Arc::clone(&inner),
-                        cancel.clone(),
-                        inner.queue_notifications.clone(),
-                        ready,
-                    )),
-                },
+                Service::Notifier => {
+                    let ready = self.notifier_ready.clone();
+                    #[cfg(test)]
+                    if inner
+                        .notifier_start_panics
+                        .fetch_update(Ordering::AcqRel, Ordering::Acquire, |remaining| {
+                            remaining.checked_sub(1)
+                        })
+                        .is_ok()
+                    {
+                        self.spawn_task(service, async move {
+                            let _ready = ready;
+                            panic!("injected notification listener panic")
+                        });
+                        return;
+                    }
+                    match inner.database.kind() {
+                        #[cfg(feature = "postgres")]
+                        DatabaseKind::Postgres => Box::pin(run_notifications(
+                            Arc::clone(&inner),
+                            cancel.clone(),
+                            inner.queue_notifications.clone(),
+                            ready,
+                        )),
+                        #[cfg(feature = "sqlite")]
+                        DatabaseKind::Sqlite => Box::pin(run_sqlite_notifications(
+                            Arc::clone(&inner),
+                            cancel.clone(),
+                            inner.queue_notifications.clone(),
+                            ready,
+                        )),
+                    }
+                }
                 Service::Extension(index) => {
                     let Some(runtime_service) =
                         inner.pilot.runtime_services().into_iter().nth(index)
@@ -664,4 +716,24 @@ pub(super) fn join_client_result(
 ) -> Result<(), Error> {
     result.map_err(Error::from_join)??;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn restart_backoff_starts_over_after_a_long_healthy_run() {
+        let mut restarts = RestartBackoff::default();
+        let quick = Duration::from_secs(1);
+        assert_eq!(restarts.failed(Service::Notifier, quick).0, 1);
+        assert_eq!(restarts.failed(Service::Notifier, quick).0, 2);
+        assert_eq!(restarts.failed(Service::Maintenance, quick).0, 1);
+        assert_eq!(restarts.failed(Service::Notifier, quick).0, 3);
+        // A failure after a healthy run is the start of a new outage.
+        let (attempt, delay) = restarts.failed(Service::Notifier, SERVICE_RESTART_RESET_AFTER);
+        assert_eq!(attempt, 1);
+        assert!(delay <= Duration::from_millis(1_100), "{delay:?}");
+        assert_eq!(restarts.failed(Service::Maintenance, quick).0, 2);
+    }
 }

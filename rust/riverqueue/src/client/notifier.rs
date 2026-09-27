@@ -48,8 +48,17 @@ pub(crate) enum RuntimeNotification {
 /// Readiness reported once by the notification path.
 pub(super) type ReadySender = oneshot::Sender<Result<(), String>>;
 
-fn report_ready(ready: &mut Option<ReadySender>) {
-    if let Some(ready) = ready.take() {
+/// Holds the notification path's readiness until a listener reports it. The
+/// supervisor keeps the slot, so a listener restarted after a panic still
+/// reports readiness instead of the client appearing to have stopped.
+pub(super) type ReadySlot = Arc<Mutex<Option<ReadySender>>>;
+
+fn report_ready(ready: &ReadySlot) {
+    if let Some(ready) = ready
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .take()
+    {
         let _ = ready.send(Ok(()));
     }
 }
@@ -136,7 +145,7 @@ pub(super) async fn run_notifications(
     inner: Arc<ClientInner>,
     cancel: CancellationToken,
     queue_notifications: broadcast::Sender<RuntimeNotification>,
-    mut ready: Option<ReadySender>,
+    ready: ReadySlot,
 ) -> Result<(), Error> {
     let mut attempt = 0;
     let mut missed_notifications = false;
@@ -148,7 +157,7 @@ pub(super) async fn run_notifications(
                 &inner,
                 &cancel,
                 &queue_notifications,
-                &mut ready,
+                &ready,
                 &mut schema,
                 &mut attempt,
                 missed_notifications,
@@ -180,7 +189,7 @@ async fn listen_until_error(
     inner: &ClientInner,
     cancel: &CancellationToken,
     queue_notifications: &broadcast::Sender<RuntimeNotification>,
-    ready: &mut Option<ReadySender>,
+    ready: &ReadySlot,
     schema: &mut Option<String>,
     attempt: &mut u32,
     missed_notifications: bool,
@@ -298,7 +307,7 @@ pub(super) async fn run_sqlite_notifications(
     inner: Arc<ClientInner>,
     cancel: CancellationToken,
     queue_notifications: broadcast::Sender<RuntimeNotification>,
-    mut ready: Option<ReadySender>,
+    ready: ReadySlot,
 ) -> Result<(), Error> {
     let pool = inner
         .sqlite_pool()
@@ -338,7 +347,7 @@ pub(super) async fn run_sqlite_notifications(
                     .await
                     .map_err(sqlite_backend_error)?;
             }
-            report_ready(&mut ready);
+            report_ready(&ready);
             while let Some(notification) = listener
                 .next(&mut connection)
                 .await

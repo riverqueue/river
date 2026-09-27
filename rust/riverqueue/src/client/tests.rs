@@ -433,3 +433,70 @@ async fn completer_abandons_its_backlog_when_a_batch_fails_during_shutdown() {
     .unwrap();
     assert!(inner.running.lock().unwrap().is_empty());
 }
+
+/// A notification listener that panics is restarted, and the restarted
+/// listener reports the client ready rather than the client appearing to
+/// have stopped before becoming ready.
+#[cfg(feature = "sqlite")]
+#[tokio::test(flavor = "multi_thread")]
+async fn readiness_survives_a_notification_listener_panic() {
+    #[derive(Deserialize, serde::Serialize)]
+    struct ReadinessArgs {}
+
+    impl JobArgs for ReadinessArgs {
+        const KIND: &'static str = "readiness";
+    }
+
+    let path = std::env::temp_dir().join(format!(
+        "river-readiness-{}-{}.sqlite",
+        std::process::id(),
+        Utc::now().timestamp_nanos_opt().unwrap_or_default()
+    ));
+    let pool = sqlx::sqlite::SqlitePoolOptions::new()
+        .max_connections(4)
+        .connect_with(
+            sqlx::sqlite::SqliteConnectOptions::new()
+                .filename(&path)
+                .create_if_missing(true)
+                .journal_mode(sqlx::sqlite::SqliteJournalMode::Wal),
+        )
+        .await
+        .unwrap();
+    riverqueue_migrate::SqliteMigrator::new(pool.clone())
+        .migrate_up()
+        .await
+        .unwrap();
+    let mut workers = WorkerRegistry::new();
+    workers
+        .register_fn(|_context: WorkContext, _job: Job<ReadinessArgs>| async {
+            Ok::<_, std::convert::Infallible>(WorkOutcome::Complete)
+        })
+        .unwrap();
+    let client = Client::builder(pool.clone())
+        .without_leader_election()
+        .workers(workers)
+        .queue("default", QueueConfig::new(1))
+        .build()
+        .unwrap();
+    client
+        .inner
+        .notifier_start_panics
+        .store(1, Ordering::Release);
+
+    let mut run = client.start().unwrap();
+    tokio::time::timeout(Duration::from_secs(10), run.wait_ready())
+        .await
+        .expect("the restarted listener reports readiness")
+        .unwrap();
+    assert_eq!(
+        client.inner.notifier_start_panics.load(Ordering::Acquire),
+        0
+    );
+    run.shutdown().await.unwrap();
+    pool.close().await;
+    for suffix in ["", "-shm", "-wal"] {
+        let mut file = path.as_os_str().to_owned();
+        file.push(suffix);
+        let _ = std::fs::remove_file(file);
+    }
+}

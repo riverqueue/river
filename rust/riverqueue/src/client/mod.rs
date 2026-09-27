@@ -128,6 +128,10 @@ pub(crate) struct ClientInner {
     pub(crate) job_timeout: Option<Duration>,
     leader_election_disabled: bool,
     pub(crate) maintenance: MaintenanceConfig,
+    /// Notification listener starts that panic before doing anything, so
+    /// tests can exercise the supervisor's restart path.
+    #[cfg(test)]
+    notifier_start_panics: AtomicU64,
     insert_middleware: Vec<Arc<dyn crate::extension::DynInsertMiddleware>>,
     pub(crate) periodic_jobs: PeriodicJobs,
     pending_cancellations: Mutex<HashMap<i64, std::time::Instant>>,

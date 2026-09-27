@@ -601,6 +601,8 @@ impl ClientBuilder {
                 job_timeout: self.job_timeout,
                 leader_election_disabled: self.leader_election_disabled,
                 maintenance,
+                #[cfg(test)]
+                notifier_start_panics: AtomicU64::new(0),
                 insert_middleware: self.insert_middleware,
                 periodic_jobs,
                 pending_cancellations: Mutex::new(HashMap::new()),
