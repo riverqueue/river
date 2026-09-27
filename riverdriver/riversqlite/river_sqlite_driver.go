@@ -328,6 +328,15 @@ func (e *Executor) JobCancel(ctx context.Context, params *riverdriver.JobCancelP
 
 			return nil, interpretError(err)
 		}
+		if params.ControlTopic != "" {
+			if err := dbsqlc.New().NotificationInsertJobCancel(schemaTemplateParam(ctx, params.Schema), dbtx, &dbsqlc.NotificationInsertJobCancelParams{
+				JobID: job.ID,
+				Queue: job.Queue,
+				Topic: params.ControlTopic,
+			}); err != nil {
+				return nil, fmt.Errorf("error inserting job cancellation notification: %w", interpretError(err))
+			}
+		}
 		return jobRowFromInternal(job)
 	})
 }

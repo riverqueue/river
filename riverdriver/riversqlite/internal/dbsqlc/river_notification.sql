@@ -28,6 +28,13 @@ LIMIT @max;
 SELECT cast(coalesce(max(id), 0) AS integer)
 FROM /* TEMPLATE: schema */river_notification;
 
+-- name: NotificationInsertJobCancel :exec
+INSERT INTO /* TEMPLATE: schema */river_notification (payload, topic)
+VALUES (
+    json_object('action', 'cancel', 'job_id', cast(@job_id AS integer), 'queue', cast(@queue AS text)),
+    @topic
+);
+
 -- name: NotificationInsertMany :exec
 INSERT INTO /* TEMPLATE: schema */river_notification (
     payload,
