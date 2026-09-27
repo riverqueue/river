@@ -345,6 +345,14 @@ impl MaintenanceService for LeadershipService {
     }
 }
 
+/// The current leader's lease expiry, which each successful renewal moves.
+async fn leader_expires_at(pool: &sqlx::SqlitePool) -> Option<String> {
+    sqlx::query_scalar("SELECT CAST(expires_at AS TEXT) FROM river_leader")
+        .fetch_optional(pool)
+        .await
+        .unwrap()
+}
+
 async fn setup() -> sqlx::SqlitePool {
     let options = SqliteConnectOptions::new()
         .filename(":memory:")
@@ -1041,23 +1049,27 @@ async fn sqlite_transient_renewal_contention_preserves_leadership_services() {
     }
     let starts_before_contention = service.starts.load(Ordering::SeqCst);
     let stops_before_contention = service.stops.load(Ordering::SeqCst);
+    let lease_before_contention = leader_expires_at(&pool).await;
     let mut writer = pool.begin_with("BEGIN IMMEDIATE").await.unwrap();
     sqlx::query("UPDATE river_queue SET updated_at = updated_at WHERE name = 'default'")
         .execute(&mut *writer)
         .await
         .unwrap();
+    // Hold the write lock across several 10 ms renewal attempts.
     tokio::time::sleep(Duration::from_millis(100)).await;
-    assert_eq!(
-        service.starts.load(Ordering::SeqCst),
-        starts_before_contention
-    );
-    assert_eq!(
-        service.stops.load(Ordering::SeqCst),
-        stops_before_contention
-    );
     writer.rollback().await.unwrap();
 
-    tokio::time::sleep(Duration::from_millis(100)).await;
+    // Once a renewal after the contention has succeeded, the services have
+    // been through the whole contention; the counters show whether they
+    // stopped at any point.
+    let renewal_deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+    while leader_expires_at(&pool).await == lease_before_contention {
+        assert!(
+            tokio::time::Instant::now() < renewal_deadline,
+            "leadership was never renewed after the contention"
+        );
+        tokio::time::sleep(Duration::from_millis(5)).await;
+    }
     assert_eq!(
         service.starts.load(Ordering::SeqCst),
         starts_before_contention

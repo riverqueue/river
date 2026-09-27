@@ -699,18 +699,24 @@ async fn shutdown_waits_for_active_work_and_soft_stop_escalates() {
         .opts(riverqueue::InsertOpts::default().with_queue("graceful"))
         .await
         .unwrap();
-    let graceful_shutdown = tokio::spawn(async move { graceful_handle.shutdown().await });
-    tokio::time::sleep(Duration::from_millis(50)).await;
-    assert!(
-        !graceful_shutdown.is_finished(),
-        "graceful shutdown returned while barrier work was active"
-    );
+    // Request the stop before releasing the worker, then check when the
+    // shutdown returns that the worker had taken its release: a shutdown that
+    // didn't wait for active work would return with the permit unclaimed.
+    graceful_handle.stopper().stop();
+    let finish = Arc::clone(&graceful_finish);
+    let graceful_shutdown = tokio::spawn(async move {
+        graceful_handle.shutdown().await.unwrap();
+        finish.available_permits()
+    });
     graceful_finish.add_permits(1);
-    tokio::time::timeout(Duration::from_secs(2), graceful_shutdown)
+    let unclaimed = tokio::time::timeout(Duration::from_secs(2), graceful_shutdown)
         .await
         .unwrap()
-        .unwrap()
         .unwrap();
+    assert_eq!(
+        unclaimed, 0,
+        "graceful shutdown returned while barrier work was active"
+    );
     assert_eq!(
         graceful_client
             .jobs()

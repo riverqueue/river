@@ -1940,7 +1940,9 @@ async fn rescuer_honors_worker_timeout_and_retry_overrides() {
         retry_override.scheduled_at
     );
 
-    tokio::time::sleep(Duration::from_millis(100)).await;
+    // Every job was stuck from the start, so the rescuer pass that rescued
+    // the job with the highest ID also looked at these two and left them
+    // running.
     for id in [disabled_timeout_id, long_timeout_id] {
         let row = client.jobs().get(id).await.unwrap();
         assert_eq!(row.state, JobState::Running);
