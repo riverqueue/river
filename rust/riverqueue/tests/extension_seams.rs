@@ -55,10 +55,25 @@ enum ClaimMode {
 }
 
 /// Claims or selects every available job and records the IDs River reports
-/// as rolled back.
+/// as committed or rolled back.
+#[derive(Clone)]
 struct ClaimingPilot {
+    committed: Arc<Mutex<Vec<i64>>>,
+    /// An ID `select_job_ids` adds to its selection whatever its state.
+    extra_selection: Option<i64>,
     mode: ClaimMode,
     rolled_back: Arc<Mutex<Vec<i64>>>,
+}
+
+impl ClaimingPilot {
+    fn new(mode: ClaimMode) -> Self {
+        Self {
+            committed: Arc::default(),
+            extra_selection: None,
+            mode,
+            rolled_back: Arc::default(),
+        }
+    }
 }
 
 #[async_trait]
@@ -111,6 +126,10 @@ impl Pilot for ClaimingPilot {
         }
     }
 
+    fn claim_jobs_committed(&self, _params: &FetchParams, job_ids: &[i64]) {
+        self.committed.lock().unwrap().extend_from_slice(job_ids);
+    }
+
     fn claim_jobs_rolled_back(&self, _params: &FetchParams, job_ids: &[i64]) {
         self.rolled_back.lock().unwrap().extend_from_slice(job_ids);
     }
@@ -120,7 +139,7 @@ impl Pilot for ClaimingPilot {
         connection: DatabaseConnection<'_>,
         params: &FetchParams,
     ) -> Result<Option<Vec<i64>>, PilotError> {
-        let ids = match connection {
+        let mut ids: Vec<i64> = match connection {
             #[cfg(feature = "postgres")]
             DatabaseConnection::Postgres(connection) => {
                 let table = params
@@ -151,54 +170,25 @@ impl Pilot for ClaimingPilot {
             #[allow(unreachable_patterns)]
             _ => return Ok(None),
         };
+        ids.extend(self.extra_selection);
         Ok(Some(ids))
     }
 }
 
-/// Waits until `rolled_back` reports `id`, failing after ten seconds.
-async fn wait_for_rollback(rolled_back: &Mutex<Vec<i64>>, id: i64) {
+/// Waits until `reported` contains `id`, failing after ten seconds.
+async fn wait_for_report(reported: &Mutex<Vec<i64>>, id: i64, outcome: &str) {
     let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
-    while !rolled_back.lock().unwrap().contains(&id) {
+    while !reported.lock().unwrap().contains(&id) {
         assert!(
             tokio::time::Instant::now() < deadline,
-            "claim of job {id} was never reported as rolled back"
+            "claim of job {id} was never reported as {outcome}"
         );
         tokio::time::sleep(Duration::from_millis(10)).await;
     }
 }
 
-/// Starts a client whose fetch commits fail until `unblock` runs, and checks
-/// that the extension hears about every rolled-back claim and that the job
-/// is worked once commits succeed.
-async fn assert_claims_roll_back<F, Fut>(
-    builder: riverqueue::ClientBuilder,
-    mode: ClaimMode,
-    unblock: F,
-) where
-    F: FnOnce() -> Fut,
-    Fut: std::future::Future<Output = ()>,
-{
-    let rolled_back = Arc::new(Mutex::new(Vec::new()));
-    let client = builder
-        .pilot(ClaimingPilot {
-            mode,
-            rolled_back: Arc::clone(&rolled_back),
-        })
-        .queue("default", fast_queue())
-        .workers(workers())
-        .build()
-        .unwrap();
-    let id = client.insert(SeamArgs { value: 1 }).await.unwrap().id();
-    let mut run = client.start().unwrap();
-    run.wait_ready().await.unwrap();
-
-    wait_for_rollback(&rolled_back, id).await;
-    assert_eq!(
-        client.jobs().get(id).await.unwrap().state,
-        JobState::Available
-    );
-
-    unblock().await;
+/// Waits for a job to complete, failing after ten seconds.
+async fn wait_for_completion(client: &Client, id: i64) {
     let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
     while client.jobs().get(id).await.unwrap().state != JobState::Completed {
         assert!(
@@ -207,7 +197,68 @@ async fn assert_claims_roll_back<F, Fut>(
         );
         tokio::time::sleep(Duration::from_millis(10)).await;
     }
+}
+
+/// Starts a client whose fetch commits fail until `unblock` runs, and checks
+/// that the extension hears about every rolled-back claim, and about the
+/// committed claim once commits succeed and the job is worked.
+async fn assert_claims_roll_back<F, Fut>(
+    builder: riverqueue::ClientBuilder,
+    mode: ClaimMode,
+    unblock: F,
+) where
+    F: FnOnce() -> Fut,
+    Fut: std::future::Future<Output = ()>,
+{
+    let pilot = ClaimingPilot::new(mode);
+    let client = builder
+        .pilot(pilot.clone())
+        .queue("default", fast_queue())
+        .workers(workers())
+        .build()
+        .unwrap();
+    let id = client.insert(SeamArgs { value: 1 }).await.unwrap().id();
+    let mut run = client.start().unwrap();
+    run.wait_ready().await.unwrap();
+
+    wait_for_report(&pilot.rolled_back, id, "rolled back").await;
+    assert!(pilot.committed.lock().unwrap().is_empty());
+    assert_eq!(
+        client.jobs().get(id).await.unwrap().state,
+        JobState::Available
+    );
+
+    unblock().await;
+    wait_for_completion(&client, id).await;
     run.shutdown().await.unwrap();
+    assert_eq!(*pilot.committed.lock().unwrap(), [id]);
+}
+
+/// Checks that a committed selection reports the jobs River claimed as
+/// committed and a selected job River's claim skipped as rolled back.
+async fn assert_skipped_selections_roll_back(builder: impl Fn() -> riverqueue::ClientBuilder) {
+    let inserter = builder().build().unwrap();
+    let skipped = inserter.insert(SeamArgs { value: 1 }).await.unwrap().id();
+    inserter.jobs().cancel(skipped).await.unwrap();
+    let id = inserter.insert(SeamArgs { value: 2 }).await.unwrap().id();
+
+    let pilot = ClaimingPilot {
+        extra_selection: Some(skipped),
+        ..ClaimingPilot::new(ClaimMode::Select)
+    };
+    let client = builder()
+        .pilot(pilot.clone())
+        .queue("default", fast_queue())
+        .workers(workers())
+        .build()
+        .unwrap();
+    let mut run = client.start().unwrap();
+    wait_for_completion(&client, id).await;
+    run.shutdown().await.unwrap();
+
+    assert_eq!(*pilot.committed.lock().unwrap(), [id]);
+    assert!(pilot.rolled_back.lock().unwrap().contains(&skipped));
+    assert!(!pilot.rolled_back.lock().unwrap().contains(&id));
 }
 
 /// Finalized jobs seeded for deletion: `(queue, state)`, all finalized an
@@ -367,6 +418,14 @@ mod postgres {
         .await;
         schema.cleanup().await;
     }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn committed_fetches_report_claimed_and_skipped_selections() {
+        let schema = PostgresSchema::new("seam_select_commit").await;
+        assert_skipped_selections_roll_back(|| builder(&schema)).await;
+        schema.cleanup().await;
+    }
+
     #[tokio::test(flavor = "multi_thread")]
     async fn deletes_finalized_jobs_with_the_cleaner_filters() {
         use riverqueue::__private::{DatabaseConfig, delete_finalized_jobs};
@@ -425,6 +484,13 @@ mod postgres {
 mod sqlite {
     use super::*;
     use crate::support::{sqlite_cleanup, sqlite_file_pool};
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn committed_fetches_report_claimed_and_skipped_selections() {
+        let (pool, path) = sqlite_file_pool(4).await;
+        assert_skipped_selections_roll_back(|| Client::builder(pool.clone())).await;
+        sqlite_cleanup(pool, path).await;
+    }
 
     #[tokio::test(flavor = "multi_thread")]
     async fn failed_fetch_commits_roll_back_extension_selections() {

@@ -589,10 +589,14 @@ pub(super) async fn fetch_jobs(
                     phase: "fetch claim",
                     source,
                 })?;
-            let (rows, extension_ids) = if let Some(claimed) = claimed {
+            let (rows, claims) = if let Some(claimed) = claimed {
                 let ids = claimed.iter().filter_map(ClaimedJob::id).collect();
-                let rows = claimed.into_iter().map(ClaimedJob::into_decoded).collect();
-                (rows, Some(ids))
+                let claims = ExtensionClaims::new(inner, &fetch_params, ids);
+                let rows = claimed
+                    .into_iter()
+                    .map(ClaimedJob::into_decoded)
+                    .collect::<Vec<_>>();
+                (rows, Some(claims))
             } else {
                 let selected_ids = inner
                     .pilot
@@ -605,6 +609,9 @@ pub(super) async fn fetch_jobs(
                         phase: "fetch selection",
                         source,
                     })?;
+                let claims = selected_ids
+                    .clone()
+                    .map(|ids| ExtensionClaims::new(inner, &fetch_params, ids));
                 let rows = match &selected_ids {
                     Some(ids) => {
                         crate::database::sqlite::claim_selected(&mut transaction, &params, ids)
@@ -612,14 +619,13 @@ pub(super) async fn fetch_jobs(
                     }
                     None => crate::database::sqlite::claim(&mut transaction, &params).await,
                 }
-                .map_err(sqlite_backend_error);
-                (
-                    rollback_extension_claims(inner, &fetch_params, selected_ids.as_deref(), rows)?,
-                    selected_ids,
-                )
+                .map_err(sqlite_backend_error)?;
+                (rows, claims)
             };
-            let committed = transaction.commit().await.map_err(Error::from);
-            rollback_extension_claims(inner, &fetch_params, extension_ids.as_deref(), committed)?;
+            transaction.commit().await?;
+            if let Some(claims) = claims {
+                claims.committed(&rows);
+            }
             rows
         } else {
             let mut connection = pool.acquire().await?;
@@ -667,10 +673,14 @@ pub(super) async fn fetch_jobs(
                     phase: "fetch claim",
                     source,
                 })?;
-            let (rows, extension_ids) = if let Some(claimed) = claimed {
+            let (rows, claims) = if let Some(claimed) = claimed {
                 let ids = claimed.iter().filter_map(ClaimedJob::id).collect();
-                let rows = claimed.into_iter().map(ClaimedJob::into_decoded).collect();
-                (rows, Some(ids))
+                let claims = ExtensionClaims::new(inner, &fetch_params, ids);
+                let rows = claimed
+                    .into_iter()
+                    .map(ClaimedJob::into_decoded)
+                    .collect::<Vec<_>>();
+                (rows, Some(claims))
             } else {
                 let selected_ids = inner
                     .pilot
@@ -683,6 +693,9 @@ pub(super) async fn fetch_jobs(
                         phase: "fetch selection",
                         source,
                     })?;
+                let claims = selected_ids
+                    .clone()
+                    .map(|ids| ExtensionClaims::new(inner, &fetch_params, ids));
                 let records = if let Some(selected_ids) = &selected_ids {
                     let sql = format!(
                         "UPDATE {table} AS job SET state = 'running', attempt = job.attempt + 1, \
@@ -703,17 +716,16 @@ pub(super) async fn fetch_jobs(
                 } else {
                     fetch_oss_records(&mut *transaction, oss_sql, queue, maximum, &inner.id).await
                 }
-                .map_err(Error::from);
-                let records = rollback_extension_claims(
-                    inner,
-                    &fetch_params,
-                    selected_ids.as_deref(),
-                    records,
-                )?;
-                (records.iter().map(decode_job_row).collect(), selected_ids)
+                .map_err(Error::from)?;
+                (
+                    records.iter().map(decode_job_row).collect::<Vec<_>>(),
+                    claims,
+                )
             };
-            let committed = transaction.commit().await.map_err(Error::from);
-            rollback_extension_claims(inner, &fetch_params, extension_ids.as_deref(), committed)?;
+            transaction.commit().await?;
+            if let Some(claims) = claims {
+                claims.committed(&rows);
+            }
             rows
         } else {
             fetch_oss_records(
@@ -738,20 +750,62 @@ pub(super) async fn fetch_jobs(
     ))
 }
 
-/// Passes `result` through, first telling the extension that the jobs it
-/// claimed or selected won't be claimed when `result` is an error.
-fn rollback_extension_claims<T>(
-    inner: &ClientInner,
-    params: &FetchParams,
-    job_ids: Option<&[i64]>,
-    result: Result<T, Error>,
-) -> Result<T, Error> {
-    if result.is_err()
-        && let Some(job_ids) = job_ids
-    {
-        inner.pilot.claim_jobs_rolled_back(params, job_ids);
+/// Jobs an extension claimed or selected in a fetch that hasn't committed
+/// yet.
+///
+/// [`committed`](Self::committed) reports which of them River claimed.
+/// Dropped before that, because the claim or commit failed or the fetch
+/// future was dropped, it reports them all as rolled back.
+struct ExtensionClaims<'a> {
+    inner: &'a ClientInner,
+    /// IDs still pending commit; empty once reported.
+    job_ids: Vec<i64>,
+    params: &'a FetchParams,
+}
+
+impl<'a> ExtensionClaims<'a> {
+    const fn new(inner: &'a ClientInner, params: &'a FetchParams, job_ids: Vec<i64>) -> Self {
+        Self {
+            inner,
+            job_ids,
+            params,
+        }
     }
-    result
+
+    /// Reports the pending IDs among the committed `rows` as committed and
+    /// the rest, which River's claim skipped, as rolled back.
+    fn committed(mut self, rows: &[DecodedJob]) {
+        let claimed = rows
+            .iter()
+            .filter_map(|row| match row {
+                Ok(row) => Some(row.id),
+                Err(undecodable) => undecodable.row.as_ref().map(|row| row.id),
+            })
+            .collect::<std::collections::HashSet<_>>();
+        let (committed, skipped): (Vec<_>, Vec<_>) = std::mem::take(&mut self.job_ids)
+            .into_iter()
+            .partition(|id| claimed.contains(id));
+        if !committed.is_empty() {
+            self.inner
+                .pilot
+                .claim_jobs_committed(self.params, &committed);
+        }
+        if !skipped.is_empty() {
+            self.inner
+                .pilot
+                .claim_jobs_rolled_back(self.params, &skipped);
+        }
+    }
+}
+
+impl Drop for ExtensionClaims<'_> {
+    fn drop(&mut self) {
+        if !self.job_ids.is_empty() {
+            self.inner
+                .pilot
+                .claim_jobs_rolled_back(self.params, &self.job_ids);
+        }
+    }
 }
 
 #[cfg(feature = "postgres")]

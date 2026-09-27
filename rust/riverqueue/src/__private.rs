@@ -747,17 +747,32 @@ pub trait Pilot: Send + Sync + 'static {
         Ok(None)
     }
 
-    /// Called when a fetch whose jobs this extension claimed or selected
-    /// didn't commit.
+    /// Called once the fetch transaction commits with jobs this extension
+    /// claimed or selected.
+    ///
+    /// `job_ids` are the IDs of the jobs [`Pilot::claim_jobs`] returned (a
+    /// claimed row that couldn't be identified is left out), or the
+    /// [`Pilot::select_job_ids`] IDs that River's claim moved to `running`.
+    /// Selected IDs River didn't claim, for example because another client
+    /// claimed them first, are passed to [`Pilot::claim_jobs_rolled_back`]
+    /// instead. Together with that method, this lets an add-on crate track
+    /// which reservations are still pending commit and roll back only those.
+    fn claim_jobs_committed(&self, _params: &FetchParams, _job_ids: &[i64]) {}
+
+    /// Called when jobs this extension claimed or selected won't start from
+    /// this fetch.
     ///
     /// River calls it after [`Pilot::claim_jobs`] returned jobs, or
-    /// [`Pilot::select_job_ids`] returned IDs, and then River's claim or the
-    /// fetch transaction's `COMMIT` failed. `job_ids` are the claimed jobs'
-    /// IDs (a claimed row that couldn't be identified is left out) or the
-    /// selected IDs. The rows stay as they were before the fetch, so an
-    /// add-on crate releases anything it provisionally reserved for them, such
-    /// as running counts. It isn't called when the fetch future is dropped
-    /// mid-commit, which leaves the outcome unknown.
+    /// [`Pilot::select_job_ids`] returned IDs, when River's claim or the
+    /// fetch transaction's `COMMIT` fails, or when the fetch future is
+    /// dropped before its commit completes. A commit whose outcome is unknown
+    /// counts as rolled back; a job it did claim is rescued later.
+    /// After a successful commit, it's also called with the selected IDs
+    /// River's claim skipped. `job_ids` are identified as for
+    /// [`Pilot::claim_jobs_committed`]. The rows stay as they were before the
+    /// fetch, so an add-on crate releases anything it provisionally reserved
+    /// for them, such as running counts. Each ID reaches exactly one of the
+    /// two methods once per fetch.
     fn claim_jobs_rolled_back(&self, _params: &FetchParams, _job_ids: &[i64]) {}
 
     /// Optionally selects and locks fetch candidates using the provided
