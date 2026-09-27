@@ -5,6 +5,31 @@
 //! both its message and its source to the error it wraps. None does both, so
 //! a report that prints the whole chain, such as `anyhow`'s `{:#}`, never
 //! repeats a message.
+//!
+//! Match [`enum@Error`]'s variants for the cases a caller handles, and keep a
+//! fallback arm, because the enum is `#[non_exhaustive]`:
+//!
+//! ```no_run
+//! use riverqueue::{Client, Error, Record, sqlx};
+//!
+//! # async fn example(client: Client, id: i64) -> Result<(), Error> {
+//! match client.jobs().get(id).await {
+//!     Ok(job) => println!("job {id} is {}", job.state),
+//!     // River Go's `errors.Is(err, river.ErrNotFound)`.
+//!     Err(Error::NotFound(Record::Job(_))) => println!("job {id} doesn't exist"),
+//!     // Database failures hold SQLx's error on either backend.
+//!     Err(Error::Database(sqlx::Error::PoolTimedOut)) => println!("database busy"),
+//!     Err(error) => return Err(error),
+//! }
+//! # Ok(())
+//! # }
+//! ```
+//!
+//! An error from a hook, middleware, or add-on crate is an
+//! [`Error::Extension`] whose [`source`](Error::Extension::source) is the
+//! extension's own error; downcast it to that error's type. Errors a worker
+//! returns reach hooks, error handlers, and retry policies as a
+//! [`WorkError`](crate::WorkError), which downcasts the same way.
 
 use std::fmt;
 
