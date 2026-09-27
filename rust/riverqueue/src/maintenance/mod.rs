@@ -251,6 +251,8 @@ impl ReducedBatchBreaker {
 #[derive(Debug)]
 pub(crate) struct Breakers {
     pub(crate) job_cleaner: Mutex<ReducedBatchBreaker>,
+    #[cfg(feature = "sqlite")]
+    pub(crate) notification_cleaner: Mutex<ReducedBatchBreaker>,
     pub(crate) queue_cleaner: Mutex<ReducedBatchBreaker>,
     pub(crate) rescuer: Mutex<ReducedBatchBreaker>,
     pub(crate) scheduler: Mutex<ReducedBatchBreaker>,
@@ -260,6 +262,8 @@ impl Breakers {
     fn new(sizes: BatchSizes) -> Self {
         Self {
             job_cleaner: Mutex::new(ReducedBatchBreaker::new(sizes)),
+            #[cfg(feature = "sqlite")]
+            notification_cleaner: Mutex::new(ReducedBatchBreaker::new(sizes)),
             queue_cleaner: Mutex::new(ReducedBatchBreaker::new(sizes)),
             rescuer: Mutex::new(ReducedBatchBreaker::new(sizes)),
             scheduler: Mutex::new(ReducedBatchBreaker::new(sizes)),

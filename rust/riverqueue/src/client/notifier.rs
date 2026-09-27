@@ -284,9 +284,12 @@ async fn listen_until_error(
 
 /// Polls SQLite's notification outbox until cancelled.
 ///
-/// Poll failures (for example `database is locked` while another process holds
-/// the write lock) are logged and retried with River's service backoff. The
-/// cursor is kept, so no durable notification is skipped.
+/// Like River Go's SQLite listener, the first successful poll connects after
+/// the outbox's current maximum ID and subscribes to River's topics, so
+/// earlier rows are never delivered. Poll failures (for example `database is
+/// locked` while another process holds the write lock) are logged and retried
+/// with River's service backoff. The cursor is kept, so no durable
+/// notification is skipped.
 #[cfg(feature = "sqlite")]
 pub(super) async fn run_sqlite_notifications(
     inner: Arc<ClientInner>,
@@ -298,7 +301,7 @@ pub(super) async fn run_sqlite_notifications(
         .sqlite_pool()
         .expect("SQLite notifications require a SQLite pool");
     let mut attempt = 0;
-    let mut after_id = None;
+    let mut listener = crate::database::sqlite::NotificationListener::default();
     let mut notification_tick =
         tokio::time::interval(crate::database::sqlite::DEFAULT_NOTIFICATION_POLL_INTERVAL);
     notification_tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
@@ -310,46 +313,53 @@ pub(super) async fn run_sqlite_notifications(
         }
         let polled = async {
             let mut connection = pool.acquire().await?;
-            let last_id = match after_id {
-                Some(last_id) => last_id,
-                None => crate::database::sqlite::notification_last_id(&mut connection)
+            if !listener.is_connected() {
+                listener
+                    .connect(&mut connection)
                     .await
-                    .map_err(sqlite_backend_error)?,
-            };
-            after_id = Some(last_id);
-            crate::database::sqlite::notification_poll(&mut connection, last_id, 1_000)
+                    .map_err(sqlite_backend_error)?;
+            }
+            for topic in [
+                crate::NOTIFICATION_TOPIC_CONTROL,
+                crate::NOTIFICATION_TOPIC_INSERT,
+                crate::NOTIFICATION_TOPIC_LEADERSHIP,
+            ] {
+                listener
+                    .listen(&mut connection, topic)
+                    .await
+                    .map_err(sqlite_backend_error)?;
+            }
+            report_ready(&mut ready);
+            while let Some(notification) = listener
+                .next(&mut connection)
                 .await
-                .map_err(sqlite_backend_error)
+                .map_err(sqlite_backend_error)?
+            {
+                dispatch_notification(
+                    &inner,
+                    &queue_notifications,
+                    &notification.topic,
+                    &notification.payload,
+                );
+            }
+            Ok::<_, Error>(())
         }
         .await;
-        let notifications = match polled {
-            Ok(notifications) => notifications,
-            Err(poll_error) => {
-                attempt += 1;
-                let sleep = exponential_backoff(attempt);
-                error!(
-                    attempt,
-                    error = %poll_error,
-                    sleep_duration = ?sleep,
-                    "River notification poll failed (will retry after backoff); producers keep polling"
-                );
-                tokio::select! {
-                    () = cancel.cancelled() => return Ok(()),
-                    () = tokio::time::sleep(sleep) => {}
-                }
-                continue;
-            }
-        };
-        attempt = 0;
-        report_ready(&mut ready);
-        for notification in notifications {
-            after_id = Some(notification.id);
-            dispatch_notification(
-                &inner,
-                &queue_notifications,
-                &notification.topic,
-                &notification.payload,
+        if let Err(poll_error) = polled {
+            attempt += 1;
+            let sleep = exponential_backoff(attempt);
+            error!(
+                attempt,
+                error = %poll_error,
+                sleep_duration = ?sleep,
+                "River notification poll failed (will retry after backoff); producers keep polling"
             );
+            tokio::select! {
+                () = cancel.cancelled() => return Ok(()),
+                () = tokio::time::sleep(sleep) => {}
+            }
+            continue;
         }
+        attempt = 0;
     }
 }

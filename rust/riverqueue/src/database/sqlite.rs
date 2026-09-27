@@ -14,7 +14,10 @@
     reason = "leader_id is the cross-language River protocol field name"
 )]
 
-use std::time::Duration;
+use std::{
+    collections::{HashMap, VecDeque},
+    time::Duration,
+};
 
 use chrono::{DateTime, SubsecRound, Utc};
 use serde_json::{Map, Value};
@@ -60,6 +63,10 @@ const QUEUE_COLUMNS: &str = r#"
 /// A short poll interval keeps local wakeups responsive while queue fetch
 /// polling remains the durable recovery path.
 pub(crate) const DEFAULT_NOTIFICATION_POLL_INTERVAL: Duration = Duration::from_millis(100);
+
+/// Maximum number of outbox rows a notification listener reads at once,
+/// matching River Go's SQLite listener.
+pub(crate) const NOTIFICATION_BATCH_SIZE: i64 = 256;
 
 #[derive(Debug, thiserror::Error)]
 pub(crate) enum BackendError {
@@ -179,9 +186,8 @@ pub(crate) struct Leader {
     pub leader_id: String,
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, FromRow, PartialEq)]
 pub(crate) struct Notification {
-    pub created_at: DateTime<Utc>,
     pub id: i64,
     pub payload: String,
     pub topic: String,
@@ -330,25 +336,6 @@ impl From<LeaderRecord> for Leader {
             elected_at: record.elected_at,
             expires_at: record.expires_at,
             leader_id: record.leader_id,
-        }
-    }
-}
-
-#[derive(Clone, Debug, FromRow)]
-struct NotificationRecord {
-    created_at: DateTime<Utc>,
-    id: i64,
-    payload: String,
-    topic: String,
-}
-
-impl From<NotificationRecord> for Notification {
-    fn from(record: NotificationRecord) -> Self {
-        Self {
-            created_at: record.created_at,
-            id: record.id,
-            payload: record.payload,
-            topic: record.topic,
         }
     }
 }
@@ -1379,28 +1366,33 @@ pub(crate) async fn notification_insert(
         .rows_affected())
 }
 
-pub(crate) async fn notification_poll(
+/// Reads up to `limit` notifications on `topics` written after `after_id`, in
+/// ID order.
+pub(crate) async fn notification_get_after(
     connection: &mut SqliteConnection,
     after_id: i64,
-    limit: i32,
+    topics: &[&str],
+    limit: i64,
 ) -> Result<Vec<Notification>, BackendError> {
-    if limit <= 0 {
+    if limit <= 0 || topics.is_empty() {
         return Ok(Vec::new());
     }
-    let records = sqlx::query_as::<_, NotificationRecord>(
+    let topics = serde_json::to_string(topics)?;
+    Ok(sqlx::query_as::<_, Notification>(
         r#"
-        SELECT created_at, id, payload, topic
+        SELECT id, payload, topic
         FROM river_notification
         WHERE id > ?
+          AND topic IN (SELECT value FROM json_each(?))
         ORDER BY id ASC
         LIMIT ?
         "#,
     )
     .bind(after_id)
+    .bind(topics)
     .bind(limit)
     .fetch_all(&mut *connection)
-    .await?;
-    Ok(records.into_iter().map(Notification::from).collect())
+    .await?)
 }
 
 pub(crate) async fn notification_last_id(
@@ -1410,6 +1402,116 @@ pub(crate) async fn notification_last_id(
         .fetch_one(&mut *connection)
         .await
         .map_err(BackendError::from)
+}
+
+/// Reads River notifications from SQLite's `river_notification` outbox,
+/// mirroring River Go's SQLite listener.
+///
+/// Connecting starts after the outbox's current maximum ID so historical rows
+/// aren't replayed. Each topic also records the maximum ID when it's
+/// subscribed, so rows written before a subscription are never delivered,
+/// including rows buffered from an earlier subscription to the same topic.
+/// Rows are read in batches of [`NOTIFICATION_BATCH_SIZE`] and delivered one
+/// at a time.
+#[derive(Debug, Default)]
+pub(crate) struct NotificationListener {
+    /// ID of the last row read, or `None` before connecting.
+    last_id: Option<i64>,
+    /// Rows read but not yet delivered.
+    pending: VecDeque<Notification>,
+    /// Subscribed topics and the ID after which each one's rows are
+    /// delivered.
+    topics: HashMap<String, i64>,
+}
+
+impl NotificationListener {
+    /// Disconnects, dropping subscriptions and undelivered rows.
+    ///
+    /// A client keeps its listener connected for its whole run, keeping the
+    /// cursor across failed reads so no durable notification is skipped.
+    #[cfg(test)]
+    pub(crate) fn close(&mut self) {
+        self.last_id = None;
+        self.pending.clear();
+        self.topics.clear();
+    }
+
+    /// Starts reading after the outbox's current maximum ID.
+    pub(crate) async fn connect(
+        &mut self,
+        connection: &mut SqliteConnection,
+    ) -> Result<(), BackendError> {
+        self.last_id = Some(notification_last_id(connection).await?);
+        Ok(())
+    }
+
+    /// Whether [`connect`](Self::connect) has succeeded since the last
+    /// [`close`](Self::close).
+    pub(crate) const fn is_connected(&self) -> bool {
+        self.last_id.is_some()
+    }
+
+    /// Subscribes to `topic`, delivering only rows written from now on.
+    /// Subscribing to a topic that's already subscribed changes nothing.
+    pub(crate) async fn listen(
+        &mut self,
+        connection: &mut SqliteConnection,
+        topic: &str,
+    ) -> Result<(), BackendError> {
+        if self.topics.contains_key(topic) {
+            return Ok(());
+        }
+        // Only this topic's starting ID advances. Advancing the shared cursor
+        // could skip undelivered rows of topics that are already subscribed.
+        let last_id = notification_last_id(connection).await?;
+        // Cleanup may have deleted rows that are still buffered locally.
+        let start_id = last_id.max(self.last_id.unwrap_or_default());
+        self.topics.insert(topic.to_owned(), start_id);
+        Ok(())
+    }
+
+    /// Returns the next notification on a subscribed topic, or `None` once
+    /// the outbox has no newer rows on subscribed topics.
+    pub(crate) async fn next(
+        &mut self,
+        connection: &mut SqliteConnection,
+    ) -> Result<Option<Notification>, BackendError> {
+        loop {
+            if self.pending.is_empty() {
+                let Some(after_id) = self.last_id else {
+                    return Ok(None);
+                };
+                let topics = self.topics.keys().map(String::as_str).collect::<Vec<_>>();
+                let notifications =
+                    notification_get_after(connection, after_id, &topics, NOTIFICATION_BATCH_SIZE)
+                        .await?;
+                let Some(last) = notifications.last() else {
+                    return Ok(None);
+                };
+                self.last_id = Some(last.id);
+                self.pending.extend(notifications);
+            }
+            // Subscriptions can change between reading a batch and delivering
+            // it.
+            while let Some(notification) = self.pending.pop_front() {
+                if self
+                    .topics
+                    .get(&notification.topic)
+                    .is_some_and(|start_id| notification.id > *start_id)
+                {
+                    return Ok(Some(notification));
+                }
+            }
+        }
+    }
+
+    /// Unsubscribes from `topic`, dropping its undelivered rows.
+    ///
+    /// A client subscribes to its topics once for its whole run.
+    #[cfg(test)]
+    pub(crate) fn unlisten(&mut self, topic: &str) {
+        self.topics.remove(topic);
+    }
 }
 
 pub(crate) async fn notification_cleanup(
@@ -1423,7 +1525,7 @@ pub(crate) async fn notification_cleanup(
     Ok(sqlx::query(
         "DELETE FROM river_notification WHERE id IN (\
          SELECT id FROM river_notification WHERE created_at < ? \
-         ORDER BY id ASC LIMIT ?)",
+         ORDER BY created_at, id LIMIT ?)",
     )
     .bind(sqlite_time(created_before))
     .bind(limit)
@@ -2044,7 +2146,10 @@ mod tests {
         .await
         .unwrap();
         assert_eq!(inserted, 2);
-        let notifications = notification_poll(&mut connection, 0, 10).await.unwrap();
+        let notifications =
+            notification_get_after(&mut connection, 0, &["insert_many", "queue_pause"], 10)
+                .await
+                .unwrap();
         assert_eq!(notifications.len(), 2);
         assert_eq!(notifications[0].topic, "insert_many");
         assert_eq!(notification_last_id(&mut connection).await.unwrap(), 2);
@@ -2055,18 +2160,26 @@ mod tests {
         let pool = setup().await;
         let mut connection = pool.acquire().await.unwrap();
         let now = Utc.with_ymd_and_hms(2026, 1, 2, 3, 4, 5).unwrap();
+        // The oldest expired row has the highest ID, so cleanup by age differs
+        // from cleanup by ID.
         sqlx::query(
             "INSERT INTO river_notification (created_at, payload, topic) VALUES \
-             (?, 'old-1', 'test'), (?, 'old-2', 'test'), (?, 'recent', 'test')",
+             (?, 'old', 'test'), (?, 'recent', 'test'), (?, 'oldest', 'test')",
         )
-        .bind(sqlite_time(now - TimeDelta::minutes(6)))
         .bind(sqlite_time(
             now - TimeDelta::minutes(5) - TimeDelta::seconds(1),
         ))
         .bind(sqlite_time(now - TimeDelta::minutes(4)))
+        .bind(sqlite_time(now - TimeDelta::minutes(6)))
         .execute(&mut *connection)
         .await
         .unwrap();
+        let remaining = async |connection: &mut SqliteConnection| -> Vec<String> {
+            sqlx::query_scalar("SELECT payload FROM river_notification ORDER BY id")
+                .fetch_all(&mut *connection)
+                .await
+                .unwrap()
+        };
 
         assert_eq!(
             notification_cleanup(&mut connection, now - TimeDelta::minutes(5), 1)
@@ -2074,18 +2187,274 @@ mod tests {
                 .unwrap(),
             1
         );
+        assert_eq!(remaining(&mut connection).await, ["old", "recent"]);
         assert_eq!(
             notification_cleanup(&mut connection, now - TimeDelta::minutes(5), 10)
                 .await
                 .unwrap(),
             1
         );
-        let remaining: Vec<String> =
-            sqlx::query_scalar("SELECT payload FROM river_notification ORDER BY id")
-                .fetch_all(&mut *connection)
-                .await
-                .unwrap();
-        assert_eq!(remaining, ["recent"]);
+        assert_eq!(remaining(&mut connection).await, ["recent"]);
+    }
+
+    async fn notify(connection: &mut SqliteConnection, topic: &str, payloads: &[&str]) {
+        let notifications = payloads
+            .iter()
+            .map(|payload| NotificationInput { payload, topic })
+            .collect::<Vec<_>>();
+        notification_insert(connection, &notifications)
+            .await
+            .unwrap();
+    }
+
+    async fn next_notification(
+        listener: &mut NotificationListener,
+        connection: &mut SqliteConnection,
+    ) -> Option<(String, String)> {
+        listener
+            .next(connection)
+            .await
+            .unwrap()
+            .map(|notification| (notification.topic, notification.payload))
+    }
+
+    fn notification(topic: &str, payload: &str) -> (String, String) {
+        (topic.to_owned(), payload.to_owned())
+    }
+
+    async fn connected_listener(connection: &mut SqliteConnection) -> NotificationListener {
+        let mut listener = NotificationListener::default();
+        listener.connect(connection).await.unwrap();
+        listener
+    }
+
+    #[tokio::test]
+    async fn notification_listener_does_not_replay_before_subscription() {
+        let pool = setup().await;
+        let mut connection = pool.acquire().await.unwrap();
+        notify(&mut connection, "topic", &["historical"]).await;
+        let mut listener = connected_listener(&mut connection).await;
+
+        notify(&mut connection, "topic", &["old"]).await;
+        listener.listen(&mut connection, "topic").await.unwrap();
+        notify(&mut connection, "topic", &["new"]).await;
+
+        assert_eq!(
+            next_notification(&mut listener, &mut connection).await,
+            Some(notification("topic", "new"))
+        );
+        assert_eq!(
+            next_notification(&mut listener, &mut connection).await,
+            None
+        );
+    }
+
+    #[tokio::test]
+    async fn notification_listener_new_topic_preserves_other_topics() {
+        let pool = setup().await;
+        let mut connection = pool.acquire().await.unwrap();
+        let mut listener = connected_listener(&mut connection).await;
+
+        listener.listen(&mut connection, "topic1").await.unwrap();
+        notify(&mut connection, "topic1", &["pending"]).await;
+        notify(&mut connection, "topic2", &["old"]).await;
+        listener.listen(&mut connection, "topic2").await.unwrap();
+        notify(&mut connection, "topic2", &["new"]).await;
+
+        assert_eq!(
+            next_notification(&mut listener, &mut connection).await,
+            Some(notification("topic1", "pending"))
+        );
+        assert_eq!(
+            next_notification(&mut listener, &mut connection).await,
+            Some(notification("topic2", "new"))
+        );
+        assert_eq!(
+            next_notification(&mut listener, &mut connection).await,
+            None
+        );
+    }
+
+    #[tokio::test]
+    async fn notification_listener_reads_multiple_batches() {
+        let pool = setup().await;
+        let mut connection = pool.acquire().await.unwrap();
+        let mut listener = connected_listener(&mut connection).await;
+        listener.listen(&mut connection, "topic").await.unwrap();
+
+        // More rows than one read returns, behind a run of unsubscribed rows.
+        let payloads = (0..600)
+            .map(|index| format!("payload_{index}"))
+            .collect::<Vec<_>>();
+        let payloads = payloads.iter().map(String::as_str).collect::<Vec<_>>();
+        notify(&mut connection, "ignored", &payloads).await;
+        notify(&mut connection, "topic", &payloads).await;
+
+        for payload in payloads {
+            assert_eq!(
+                next_notification(&mut listener, &mut connection).await,
+                Some(notification("topic", payload))
+            );
+        }
+        assert_eq!(
+            next_notification(&mut listener, &mut connection).await,
+            None
+        );
+    }
+
+    #[tokio::test]
+    async fn notification_listener_reconnect_discards_buffered_notifications() {
+        let pool = setup().await;
+        let mut connection = pool.acquire().await.unwrap();
+        let mut listener = connected_listener(&mut connection).await;
+        listener.listen(&mut connection, "topic").await.unwrap();
+        notify(&mut connection, "topic", &["first", "buffered"]).await;
+        assert_eq!(
+            next_notification(&mut listener, &mut connection).await,
+            Some(notification("topic", "first"))
+        );
+
+        listener.close();
+        listener.connect(&mut connection).await.unwrap();
+        listener.listen(&mut connection, "topic").await.unwrap();
+        notify(&mut connection, "topic", &["new"]).await;
+
+        assert_eq!(
+            next_notification(&mut listener, &mut connection).await,
+            Some(notification("topic", "new"))
+        );
+        assert_eq!(
+            next_notification(&mut listener, &mut connection).await,
+            None
+        );
+    }
+
+    #[tokio::test]
+    async fn notification_listener_repeated_listen_preserves_pending_notifications() {
+        let pool = setup().await;
+        let mut connection = pool.acquire().await.unwrap();
+        let mut listener = connected_listener(&mut connection).await;
+
+        listener.listen(&mut connection, "topic").await.unwrap();
+        notify(&mut connection, "topic", &["pending"]).await;
+        listener.listen(&mut connection, "topic").await.unwrap();
+
+        assert_eq!(
+            next_notification(&mut listener, &mut connection).await,
+            Some(notification("topic", "pending"))
+        );
+        assert_eq!(
+            next_notification(&mut listener, &mut connection).await,
+            None
+        );
+    }
+
+    #[tokio::test]
+    async fn notification_listener_resubscribe_after_cleanup() {
+        let pool = setup().await;
+        let mut connection = pool.acquire().await.unwrap();
+        let mut listener = connected_listener(&mut connection).await;
+        listener.listen(&mut connection, "topic").await.unwrap();
+        notify(&mut connection, "topic", &["first", "buffered"]).await;
+        assert_eq!(
+            next_notification(&mut listener, &mut connection).await,
+            Some(notification("topic", "first"))
+        );
+
+        // Cleanup deletes rows that are still buffered, so the outbox's
+        // maximum ID no longer covers them.
+        listener.unlisten("topic");
+        sqlx::query("DELETE FROM river_notification")
+            .execute(&mut *connection)
+            .await
+            .unwrap();
+        listener.listen(&mut connection, "topic").await.unwrap();
+        notify(&mut connection, "topic", &["new"]).await;
+
+        assert_eq!(
+            next_notification(&mut listener, &mut connection).await,
+            Some(notification("topic", "new"))
+        );
+        assert_eq!(
+            next_notification(&mut listener, &mut connection).await,
+            None
+        );
+    }
+
+    #[tokio::test]
+    async fn notification_listener_resubscribe_discards_buffered_notifications() {
+        let pool = setup().await;
+        let mut connection = pool.acquire().await.unwrap();
+        let mut listener = connected_listener(&mut connection).await;
+        listener.listen(&mut connection, "topic").await.unwrap();
+        notify(&mut connection, "topic", &["first", "buffered"]).await;
+        assert_eq!(
+            next_notification(&mut listener, &mut connection).await,
+            Some(notification("topic", "first"))
+        );
+
+        listener.unlisten("topic");
+        notify(&mut connection, "topic", &["gap"]).await;
+        listener.listen(&mut connection, "topic").await.unwrap();
+        notify(&mut connection, "topic", &["new"]).await;
+
+        assert_eq!(
+            next_notification(&mut listener, &mut connection).await,
+            Some(notification("topic", "new"))
+        );
+        assert_eq!(
+            next_notification(&mut listener, &mut connection).await,
+            None
+        );
+    }
+
+    #[tokio::test]
+    async fn notification_listener_resubscribe_skips_gap() {
+        let pool = setup().await;
+        let mut connection = pool.acquire().await.unwrap();
+        let mut listener = connected_listener(&mut connection).await;
+
+        listener.listen(&mut connection, "topic").await.unwrap();
+        listener.unlisten("topic");
+        notify(&mut connection, "topic", &["gap"]).await;
+        listener.listen(&mut connection, "topic").await.unwrap();
+        notify(&mut connection, "topic", &["new"]).await;
+
+        assert_eq!(
+            next_notification(&mut listener, &mut connection).await,
+            Some(notification("topic", "new"))
+        );
+        assert_eq!(
+            next_notification(&mut listener, &mut connection).await,
+            None
+        );
+    }
+
+    #[tokio::test]
+    async fn notification_listener_unlisten_discards_buffered_notifications() {
+        let pool = setup().await;
+        let mut connection = pool.acquire().await.unwrap();
+        let mut listener = connected_listener(&mut connection).await;
+        listener.listen(&mut connection, "topic1").await.unwrap();
+        listener.listen(&mut connection, "topic2").await.unwrap();
+        notify(&mut connection, "topic1", &["first"]).await;
+        notify(&mut connection, "topic2", &["buffered"]).await;
+        assert_eq!(
+            next_notification(&mut listener, &mut connection).await,
+            Some(notification("topic1", "first"))
+        );
+
+        listener.unlisten("topic2");
+        notify(&mut connection, "topic1", &["new"]).await;
+
+        assert_eq!(
+            next_notification(&mut listener, &mut connection).await,
+            Some(notification("topic1", "new"))
+        );
+        assert_eq!(
+            next_notification(&mut listener, &mut connection).await,
+            None
+        );
     }
 
     #[tokio::test]

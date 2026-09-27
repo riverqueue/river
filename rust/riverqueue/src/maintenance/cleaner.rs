@@ -254,28 +254,96 @@ async fn clean_queues_batch(
 }
 
 /// Deletes SQLite notification outbox rows old enough that every poller has
-/// consumed them.
+/// consumed them, oldest first, in batches like River Go's
+/// `SQLiteNotificationCleaner`.
+///
+/// Each batch commits on its own, and a pause between batches yields SQLite's
+/// write lock to job inserts and updates. The horizon is fixed for the pass
+/// so rows expiring meanwhile don't extend it. Repeated timeouts switch to
+/// the reduced batch size.
 #[cfg(feature = "sqlite")]
-pub(super) async fn clean_notifications(context: &ServiceContext) -> Result<(), MaintenanceError> {
+pub(super) async fn clean_notifications(context: &ServiceContext) -> Result<u64, MaintenanceError> {
     let pool = context
         .inner
         .sqlite_pool()
         .expect("notification cleanup is only started for SQLite");
     let retention = chrono::Duration::from_std(NOTIFICATION_RETENTION)
         .map_err(|error| Error::configuration_context("maintenance", error.to_string()))?;
+    let created_before = Utc::now() - retention;
+    let mut deleted = 0;
     loop {
-        let created_before = Utc::now() - retention;
-        let limit = super::BATCH_SIZE_DEFAULT;
+        let limit = batch_size(&context.breakers.notification_cleaner);
         let operation = async {
             let mut connection = pool.acquire().await?;
             Ok::<_, MaintenanceError>(
                 sqlite::notification_cleanup(&mut connection, created_before, limit).await?,
             )
         };
-        let count = super::sqlite_cancellable(&context.cancel, TIMEOUT_DEFAULT, operation).await?;
+        let result = super::sqlite_cancellable(&context.cancel, TIMEOUT_DEFAULT, operation).await;
+        record_batch(&context.breakers.notification_cleaner, &result);
+        let count = result?;
+        deleted += count;
         if count < u64::try_from(limit).unwrap_or(u64::MAX) {
-            return Ok(());
+            return Ok(deleted);
         }
         batch_backoff(&context.cancel).await?;
+    }
+}
+
+#[cfg(all(test, feature = "sqlite"))]
+mod sqlite_tests {
+    use std::sync::Arc;
+
+    use chrono::Utc;
+    use riverqueue_migrate::SqliteMigrator;
+    use sqlx::sqlite::SqlitePoolOptions;
+    use tokio_util::sync::CancellationToken;
+
+    use super::{super::BatchSizes, super::Breakers, clean_notifications};
+    use crate::{Client, database::sqlite::sqlite_time, maintenance::maintainer::ServiceContext};
+
+    #[tokio::test]
+    async fn notification_cleaner_deletes_expired_rows_in_batches() {
+        let pool = SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect("sqlite::memory:")
+            .await
+            .unwrap();
+        SqliteMigrator::new(pool.clone())
+            .migrate_up()
+            .await
+            .unwrap();
+        let expired = sqlite_time(Utc::now() - chrono::Duration::hours(2));
+        for _ in 0..5 {
+            sqlx::query(
+                "INSERT INTO river_notification (created_at, payload, topic) \
+                 VALUES (?, 'expired', 'topic')",
+            )
+            .bind(&expired)
+            .execute(&pool)
+            .await
+            .unwrap();
+        }
+        sqlx::query("INSERT INTO river_notification (payload, topic) VALUES ('recent', 'topic')")
+            .execute(&pool)
+            .await
+            .unwrap();
+        let client = Client::builder(pool.clone()).build().unwrap();
+        let context = ServiceContext {
+            // Two full batches followed by a partial one.
+            breakers: Arc::new(Breakers::new(BatchSizes {
+                default: 2,
+                reduced: 1,
+            })),
+            cancel: CancellationToken::new(),
+            inner: Arc::clone(&client.inner),
+        };
+
+        assert_eq!(clean_notifications(&context).await.unwrap(), 5);
+        let remaining: Vec<String> = sqlx::query_scalar("SELECT payload FROM river_notification")
+            .fetch_all(&pool)
+            .await
+            .unwrap();
+        assert_eq!(remaining, ["recent"]);
     }
 }

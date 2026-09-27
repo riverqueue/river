@@ -162,7 +162,9 @@ async fn run_term(inner: Arc<ClientInner>, breakers: Arc<Breakers>, term: Term) 
             Arc::clone(&context),
             "SQLite notification cleaner",
             cleaner::NOTIFICATION_CLEANER_INTERVAL,
-            |context| Box::pin(async move { cleaner::clean_notifications(&context).await }),
+            |context| {
+                Box::pin(async move { cleaner::clean_notifications(&context).await.map(|_| ()) })
+            },
         ));
     }
     #[cfg(feature = "postgres")]
