@@ -42,6 +42,7 @@ const (
 
 // Test-only properties.
 type producerTestSignals struct {
+	CancelHandledDuringFetch   testsignal.TestSignal[int64]                // notifies when a cancellation is handled during a fetch
 	DeletedExpiredQueueRecords testsignal.TestSignal[struct{}]             // notifies when the producer deletes expired queue records
 	JobFetchTriggered          testsignal.TestSignal[struct{}]             // notifies when the producer's fetch limiter is triggered via triggerJobFetch
 	MetadataChanged            testsignal.TestSignal[struct{}]             // notifies when the producer detects a metadata change
@@ -651,6 +652,9 @@ func (p *producer) innerFetchLoop(workCtx context.Context, fetchResultCh chan pr
 		}
 	}
 
+	// A fetched job may not have an executor yet. Keep unmatched cancellations
+	// only for this fetch so unrelated IDs cannot affect later fetches.
+	pendingCancelJobs := make(map[int64]struct{})
 	go p.dispatchWork(workCtx, limit, fetchResultCh)
 
 	for {
@@ -659,7 +663,7 @@ func (p *producer) innerFetchLoop(workCtx context.Context, fetchResultCh chan pr
 			if result.err != nil {
 				p.Logger.ErrorContext(workCtx, p.Name+": Error fetching jobs", slog.String("err", result.err.Error()), slog.String("queue", p.config.Queue))
 			} else if len(result.jobs) > 0 {
-				p.startNewExecutors(workCtx, result.jobs)
+				p.startNewExecutors(workCtx, result.jobs, pendingCancelJobs)
 
 				if len(result.jobs) == limit {
 					// Fetch returned the maximum number of jobs that were requested,
@@ -672,7 +676,10 @@ func (p *producer) innerFetchLoop(workCtx context.Context, fetchResultCh chan pr
 		case result := <-p.jobResultCh:
 			p.removeActiveJob(result)
 		case jobID := <-p.cancelCh:
-			p.maybeCancelJob(workCtx, jobID)
+			if !p.maybeCancelJob(workCtx, jobID) {
+				pendingCancelJobs[jobID] = struct{}{}
+			}
+			p.testSignals.CancelHandledDuringFetch.Signal(jobID)
 		}
 	}
 }
@@ -780,12 +787,13 @@ func (p *producer) handleWorkerUnstuck() {
 	p.config.JobStuckCount.Add(-1)
 }
 
-func (p *producer) maybeCancelJob(ctx context.Context, id int64) {
+func (p *producer) maybeCancelJob(ctx context.Context, id int64) bool {
 	executor, ok := p.activeJobs[id]
 	if !ok {
-		return
+		return false
 	}
 	executor.Cancel(ctx)
+	return true
 }
 
 func (p *producer) metricEmitHooksFromLookup() []rivertype.HookMetricEmit {
@@ -907,7 +915,7 @@ func (p *producer) heartbeatLogLoop(ctx context.Context, wg *sync.WaitGroup) {
 	}
 }
 
-func (p *producer) startNewExecutors(workCtx context.Context, jobs []*rivertype.JobRow) {
+func (p *producer) startNewExecutors(workCtx context.Context, jobs []*rivertype.JobRow, pendingCancelJobs map[int64]struct{}) {
 	defaultClientRetryPolicy := retrypolicy.NewDefault(p.Time)
 
 	for _, job := range jobs {
@@ -946,6 +954,10 @@ func (p *producer) startNewExecutors(workCtx context.Context, jobs []*rivertype.
 			WorkUnit:               workUnit,
 		})
 		p.addActiveJob(job.ID, executor)
+		if _, ok := pendingCancelJobs[job.ID]; ok {
+			// Cancel before execution so the worker starts with a cancelled context.
+			executor.Cancel(workCtx)
+		}
 
 		go executor.Execute(jobCtx)
 	}
