@@ -18,7 +18,7 @@ all-features = true
 default = ["postgres"]
 postgres = ["riverqueue-migrate/postgres", "sqlx/postgres"]
 postgres-tests = ["postgres"]
-sqlite = ["riverqueue-migrate/sqlite", "sqlx/sqlite"]
+sqlite = ["dep:rand", "riverqueue-migrate/sqlite", "sqlx/sqlite"]
 
 [dependencies]
 async-trait.workspace = true
@@ -27,7 +27,7 @@ chrono.workspace = true
 futures-util.workspace = true
 riverqueue-migrate = { path = "../riverqueue-migrate", version = "=0.47.0-alpha.1", default-features = false }
 riverqueue-macros = { path = "../riverqueue-macros", version = "=0.47.0-alpha.1" }
-rand.workspace = true
+rand = { workspace = true, optional = true }
 serde.workspace = true
 serde_json.workspace = true
 sha2.workspace = true
