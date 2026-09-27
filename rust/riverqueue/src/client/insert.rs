@@ -711,12 +711,15 @@ impl Client {
     }
 
     fn batch_savepoint(&self, mode: InsertMode) -> String {
-        let nonce = self.inner.unique_nonce.fetch_add(1, Ordering::Relaxed);
+        let sequence = self
+            .inner
+            .insert_savepoint_sequence
+            .fetch_add(1, Ordering::Relaxed);
         let mode = match mode {
             InsertMode::Fast => "fast",
             InsertMode::Rows => "rows",
         };
-        format!("river_insert_{mode}_{nonce}")
+        format!("river_insert_{mode}_{sequence}")
     }
 
     /// Wakes local producers for jobs this client committed itself.
@@ -1036,10 +1039,15 @@ impl Client {
     /// Returns a nonce that marks a SQLite insert as this call's own.
     ///
     /// SQLite reports a skipped unique duplicate by checking whether the
-    /// returned row carries the nonce the insert wrote. Like River Go's
-    /// `randutil.Hex(8)`, the nonce must not repeat across processes: client
-    /// IDs and counters can (a restarted container keeps its hostname and
-    /// PID), so eight random bytes are drawn for each insert.
+    /// returned row carries the nonce the insert wrote. The nonce must not
+    /// repeat across processes: client IDs and counters can (a restarted
+    /// container keeps its hostname and PID), so it's eight random bytes in
+    /// lowercase hex, the format of River Go's `randutil.Hex(8)`.
+    ///
+    /// Unlike Go, which draws one nonce per insertion call and writes it to
+    /// every row of the batch, River draws one per row. Two rows of one batch
+    /// with the same unique key are therefore reported as a duplicate here,
+    /// while Go reports neither as skipped.
     #[cfg(feature = "sqlite")]
     fn unique_insert_nonce() -> String {
         format!("{:016x}", rand::random::<u64>())

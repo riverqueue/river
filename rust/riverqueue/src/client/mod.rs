@@ -148,9 +148,10 @@ pub(crate) struct ClientInner {
     pub(crate) schema: SchemaName,
     allow_legacy_job_kinds: bool,
     allow_unregistered_job_kinds: bool,
+    /// Numbers the savepoints of batch insertions in caller transactions.
+    insert_savepoint_sequence: AtomicU64,
     soft_stop_timeout: Option<Duration>,
     started: AtomicBool,
-    unique_nonce: AtomicU64,
     pub(crate) workers: WorkerRegistry,
     work_middleware: Vec<Arc<dyn crate::extension::DynWorkMiddleware>>,
 }
