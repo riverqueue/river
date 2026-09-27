@@ -381,6 +381,7 @@ impl ExtensionClient<'_> {
             encoded_args: source_row.encoded_args,
             kind: source_row.kind,
             opts: InsertParams {
+                extension_options: Map::new(),
                 max_attempts: source_row.max_attempts,
                 metadata: source_row.metadata,
                 pending: false,

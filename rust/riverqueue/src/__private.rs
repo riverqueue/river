@@ -24,6 +24,36 @@ use tokio_util::sync::CancellationToken;
 pub use crate::client::{ExtensionClient, WeakClient};
 pub use crate::database::erased::{Database, ErasedExecutor, ErasedTransaction};
 
+/// Insertion options reserved for River's own companion crates.
+///
+/// Extension options travel beside a job's ordinary options, from a job
+/// type's `JobArgs::default_insert_opts` or a call's options, to the
+/// extension's [`Pilot::before_jobs_insert`] hook as
+/// [`JobInsertParams::extension_options`]. River doesn't persist them. They
+/// resolve key by key: a call's option replaces the job type's option with
+/// the same key, and the job type's other options are kept, so an extension
+/// can declare options for a job type that per-call options such as metadata
+/// don't disturb.
+pub trait InsertOptsExt: Sized {
+    /// Returns the extension options set on these insertion options.
+    fn extension_options(&self) -> &Map<String, Value>;
+
+    /// Sets the extension option `key`, replacing any earlier value.
+    #[must_use]
+    fn with_extension_option(self, key: impl Into<String>, value: Value) -> Self;
+}
+
+impl InsertOptsExt for crate::InsertOpts {
+    fn extension_options(&self) -> &Map<String, Value> {
+        &self.extension_options
+    }
+
+    fn with_extension_option(mut self, key: impl Into<String>, value: Value) -> Self {
+        self.extension_options.insert(key.into(), value);
+        self
+    }
+}
+
 /// Builder operations reserved for River's own companion crates.
 pub trait ClientBuilderExt: Sized {
     /// Returns whether the client will stay out of leader election, as set
@@ -580,6 +610,10 @@ pub struct QueueMetadataChangedParams {
 pub struct JobInsertParams<'insert> {
     /// Serialized job arguments as exact JSON text.
     pub encoded_args: &'insert mut Box<serde_json::value::RawValue>,
+    /// Extension options resolved from the job type's and the call's
+    /// [`InsertOptsExt`] options, keyed by extension. River doesn't persist
+    /// them.
+    pub extension_options: &'insert Map<String, Value>,
     /// Stable job kind.
     pub kind: &'insert mut String,
     /// Arbitrary job metadata.

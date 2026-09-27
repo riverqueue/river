@@ -4,7 +4,7 @@ use std::time::Duration;
 
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
-use serde_json::value::RawValue;
+use serde_json::{Map, Value, value::RawValue};
 
 use crate::{PRIORITY_DEFAULT, QUEUE_DEFAULT};
 
@@ -151,6 +151,9 @@ impl AttemptError {
 /// merely because it happens to equal River's default.
 #[derive(Clone, Debug, Default)]
 pub struct InsertOpts {
+    /// Options for an exact-version extension, which River carries to the
+    /// extension's insert hook without persisting them.
+    pub(crate) extension_options: Map<String, Value>,
     max_attempts: Option<i16>,
     metadata: Option<JobMetadata>,
     pending: Option<bool>,
@@ -233,9 +236,8 @@ impl InsertOpts {
 
     /// Replaces arbitrary JSON object metadata.
     ///
-    /// Per-call metadata replaces the job type's default metadata, but keeps
-    /// its reserved `river:` keys that the per-call metadata doesn't set, so
-    /// options an add-on crate declares for a job type survive.
+    /// As in River Go, per-call metadata replaces the job type's default
+    /// metadata as a whole.
     ///
     /// Accepts a [`JobMetadata`] or a `serde_json::Map`. Build a
     /// [`JobMetadata`] from JSON text (for example with `str::parse`) to keep
@@ -307,6 +309,7 @@ impl InsertOpts {
     #[must_use]
     pub fn overlay(mut self, overrides: Self) -> Self {
         let Self {
+            extension_options,
             max_attempts,
             metadata,
             pending,
@@ -316,6 +319,7 @@ impl InsertOpts {
             tags,
             unique,
         } = overrides;
+        self.extension_options.extend(extension_options);
         self.max_attempts = max_attempts.or(self.max_attempts);
         self.metadata = metadata.or(self.metadata);
         self.pending = pending.or(self.pending);
@@ -335,6 +339,7 @@ impl InsertOpts {
         call_overrides: Self,
     ) -> InsertParams {
         let mut resolved = InsertParams {
+            extension_options: Map::new(),
             max_attempts: client_max_attempts,
             metadata: JobMetadata::default(),
             pending: false,
@@ -344,13 +349,8 @@ impl InsertOpts {
             tags: Vec::new(),
             unique: UniqueOpts::default(),
         };
-        let default_metadata = job_defaults.metadata.clone();
-        let call_sets_metadata = call_overrides.metadata.is_some();
         resolved.apply(job_defaults);
         resolved.apply(call_overrides);
-        if call_sets_metadata && let Some(default_metadata) = default_metadata {
-            resolved.metadata.keep_reserved_members(&default_metadata);
-        }
         resolved
     }
 }
@@ -364,6 +364,8 @@ impl InsertOpts {
 #[derive(Clone, Debug)]
 #[non_exhaustive]
 pub struct InsertParams {
+    /// Options for an exact-version extension; see [`InsertOpts`].
+    pub(crate) extension_options: Map<String, Value>,
     /// Maximum number of attempts, including the first.
     pub max_attempts: i16,
     /// Arbitrary JSON object metadata.
@@ -384,6 +386,7 @@ pub struct InsertParams {
 
 impl InsertParams {
     fn apply(&mut self, options: InsertOpts) {
+        self.extension_options.extend(options.extension_options);
         if let Some(value) = options.max_attempts {
             self.max_attempts = value;
         }
@@ -907,12 +910,13 @@ mod tests {
     }
 
     #[test]
-    fn per_call_metadata_keeps_reserved_default_members() {
+    fn per_call_metadata_replaces_default_metadata_wholesale() {
         let defaults = InsertOpts::default().with_metadata(
             r#"{"team":"a","river:addon":{"key":1e400},"river:shared":"default"}"#
                 .parse::<JobMetadata>()
                 .unwrap(),
         );
+        // Like Go, even reserved `river:` keys from the defaults are replaced.
         let resolved = InsertOpts::resolve(
             7,
             defaults.clone(),
@@ -922,7 +926,7 @@ mod tests {
         );
         assert_eq!(
             resolved.metadata.as_raw().get(),
-            r#"{"call":true,"river:shared":"call","river:addon":{"key":1e400}}"#
+            r#"{"call":true,"river:shared":"call"}"#
         );
 
         // Without per-call metadata, the defaults apply unchanged.

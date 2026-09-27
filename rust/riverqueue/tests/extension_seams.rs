@@ -1,6 +1,7 @@
 //! Exact-version seams that add-on crates build on: fetch claims rolled back
 //! by a failed commit, filtered finalized-job deletion, reserved job-type
-//! metadata, batched insertion interception, and queue metadata changes.
+//! metadata, batched insertion interception, extension insert options, and
+//! queue metadata changes.
 //!
 //! PostgreSQL scenarios run in a unique schema and fail rather than skip when
 //! `RIVER_RUST_DATABASE_URL` is unset; SQLite scenarios use temporary files.
@@ -16,10 +17,12 @@ use std::{
 };
 
 use async_trait::async_trait;
-use riverqueue::__private::{ClientBuilderExt, DatabaseConnection, FetchParams, Pilot, PilotError};
+use riverqueue::__private::{
+    ClientBuilderExt, DatabaseConnection, FetchParams, InsertOptsExt, Pilot, PilotError,
+};
 use riverqueue::{
-    Client, Job, JobArgs, JobState, QueueConfig, QueueUpdateParams, WorkContext, WorkOutcome,
-    WorkerRegistry,
+    Client, InsertOpts, Job, JobArgs, JobState, QueueConfig, QueueUpdateParams, WorkContext,
+    WorkOutcome, WorkerRegistry,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value, json};
@@ -357,6 +360,103 @@ async fn assert_batched_insert_interception(builder: impl Fn() -> riverqueue::Cl
     assert_eq!(*batches.lock().unwrap(), [1, 3]);
 }
 
+/// A job type that declares extension options and default metadata.
+#[derive(Clone, Debug, Deserialize, Serialize)]
+struct DeclaredArgs {
+    value: i64,
+}
+
+impl JobArgs for DeclaredArgs {
+    const KIND: &'static str = "extension_seams_declared";
+
+    fn default_insert_opts() -> InsertOpts {
+        InsertOpts::default()
+            .with_metadata(json!({"team": "a"}).as_object().unwrap().clone())
+            .with_extension_option("declared", json!({"type": true}))
+            .with_extension_option("shared", json!("type"))
+    }
+}
+
+/// The extension options and metadata JSON a job reached the insert hook
+/// with.
+type SeenInsert = (Map<String, Value>, String);
+
+/// Records what each inserted job reaches the insert hook with.
+#[derive(Clone, Default)]
+struct OptionsPilot {
+    seen: Arc<Mutex<Vec<SeenInsert>>>,
+}
+
+#[async_trait]
+impl Pilot for OptionsPilot {
+    fn intercepts_insert(&self) -> bool {
+        true
+    }
+
+    async fn before_jobs_insert(
+        &self,
+        _connection: DatabaseConnection<'_>,
+        jobs: &mut [riverqueue::__private::JobInsertParams<'_>],
+    ) -> Result<(), PilotError> {
+        let mut seen = self.seen.lock().unwrap();
+        for job in jobs {
+            seen.push((
+                job.extension_options.clone(),
+                job.metadata.as_raw().get().to_owned(),
+            ));
+        }
+        Ok(())
+    }
+}
+
+/// Checks that extension options reach the insert hook resolved key by key
+/// and aren't persisted, while per-call metadata replaces the job type's
+/// default metadata wholesale, as in Go.
+async fn assert_extension_options_reach_the_insert_hook(
+    builder: impl Fn() -> riverqueue::ClientBuilder,
+) {
+    let pilot = OptionsPilot::default();
+    let client = builder().pilot(pilot.clone()).build().unwrap();
+
+    let defaults = client.insert(DeclaredArgs { value: 1 }).await.unwrap();
+    let overridden = client
+        .insert(DeclaredArgs { value: 2 })
+        .opts(
+            InsertOpts::default()
+                .with_metadata(json!({"call": 1}).as_object().unwrap().clone())
+                .with_extension_option("shared", json!("call")),
+        )
+        .await
+        .unwrap();
+
+    let seen = pilot.seen.lock().unwrap().clone();
+    assert_eq!(seen.len(), 2);
+    assert_eq!(
+        Value::Object(seen[0].0.clone()),
+        json!({"declared": {"type": true}, "shared": "type"})
+    );
+    assert_eq!(seen[0].1, r#"{"team":"a"}"#);
+    // A call's metadata replaces the defaults, but not the declared
+    // extension options, which the call overrides key by key.
+    assert_eq!(
+        Value::Object(seen[1].0.clone()),
+        json!({"declared": {"type": true}, "shared": "call"})
+    );
+    assert_eq!(seen[1].1, r#"{"call":1}"#);
+    // Nothing about the extension options is persisted. (SQLite adds its
+    // insert nonce.)
+    for (id, expected) in [
+        (defaults.id(), json!({"team": "a"})),
+        (overridden.id(), json!({"call": 1})),
+    ] {
+        let mut metadata: Map<String, Value> =
+            serde_json::from_str(client.jobs().get(id).await.unwrap().metadata.as_raw().get())
+                .unwrap();
+        metadata.remove("river:unique_nonce");
+        assert_eq!(Value::Object(metadata), expected);
+    }
+}
+
 /// Records the metadata each [`Pilot::queue_metadata_changed`] call reports.
 #[derive(Clone, Default)]
 struct MetadataPilot {
@@ -560,6 +660,13 @@ mod postgres {
     }
 
     #[tokio::test(flavor = "multi_thread")]
+    async fn extension_options_reach_the_insert_hook() {
+        let schema = PostgresSchema::new("seam_extension_options").await;
+        assert_extension_options_reach_the_insert_hook(|| builder(&schema)).await;
+        schema.cleanup().await;
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
     async fn insertions_reach_the_extension_as_one_batch() {
         let schema = PostgresSchema::new("seam_batch_insert").await;
         assert_batched_insert_interception(|| builder(&schema)).await;
@@ -653,6 +760,13 @@ mod sqlite {
             let expected: Vec<i64> = kept.iter().map(|&index| ids[index]).collect();
             assert_eq!(remaining, expected, "{params:?}");
         }
+        sqlite_cleanup(pool, path).await;
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn extension_options_reach_the_insert_hook() {
+        let (pool, path) = sqlite_file_pool(4).await;
+        assert_extension_options_reach_the_insert_hook(|| Client::builder(pool.clone())).await;
         sqlite_cleanup(pool, path).await;
     }
 

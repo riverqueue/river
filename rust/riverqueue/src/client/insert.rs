@@ -895,6 +895,7 @@ fn extension_insert_params(jobs: &mut [InsertContext]) -> Vec<PilotJobInsertPara
             } = job;
             PilotJobInsertParams {
                 encoded_args,
+                extension_options: &opts.extension_options,
                 kind,
                 metadata: &mut opts.metadata,
                 queue: &mut opts.queue,
