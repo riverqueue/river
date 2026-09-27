@@ -106,7 +106,10 @@ fn dispatch_notification(
                         );
                     }
                 }
-                "pause" | "resume" => {
+                // Like Go's producer, a metadata change is handled at once
+                // rather than at the next queue poll. The producer reloads
+                // the queue and reports changed metadata to the extension.
+                "metadata_changed" | "pause" | "resume" => {
                     if let Some(queue) = payload.queue {
                         let _ = queue_notifications.send(RuntimeNotification::QueueControl(queue));
                     }

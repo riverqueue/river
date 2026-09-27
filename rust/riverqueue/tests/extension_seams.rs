@@ -1,6 +1,6 @@
 //! Exact-version seams that add-on crates build on: fetch claims rolled back
 //! by a failed commit, filtered finalized-job deletion, reserved job-type
-//! metadata, and batched insertion interception.
+//! metadata, batched insertion interception, and queue metadata changes.
 //!
 //! PostgreSQL scenarios run in a unique schema and fail rather than skip when
 //! `RIVER_RUST_DATABASE_URL` is unset; SQLite scenarios use temporary files.
@@ -18,9 +18,11 @@ use std::{
 use async_trait::async_trait;
 use riverqueue::__private::{ClientBuilderExt, DatabaseConnection, FetchParams, Pilot, PilotError};
 use riverqueue::{
-    Client, Job, JobArgs, JobState, QueueConfig, WorkContext, WorkOutcome, WorkerRegistry,
+    Client, Job, JobArgs, JobState, QueueConfig, QueueUpdateParams, WorkContext, WorkOutcome,
+    WorkerRegistry,
 };
 use serde::{Deserialize, Serialize};
+use serde_json::{Map, Value, json};
 
 #[derive(Clone, Debug, Deserialize, JobArgs, Serialize)]
 #[river(kind = "extension_seams")]
@@ -355,6 +357,91 @@ async fn assert_batched_insert_interception(builder: impl Fn() -> riverqueue::Cl
     assert_eq!(*batches.lock().unwrap(), [1, 3]);
 }
 
+/// Records the metadata each [`Pilot::queue_metadata_changed`] call reports.
+#[derive(Clone, Default)]
+struct MetadataPilot {
+    seen: Arc<Mutex<Vec<Map<String, Value>>>>,
+}
+
+#[async_trait]
+impl Pilot for MetadataPilot {
+    async fn queue_metadata_changed(
+        &self,
+        params: &riverqueue::__private::QueueMetadataChangedParams,
+    ) -> Result<(), PilotError> {
+        self.seen.lock().unwrap().push(params.metadata.clone());
+        Ok(())
+    }
+}
+
+impl MetadataPilot {
+    /// Waits until the last reported metadata is `expected`, failing after
+    /// `timeout`.
+    async fn wait_for(&self, expected: &Value, timeout: Duration) {
+        let deadline = tokio::time::Instant::now() + timeout;
+        loop {
+            if let Some(last) = self.seen.lock().unwrap().last()
+                && Value::Object(last.clone()) == *expected
+            {
+                return;
+            }
+            assert!(
+                tokio::time::Instant::now() < deadline,
+                "queue metadata {expected} not reported within {timeout:?}; saw {:?}",
+                self.seen.lock().unwrap()
+            );
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    }
+}
+
+/// Checks that queue metadata changes reach the extension at once, as Go's
+/// producer handles `metadata_changed`, rather than at the next queue poll
+/// two seconds later. A listening client learns of another client's update
+/// through the control notification; a poll-only client learns of its own
+/// update through a local signal.
+///
+/// Two consecutive updates must each arrive within 1.5 seconds. A poll could
+/// catch the first by chance, but the second is made right after that poll,
+/// so it would wait almost the whole interval.
+async fn assert_metadata_changes_reach_extension(
+    builder: impl Fn() -> riverqueue::ClientBuilder,
+    poll_only: bool,
+) {
+    let pilot = MetadataPilot::default();
+    let queue = if poll_only { "poll_only" } else { "listening" };
+    let mut client_builder = builder()
+        .pilot(pilot.clone())
+        .queue(queue, fast_queue())
+        .workers(workers());
+    if poll_only {
+        client_builder = client_builder.without_notifications();
+    }
+    let client = client_builder.build().unwrap();
+    let mut run = client.start().unwrap();
+    run.wait_ready().await.unwrap();
+    pilot.wait_for(&json!({}), Duration::from_secs(10)).await;
+
+    let updater = if poll_only {
+        client.clone()
+    } else {
+        builder().build().unwrap()
+    };
+    for value in 1..=2 {
+        let metadata = json!({"value": value});
+        let Value::Object(map) = metadata.clone() else {
+            unreachable!()
+        };
+        updater
+            .queues()
+            .update(queue, QueueUpdateParams::new().metadata(map))
+            .await
+            .unwrap();
+        pilot.wait_for(&metadata, Duration::from_millis(1500)).await;
+    }
+    run.shutdown().await.unwrap();
+}
+
 #[cfg(feature = "postgres-tests")]
 mod postgres {
     use riverqueue::database::PostgresDatabase;
@@ -478,6 +565,14 @@ mod postgres {
         assert_batched_insert_interception(|| builder(&schema)).await;
         schema.cleanup().await;
     }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn queue_metadata_changes_reach_the_extension_at_once() {
+        let schema = PostgresSchema::new("seam_queue_metadata").await;
+        assert_metadata_changes_reach_extension(|| builder(&schema), false).await;
+        assert_metadata_changes_reach_extension(|| builder(&schema), true).await;
+        schema.cleanup().await;
+    }
 }
 
 #[cfg(feature = "sqlite")]
@@ -565,6 +660,14 @@ mod sqlite {
     async fn insertions_reach_the_extension_as_one_batch() {
         let (pool, path) = sqlite_file_pool(4).await;
         assert_batched_insert_interception(|| Client::builder(pool.clone())).await;
+        sqlite_cleanup(pool, path).await;
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn queue_metadata_changes_reach_the_extension_at_once() {
+        let (pool, path) = sqlite_file_pool(4).await;
+        assert_metadata_changes_reach_extension(|| Client::builder(pool.clone()), false).await;
+        assert_metadata_changes_reach_extension(|| Client::builder(pool.clone()), true).await;
         sqlite_cleanup(pool, path).await;
     }
 }

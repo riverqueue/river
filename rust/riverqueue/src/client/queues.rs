@@ -243,12 +243,19 @@ request_type! {
 impl QueueUpdateRequest<'_> {
     async fn run(self) -> Result<Queue, Error> {
         let inner = &self.client.inner;
+        let own_transaction = !self.target.is_transaction();
         let mut session = self.target.session(inner, Access::Transaction).await?;
         let queue = session
             .storage(inner)
             .queue_update(&self.name, self.params.metadata.as_ref())
             .await?;
         session.commit().await?;
+        // Like a pause, a metadata change reaches this client's producers at
+        // once, including on a poll-only client, as Go's
+        // `notifyProducerWithoutListenerQueueControlEvent` does.
+        if own_transaction && self.params.metadata.is_some() {
+            self.client.signal_queue_control(&self.name);
+        }
         Ok(queue)
     }
 }
