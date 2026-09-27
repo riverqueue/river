@@ -583,6 +583,10 @@ where
 {
     /// Worker-specific error type. Errors use River's retry policy.
     ///
+    /// The job's recorded error is the error's message followed by each of
+    /// its sources, `outer: inner`, like Go's `err.Error()` on a wrapped
+    /// error, so the cause of a failure stays visible on the job.
+    ///
     /// Any error convertible into [`BoxError`] works, including concrete
     /// error types, `Box<dyn Error + Send + Sync>`, and report types such as
     /// `anyhow::Error` or `eyre::Report`. Hooks and error handlers receive it

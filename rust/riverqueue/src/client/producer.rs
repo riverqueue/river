@@ -109,7 +109,7 @@ impl Producers {
         let (task_id, name, generation, failure) = match joined {
             Ok((task_id, (name, generation, queue_cancel, result))) => {
                 let failure = match result {
-                    Err(queue_error) => Some(queue_error.to_string()),
+                    Err(queue_error) => Some(crate::error::Chain(&queue_error).to_string()),
                     Ok(()) if !queue_cancel.is_cancelled() => {
                         Some("producer exited unexpectedly".to_owned())
                     }

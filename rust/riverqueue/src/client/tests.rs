@@ -206,6 +206,28 @@ fn retry_delay_is_seeded_bounded_and_capped() {
 }
 
 #[tokio::test]
+async fn worker_failures_record_the_error_chain_and_panic_value() {
+    #[derive(Debug, thiserror::Error)]
+    #[error("charging card")]
+    struct ChargeError(#[source] std::io::Error);
+
+    let failure = super::executor::worker_join_result(Ok(Err(WorkError::new(ChargeError(
+        std::io::Error::other("card declined"),
+    )))))
+    .unwrap_err();
+    assert_eq!(failure.error, "charging card: card declined");
+
+    let join_error = tokio::spawn(async { panic!("boom") }).await.unwrap_err();
+    let failure = super::executor::worker_join_result(Err(join_error)).unwrap_err();
+    assert_eq!(failure.error, "boom");
+    let WorkResult::Panicked(panic) = super::executor::public_work_result(&Err(failure)) else {
+        panic!("expected a panic result");
+    };
+    assert_eq!(panic.message(), "boom");
+    assert_eq!(panic.to_string(), "worker panicked: boom");
+}
+
+#[tokio::test]
 async fn completion_retries_recover_from_a_transient_error() {
     let attempts = AtomicU64::new(0);
     let result = with_completion_retries("test completion", || async {

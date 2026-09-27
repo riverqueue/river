@@ -303,18 +303,41 @@ impl Error {
 }
 
 /// Formats an error with its whole source chain, `outer: inner: innermost`,
-/// for River's own log lines.
+/// for recorded job errors and River's own log lines.
+///
+/// This is the Rust counterpart of Go's `err.Error()` on a wrapped error. An
+/// error whose message already ends with `: {source}`, as some libraries'
+/// errors (including SQLx's) do, is shortened so the source's message
+/// appears once; snafu's `CleanedErrorText` applies the same rule.
 pub(crate) struct Chain<'a>(pub(crate) &'a (dyn std::error::Error + 'static));
 
 impl fmt::Display for Chain<'_> {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(formatter, "{}", self.0)?;
-        let mut source = self.0.source();
-        while let Some(error) = source {
-            write!(formatter, ": {error}")?;
-            source = error.source();
+        let mut error = self.0;
+        let mut message = error.to_string();
+        let mut separator = "";
+        loop {
+            let Some(source) = error.source() else {
+                return write!(formatter, "{separator}{message}");
+            };
+            let source_message = source.to_string();
+            let own = message
+                .strip_suffix(source_message.as_str())
+                .and_then(|own| {
+                    if own.is_empty() {
+                        Some(own)
+                    } else {
+                        own.strip_suffix(": ")
+                    }
+                })
+                .unwrap_or(&message);
+            if !own.is_empty() {
+                write!(formatter, "{separator}{own}")?;
+                separator = ": ";
+            }
+            error = source;
+            message = source_message;
         }
-        Ok(())
     }
 }
 
@@ -336,6 +359,40 @@ mod tests {
     /// Renders an error the way `anyhow`'s `{:#}` does.
     fn report(error: &(dyn std::error::Error + 'static)) -> String {
         Chain(error).to_string()
+    }
+
+    #[test]
+    fn chains_show_each_message_once() {
+        #[derive(Debug, Error)]
+        #[error("fetching user")]
+        struct Outer(#[source] Repeats);
+
+        /// Prints its source itself, as `sqlx::Error::Database` does.
+        #[derive(Debug, Error)]
+        #[error("query failed: {0}")]
+        struct Repeats(#[source] std::io::Error);
+
+        #[derive(Debug, Error)]
+        #[error("{0}")]
+        struct Same(#[source] std::io::Error);
+
+        #[derive(Debug, Error)]
+        #[error("retry 5")]
+        struct Suffix(#[source] std::io::Error);
+
+        let error = Outer(Repeats(std::io::Error::other("connection reset")));
+        assert_eq!(
+            report(&error),
+            "fetching user: query failed: connection reset"
+        );
+
+        let error = Same(std::io::Error::other("connection reset"));
+        assert_eq!(report(&error), "connection reset");
+
+        // A source's message that merely ends the outer message isn't a
+        // repeat.
+        let error = Suffix(std::io::Error::other("5"));
+        assert_eq!(report(&error), "retry 5: 5");
     }
 
     #[test]

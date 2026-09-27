@@ -2,6 +2,7 @@
 
 #[allow(clippy::wildcard_imports)]
 use super::*;
+use crate::error::{Chain, panic_message};
 
 /// Runs one claimed job's attempt and persists its result.
 ///
@@ -91,7 +92,7 @@ pub(super) async fn execute_job(
             && result.is_ok()
         {
             result = Err(WorkerFailure {
-                error: resumable_failure.to_string(),
+                error: Chain(&resumable_failure).to_string(),
                 kind: WorkerFailureKind::Error,
                 source: Some(resumable_failure),
                 trace: String::new(),
@@ -367,22 +368,24 @@ pub(super) fn worker_join_result(
     match result {
         Ok(Ok(outcome)) => Ok(outcome),
         Ok(Err(worker_error)) => Err(WorkerFailure {
-            error: worker_error.to_string(),
+            error: Chain(&worker_error).to_string(),
             kind: WorkerFailureKind::Error,
             source: Some(worker_error),
             trace: String::new(),
         }),
+        // Like Go, a panic is recorded as the panic's value alone.
+        Err(join_error) if join_error.is_panic() => {
+            let trace = format!("{join_error:?}");
+            Err(WorkerFailure {
+                error: panic_message(&join_error.into_panic()).to_owned(),
+                kind: WorkerFailureKind::Panic,
+                source: None,
+                trace,
+            })
+        }
         Err(join_error) => Err(WorkerFailure {
-            error: if join_error.is_panic() {
-                format!("job panicked: {join_error}")
-            } else {
-                format!("job task cancelled: {join_error}")
-            },
-            kind: if join_error.is_panic() {
-                WorkerFailureKind::Panic
-            } else {
-                WorkerFailureKind::Aborted
-            },
+            error: format!("job task cancelled: {join_error}"),
+            kind: WorkerFailureKind::Aborted,
             source: None,
             trace: format!("{join_error:?}"),
         }),
@@ -392,7 +395,7 @@ pub(super) fn worker_join_result(
 pub(super) fn worker_failure_from_source(error: BoxError) -> WorkerFailure {
     let error = WorkError::new(error);
     WorkerFailure {
-        error: error.to_string(),
+        error: Chain(&error).to_string(),
         kind: WorkerFailureKind::Error,
         source: Some(error),
         trace: String::new(),
