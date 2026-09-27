@@ -415,6 +415,45 @@ async fn stop_now_from_another_task_interrupts_running_jobs() {
     assert!(cancel_attempted.finalized_at.is_some());
 }
 
+// Like Go, whose fetches and notification polls run under a context the
+// stop cancels, a stop during a database outage doesn't wait for the pool to
+// hand out a connection.
+#[tokio::test(flavor = "multi_thread")]
+async fn stop_during_an_outage_does_not_wait_for_a_connection() {
+    let database = TestDatabase::new().await;
+    // A leader's resignation deliberately outlives a stop, with the bounded
+    // retries Go uses, so this client never leads.
+    let client = Client::builder(database.pool.clone())
+        .without_leader_election()
+        .workers(Gate::new().workers())
+        .queue(
+            "default",
+            QueueConfig::new(1)
+                .with_fetch_cooldown(Duration::from_millis(1))
+                .with_fetch_poll_interval(Duration::from_millis(20)),
+        )
+        .build()
+        .unwrap();
+    let mut run = client.start().unwrap();
+    run.wait_ready().await.unwrap();
+
+    // Taking every connection leaves the client's producer, notification
+    // poller, and heartbeat waiting on the pool for its 30-second acquire
+    // timeout.
+    let mut held = Vec::new();
+    for _ in 0..4 {
+        held.push(database.pool.acquire().await.unwrap());
+    }
+    // Give polls and fetches time to start waiting; a stop must end them
+    // wherever they are.
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    tokio::time::timeout(Duration::from_secs(5), run.shutdown())
+        .await
+        .expect("the stop waited for a pool connection")
+        .unwrap();
+    drop(held);
+}
+
 #[tokio::test(flavor = "multi_thread")]
 async fn wait_ready_waits_for_queue_registration() {
     let database = TestDatabase::new().await;

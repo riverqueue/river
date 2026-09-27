@@ -314,8 +314,14 @@ pub(super) async fn run_sqlite_notifications(
             () = cancel.cancelled() => return Ok(()),
             _ = notification_tick.tick() => {}
         }
+        // Like the rest of a poll, waiting for a connection during an
+        // outage must not delay a stop, as Go's cancellable context doesn't.
         let polled = async {
-            let mut connection = pool.acquire().await?;
+            let mut connection = tokio::select! {
+                biased;
+                () = cancel.cancelled() => return Ok(()),
+                connection = pool.acquire() => connection?,
+            };
             if !listener.is_connected() {
                 listener
                     .connect(&mut connection)

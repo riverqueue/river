@@ -211,7 +211,9 @@ impl Producers {
                         () = tokio::time::sleep(start_delay) => {}
                     }
                 }
-                let result = run_queue(
+                // Boxed: the producer loop's state, including an in-flight
+                // fetch, is too large to embed in this task's future.
+                let result = Box::pin(run_queue(
                     inner,
                     completion_sender,
                     task_name.clone(),
@@ -220,7 +222,7 @@ impl Producers {
                     work_cancel,
                     notifications,
                     registered,
-                )
+                ))
                 .await;
                 (task_name, generation, task_cancel, result)
             });
@@ -264,7 +266,12 @@ pub(super) async fn run_queue(
     let start_time = tokio::time::Instant::now();
     let mut start_attempt = 0;
     let initial_queue = loop {
-        match crate::storage::touch_queue(&inner, &queue).await {
+        let Some(touched) =
+            unless_cancelled(&fetch_cancel, crate::storage::touch_queue(&inner, &queue)).await
+        else {
+            return Ok(());
+        };
+        match touched {
             Ok(queue_row) => break queue_row,
             Err(queue_error) => {
                 let sleep = if start_time.elapsed() < START_FAST_RETRY_WINDOW {
@@ -309,8 +316,12 @@ pub(super) async fn run_queue(
         let (mut should_fetch, refresh_queue_state) = tokio::select! {
             () = fetch_cancel.cancelled() => break,
             _ = heartbeat.tick() => {
-                if let Err(queue_error) = crate::storage::touch_queue(&inner, &queue).await {
-                    error!(error = %queue_error, "River queue heartbeat failed; retrying");
+                match unless_cancelled(&fetch_cancel, crate::storage::touch_queue(&inner, &queue)).await {
+                    None => break,
+                    Some(Err(queue_error)) => {
+                        error!(error = %queue_error, "River queue heartbeat failed; retrying");
+                    }
+                    Some(Ok(_)) => {}
                 }
                 (false, false)
             },
@@ -341,7 +352,12 @@ pub(super) async fn run_queue(
         };
 
         if refresh_queue_state {
-            match crate::storage::load_queue(&inner, &queue).await {
+            let Some(loaded) =
+                unless_cancelled(&fetch_cancel, crate::storage::load_queue(&inner, &queue)).await
+            else {
+                break;
+            };
+            match loaded {
                 Ok(Some(queue_row)) => {
                     if queue_row.metadata != metadata {
                         metadata.clone_from(&queue_row.metadata);
@@ -402,8 +418,8 @@ pub(super) async fn run_queue(
             let first_maximum = available / 2;
             let second_maximum = available - first_maximum;
             let (first, second) = tokio::join!(
-                fetch_jobs(&inner, &queue, first_maximum),
-                fetch_jobs(&inner, &queue, second_maximum),
+                fetch_jobs(&inner, &queue, first_maximum, &fetch_cancel),
+                fetch_jobs(&inner, &queue, second_maximum, &fetch_cancel),
             );
             match (first, second) {
                 (Ok(mut first), Ok(second)) => {
@@ -428,7 +444,7 @@ pub(super) async fn run_queue(
                 }
             }
         } else {
-            match fetch_jobs(&inner, &queue, available).await {
+            match fetch_jobs(&inner, &queue, available, &fetch_cancel).await {
                 Ok(rows) => rows,
                 Err(fetch_error) => {
                     last_fetch = Some(tokio::time::Instant::now());
@@ -554,6 +570,26 @@ async fn finish_fetch(
     fetched
 }
 
+/// Waits for `operation` unless `cancel` fires first.
+///
+/// A fetch only abandons connection acquisition and transaction begins,
+/// which River's begin helpers make safe to drop. Like Go's fetch, which
+/// runs under the fetch context, a stop then doesn't wait out the pool's
+/// acquire timeout during a database outage. Nothing is claimed until the
+/// claim itself runs, and that always completes.
+async fn unless_cancelled<T>(
+    cancel: &CancellationToken,
+    operation: impl std::future::Future<Output = T>,
+) -> Option<T> {
+    tokio::select! {
+        biased;
+        () = cancel.cancelled() => None,
+        output = operation => Some(output),
+    }
+}
+
+/// Claims up to `maximum` jobs from `queue`. Returns no jobs when `cancel`
+/// fires before a connection is available.
 #[allow(
     clippy::too_many_lines,
     reason = "each backend's claim and extension interception stay together until the backend rework"
@@ -562,6 +598,7 @@ pub(super) async fn fetch_jobs(
     inner: &ClientInner,
     queue: &str,
     maximum: usize,
+    cancel: &CancellationToken,
 ) -> Result<FetchedJobs, Error> {
     let fetch_started = (!inner.hooks.is_empty()).then(std::time::Instant::now);
     let maximum = i32::try_from(maximum)
@@ -576,7 +613,12 @@ pub(super) async fn fetch_jobs(
             queue,
         };
         let rows = if inner.pilot.intercepts_fetch() {
-            let mut transaction = crate::database::begin_sqlite_write(pool).await?;
+            let Some(transaction) =
+                unless_cancelled(cancel, crate::database::begin_sqlite_write(pool)).await
+            else {
+                return Ok(FetchedJobs::default());
+            };
+            let mut transaction = transaction?;
             let fetch_params = extension_fetch_params(inner, queue, maximum);
             let claimed = inner
                 .pilot
@@ -628,7 +670,10 @@ pub(super) async fn fetch_jobs(
             }
             rows
         } else {
-            let mut connection = pool.acquire().await?;
+            let Some(connection) = unless_cancelled(cancel, pool.acquire()).await else {
+                return Ok(FetchedJobs::default());
+            };
+            let mut connection = connection?;
             crate::database::sqlite::claim(&mut connection, &params)
                 .await
                 .map_err(sqlite_backend_error)?
@@ -655,12 +700,19 @@ pub(super) async fn fetch_jobs(
             job_projection("job")
         );
         let rows = if inner.pilot.intercepts_fetch() {
-            let mut transaction = crate::database::begin_postgres(
-                inner
-                    .postgres_pool()
-                    .expect("PostgreSQL fetch extension requires a PostgreSQL pool"),
+            let Some(transaction) = unless_cancelled(
+                cancel,
+                crate::database::begin_postgres(
+                    inner
+                        .postgres_pool()
+                        .expect("PostgreSQL fetch extension requires a PostgreSQL pool"),
+                ),
             )
-            .await?;
+            .await
+            else {
+                return Ok(FetchedJobs::default());
+            };
+            let mut transaction = transaction?;
             let fetch_params = extension_fetch_params(inner, queue, maximum);
             let claimed = inner
                 .pilot
@@ -728,19 +780,17 @@ pub(super) async fn fetch_jobs(
             }
             rows
         } else {
-            fetch_oss_records(
-                inner
-                    .postgres_pool()
-                    .expect("PostgreSQL fetch path requires a PostgreSQL pool"),
-                oss_sql,
-                queue,
-                maximum,
-                &inner.id,
-            )
-            .await?
-            .iter()
-            .map(decode_job_row)
-            .collect()
+            let pool = inner
+                .postgres_pool()
+                .expect("PostgreSQL fetch path requires a PostgreSQL pool");
+            let Some(connection) = unless_cancelled(cancel, pool.acquire()).await else {
+                return Ok(FetchedJobs::default());
+            };
+            fetch_oss_records(&mut *connection?, oss_sql, queue, maximum, &inner.id)
+                .await?
+                .iter()
+                .map(decode_job_row)
+                .collect()
         };
         return Ok(finish_fetch(inner, fetch_started, rows).await);
     }
