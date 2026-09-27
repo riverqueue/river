@@ -3,6 +3,8 @@ package riverdrivertest
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
+	"maps"
 	"math"
 	"slices"
 	"testing"
@@ -230,6 +232,16 @@ func TestClientWithDriverRiverTurso(t *testing.T) {
 	)
 }
 
+// customJSONArgs are job args encoded as an arbitrary JSON object, like args
+// with a custom MarshalJSON implementation.
+type customJSONArgs struct {
+	values map[string]string
+}
+
+func (customJSONArgs) Kind() string { return "customJSON" }
+
+func (a customJSONArgs) MarshalJSON() ([]byte, error) { return json.Marshal(a.values) }
+
 type noOpArgs struct {
 	Name string `json:"name"`
 }
@@ -416,6 +428,129 @@ func ExerciseClient[TTx any](ctx context.Context, t *testing.T,
 		event := riversharedtest.WaitOrTimeout(t, subscribeChan)
 		require.Equal(t, river.EventKindJobCancelled, event.Kind)
 		require.Equal(t, rivertype.JobStateCancelled, event.Job.State)
+	})
+
+	// Keys containing gjson/sjson path syntax (and the empty key) are distinct
+	// keys when unique by all args, so args differing in their values aren't
+	// duplicates.
+	t.Run("InsertUniqueByArgsAllArgsWithPathSyntaxKeys", func(t *testing.T) {
+		t.Parallel()
+
+		client, bundle := setup(t)
+
+		river.AddWorker(bundle.config.Workers, river.WorkFunc(func(ctx context.Context, job *river.Job[customJSONArgs]) error {
+			return nil
+		}))
+
+		insert := func(t *testing.T, values map[string]string) *rivertype.JobInsertResult {
+			t.Helper()
+
+			insertRes, err := client.Insert(ctx, customJSONArgs{values: values}, &river.InsertOpts{
+				UniqueOpts: river.UniqueOpts{ByArgs: true},
+			})
+			require.NoError(t, err)
+			return insertRes
+		}
+
+		var (
+			keys       = []string{"", "!x", ":x", "[x", "alice@example.com", "file.name", "x*?", "x#", "x|", `x\y`, "{x"}
+			baseValues = map[string]string{"x": "x"}
+		)
+		for _, key := range keys {
+			baseValues[key] = "value"
+		}
+
+		insertRes0 := insert(t, baseValues)
+		require.False(t, insertRes0.UniqueSkippedAsDuplicate)
+
+		insertRes1 := insert(t, maps.Clone(baseValues))
+		require.True(t, insertRes1.UniqueSkippedAsDuplicate)
+		require.Equal(t, insertRes0.Job.ID, insertRes1.Job.ID)
+
+		for _, key := range keys {
+			values := maps.Clone(baseValues)
+			values[key] = "other"
+
+			insertRes := insert(t, values)
+			require.False(t, insertRes.UniqueSkippedAsDuplicate, "key: %q", key)
+		}
+	})
+
+	// Unique fields whose JSON keys contain gjson/sjson path syntax, or whose
+	// `json` tag has no name, are part of the unique key.
+	t.Run("InsertUniqueByArgsUniqueFieldsWithPathSyntaxKeys", func(t *testing.T) {
+		t.Parallel()
+
+		client, bundle := setup(t)
+
+		type User struct {
+			ID string `json:"id" river:"unique"`
+		}
+
+		//nolint:tagliatelle // non-snake keys are intentional
+		type JobArgs struct {
+			testutil.JobArgsReflectKind[JobArgs]
+
+			Bang      string `json:"!bang"             river:"unique"`
+			Colon     string `json:":colon"            river:"unique"`
+			Email     string `json:"alice@example.com" river:"unique"`
+			Other     string `json:"other"`
+			Recipient string `json:",omitempty"        river:"unique"`
+			User      User   `json:"user"`
+			UserID    string `json:"user.id"           river:"unique"`
+			Wildcard  string `json:"wild*?"            river:"unique"`
+		}
+
+		river.AddWorker(bundle.config.Workers, river.WorkFunc(func(ctx context.Context, job *river.Job[JobArgs]) error {
+			return nil
+		}))
+
+		insert := func(t *testing.T, args *JobArgs) *rivertype.JobInsertResult {
+			t.Helper()
+
+			insertRes, err := client.Insert(ctx, args, &river.InsertOpts{
+				UniqueOpts: river.UniqueOpts{ByArgs: true},
+			})
+			require.NoError(t, err)
+			return insertRes
+		}
+
+		baseArgs := JobArgs{
+			Bang:      "bang",
+			Colon:     "colon",
+			Email:     "email",
+			Other:     "other",
+			Recipient: "recipient",
+			User:      User{ID: "nested"},
+			UserID:    "u1",
+			Wildcard:  "wildcard",
+		}
+
+		insertRes0 := insert(t, &baseArgs)
+		require.False(t, insertRes0.UniqueSkippedAsDuplicate)
+
+		// A change to a field that isn't unique is still a duplicate.
+		args := baseArgs
+		args.Other = "changed"
+		insertRes1 := insert(t, &args)
+		require.True(t, insertRes1.UniqueSkippedAsDuplicate)
+		require.Equal(t, insertRes0.Job.ID, insertRes1.Job.ID)
+
+		for _, modify := range []func(args *JobArgs){
+			func(args *JobArgs) { args.Bang = "changed" },
+			func(args *JobArgs) { args.Colon = "changed" },
+			func(args *JobArgs) { args.Email = "changed" },
+			func(args *JobArgs) { args.Recipient = "changed" },
+			func(args *JobArgs) { args.User.ID = "changed" },
+			func(args *JobArgs) { args.UserID = "u2" },
+			func(args *JobArgs) { args.Wildcard = "changed" },
+		} {
+			args := baseArgs
+			modify(&args)
+
+			insertRes := insert(t, &args)
+			require.False(t, insertRes.UniqueSkippedAsDuplicate, "args: %+v", args)
+		}
 	})
 
 	t.Run("InsertUniqueByPeriod", func(t *testing.T) {
