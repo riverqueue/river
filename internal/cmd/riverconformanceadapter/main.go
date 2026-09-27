@@ -35,7 +35,7 @@ import (
 )
 
 const (
-	adapterVersion        = 14
+	adapterVersion        = 15
 	implementationVersion = "0.47.0"
 	protocolRevision      = 1
 )
@@ -57,7 +57,6 @@ var adapterMethods = []string{ //nolint:gochecknoglobals
 	"handshake",
 	"insert",
 	"insert_many",
-	"insert_many_fast",
 	"leader",
 	"list",
 	"listener_count",
@@ -93,7 +92,6 @@ var adapterMethods = []string{ //nolint:gochecknoglobals
 	"tx_get",
 	"tx_insert",
 	"tx_insert_many",
-	"tx_insert_many_fast",
 	"tx_list",
 	"tx_queue_get",
 	"tx_queue_list",
@@ -115,7 +113,6 @@ var capabilities = []string{ //nolint:gochecknoglobals
 	"custom_schema",
 	"deterministic_controls",
 	"extensions",
-	"fast_insert",
 	"fault_injection",
 	"get",
 	"insert",
@@ -148,7 +145,6 @@ var sqliteAdapterMethods = []string{ //nolint:gochecknoglobals
 	"handshake",
 	"insert",
 	"insert_many",
-	"insert_many_fast",
 	"list",
 	"migrate",
 	"raw_insert_exact_json",
@@ -167,7 +163,6 @@ var sqliteAdapterMethods = []string{ //nolint:gochecknoglobals
 	"tx_get",
 	"tx_insert",
 	"tx_insert_many",
-	"tx_insert_many_fast",
 	"tx_list",
 	"tx_retry",
 	"tx_rollback",
@@ -179,7 +174,6 @@ var sqliteAdapterMethods = []string{ //nolint:gochecknoglobals
 var sqliteCapabilities = []string{ //nolint:gochecknoglobals
 	"cancel",
 	"deterministic_controls",
-	"fast_insert",
 	"get",
 	"insert",
 	"job_crud",
@@ -192,7 +186,7 @@ var sqliteCapabilities = []string{ //nolint:gochecknoglobals
 }
 
 var sqliteRuntimeCapabilities = []string{ //nolint:gochecknoglobals
-	"barriers", "cancel", "deterministic_controls", "extensions", "fast_insert", "get", "insert",
+	"barriers", "cancel", "deterministic_controls", "extensions", "get", "insert",
 	"job_crud", "leadership", "lifecycle", "migrate", "notifications",
 	"periodic_jobs", "poll_only", "queues", "reset", "resumable_jobs", "retry", "scheduler",
 	"subscriptions", "transactions", "unique_jobs", "work",
@@ -200,11 +194,11 @@ var sqliteRuntimeCapabilities = []string{ //nolint:gochecknoglobals
 
 var sqliteRuntimeMethods = []string{ //nolint:gochecknoglobals
 	"barrier_create", "barrier_release", "cancel", "clock_set", "cron_next", "delete", "delete_many", "get",
-	"handshake", "insert", "insert_many", "insert_many_fast", "leader", "list", "migrate",
+	"handshake", "insert", "insert_many", "leader", "list", "migrate",
 	"queue_add", "queue_get", "queue_list", "queue_pause", "queue_remove", "queue_resume",
 	"queue_update", "raw_finalize", "raw_insert_exact_json", "raw_insert_no_notify", "raw_job_exact_json", "raw_job_row", "raw_job_timestamps", "request_resign", "reset", "retry", "retry_delay",
 	"rng_seed", "runtime_stats", "start", "stop", "tx_begin", "tx_cancel", "tx_commit",
-	"tx_delete", "tx_delete_many", "tx_get", "tx_insert", "tx_insert_many", "tx_insert_many_fast",
+	"tx_delete", "tx_delete_many", "tx_get", "tx_insert", "tx_insert_many",
 	"tx_list", "tx_queue_get", "tx_queue_list", "tx_queue_pause", "tx_queue_resume",
 	"tx_queue_update", "tx_retry", "tx_rollback", "tx_update", "unique_key", "update", "wait", "work",
 }
@@ -1399,31 +1393,6 @@ func (s *adapterState) handle(ctx context.Context, req *request) (any, error) {
 		p95 := latencies[max(0, (len(latencies)*95+99)/100-1)]
 		return map[string]any{"duration_ns": duration.Nanoseconds(), "p95_ns": p95.Nanoseconds()}, nil
 
-	case "insert_many_fast":
-		var params struct {
-			Jobs []insertParams `json:"jobs"`
-		}
-		if err := decodeParams(req.Params, &params); err != nil {
-			return nil, err
-		}
-		jobs := make([]river.InsertManyParams, len(params.Jobs))
-		for i, job := range params.Jobs {
-			if err := job.rejectRawOnlyFields(); err != nil {
-				return nil, err
-			}
-			opts, err := job.Opts.opts()
-			if err != nil {
-				return nil, err
-			}
-			jobs[i] = river.InsertManyParams{Args: job.args(), InsertOpts: opts}
-		}
-		client, err := s.client()
-		if err != nil {
-			return nil, err
-		}
-		count, err := client.InsertManyFast(ctx, jobs)
-		return map[string]any{"count": count}, err
-
 	case "get": //nolint:usestdlibvars // JSON-RPC method names are lowercase protocol values.
 		var params struct {
 			ID     int64  `json:"id"`
@@ -2071,7 +2040,7 @@ func (s *adapterState) handle(ctx context.Context, req *request) (any, error) {
 		}
 		return normalizeJob(result.Job), nil
 
-	case "tx_insert_many", "tx_insert_many_fast":
+	case "tx_insert_many":
 		var params struct {
 			Handle string          `json:"handle"`
 			Jobs   json.RawMessage `json:"jobs"`
@@ -2090,10 +2059,6 @@ func (s *adapterState) handle(ctx context.Context, req *request) (any, error) {
 		client, err := s.client()
 		if err != nil {
 			return nil, err
-		}
-		if req.Method == "tx_insert_many_fast" {
-			count, err := client.InsertManyFastTx(ctx, tx, jobs)
-			return map[string]any{"count": count}, err
 		}
 		results, err := client.InsertManyTx(ctx, tx, jobs)
 		if err != nil {
@@ -2476,14 +2441,10 @@ func (s *sqliteAdapterState) handle(ctx context.Context, req *request) (any, err
 		}
 		return normalizeJob(result.Job), nil
 
-	case "insert_many", "insert_many_fast":
+	case "insert_many":
 		jobs, err := decodeInsertManyParams(req.Params)
 		if err != nil {
 			return nil, err
-		}
-		if req.Method == "insert_many_fast" {
-			count, err := s.client().InsertManyFast(ctx, jobs)
-			return map[string]any{"count": count}, err
 		}
 		results, err := s.client().InsertMany(ctx, jobs)
 		if err != nil {
@@ -3012,7 +2973,7 @@ func (s *sqliteAdapterState) handle(ctx context.Context, req *request) (any, err
 		}
 		return normalizeJob(result.Job), nil
 
-	case "tx_insert_many", "tx_insert_many_fast":
+	case "tx_insert_many":
 		var params struct {
 			Handle string          `json:"handle"`
 			Jobs   json.RawMessage `json:"jobs"`
@@ -3027,10 +2988,6 @@ func (s *sqliteAdapterState) handle(ctx context.Context, req *request) (any, err
 		jobs, err := decodeInsertManyParams(params.Jobs)
 		if err != nil {
 			return nil, err
-		}
-		if req.Method == "tx_insert_many_fast" {
-			count, err := s.client().InsertManyFastTx(ctx, tx, jobs)
-			return map[string]any{"count": count}, err
 		}
 		results, err := s.client().InsertManyTx(ctx, tx, jobs)
 		if err != nil {

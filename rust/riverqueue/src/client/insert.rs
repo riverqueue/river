@@ -22,17 +22,6 @@ use std::{
 use super::*;
 use crate::extension::{InsertEndpoint, InsertNext, InsertedJob, InsertedJobs};
 
-/// Whether an insertion returns rows or only a count.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(super) enum InsertMode {
-    /// Inserts rows through the backend's fastest path. On PostgreSQL this is
-    /// `COPY`, which returns no rows and fails on unique conflicts. SQLite
-    /// skips unique conflicts, like Go's `ON CONFLICT DO NOTHING`.
-    Fast,
-    /// Inserts rows and returns them, reporting unique conflicts per row.
-    Rows,
-}
-
 /// One job of a homogeneous [`Client::insert_many`] batch: arguments plus
 /// options that override the job type's defaults.
 ///
@@ -126,7 +115,7 @@ impl<'a, A: JobArgs> IntoFuture for InsertRequest<'a, A> {
             } = self;
             let job = client.prepare_typed(&args, opts, Utc::now())?;
             let rows = client
-                .run_insert(target.into_executor()?, vec![job], InsertMode::Rows)
+                .run_insert(target.into_executor()?, vec![job])
                 .await?;
             let row = rows.into_iter().next().ok_or_else(|| {
                 Error::runtime_context("job insertion", "insertion returned no row")
@@ -151,17 +140,6 @@ pub struct InsertManyRequest<'a, A> {
 }
 
 impl<'a, A: JobArgs> InsertManyRequest<'a, A> {
-    /// Inserts the jobs through the backend's fastest path, returning only
-    /// how many were inserted.
-    ///
-    /// On PostgreSQL this uses `COPY`, so a unique conflict fails the whole
-    /// batch instead of returning the existing job. SQLite inserts the jobs in
-    /// one write transaction and, like Go's SQLite driver, skips a job whose
-    /// unique key conflicts with an existing one; the count excludes it.
-    pub fn fast(self) -> InsertManyFastRequest<'a, A> {
-        InsertManyFastRequest { inner: self }
-    }
-
     /// Inserts the jobs in a caller-managed transaction.
     ///
     /// The jobs become visible to workers only when the transaction commits.
@@ -208,9 +186,7 @@ impl<'a, A: JobArgs> IntoFuture for InsertManyRequest<'a, A> {
                 target,
             } = self;
             let jobs = Self::prepare(client, jobs)?;
-            let rows = client
-                .run_insert(target.into_executor()?, jobs, InsertMode::Rows)
-                .await?;
+            let rows = client.run_insert(target.into_executor()?, jobs).await?;
             rows.into_iter()
                 .map(|row| {
                     let args = row.job.decode_args()?;
@@ -220,55 +196,6 @@ impl<'a, A: JobArgs> IntoFuture for InsertManyRequest<'a, A> {
                     })
                 })
                 .collect()
-        })
-    }
-}
-
-/// A fast batch insertion, returned by [`InsertManyRequest::fast`]. Await it
-/// to insert the jobs and get the number inserted.
-#[must_use = "insert requests do nothing unless awaited"]
-pub struct InsertManyFastRequest<'a, A> {
-    inner: InsertManyRequest<'a, A>,
-}
-
-impl<'a, A: JobArgs> InsertManyFastRequest<'a, A> {
-    /// Inserts the jobs in a caller-managed transaction.
-    pub fn tx<'t, E>(self, executor: E) -> InsertManyFastRequest<'t, A>
-    where
-        'a: 't,
-        E: DatabaseTransactionExecutor<'t>,
-    {
-        InsertManyFastRequest {
-            inner: self.inner.tx(executor),
-        }
-    }
-}
-
-impl<A> fmt::Debug for InsertManyFastRequest<'_, A> {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter
-            .debug_struct("InsertManyFastRequest")
-            .field("jobs", &self.inner.jobs.len())
-            .finish_non_exhaustive()
-    }
-}
-
-impl<'a, A: JobArgs> IntoFuture for InsertManyFastRequest<'a, A> {
-    type Output = Result<u64, Error>;
-    type IntoFuture = Pin<Box<dyn Future<Output = Self::Output> + Send + 'a>>;
-
-    fn into_future(self) -> Self::IntoFuture {
-        Box::pin(async move {
-            let InsertManyRequest {
-                client,
-                jobs,
-                target,
-            } = self.inner;
-            let jobs = InsertManyRequest::prepare(client, jobs)?;
-            let inserted = client
-                .run_insert_inserted(target.into_executor()?, jobs, InsertMode::Fast)
-                .await?;
-            Ok(inserted.len())
         })
     }
 }
@@ -335,9 +262,7 @@ impl<'a> IntoFuture for InsertBatchRequest<'a> {
                     now,
                 )?);
             }
-            let rows = client
-                .run_insert(target.into_executor()?, jobs, InsertMode::Rows)
-                .await?;
+            let rows = client.run_insert(target.into_executor()?, jobs).await?;
             Ok(rows
                 .into_iter()
                 .map(|row| InsertBatchResult {
@@ -411,9 +336,7 @@ impl Client {
     /// Atomically inserts a batch of one or more jobs of one type.
     ///
     /// Items are job arguments or `(args, opts)` tuples. Await the request to
-    /// get one [`InsertResult`] per job in input order, or chain
-    /// [`fast`](InsertManyRequest::fast) to use the backend's fastest path and
-    /// get only a count.
+    /// get one [`InsertResult`] per job in input order.
     ///
     /// ```no_run
     /// # use riverqueue::{Client, InsertOpts, JobArgs};
@@ -429,12 +352,6 @@ impl Client {
     ///     ])
     ///     .await?;
     /// assert_eq!(results.len(), 2);
-    ///
-    /// let inserted = client
-    ///     .insert_many((0..1_000).map(|n| SendEmail { address: format!("{n}@example.com") }))
-    ///     .fast()
-    ///     .await?;
-    /// assert_eq!(inserted, 1_000);
     /// # Ok(())
     /// # }
     /// ```
@@ -507,7 +424,7 @@ impl Client {
             target,
             Utc::now(),
         )?;
-        let rows = self.run_insert(None, vec![job], InsertMode::Rows).await?;
+        let rows = self.run_insert(None, vec![job]).await?;
         rows.into_iter().next().map(|row| row.job).ok_or_else(|| {
             Error::runtime_context("periodic job insertion", "insertion returned no row")
         })
@@ -596,40 +513,38 @@ impl Client {
         })
     }
 
-    /// Runs an insertion that returns rows, decoding them with decode hooks.
+    /// Runs the insertion pipeline and decodes the returned rows with decode
+    /// hooks.
     pub(super) async fn run_insert(
         &self,
         executor: Option<PilotDatabaseConnection<'_>>,
         jobs: Vec<InsertContext>,
-        mode: InsertMode,
     ) -> Result<Vec<InsertedJob>, Error> {
-        match self.run_insert_inserted(executor, jobs, mode).await? {
-            InsertedJobs::Rows(mut rows) => {
-                for row in &mut rows {
-                    for hook in self.inner.hooks.iter().rev() {
-                        hook.decode_insert_result(&mut row.job).await?;
-                    }
-                }
-                Ok(rows)
+        let InsertedJobs::Rows(mut rows) = self.run_insert_inserted(executor, jobs).await?;
+        for row in &mut rows {
+            for hook in self.inner.hooks.iter().rev() {
+                hook.decode_insert_result(&mut row.job).await?;
             }
-            InsertedJobs::Count(_) => Err(Error::runtime_context(
-                "job insertion",
-                "insertion middleware returned a count where rows were expected",
-            )),
         }
+        Ok(rows)
     }
 
     /// Runs the insertion pipeline, returning what middleware returned.
-    pub(super) async fn run_insert_inserted(
+    ///
+    /// Without a caller transaction, validation has already run, and
+    /// middleware, begin hooks, extension interception, the write, and the
+    /// insert notification all run in one transaction, like River Go's
+    /// `Insert` and `InsertMany`: an error anywhere, including in middleware
+    /// after the write, rolls the whole insertion back.
+    async fn run_insert_inserted(
         &self,
         executor: Option<PilotDatabaseConnection<'_>>,
         jobs: Vec<InsertContext>,
-        mode: InsertMode,
     ) -> Result<InsertedJobs, Error> {
         if jobs.is_empty() {
             return Err(Error::invalid_job("no jobs to insert".to_owned()));
         }
-        let atomic = mode == InsertMode::Fast || jobs.len() > 1;
+        let atomic = jobs.len() > 1;
         let Some(executor) = executor else {
             let inserted = match self.inner.database.pool() {
                 #[cfg(feature = "postgres")]
@@ -639,7 +554,6 @@ impl Client {
                         .insert_on_connection(
                             PilotDatabaseConnection::Postgres(&mut transaction),
                             jobs,
-                            mode,
                         )
                         .await?;
                     transaction.commit().await?;
@@ -652,7 +566,6 @@ impl Client {
                         .insert_on_connection(
                             PilotDatabaseConnection::Sqlite(&mut transaction),
                             jobs,
-                            mode,
                         )
                         .await?;
                     transaction.commit().await?;
@@ -667,21 +580,13 @@ impl Client {
             PilotDatabaseConnection::Postgres(connection) => {
                 if !atomic {
                     return self
-                        .insert_on_connection(
-                            PilotDatabaseConnection::Postgres(connection),
-                            jobs,
-                            mode,
-                        )
+                        .insert_on_connection(PilotDatabaseConnection::Postgres(connection), jobs)
                         .await;
                 }
-                let savepoint = self.batch_savepoint(mode);
+                let savepoint = self.batch_savepoint();
                 begin_postgres_savepoint(connection, &savepoint).await?;
                 let result = self
-                    .insert_on_connection(
-                        PilotDatabaseConnection::Postgres(&mut *connection),
-                        jobs,
-                        mode,
-                    )
+                    .insert_on_connection(PilotDatabaseConnection::Postgres(&mut *connection), jobs)
                     .await;
                 finish_postgres_savepoint(connection, &savepoint, result).await
             }
@@ -689,55 +594,32 @@ impl Client {
             PilotDatabaseConnection::Sqlite(connection) => {
                 if !atomic {
                     return self
-                        .insert_on_connection(
-                            PilotDatabaseConnection::Sqlite(connection),
-                            jobs,
-                            mode,
-                        )
+                        .insert_on_connection(PilotDatabaseConnection::Sqlite(connection), jobs)
                         .await;
                 }
-                let savepoint = self.batch_savepoint(mode);
+                let savepoint = self.batch_savepoint();
                 begin_sqlite_savepoint(connection, &savepoint).await?;
                 let result = self
-                    .insert_on_connection(
-                        PilotDatabaseConnection::Sqlite(&mut *connection),
-                        jobs,
-                        mode,
-                    )
+                    .insert_on_connection(PilotDatabaseConnection::Sqlite(&mut *connection), jobs)
                     .await;
                 finish_sqlite_savepoint(connection, &savepoint, result).await
             }
         }
     }
 
-    fn batch_savepoint(&self, mode: InsertMode) -> String {
+    fn batch_savepoint(&self) -> String {
         let sequence = self
             .inner
             .insert_savepoint_sequence
             .fetch_add(1, Ordering::Relaxed);
-        let mode = match mode {
-            InsertMode::Fast => "fast",
-            InsertMode::Rows => "rows",
-        };
-        format!("river_insert_{mode}_{sequence}")
+        format!("river_insert_{sequence}")
     }
 
     /// Wakes local producers for jobs this client committed itself.
     fn signal_inserted(&self, inserted: &InsertedJobs) {
-        match inserted {
-            InsertedJobs::Rows(rows) => {
-                for row in rows {
-                    self.signal_insert(&row.job, row.unique_skipped_as_duplicate);
-                }
-            }
-            InsertedJobs::Count(count) => {
-                if *count > 0 {
-                    let _ = self
-                        .inner
-                        .queue_notifications
-                        .send(RuntimeNotification::Insert("*".to_owned()));
-                }
-            }
+        let InsertedJobs::Rows(rows) = inserted;
+        for row in rows {
+            self.signal_insert(&row.job, row.unique_skipped_as_duplicate);
         }
     }
 
@@ -746,10 +628,9 @@ impl Client {
         &'c self,
         connection: PilotDatabaseConnection<'c>,
         jobs: Vec<InsertContext>,
-        mode: InsertMode,
     ) -> Result<InsertedJobs, Error> {
         let endpoint: InsertEndpoint<'c> =
-            Box::new(move |jobs| Box::pin(self.persist_jobs(connection, jobs, mode)));
+            Box::new(move |jobs| Box::pin(self.persist_jobs(connection, jobs)));
         InsertNext::new(&self.inner.insert_middleware, endpoint)
             .run(jobs)
             .await
@@ -761,15 +642,11 @@ impl Client {
         &self,
         mut connection: PilotDatabaseConnection<'_>,
         mut jobs: Vec<InsertContext>,
-        mode: InsertMode,
     ) -> Result<InsertedJobs, Error> {
         if jobs.is_empty() {
             return Err(Error::invalid_job("no jobs to insert".to_owned()));
         }
-        let intercepts = match mode {
-            InsertMode::Fast => self.inner.pilot.intercepts_fast_insert(),
-            InsertMode::Rows => self.inner.pilot.intercepts_insert(),
-        };
+        let intercepts = self.inner.pilot.intercepts_insert();
         for job in &mut jobs {
             for hook in &self.inner.hooks {
                 hook.insert_begin(job).await?;
@@ -798,40 +675,10 @@ impl Client {
             }
         }
 
-        #[cfg(feature = "postgres")]
-        if mode == InsertMode::Fast
-            && !intercepts
-            && let PilotDatabaseConnection::Postgres(connection) = &mut connection
-        {
-            let count = self.copy_jobs(connection, &jobs).await?;
-            let queues = jobs
-                .iter()
-                .filter(|job| job.state == JobState::Available)
-                .map(|job| job.opts.queue.as_str())
-                .collect::<std::collections::BTreeSet<_>>();
-            self.notify_insert(PilotDatabaseConnection::Postgres(connection), queues)
-                .await?;
-            return Ok(InsertedJobs::Count(count));
-        }
-
         let now = Utc::now();
         let mut rows = Vec::with_capacity(jobs.len());
         for job in jobs {
-            let row = self
-                .insert_row(connection.reborrow(), job, now, mode)
-                .await?;
-            // Go's PostgreSQL `COPY` fails on a unique conflict, while its
-            // SQLite fast insertion skips the conflicting job.
-            #[cfg(feature = "postgres")]
-            if mode == InsertMode::Fast
-                && row.unique_skipped_as_duplicate
-                && matches!(connection, PilotDatabaseConnection::Postgres(_))
-            {
-                return Err(Error::invalid_job(
-                    "fast insertion encountered a unique conflict".to_owned(),
-                ));
-            }
-            rows.push(row);
+            rows.push(self.insert_row(connection.reborrow(), job, now).await?);
         }
         if intercepts {
             self.after_jobs_inserted(connection.reborrow(), &rows)
@@ -843,17 +690,7 @@ impl Client {
             .map(|row| row.job.queue.as_str())
             .collect::<std::collections::BTreeSet<_>>();
         self.notify_insert(connection.reborrow(), queues).await?;
-        Ok(match mode {
-            InsertMode::Fast => InsertedJobs::Count(
-                u64::try_from(
-                    rows.iter()
-                        .filter(|row| !row.unique_skipped_as_duplicate)
-                        .count(),
-                )
-                .unwrap_or(u64::MAX),
-            ),
-            InsertMode::Rows => InsertedJobs::Rows(rows),
-        })
+        Ok(InsertedJobs::Rows(rows))
     }
 
     /// Runs the extension's post-insert hook on the rows an insertion wrote.
@@ -932,16 +769,11 @@ impl Client {
     }
 
     /// Writes one job, returning it or the existing unique job it matched.
-    #[cfg_attr(
-        not(feature = "sqlite"),
-        expect(unused_variables, reason = "only SQLite insertion depends on the mode")
-    )]
     async fn insert_row(
         &self,
         connection: PilotDatabaseConnection<'_>,
         job: InsertContext,
         now: DateTime<Utc>,
-        mode: InsertMode,
     ) -> Result<InsertedJob, Error> {
         let InsertContext {
             encoded_args,
@@ -996,12 +828,8 @@ impl Client {
             }
             #[cfg(feature = "sqlite")]
             PilotDatabaseConnection::Sqlite(connection) => {
-                // Go's SQLite driver writes a nonce into every row it inserts
-                // and returns, and none into fast insertions. A fast unique
-                // insertion still needs one here to detect a skipped
-                // duplicate, since it reads the row back.
-                let nonce = (mode == InsertMode::Rows || unique_key.is_some())
-                    .then(Self::unique_insert_nonce);
+                // Like Go's SQLite driver, every inserted row carries a nonce.
+                let nonce = Self::unique_insert_nonce();
                 let inserted = crate::database::sqlite::insert(
                     connection,
                     &crate::database::sqlite::InsertJob {
@@ -1022,7 +850,7 @@ impl Client {
                         state,
                         tags: &opts.tags,
                         unique_key: unique_key.as_deref(),
-                        unique_nonce: nonce.as_deref(),
+                        unique_nonce: Some(&nonce),
                         unique_states,
                     },
                 )
@@ -1052,27 +880,6 @@ impl Client {
     fn unique_insert_nonce() -> String {
         format!("{:016x}", rand::random::<u64>())
     }
-
-    /// Writes jobs with PostgreSQL `COPY`, which is the fastest bulk path
-    /// but returns no rows and fails on a unique conflict.
-    #[cfg(feature = "postgres")]
-    async fn copy_jobs(
-        &self,
-        connection: &mut PgConnection,
-        jobs: &[InsertContext],
-    ) -> Result<u64, Error> {
-        let table = self.inner.schema.qualify("river_job");
-        let copy_sql = format!(
-            "COPY {table} (args, created_at, kind, max_attempts, metadata, priority, queue, scheduled_at, state, tags, unique_key, unique_states) FROM STDIN WITH (FORMAT csv, NULL '\\N')"
-        );
-        let data = encode_fast_copy(jobs, Utc::now());
-        let mut copy = connection.copy_in_raw(&copy_sql).await?;
-        if let Err(copy_error) = copy.send(data).await {
-            let _ = copy.abort("River fast insertion failed").await;
-            return Err(copy_error.into());
-        }
-        Ok(copy.finish().await?)
-    }
 }
 
 /// Exposes the mutable fields of each job to an extension's insert hook.
@@ -1095,64 +902,4 @@ fn extension_insert_params(jobs: &mut [InsertContext]) -> Vec<PilotJobInsertPara
             }
         })
         .collect()
-}
-
-/// Encodes jobs as `COPY` CSV rows.
-#[cfg(feature = "postgres")]
-fn encode_fast_copy(jobs: &[InsertContext], now: DateTime<Utc>) -> Vec<u8> {
-    let timestamp = |at: Option<DateTime<Utc>>| {
-        at.unwrap_or(now)
-            .to_rfc3339_opts(SecondsFormat::Micros, true)
-    };
-    let mut output = String::new();
-    for job in jobs {
-        let unique_key = job.unique_key.as_ref().map(|key| {
-            let mut value = String::from("\\x");
-            for byte in key {
-                write!(value, "{byte:02x}").expect("writing to a string cannot fail");
-            }
-            value
-        });
-        let unique_states = job.unique_states.map(|states| format!("{states:08b}"));
-        let fields = [
-            Some(job.encoded_args.to_string()),
-            Some(timestamp(job.created_at)),
-            Some(job.kind.clone()),
-            Some(job.opts.max_attempts.to_string()),
-            Some(job.opts.metadata.as_raw().get().to_owned()),
-            Some(job.opts.priority.to_string()),
-            Some(job.opts.queue.clone()),
-            Some(timestamp(job.opts.scheduled_at)),
-            Some(job.state.as_str().to_owned()),
-            Some(postgres_array(&job.opts.tags)),
-            unique_key,
-            unique_states,
-        ];
-        for (index, field) in fields.iter().enumerate() {
-            if index > 0 {
-                output.push(',');
-            }
-            match field {
-                Some(field) => {
-                    output.push('"');
-                    output.push_str(&field.replace('"', "\"\""));
-                    output.push('"');
-                }
-                None => output.push_str("\\N"),
-            }
-        }
-        output.push('\n');
-    }
-    output.into_bytes()
-}
-
-/// Formats a PostgreSQL array literal.
-#[cfg(feature = "postgres")]
-fn postgres_array(values: &[String]) -> String {
-    let values = values
-        .iter()
-        .map(|value| format!(r#""{}""#, value.replace('\\', "\\\\").replace('"', "\\\"")))
-        .collect::<Vec<_>>()
-        .join(",");
-    format!("{{{values}}}")
 }

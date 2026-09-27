@@ -41,25 +41,19 @@
       "source": "client.go:river.Client.InsertMany"
     },
     {
-      "applicability": "api_equivalent",
+      "applicability": "not_applicable",
       "area": "client",
       "detail": "func(context.Context, []river.InsertManyParams) (int, error)",
       "id": "client.InsertManyFast",
-      "rationale": "Each implementation provides InsertManyFast in its own idiom; exercised through the corresponding adapter method.",
-      "scenarios": [
-        "fast_insert_both_implementations"
-      ],
+      "rationale": "Ports don't offer fast insertion yet; batches use ordinary typed insertion.",
       "source": "client.go:river.Client.InsertManyFast"
     },
     {
-      "applicability": "api_equivalent",
+      "applicability": "not_applicable",
       "area": "client",
       "detail": "func(context.Context, TTx, []river.InsertManyParams) (int, error)",
       "id": "client.InsertManyFastTx",
-      "rationale": "Each implementation provides InsertManyFast inside a caller-managed transaction in its own idiom; exercised through the corresponding adapter method.",
-      "scenarios": [
-        "transactional_fast_batch_insertion"
-      ],
+      "rationale": "Ports don't offer fast insertion yet; batches use ordinary typed insertion.",
       "source": "client.go:river.Client.InsertManyFastTx"
     },
     {
@@ -1949,7 +1943,6 @@
       "id": "insert_opts.Pending",
       "rationale": "Inserts rows in the pending state.",
       "scenarios": [
-        "fast_insert_both_implementations",
         "typed_batch_insertion"
       ],
       "source": "insert_opts.go:river.InsertOpts.Pending"

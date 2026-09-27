@@ -6,7 +6,6 @@
     "custom_schema": "complete",
     "deterministic_controls": "complete",
     "extensions": "complete",
-    "fast_insert": "complete",
     "fault_injection": "complete",
     "get": "complete",
     "insert": "complete",

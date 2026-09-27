@@ -106,20 +106,8 @@ func TestMixedConformance(t *testing.T) {
 		defer scenarios.record(t)
 
 		pair.eachDirection(func(actor, observer *adapter) {
-			verifyTransactionalBatchInsertion(t, actor, observer, false)
+			verifyTransactionalBatchInsertion(t, actor, observer)
 		})
-	})
-	t.Run("transactional_fast_batch_insertion", func(t *testing.T) {
-		defer scenarios.record(t)
-
-		pair.eachDirection(func(actor, observer *adapter) {
-			verifyTransactionalBatchInsertion(t, actor, observer, true)
-		})
-	})
-	t.Run("fast_insert_both_implementations", func(t *testing.T) {
-		defer scenarios.record(t)
-
-		verifyFastInsertion(t, goAdapter, candidateAdapter)
 	})
 	t.Run("differential_job_crud", func(t *testing.T) {
 		defer scenarios.record(t)

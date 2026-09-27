@@ -38,13 +38,10 @@ stale.
   queues it works; a job whose kind has no registered worker fails with a
   retryable unknown-kind error (`mixed_unknown_kind_error`,
   `sqlite_runtime_unknown_kind_error`).
-- Fast insertion is a semantic contract: rows, defaults, and transactional
-  visibility match ordinary batch insertion
-  (`fast_insert_both_implementations`, `transactional_fast_batch_insertion`).
-  The transport an implementation uses to send the rows is an implementation
-  detail.
+- Fast insertion (`InsertManyFast`) isn't part of the shared contract. Ports
+  don't offer it yet, so batches go through ordinary typed insertion.
 - SQLite `portable-storage-v1` covers main-line migrations; deterministic
-  retry and unique-key controls; typed and fast insertion; job
+  retry and unique-key controls; typed insertion; job
   get/list/update/cancel/retry/delete; cross-language cursor ordering;
   millisecond timestamp storage; and transaction commit, rollback, batch
   atomicity, and visibility. Every selected candidate is exercised in both

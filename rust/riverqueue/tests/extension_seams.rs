@@ -254,20 +254,15 @@ fn finalized_deletions() -> Vec<(riverqueue::__private::FinalizedJobDeleteParams
 }
 
 /// Records each batch [`Pilot::before_jobs_insert`] receives and tags its
-/// jobs, optionally leaving fast insertions to River.
+/// jobs.
 struct BatchInsertPilot {
     batches: Arc<Mutex<Vec<usize>>>,
-    intercepts_fast: bool,
 }
 
 #[async_trait]
 impl Pilot for BatchInsertPilot {
     fn intercepts_insert(&self) -> bool {
         true
-    }
-
-    fn intercepts_fast_insert(&self) -> bool {
-        self.intercepts_fast
     }
 
     async fn before_jobs_insert(
@@ -283,61 +278,30 @@ impl Pilot for BatchInsertPilot {
     }
 }
 
-/// Checks that each insertion call reaches the extension as one batch, and
-/// that fast insertions skip it when the extension asks.
+/// Checks that each insertion call reaches the extension as one batch.
 async fn assert_batched_insert_interception(builder: impl Fn() -> riverqueue::ClientBuilder) {
-    for intercepts_fast in [true, false] {
-        let batches = Arc::new(Mutex::new(Vec::new()));
-        let client = builder()
-            .pilot(BatchInsertPilot {
-                batches: Arc::clone(&batches),
-                intercepts_fast,
-            })
-            .build()
-            .unwrap();
+    let batches = Arc::new(Mutex::new(Vec::new()));
+    let client = builder()
+        .pilot(BatchInsertPilot {
+            batches: Arc::clone(&batches),
+        })
+        .build()
+        .unwrap();
 
-        let single = client.insert(SeamArgs { value: 1 }).await.unwrap();
-        assert_eq!(
-            single.job.row.metadata.get::<bool>("batched").unwrap(),
-            Some(true)
-        );
-        let many = client
-            .insert_many((2..=4).map(|value| SeamArgs { value }))
-            .await
-            .unwrap();
-        assert!(
-            many.iter()
-                .all(|job| job.job.row.metadata.contains_key("batched"))
-        );
-        let fast = client
-            .insert_many((5..=6).map(|value| SeamArgs { value }))
-            .fast()
-            .await
-            .unwrap();
-        assert_eq!(fast, 2);
-
-        let expected: &[usize] = if intercepts_fast { &[1, 3, 2] } else { &[1, 3] };
-        assert_eq!(*batches.lock().unwrap(), expected);
-        let listed = client
-            .jobs()
-            .list(riverqueue::JobListParams::default().limit(100))
-            .await
-            .unwrap()
-            .jobs;
-        let fast_batched = listed
-            .iter()
-            .filter(|job| {
-                serde_json::from_str::<SeamArgs>(job.encoded_args.get())
-                    .is_ok_and(|args| args.value >= 5)
-            })
-            .all(|job| job.metadata.contains_key("batched"));
-        assert_eq!(fast_batched, intercepts_fast);
-        client
-            .jobs()
-            .delete_many(riverqueue::JobDeleteManyParams::all())
-            .await
-            .unwrap();
-    }
+    let single = client.insert(SeamArgs { value: 1 }).await.unwrap();
+    assert_eq!(
+        single.job.row.metadata.get::<bool>("batched").unwrap(),
+        Some(true)
+    );
+    let many = client
+        .insert_many((2..=4).map(|value| SeamArgs { value }))
+        .await
+        .unwrap();
+    assert!(
+        many.iter()
+            .all(|job| job.job.row.metadata.contains_key("batched"))
+    );
+    assert_eq!(*batches.lock().unwrap(), [1, 3]);
 }
 
 #[cfg(feature = "postgres-tests")]

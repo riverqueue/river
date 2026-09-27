@@ -44,7 +44,7 @@ Options:
       --duration DURATION      Stop after a Go-style duration such as 30s or 5m
   -n, --num-total-jobs COUNT   Insert COUNT jobs, then work them all
       --backlog COUNT          Target continuous-mode backlog (default: 75000)
-      --batch-size COUNT       COPY insertion batch size (default: 5000)
+      --batch-size COUNT       Jobs per insertion batch (default: 5000)
       --max-connections COUNT  SQLx pool size (default: 50)
       --max-workers COUNT      Concurrent workers (default: 2000)
       --skip-vacuum            Truncate without VACUUM FULL
@@ -530,7 +530,7 @@ async fn insert_jobs(
                 )
             })
             .collect::<Vec<_>>();
-        let count = client.insert_many(jobs).fast().await?;
+        let count = u64::try_from(client.insert_many(jobs).await?.len()).unwrap_or(u64::MAX);
         inserted.fetch_add(count, Ordering::Relaxed);
         remaining -= count;
     }

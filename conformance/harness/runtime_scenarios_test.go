@@ -452,10 +452,10 @@ func verifyCompletionBatching(t *testing.T, observer *postgresObserver, current 
 		jobs[index] = map[string]any{"behavior": "barrier_wait", "message": "completion-batching"}
 	}
 	var inserted struct {
-		Count int `json:"count"`
+		Results []normalizedInsertResult `json:"results"`
 	}
-	current.call(t, "insert_many_fast", map[string]any{"jobs": jobs}, &inserted)
-	require.Equal(t, jobCount, inserted.Count)
+	current.call(t, "insert_many", map[string]any{"jobs": jobs}, &inserted)
+	require.Len(t, inserted.Results, jobCount)
 	waitForListedJobCountWithin(t, current, map[string]any{
 		"limit": jobCount, "states": []string{"running"},
 	}, jobCount, 20*time.Second)

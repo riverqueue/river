@@ -4,7 +4,6 @@
   "capabilities": [
     "cancel",
     "deterministic_controls",
-    "fast_insert",
     "get",
     "insert",
     "job_crud",
@@ -26,7 +25,6 @@
     "handshake",
     "insert",
     "insert_many",
-    "insert_many_fast",
     "list",
     "migrate",
     "raw_insert_exact_json",
@@ -45,7 +43,6 @@
     "tx_get",
     "tx_insert",
     "tx_insert_many",
-    "tx_insert_many_fast",
     "tx_list",
     "tx_retry",
     "tx_rollback",

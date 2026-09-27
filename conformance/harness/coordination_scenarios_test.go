@@ -265,6 +265,7 @@ func verifyRemoteQueueSubscriptionEvents(t *testing.T, goAdapter, candidateAdapt
 func verifyTransactionalNotificationWakeups(t *testing.T, observer *postgresObserver, goAdapter, candidateAdapter *adapter) {
 	t.Helper()
 
+	const method = "tx_insert_many"
 	insertChannel := observer.currentSchema(t) + ".river_insert"
 	for _, pair := range []struct {
 		controller *adapter
@@ -273,65 +274,58 @@ func verifyTransactionalNotificationWakeups(t *testing.T, observer *postgresObse
 		{controller: candidateAdapter, worker: goAdapter},
 		{controller: goAdapter, worker: candidateAdapter},
 	} {
-		for _, method := range []string{"tx_insert_many", "tx_insert_many_fast"} {
-			for _, commit := range []bool{false, true} {
-				pair.worker.call(t, "reset", map[string]any{}, nil)
-				pair.worker.call(t, "start", map[string]any{
-					"client_id":              pair.worker.name + "-transaction-notification",
-					"fetch_poll_interval_ms": 60_000,
-					"max_workers":            2,
-				}, nil)
-				listener := observer.listen(t, insertChannel)
+		for _, commit := range []bool{false, true} {
+			pair.worker.call(t, "reset", map[string]any{}, nil)
+			pair.worker.call(t, "start", map[string]any{
+				"client_id":              pair.worker.name + "-transaction-notification",
+				"fetch_poll_interval_ms": 60_000,
+				"max_workers":            2,
+			}, nil)
+			listener := observer.listen(t, insertChannel)
 
-				outcome := "rollback"
-				if commit {
-					outcome = "commit"
-				}
-				handle := fmt.Sprintf("notification-%s-%s-%s", pair.controller.name, method, outcome)
-				tag := strings.ReplaceAll(handle, "-", "_")
-				pair.controller.call(t, "tx_begin", map[string]any{"handle": handle}, nil)
-				jobs := []map[string]any{
-					{"message": handle + " first", "opts": map[string]any{"tags": []string{tag}}},
-					{"message": handle + " second", "opts": map[string]any{"tags": []string{tag}}},
-				}
-				var inserted struct {
-					Count   int                      `json:"count"`
-					Results []normalizedInsertResult `json:"results"`
-				}
-				pair.controller.call(t, method, map[string]any{
-					"handle": handle, "jobs": jobs,
-				}, &inserted)
-				if method == "tx_insert_many_fast" {
-					require.Equal(t, 2, inserted.Count)
-				} else {
-					require.Len(t, inserted.Results, 2)
-				}
-
-				var listed struct {
-					Jobs []normalizedJob `json:"jobs"`
-				}
-				pair.worker.call(t, "list", map[string]any{"tags_all": []string{tag}}, &listed)
-				require.Empty(t, listed.Jobs, "transactional batch became visible before commit")
-
-				if commit {
-					startedAt := time.Now()
-					pair.controller.call(t, "tx_commit", map[string]any{"handle": handle}, nil)
-					waitForListedJobCount(t, pair.worker, map[string]any{
-						"states": []string{"completed"}, "tags_all": []string{tag},
-					}, 2)
-					require.Less(t, time.Since(startedAt), 5*time.Second,
-						"committed transactional insert did not wake a 60-second polling worker")
-					require.NotEmpty(t, listener.receiveUntilMarker(t, observer, handle+"-marker"),
-						"commit published no insert notification")
-				} else {
-					pair.controller.call(t, "tx_rollback", map[string]any{"handle": handle}, nil)
-					require.Empty(t, listener.receiveUntilMarker(t, observer, handle+"-marker"),
-						"rolled-back transaction published an insert notification")
-					pair.worker.call(t, "list", map[string]any{"tags_all": []string{tag}}, &listed)
-					require.Empty(t, listed.Jobs)
-				}
-				pair.worker.call(t, "stop", map[string]any{}, nil)
+			outcome := "rollback"
+			if commit {
+				outcome = "commit"
 			}
+			handle := fmt.Sprintf("notification-%s-%s-%s", pair.controller.name, method, outcome)
+			tag := strings.ReplaceAll(handle, "-", "_")
+			pair.controller.call(t, "tx_begin", map[string]any{"handle": handle}, nil)
+			jobs := []map[string]any{
+				{"message": handle + " first", "opts": map[string]any{"tags": []string{tag}}},
+				{"message": handle + " second", "opts": map[string]any{"tags": []string{tag}}},
+			}
+			var inserted struct {
+				Results []normalizedInsertResult `json:"results"`
+			}
+			pair.controller.call(t, method, map[string]any{
+				"handle": handle, "jobs": jobs,
+			}, &inserted)
+			require.Len(t, inserted.Results, 2)
+
+			var listed struct {
+				Jobs []normalizedJob `json:"jobs"`
+			}
+			pair.worker.call(t, "list", map[string]any{"tags_all": []string{tag}}, &listed)
+			require.Empty(t, listed.Jobs, "transactional batch became visible before commit")
+
+			if commit {
+				startedAt := time.Now()
+				pair.controller.call(t, "tx_commit", map[string]any{"handle": handle}, nil)
+				waitForListedJobCount(t, pair.worker, map[string]any{
+					"states": []string{"completed"}, "tags_all": []string{tag},
+				}, 2)
+				require.Less(t, time.Since(startedAt), 5*time.Second,
+					"committed transactional insert did not wake a 60-second polling worker")
+				require.NotEmpty(t, listener.receiveUntilMarker(t, observer, handle+"-marker"),
+					"commit published no insert notification")
+			} else {
+				pair.controller.call(t, "tx_rollback", map[string]any{"handle": handle}, nil)
+				require.Empty(t, listener.receiveUntilMarker(t, observer, handle+"-marker"),
+					"rolled-back transaction published an insert notification")
+				pair.worker.call(t, "list", map[string]any{"tags_all": []string{tag}}, &listed)
+				require.Empty(t, listed.Jobs)
+			}
+			pair.worker.call(t, "stop", map[string]any{}, nil)
 		}
 	}
 }
@@ -614,10 +608,10 @@ func verifySkipLockedCompetition(t *testing.T, goAdapter, candidateAdapter *adap
 			}
 		}
 		var inserted struct {
-			Count int `json:"count"`
+			Results []normalizedInsertResult `json:"results"`
 		}
-		inserter.call(t, "insert_many_fast", map[string]any{"jobs": jobs}, &inserted)
-		require.Equal(t, jobsPerInserter, inserted.Count)
+		inserter.call(t, "insert_many", map[string]any{"jobs": jobs}, &inserted)
+		require.Len(t, inserted.Results, jobsPerInserter)
 	}
 	worked := waitForListedJobCountWithin(t, goAdapter, map[string]any{
 		"limit": 2 * jobsPerInserter, "states": []string{"completed"}, "tags_all": []string{"competition"},

@@ -692,17 +692,6 @@ pub trait Pilot: Send + Sync + 'static {
         false
     }
 
-    /// Whether fast insertions (`insert_many(..).fast()`) must also run
-    /// [`Pilot::before_jobs_insert`] and [`Pilot::after_jobs_inserted`].
-    ///
-    /// Defaults to [`Pilot::intercepts_insert`], so intercepted fast
-    /// insertions write rows individually. Returning `false` lets them skip
-    /// the extension and keep River's fast path (`COPY` on PostgreSQL), like
-    /// River Go's `InsertManyFast`, which bypasses its pilot.
-    fn intercepts_fast_insert(&self) -> bool {
-        self.intercepts_insert()
-    }
-
     /// Mutates or validates every job of one insertion call at once, using
     /// its transaction connection, like River Go's `Pilot.JobInsertMany`
     /// receiving the whole batch.
@@ -854,9 +843,7 @@ pub trait Pilot: Send + Sync + 'static {
     ///
     /// Called only when [`Pilot::intercepts_insert`] returns `true`, on every
     /// insertion path, including batches, caller-managed transactions, and
-    /// periodic jobs. Fast inserts call it (and then write rows individually
-    /// rather than with `COPY`) only when [`Pilot::intercepts_fast_insert`]
-    /// returns `true`. Unique insertions skipped as duplicates aren't
+    /// periodic jobs. Unique insertions skipped as duplicates aren't
     /// included. Returning an error rolls back the insertion.
     async fn after_jobs_inserted(
         &self,

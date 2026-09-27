@@ -57,8 +57,7 @@ func TestMixedSQLiteConformance(t *testing.T) {
 
 		verifyBatchInsertion(t, goAdapter, candidateAdapter)
 		pair.eachDirection(func(actor, observer *adapter) {
-			verifyTransactionalBatchInsertion(t, actor, observer, false)
-			verifyTransactionalBatchInsertion(t, actor, observer, true)
+			verifyTransactionalBatchInsertion(t, actor, observer)
 		})
 	})
 	t.Run("sqlite_job_row_bytes", func(t *testing.T) {
@@ -284,10 +283,10 @@ func verifySQLiteCompetingWorkers(t *testing.T, goAdapter, candidateAdapter *ada
 		}
 	}
 	var inserted struct {
-		Count int `json:"count"`
+		Results []normalizedInsertResult `json:"results"`
 	}
-	goAdapter.call(t, "insert_many_fast", map[string]any{"jobs": jobs}, &inserted)
-	require.Equal(t, jobCount, inserted.Count)
+	goAdapter.call(t, "insert_many", map[string]any{"jobs": jobs}, &inserted)
+	require.Len(t, inserted.Results, jobCount)
 	worked := waitForListedJobCount(t, candidateAdapter, map[string]any{
 		"states": []string{"completed"}, "tags_all": []string{"sqlite_competing_workers"},
 	}, jobCount)

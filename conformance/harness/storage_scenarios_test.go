@@ -283,34 +283,27 @@ func verifyLargeBatchInsertion(t *testing.T, adapters ...*adapter) {
 	}
 }
 
-// verifyTransactionalBatchInsertion checks that typed or fast batches inserted
-// in a caller-managed transaction are invisible to the other implementation
-// until commit and never visible after rollback.
-func verifyTransactionalBatchInsertion(t *testing.T, actor, observer *adapter, fast bool) {
+// verifyTransactionalBatchInsertion checks that typed batches inserted in a
+// caller-managed transaction are invisible to the other implementation until
+// commit and never visible after rollback.
+func verifyTransactionalBatchInsertion(t *testing.T, actor, observer *adapter) {
 	t.Helper()
 
-	method := "tx_insert_many"
-	mode := "typed"
-	if fast {
-		method = "tx_insert_many_fast"
-		mode = "fast"
-	} else {
-		actor.call(t, "reset", map[string]any{}, nil)
-		handle := "batch-empty-" + actor.name
-		actor.call(t, "tx_begin", map[string]any{"handle": handle}, nil)
-		actor.requireCallError(t, method, map[string]any{
-			"handle": handle,
-			"jobs":   []map[string]any{},
-		}, "rejected")
-		actor.call(t, "tx_commit", map[string]any{"handle": handle}, nil)
-	}
+	actor.call(t, "reset", map[string]any{}, nil)
+	emptyHandle := "batch-empty-" + actor.name
+	actor.call(t, "tx_begin", map[string]any{"handle": emptyHandle}, nil)
+	actor.requireCallError(t, "tx_insert_many", map[string]any{
+		"handle": emptyHandle,
+		"jobs":   []map[string]any{},
+	}, "rejected")
+	actor.call(t, "tx_commit", map[string]any{"handle": emptyHandle}, nil)
 	for _, commit := range []bool{false, true} {
 		actor.call(t, "reset", map[string]any{}, nil)
 		outcome := "rollback"
 		if commit {
 			outcome = "commit"
 		}
-		handle := fmt.Sprintf("batch-%s-%s-%s", actor.name, mode, outcome)
+		handle := fmt.Sprintf("batch-%s-typed-%s", actor.name, outcome)
 		tag := strings.ReplaceAll(handle, "-", "_")
 		actor.call(t, "tx_begin", map[string]any{"handle": handle}, nil)
 		jobs := []map[string]any{
@@ -332,17 +325,12 @@ func verifyTransactionalBatchInsertion(t *testing.T, actor, observer *adapter, f
 			},
 		}
 		var result struct {
-			Count   int                      `json:"count"`
 			Results []normalizedInsertResult `json:"results"`
 		}
-		actor.call(t, method, map[string]any{"handle": handle, "jobs": jobs}, &result)
-		if fast {
-			require.Equal(t, 2, result.Count)
-		} else {
-			require.Len(t, result.Results, 2)
-			require.EqualValues(t, 0, result.Results[0].Job.Metadata["batch_index"])
-			require.EqualValues(t, 1, result.Results[1].Job.Metadata["batch_index"])
-		}
+		actor.call(t, "tx_insert_many", map[string]any{"handle": handle, "jobs": jobs}, &result)
+		require.Len(t, result.Results, 2)
+		require.EqualValues(t, 0, result.Results[0].Job.Metadata["batch_index"])
+		require.EqualValues(t, 1, result.Results[1].Job.Metadata["batch_index"])
 
 		var listed struct {
 			Jobs []normalizedJob `json:"jobs"`
@@ -361,67 +349,6 @@ func verifyTransactionalBatchInsertion(t *testing.T, actor, observer *adapter, f
 			observer.call(t, "list", map[string]any{"tags_all": []string{tag}}, &listed)
 			require.Empty(t, listed.Jobs)
 		}
-	}
-}
-
-// verifyFastInsertion checks the semantic contract of each implementation's
-// fast batch insertion: a count result, every persisted option, and rows the
-// other implementation reads identically. Whether an implementation uses
-// PostgreSQL COPY or another bulk mechanism is not observable and is not
-// asserted.
-func verifyFastInsertion(t *testing.T, goAdapter, candidateAdapter *adapter) {
-	t.Helper()
-
-	for _, pair := range []struct{ actor, observer *adapter }{
-		{actor: goAdapter, observer: candidateAdapter},
-		{actor: candidateAdapter, observer: goAdapter},
-	} {
-		pair.actor.call(t, "reset", map[string]any{}, nil)
-		tag := "fast_" + pair.actor.name
-		scheduledAt := time.Now().Add(time.Hour).UTC().Truncate(time.Millisecond)
-		var fastResult struct {
-			Count int `json:"count"`
-		}
-		pair.actor.call(t, "insert_many_fast", map[string]any{"jobs": []map[string]any{
-			{"message": "fast available", "opts": map[string]any{
-				"metadata": map[string]any{"index": 0}, "priority": 2, "tags": []string{tag},
-			}},
-			{"message": "fast pending", "opts": map[string]any{
-				"metadata": map[string]any{"index": 1}, "pending": true, "tags": []string{tag},
-			}},
-			{"message": "fast scheduled", "opts": map[string]any{
-				"max_attempts": 7, "metadata": map[string]any{"index": 2}, "queue": "fast_queue",
-				"scheduled_at": scheduledAt.Format(time.RFC3339Nano), "tags": []string{tag},
-			}},
-		}}, &fastResult)
-		require.Equal(t, 3, fastResult.Count)
-
-		var actorList, observerList struct {
-			Jobs []normalizedJob `json:"jobs"`
-		}
-		listParams := map[string]any{"direction": "asc", "order_by": "id", "tags_all": []string{tag}}
-		pair.actor.call(t, "list", listParams, &actorList)
-		pair.observer.call(t, "list", listParams, &observerList)
-		require.Equal(t, actorList, observerList)
-		require.Len(t, observerList.Jobs, 3)
-		for index, job := range observerList.Jobs {
-			require.EqualValues(t, index, job.Metadata["index"])
-			require.Equal(t, "conformance_echo", job.Kind)
-			require.Equal(t, 0, job.Attempt)
-			require.Empty(t, job.AttemptedBy)
-			require.Empty(t, job.Errors)
-		}
-		require.Equal(t, "available", observerList.Jobs[0].State)
-		require.Equal(t, 2, observerList.Jobs[0].Priority)
-		require.Equal(t, "default", observerList.Jobs[0].Queue)
-		require.Equal(t, "pending", observerList.Jobs[1].State)
-		require.Equal(t, "scheduled", observerList.Jobs[2].State)
-		require.Equal(t, "fast_queue", observerList.Jobs[2].Queue)
-		require.Equal(t, 7, observerList.Jobs[2].MaxAttempts)
-		observedScheduledAt, err := time.Parse(time.RFC3339Nano, observerList.Jobs[2].ScheduledAt)
-		require.NoError(t, err)
-		require.True(t, scheduledAt.Equal(observedScheduledAt),
-			"scheduled_at %s, expected %s", observerList.Jobs[2].ScheduledAt, scheduledAt)
 	}
 }
 

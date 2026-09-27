@@ -379,7 +379,7 @@ func verifyPoolPressure(t *testing.T, goAdapter, candidateAdapter *adapter) {
 				"opts": map[string]any{"tags": []string{"pool_pressure"}},
 			}
 		}
-		inserter.call(t, "insert_many_fast", map[string]any{"jobs": jobs}, nil)
+		inserter.call(t, "insert_many", map[string]any{"jobs": jobs}, nil)
 	}
 	deadline := time.Now().Add(60 * time.Second)
 	peak := make(map[string]int)

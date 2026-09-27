@@ -27,12 +27,12 @@ mod unique;
 pub mod worker;
 
 pub use client::{
-    Client, ClientBuilder, InsertBatchRequest, InsertManyFastRequest, InsertManyItem,
-    InsertManyRequest, InsertRequest, JobCancelRequest, JobCompleteRequest, JobCompleteTxRequest,
-    JobDeleteManyRequest, JobDeleteRequest, JobGetRequest, JobListRequest, JobRetryRequest,
-    JobUpdateRequest, Jobs, LocalQueues, MaintenanceConfig, QueueConfig, QueueGetRequest,
-    QueueListRequest, QueuePauseRequest, QueueResumeRequest, QueueUpdateRequest, Queues,
-    ResignRequest, RunHandle, Stopper,
+    Client, ClientBuilder, InsertBatchRequest, InsertManyItem, InsertManyRequest, InsertRequest,
+    JobCancelRequest, JobCompleteRequest, JobCompleteTxRequest, JobDeleteManyRequest,
+    JobDeleteRequest, JobGetRequest, JobListRequest, JobRetryRequest, JobUpdateRequest, Jobs,
+    LocalQueues, MaintenanceConfig, QueueConfig, QueueGetRequest, QueueListRequest,
+    QueuePauseRequest, QueueResumeRequest, QueueUpdateRequest, Queues, ResignRequest, RunHandle,
+    Stopper,
 };
 pub(crate) use database::SchemaName;
 pub use error::{BoxError, ConfigurationError, Error, JobValidationError, RuntimeError};

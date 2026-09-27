@@ -38,7 +38,7 @@ use sqlx::{
 };
 use tokio::sync::watch;
 
-const ADAPTER_VERSION: u32 = 14;
+const ADAPTER_VERSION: u32 = 15;
 const PROTOCOL_REVISION: u32 = 1;
 
 const ADAPTER_METHODS: &[&str] = &[
@@ -58,7 +58,6 @@ const ADAPTER_METHODS: &[&str] = &[
     "handshake",
     "insert",
     "insert_many",
-    "insert_many_fast",
     "leader",
     "list",
     "listener_count",
@@ -94,7 +93,6 @@ const ADAPTER_METHODS: &[&str] = &[
     "tx_get",
     "tx_insert",
     "tx_insert_many",
-    "tx_insert_many_fast",
     "tx_list",
     "tx_queue_get",
     "tx_queue_list",
@@ -130,7 +128,6 @@ const CAPABILITIES: &[&str] = &[
     "custom_schema",
     "deterministic_controls",
     "extensions",
-    "fast_insert",
     "fault_injection",
     "get",
     "insert",
@@ -163,7 +160,6 @@ const SQLITE_ADAPTER_METHODS: &[&str] = &[
     "handshake",
     "insert",
     "insert_many",
-    "insert_many_fast",
     "list",
     "migrate",
     "raw_insert_exact_json",
@@ -182,7 +178,6 @@ const SQLITE_ADAPTER_METHODS: &[&str] = &[
     "tx_get",
     "tx_insert",
     "tx_insert_many",
-    "tx_insert_many_fast",
     "tx_list",
     "tx_retry",
     "tx_rollback",
@@ -194,7 +189,6 @@ const SQLITE_ADAPTER_METHODS: &[&str] = &[
 const SQLITE_CAPABILITIES: &[&str] = &[
     "cancel",
     "deterministic_controls",
-    "fast_insert",
     "get",
     "insert",
     "job_crud",
@@ -218,7 +212,6 @@ const SQLITE_RUNTIME_METHODS: &[&str] = &[
     "handshake",
     "insert",
     "insert_many",
-    "insert_many_fast",
     "leader",
     "list",
     "migrate",
@@ -251,7 +244,6 @@ const SQLITE_RUNTIME_METHODS: &[&str] = &[
     "tx_get",
     "tx_insert",
     "tx_insert_many",
-    "tx_insert_many_fast",
     "tx_list",
     "tx_queue_get",
     "tx_queue_list",
@@ -272,7 +264,6 @@ const SQLITE_RUNTIME_CAPABILITIES: &[&str] = &[
     "cancel",
     "deterministic_controls",
     "extensions",
-    "fast_insert",
     "get",
     "insert",
     "job_crud",
@@ -1592,16 +1583,6 @@ impl Adapter {
                     "p95_ns": u64::try_from(p95.as_nanos())?,
                 }))
             }
-            "insert_many_fast" => {
-                let params = params.get("jobs").cloned().ok_or("missing jobs")?;
-                let params: Vec<InsertParams> = serde_json::from_value(params)?;
-                let jobs = params
-                    .into_iter()
-                    .map(|params| (params.args(), params.opts.into_opts()))
-                    .collect::<Vec<_>>();
-                let count = self.client()?.insert_many(jobs).fast().await?;
-                Ok(json!({"count": count}))
-            }
             "get" => {
                 let client = self.client_for_schema(
                     params
@@ -2139,20 +2120,15 @@ impl Adapter {
                     .await?;
                 Ok(normalize_job(&row.job.row))
             }
-            "tx_insert_many" | "tx_insert_many_fast" => {
+            "tx_insert_many" => {
                 let handle = required_string(&params, "handle")?;
                 let jobs = insert_many_params(params.get("jobs").ok_or("missing jobs")?)?;
                 let client = self.client()?;
                 let transaction = self.transactions.get_mut(&handle).ok_or_else(|| {
                     AdapterError::not_found(format!("transaction {handle:?} not found"))
                 })?;
-                if method == "tx_insert_many_fast" {
-                    let count = client.insert_many(jobs).fast().tx(transaction).await?;
-                    Ok(json!({"count": count}))
-                } else {
-                    let results = client.insert_many(jobs).tx(transaction).await?;
-                    Ok(normalize_insert_many_results(&results))
-                }
+                let results = client.insert_many(jobs).tx(transaction).await?;
+                Ok(normalize_insert_many_results(&results))
             }
             "tx_get" => {
                 let handle = required_string(&params, "handle")?;
@@ -2521,16 +2497,6 @@ impl SqliteAdapter {
                 let jobs = insert_many_params(&params)?;
                 let results = self.client()?.insert_many(jobs).await?;
                 Ok(normalize_insert_many_results(&results))
-            }
-            "insert_many_fast" => {
-                let params = params.get("jobs").cloned().ok_or("missing jobs")?;
-                let params: Vec<InsertParams> = serde_json::from_value(params)?;
-                let jobs = params
-                    .into_iter()
-                    .map(|params| (params.args(), params.opts.into_opts()))
-                    .collect::<Vec<_>>();
-                let count = self.client()?.insert_many(jobs).fast().await?;
-                Ok(json!({"count": count}))
             }
             "raw_insert_no_notify" => {
                 let params: InsertParams = serde_json::from_value(params)?;
@@ -3003,20 +2969,15 @@ impl SqliteAdapter {
                     .await?;
                 Ok(normalize_job(&row.job.row))
             }
-            "tx_insert_many" | "tx_insert_many_fast" => {
+            "tx_insert_many" => {
                 let handle = required_string(&params, "handle")?;
                 let jobs = insert_many_params(params.get("jobs").ok_or("missing jobs")?)?;
                 let client = self.client()?;
                 let transaction = self.transactions.get_mut(&handle).ok_or_else(|| {
                     AdapterError::not_found(format!("transaction {handle:?} not found"))
                 })?;
-                if method == "tx_insert_many_fast" {
-                    let count = client.insert_many(jobs).fast().tx(transaction).await?;
-                    Ok(json!({"count": count}))
-                } else {
-                    let results = client.insert_many(jobs).tx(transaction).await?;
-                    Ok(normalize_insert_many_results(&results))
-                }
+                let results = client.insert_many(jobs).tx(transaction).await?;
+                Ok(normalize_insert_many_results(&results))
             }
             "tx_get" => {
                 let handle = required_string(&params, "handle")?;

@@ -107,9 +107,8 @@ The precedence is call override, job-type default, client default, then River
 default. It is based on whether an option was supplied, not whether its value
 happens to equal a default. `insert_many` inserts many jobs of one kind
 atomically and returns results in input order; `insert_batch` does the same
-for jobs of different kinds. Adding `.fast()` to `insert_many` inserts with
-PostgreSQL's `COPY` (or a batched insert on SQLite) and returns only a count,
-and a unique conflict rejects the whole batch.
+for jobs of different kinds. There's no equivalent of River Go's
+`InsertManyFast` yet, so bulk inserts use `insert_many`.
 
 Chain `.tx(&mut transaction)` onto an insertion, or onto any request from
 `client.jobs()` or `client.queues()`, to run it in the same SQL transaction as
@@ -250,7 +249,7 @@ database, so backend types don't leak into workers, contexts, or extensions,
 and there's no database driver trait to implement.
 
 Database-specific behavior stays behind each backend: PostgreSQL uses schemas,
-`LISTEN`/`NOTIFY`, advisory locking, and `COPY`; SQLite uses its canonical River
+`LISTEN`/`NOTIFY`, and advisory locking; SQLite uses its canonical River
 schema, serialized writer transactions, and durable notification-outbox
 polling. Capability differences must be explicit rather than silently changing
 job semantics.

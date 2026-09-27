@@ -22,9 +22,7 @@ mod validate;
 
 pub use self::builder::{ClientBuilder, MaintenanceConfig, QueueConfig};
 pub use self::extension::ExtensionClient;
-pub use self::insert::{
-    InsertBatchRequest, InsertManyFastRequest, InsertManyItem, InsertManyRequest, InsertRequest,
-};
+pub use self::insert::{InsertBatchRequest, InsertManyItem, InsertManyRequest, InsertRequest};
 pub use self::jobs::{
     JobCancelRequest, JobCompleteRequest, JobCompleteTxRequest, JobDeleteManyRequest,
     JobDeleteRequest, JobGetRequest, JobListRequest, JobRetryRequest, JobUpdateRequest, Jobs,
@@ -60,8 +58,6 @@ use std::{
     time::Duration,
 };
 
-#[cfg(feature = "postgres")]
-use chrono::SecondsFormat;
 use chrono::{DateTime, Utc};
 use serde::Deserialize;
 use serde_json::{Map, Value, value::RawValue};
@@ -75,8 +71,6 @@ use sqlx::{
     postgres::{PgListener, PgRow},
     types::Json,
 };
-#[cfg(feature = "postgres")]
-use std::fmt::Write as _;
 use tokio::{
     sync::{OwnedSemaphorePermit, Semaphore, broadcast, mpsc, oneshot, watch},
     task::JoinSet,

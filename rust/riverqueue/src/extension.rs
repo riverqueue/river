@@ -485,8 +485,6 @@ impl fmt::Debug for InsertNext<'_> {
 pub enum InsertedJobs {
     /// Rows returned by an insertion, in input order.
     Rows(Vec<InsertedJob>),
-    /// Number of rows written by a fast insertion that doesn't return rows.
-    Count(u64),
 }
 
 impl InsertedJobs {
@@ -494,10 +492,8 @@ impl InsertedJobs {
     /// insertion was skipped as a duplicate.
     #[must_use]
     pub fn len(&self) -> u64 {
-        match self {
-            Self::Rows(rows) => u64::try_from(rows.len()).unwrap_or(u64::MAX),
-            Self::Count(count) => *count,
-        }
+        let Self::Rows(rows) = self;
+        u64::try_from(rows.len()).unwrap_or(u64::MAX)
     }
 
     /// Returns whether no jobs were inserted.

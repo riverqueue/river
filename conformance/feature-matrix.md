@@ -38,13 +38,10 @@ stale.
   queues it works; a job whose kind has no registered worker fails with a
   retryable unknown-kind error (`mixed_unknown_kind_error`,
   `sqlite_runtime_unknown_kind_error`).
-- Fast insertion is a semantic contract: rows, defaults, and transactional
-  visibility match ordinary batch insertion
-  (`fast_insert_both_implementations`, `transactional_fast_batch_insertion`).
-  The transport an implementation uses to send the rows is an implementation
-  detail.
+- Fast insertion (`InsertManyFast`) isn't part of the shared contract. Ports
+  don't offer it yet, so batches go through ordinary typed insertion.
 - SQLite `portable-storage-v1` covers main-line migrations; deterministic
-  retry and unique-key controls; typed and fast insertion; job
+  retry and unique-key controls; typed insertion; job
   get/list/update/cancel/retry/delete; cross-language cursor ordering;
   millisecond timestamp storage; and transaction commit, rollback, batch
   atomicity, and visibility. Every selected candidate is exercised in both
@@ -82,7 +79,7 @@ stale.
 | [`unique_opts`](#unique_opts) | 5 | 0 | 0 | 0 | 0 | 0 | 5 |
 | [`queue_config`](#queue_config) | 0 | 3 | 0 | 0 | 0 | 0 | 3 |
 | [`periodic_job_opts`](#periodic_job_opts) | 2 | 0 | 0 | 0 | 0 | 0 | 2 |
-| [`client`](#client) | 0 | 40 | 0 | 0 | 3 | 0 | 43 |
+| [`client`](#client) | 0 | 38 | 0 | 0 | 5 | 0 | 43 |
 | [`job_list_params`](#job_list_params) | 0 | 11 | 0 | 0 | 1 | 0 | 12 |
 | [`job_delete_many_params`](#job_delete_many_params) | 0 | 7 | 0 | 0 | 0 | 0 | 7 |
 | [`queue_list_params`](#queue_list_params) | 0 | 1 | 0 | 0 | 0 | 0 | 1 |
@@ -145,7 +142,7 @@ Exported fields of `river.InsertOpts`.
 |---|---|---|---|
 | `insert_opts.MaxAttempts` | protocol_visible | `mixed_unknown_kind_error` (TestMixedConformance)<br>`single_implementation_worker_outcomes` (TestMixedConformance) | Persisted max_attempts decides between retry and discard. |
 | `insert_opts.Metadata` | protocol_visible | `differential_job_crud` (TestMixedConformance)<br>`job_row_round_trip_all_fields` (TestMixedConformance) | Persisted job metadata. |
-| `insert_opts.Pending` | protocol_visible | `fast_insert_both_implementations` (TestMixedConformance)<br>`typed_batch_insertion` (TestMixedConformance) | Inserts rows in the pending state. |
+| `insert_opts.Pending` | protocol_visible | `typed_batch_insertion` (TestMixedConformance) | Inserts rows in the pending state. |
 | `insert_opts.Priority` | protocol_visible | `differential_job_crud` (TestMixedConformance)<br>`typed_batch_insertion` (TestMixedConformance) | Persisted priority; affects fetch order. |
 | `insert_opts.Queue` | protocol_visible | `cross_language_unique_conflict` (TestMixedConformance)<br>`ignored_cancellation_hard_abort` (TestMixedConformance) | Persisted queue; determines which clients fetch the job. |
 | `insert_opts.ScheduledAt` | protocol_visible | `clock_boundary_scheduling` (TestMixedConformance)<br>`differential_job_list_filters_and_cursors` (TestMixedConformance) | Persisted scheduled_at; future times insert as scheduled. |
@@ -193,8 +190,8 @@ Exported methods of `*river.Client[TTx]`.
 | `client.ID` | api_equivalent |  | Accessor for the configured or generated client ID (see config.ID). |
 | `client.Insert` | api_equivalent | `candidate_insert_reference_work` (TestMixedConformance)<br>`reference_insert_candidate_work` (TestMixedConformance) | Each implementation provides Insert in its own idiom; exercised through the corresponding adapter method. |
 | `client.InsertMany` | api_equivalent | `typed_batch_insertion` (TestMixedConformance) | Each implementation provides InsertMany in its own idiom; exercised through the corresponding adapter method. |
-| `client.InsertManyFast` | api_equivalent | `fast_insert_both_implementations` (TestMixedConformance) | Each implementation provides InsertManyFast in its own idiom; exercised through the corresponding adapter method. |
-| `client.InsertManyFastTx` | api_equivalent | `transactional_fast_batch_insertion` (TestMixedConformance) | Each implementation provides InsertManyFast inside a caller-managed transaction in its own idiom; exercised through the corresponding adapter method. |
+| `client.InsertManyFast` | not_applicable |  | Ports don't offer fast insertion yet; batches use ordinary typed insertion. |
+| `client.InsertManyFastTx` | not_applicable |  | Ports don't offer fast insertion yet; batches use ordinary typed insertion. |
 | `client.InsertManyTx` | api_equivalent | `transactional_batch_insertion` (TestMixedConformance) | Each implementation provides InsertMany inside a caller-managed transaction in its own idiom; exercised through the corresponding adapter method. |
 | `client.InsertTx` | api_equivalent | `transaction_commit_visibility` (TestMixedConformance)<br>`transaction_rollback_visibility` (TestMixedConformance) | Each implementation provides Insert inside a caller-managed transaction in its own idiom; exercised through the corresponding adapter method. |
 | `client.JobCancel` | api_equivalent | `differential_job_crud` (TestMixedConformance)<br>`remote_cancel_notification` (TestMixedConformance) | Each implementation provides JobCancel in its own idiom; exercised through the corresponding adapter method. |

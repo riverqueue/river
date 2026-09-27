@@ -128,7 +128,6 @@ struct RuntimeHook {
 
 #[derive(Default)]
 struct RuntimeCounts {
-    fast_insert_after: AtomicUsize,
     insert_after: AtomicUsize,
     insert_before: AtomicUsize,
     metrics: AtomicUsize,
@@ -192,17 +191,10 @@ impl InsertMiddleware for RuntimeInsertMiddleware {
                 .expect("boolean metadata serializes");
         }
         let inserted = next.run(jobs).await?;
-        match &inserted {
-            InsertedJobs::Count(count) => {
-                self.0
-                    .fast_insert_after
-                    .fetch_add(usize::try_from(*count).unwrap(), Ordering::SeqCst);
-            }
-            InsertedJobs::Rows(rows) => {
-                self.0.insert_after.fetch_add(rows.len(), Ordering::SeqCst);
-            }
-            _ => unreachable!("River returns rows or a count"),
-        }
+        let InsertedJobs::Rows(rows) = &inserted else {
+            unreachable!("River returns rows")
+        };
+        self.0.insert_after.fetch_add(rows.len(), Ordering::SeqCst);
         Ok(inserted)
     }
 }
@@ -345,10 +337,7 @@ async fn completion_burst_does_not_lag_large_subscription() {
         )
         .unwrap();
     let jobs = (0..JOB_COUNT).map(|_| (BurstArgs {}, riverqueue::InsertOpts::default()));
-    assert_eq!(
-        client.insert_many(jobs).fast().await.unwrap(),
-        u64::try_from(JOB_COUNT).unwrap()
-    );
+    assert_eq!(client.insert_many(jobs).await.unwrap().len(), JOB_COUNT);
     let expected_ids = sqlx::query_scalar::<_, i64>(AssertSqlSafe(format!(
         "SELECT id FROM {}",
         schema.qualify("river_job")
@@ -838,9 +827,9 @@ async fn poll_only_and_subscription_configuration() {
                     riverqueue::InsertOpts::default().with_pending(true),
                 ),
             ])
-            .fast()
             .await
-            .unwrap(),
+            .unwrap()
+            .len(),
         2
     );
     let inserted = client.insert(RuntimeArgs {}).await.unwrap();
@@ -865,9 +854,8 @@ async fn poll_only_and_subscription_configuration() {
     assert!(statistics.complete_duration > Duration::ZERO);
     assert!(counts.metrics.load(Ordering::SeqCst) >= 2);
     assert_eq!(counts.periodic_starts.load(Ordering::SeqCst), 1);
-    assert_eq!(counts.fast_insert_after.load(Ordering::SeqCst), 2);
     assert_eq!(counts.insert_before.load(Ordering::SeqCst), 3);
-    assert_eq!(counts.insert_after.load(Ordering::SeqCst), 1);
+    assert_eq!(counts.insert_after.load(Ordering::SeqCst), 3);
     assert_eq!(counts.work_before.load(Ordering::SeqCst), 2);
     assert_eq!(counts.work_after.load(Ordering::SeqCst), 2);
 

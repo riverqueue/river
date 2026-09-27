@@ -233,7 +233,7 @@
       "type": "string"
     }
   },
-  "adapter_version": 14,
+  "adapter_version": 15,
   "errors": [
     {
       "code": -32700,
@@ -329,7 +329,7 @@
       }
     },
     {
-      "capability": "fast_insert",
+      "capability": "insert",
       "description": "Measure in-process insertion without RPC framing overhead.",
       "name": "benchmark_enqueue",
       "params": {
@@ -796,66 +796,6 @@
         "required": [
           "results"
         ]
-      }
-    },
-    {
-      "capability": "fast_insert",
-      "description": "Insert a homogeneous job batch through the implementation's fast path.",
-      "name": "insert_many_fast",
-      "params": {
-        "additionalProperties": false,
-        "properties": {
-          "jobs": {
-            "items": {
-              "additionalProperties": false,
-              "properties": {
-                "behavior": {
-                  "description": "Built-in `conformance_echo` worker behavior; empty completes immediately.",
-                  "enum": [
-                    "",
-                    "barrier_output",
-                    "barrier_wait",
-                    "cancel",
-                    "cancel_error",
-                    "cancel_panic",
-                    "cooperative_cancel",
-                    "discard",
-                    "error",
-                    "ignored_cancel",
-                    "output",
-                    "panic",
-                    "resumable",
-                    "resumable_cursor",
-                    "resumable_duplicate",
-                    "sleep",
-                    "snooze_once",
-                    "snooze_then_cancel",
-                    "transactional_complete"
-                  ]
-                },
-                "duration_ms": {
-                  "minimum": 0,
-                  "type": "integer"
-                },
-                "message": {
-                  "type": "string"
-                },
-                "opts": {
-                  "$ref": "#/$defs/insert_opts"
-                }
-              },
-              "type": "object"
-            },
-            "type": "array"
-          }
-        },
-        "type": "object",
-        "required": [
-          "jobs"
-        ]
-      },
-      "result": {
-        "$ref": "#/$defs/count_result"
       }
     },
     {
@@ -2117,70 +2057,6 @@
     },
     {
       "capability": "transactions",
-      "description": "Insert a homogeneous fast batch in a caller-managed transaction.",
-      "name": "tx_insert_many_fast",
-      "params": {
-        "additionalProperties": false,
-        "properties": {
-          "handle": {
-            "$ref": "#/$defs/handle"
-          },
-          "jobs": {
-            "items": {
-              "additionalProperties": false,
-              "properties": {
-                "behavior": {
-                  "description": "Built-in `conformance_echo` worker behavior; empty completes immediately.",
-                  "enum": [
-                    "",
-                    "barrier_output",
-                    "barrier_wait",
-                    "cancel",
-                    "cancel_error",
-                    "cancel_panic",
-                    "cooperative_cancel",
-                    "discard",
-                    "error",
-                    "ignored_cancel",
-                    "output",
-                    "panic",
-                    "resumable",
-                    "resumable_cursor",
-                    "resumable_duplicate",
-                    "sleep",
-                    "snooze_once",
-                    "snooze_then_cancel",
-                    "transactional_complete"
-                  ]
-                },
-                "duration_ms": {
-                  "minimum": 0,
-                  "type": "integer"
-                },
-                "message": {
-                  "type": "string"
-                },
-                "opts": {
-                  "$ref": "#/$defs/insert_opts"
-                }
-              },
-              "type": "object"
-            },
-            "type": "array"
-          }
-        },
-        "type": "object",
-        "required": [
-          "handle",
-          "jobs"
-        ]
-      },
-      "result": {
-        "$ref": "#/$defs/count_result"
-      }
-    },
-    {
-      "capability": "transactions",
       "description": "List jobs in a transaction.",
       "name": "tx_list",
       "params": {
@@ -2565,7 +2441,9 @@
           "selected_unique_components": {
             "description": "Decoded JSON field-name paths for selected argument fixtures.",
             "items": {
-              "items": { "type": "string" },
+              "items": {
+                "type": "string"
+              },
               "type": "array"
             },
             "type": "array"

@@ -180,9 +180,9 @@ an adapter whose implementation does not expose them; the Go reference is one.
 
 ## Jobs and queues
 
-- `insert`, typed `insert_many`, `insert_many_fast`, `get`, `list`, `update`,
-  `retry`, `cancel`, `delete`, and `delete_many`. Typed batch results preserve
-  input order and include each normalized job and its unique-conflict flag.
+- `insert`, typed `insert_many`, `get`, `list`, `update`, `retry`, `cancel`,
+  `delete`, and `delete_many`. Typed batch results preserve input order and
+  include each normalized job and its unique-conflict flag.
 - `queue_get`, `queue_list`, `queue_pause`, `queue_resume`, `queue_update`, and
   runtime `queue_add`/`queue_remove`. Like River Go, `queue_pause`,
   `queue_resume`, and `queue_update` don't validate the queue name: a name
@@ -233,9 +233,9 @@ rejects a malformed cursor object before user work begins.
 ## Transaction handles
 
 `tx_begin` creates a connection-local transaction under a caller-chosen
-handle. Transaction operations cover insert, typed `tx_insert_many`, fast
-`tx_insert_many_fast`, get/list/update/delete/bulk delete, cancel/retry, and
-queue get/list/update/pause/resume. `tx_commit` and `tx_rollback` consume a
+handle. Transaction operations cover insert, typed `tx_insert_many`,
+get/list/update/delete/bulk delete, cancel/retry, and queue
+get/list/update/pause/resume. `tx_commit` and `tx_rollback` consume a
 handle. `tx_fail` deliberately aborts PostgreSQL state to verify rollback
 behavior. Handles never cross adapter processes because a database transaction
 is connection-local. Their effects are deliberately observed from the other
