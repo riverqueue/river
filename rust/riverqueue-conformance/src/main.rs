@@ -38,7 +38,7 @@ use sqlx::{
 };
 use tokio::sync::watch;
 
-const ADAPTER_VERSION: u32 = 15;
+const ADAPTER_VERSION: u32 = 16;
 const PROTOCOL_REVISION: u32 = 1;
 
 const ADAPTER_METHODS: &[&str] = &[
@@ -460,8 +460,22 @@ struct RawJobRow {
     created_at: String,
     errors: Option<String>,
     finalized_at: Option<String>,
+    /// SQLite's stored JSONB bytes; `None` on PostgreSQL.
+    #[sqlx(skip)]
+    jsonb: Option<RawJsonbColumns>,
     metadata: String,
     scheduled_at: String,
+    tags: String,
+}
+
+/// A SQLite job's JSONB columns as uppercase hex, so implementations can
+/// compare the element types SQLite stored as well as the JSON text.
+#[derive(sqlx::FromRow, Serialize)]
+struct RawJsonbColumns {
+    args: String,
+    attempted_by: Option<String>,
+    errors: Option<String>,
+    metadata: String,
     tags: String,
 }
 
@@ -2638,17 +2652,31 @@ impl SqliteAdapter {
                 Ok(normalize_job(&self.client()?.jobs().get(id).await?))
             }
             "raw_job_row" => {
-                let row = sqlx::query_as::<_, RawJobRow>(
+                let id = required_i64(&params, "id")?;
+                let mut row = sqlx::query_as::<_, RawJobRow>(
                     "SELECT json(args) AS args, CAST(attempted_at AS TEXT) AS attempted_at, \
                      json(attempted_by) AS attempted_by, CAST(created_at AS TEXT) AS created_at, \
                      json(errors) AS errors, CAST(finalized_at AS TEXT) AS finalized_at, \
                      json(metadata) AS metadata, CAST(scheduled_at AS TEXT) AS scheduled_at, \
                      json(tags) AS tags FROM river_job WHERE id = ?",
                 )
-                .bind(required_i64(&params, "id")?)
+                .bind(id)
                 .fetch_optional(&self.pool)
                 .await?
                 .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "job not found"))?;
+                row.jsonb = Some(
+                    sqlx::query_as::<_, RawJsonbColumns>(
+                        "SELECT hex(args) AS args, \
+                         CASE WHEN attempted_by IS NULL THEN NULL ELSE hex(attempted_by) END \
+                             AS attempted_by, \
+                         CASE WHEN errors IS NULL THEN NULL ELSE hex(errors) END AS errors, \
+                         hex(metadata) AS metadata, hex(tags) AS tags \
+                         FROM river_job WHERE id = ?",
+                    )
+                    .bind(id)
+                    .fetch_one(&self.pool)
+                    .await?,
+                );
                 Ok(serde_json::to_value(row)?)
             }
             "raw_job_timestamps" => {

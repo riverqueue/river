@@ -3,7 +3,11 @@
 package harness_test
 
 import (
+	"encoding/hex"
+	"errors"
+	"fmt"
 	"regexp"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -19,9 +23,123 @@ type rawJobRow struct {
 	CreatedAt   string  `json:"created_at"`
 	Errors      *string `json:"errors"`
 	FinalizedAt *string `json:"finalized_at"`
-	Metadata    string  `json:"metadata"`
-	ScheduledAt string  `json:"scheduled_at"`
-	Tags        string  `json:"tags"`
+	// JSONB holds SQLite's stored JSONB bytes as hex, and is nil on
+	// PostgreSQL.
+	JSONB *struct {
+		Args        string  `json:"args"`
+		AttemptedBy *string `json:"attempted_by"`
+		Errors      *string `json:"errors"`
+		Metadata    string  `json:"metadata"`
+		Tags        string  `json:"tags"`
+	} `json:"jsonb"`
+	Metadata    string `json:"metadata"`
+	ScheduledAt string `json:"scheduled_at"`
+	Tags        string `json:"tags"`
+}
+
+// jsonbTypeNames names SQLite's JSONB element types by their header code.
+var jsonbTypeNames = [...]string{ //nolint:gochecknoglobals // fixed lookup table
+	"null", "true", "false", "int", "int5", "float", "float5",
+	"text", "textj", "text5", "textraw", "array", "object",
+}
+
+// jsonbNode is one decoded SQLite JSONB element.
+type jsonbNode struct {
+	children []jsonbNode
+	payload  []byte
+	typ      byte
+}
+
+// decodeJSONB decodes the first JSONB element of data and returns it with
+// the bytes that follow it.
+func decodeJSONB(data []byte) (jsonbNode, []byte, error) {
+	if len(data) == 0 {
+		return jsonbNode{}, nil, errors.New("empty JSONB element")
+	}
+	node := jsonbNode{typ: data[0] & 0x0f}
+	if int(node.typ) >= len(jsonbTypeNames) {
+		return jsonbNode{}, nil, fmt.Errorf("reserved JSONB type %d", node.typ)
+	}
+	size, header := uint64(data[0]>>4), 1
+	if size > 11 {
+		width := 1 << (size - 12)
+		if len(data) < 1+width {
+			return jsonbNode{}, nil, errors.New("truncated JSONB header")
+		}
+		header += width
+		// Wider sizes follow the header byte, big-endian.
+		size = 0
+		for _, b := range data[1:header] {
+			size = size<<8 | uint64(b)
+		}
+	}
+	if size > uint64(len(data)-header) { //nolint:gosec // len is never negative
+		return jsonbNode{}, nil, errors.New("truncated JSONB payload")
+	}
+	node.payload = data[header : header+int(size)]
+	rest := data[header+int(size):]
+	if node.typ == 11 || node.typ == 12 {
+		for remaining := node.payload; len(remaining) > 0; {
+			var child jsonbNode
+			var err error
+			child, remaining, err = decodeJSONB(remaining)
+			if err != nil {
+				return jsonbNode{}, nil, err
+			}
+			node.children = append(node.children, child)
+		}
+		node.payload = nil
+	}
+	return node, rest, nil
+}
+
+// renderJSONB renders a SQLite JSONB column's element types and payloads,
+// with the values that legitimately differ between two writers normalized
+// after a format check: the unique nonce becomes `<nonce>` and times become
+// `<time>`. Header size widths aren't rendered, since normalizing a value can
+// change them.
+func renderJSONB(t *testing.T, writer, column, hexBytes string) string {
+	t.Helper()
+
+	data, err := hex.DecodeString(hexBytes)
+	require.NoError(t, err, "%s wrote %s JSONB that isn't hex", writer, column)
+	node, rest, err := decodeJSONB(data)
+	require.NoError(t, err, "%s wrote invalid %s JSONB: %s", writer, column, hexBytes)
+	require.Empty(t, rest, "%s wrote trailing bytes after %s JSONB: %s", writer, column, hexBytes)
+
+	var render func(node jsonbNode) string
+	render = func(node jsonbNode) string {
+		name := jsonbTypeNames[node.typ]
+		switch node.typ {
+		case 11:
+			parts := make([]string, len(node.children))
+			for index, child := range node.children {
+				parts[index] = render(child)
+			}
+			return name + "[" + strings.Join(parts, ",") + "]"
+		case 12:
+			var parts []string
+			for index := 0; index+1 < len(node.children); index += 2 {
+				key, value := node.children[index], node.children[index+1]
+				rendered := render(value)
+				if string(key.payload) == "river:unique_nonce" {
+					require.Regexp(t, `^[0-9a-f]{16}$`, string(value.payload),
+						"%s wrote a unique nonce in a non-Go format", writer)
+					rendered = jsonbTypeNames[value.typ] + "(<nonce>)"
+				}
+				parts = append(parts, render(key)+":"+rendered)
+			}
+			return name + "{" + strings.Join(parts, ",") + "}"
+		}
+		payload := string(node.payload)
+		if rfc3339TextPattern.MatchString(payload) {
+			require.Regexp(t, goTimeTextPattern, payload,
+				"%s wrote a %s time in a non-Go format: %s", writer, column, payload)
+			payload = "<time>"
+		}
+		return name + "(" + strconv.Quote(payload) + ")"
+	}
+	return render(node)
 }
 
 var (
@@ -33,6 +151,12 @@ var (
 	// rfc3339JSONPattern matches any RFC 3339 time in a JSON string, so
 	// times that don't match goTimeJSONPattern can be reported.
 	rfc3339JSONPattern = regexp.MustCompile(`"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?(Z|[+-]\d{2}:\d{2})"`)
+
+	// goTimeTextPattern and rfc3339TextPattern match the same times as
+	// goTimeJSONPattern and rfc3339JSONPattern, as an unquoted JSONB string
+	// payload.
+	goTimeTextPattern  = regexp.MustCompile(`^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d*[1-9])?(Z|[+-]\d{2}:\d{2})$`)
+	rfc3339TextPattern = regexp.MustCompile(`^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?(Z|[+-]\d{2}:\d{2})$`)
 
 	// sqliteTimePattern is Go's SQLite time format, `2006-01-02 15:04:05.000`.
 	sqliteTimePattern = regexp.MustCompile(`^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\.\d{3}$`)
@@ -76,17 +200,29 @@ func comparableJobRow(t *testing.T, writer string, row rawJobRow) map[string]any
 	if row.AttemptedBy != nil {
 		attemptedBy = *row.AttemptedBy
 	}
+	require.NotNil(t, row.JSONB, "%s returned no SQLite JSONB bytes", writer)
+	jsonb := func(column string, hexBytes *string) any {
+		if hexBytes == nil {
+			return nil
+		}
+		return renderJSONB(t, writer, column, *hexBytes)
+	}
 
 	return map[string]any{
-		"args":         row.Args,
-		"attempted_at": sqliteTime("attempted_at", row.AttemptedAt),
-		"attempted_by": attemptedBy,
-		"created_at":   sqliteTime("created_at", &row.CreatedAt),
-		"errors":       jsonTimes("errors", row.Errors),
-		"finalized_at": sqliteTime("finalized_at", row.FinalizedAt),
-		"metadata":     jsonTimes("metadata", &metadata),
-		"scheduled_at": sqliteTime("scheduled_at", &row.ScheduledAt),
-		"tags":         row.Tags,
+		"jsonb_args":         jsonb("args", &row.JSONB.Args),
+		"jsonb_attempted_by": jsonb("attempted_by", row.JSONB.AttemptedBy),
+		"jsonb_errors":       jsonb("errors", row.JSONB.Errors),
+		"jsonb_metadata":     jsonb("metadata", &row.JSONB.Metadata),
+		"jsonb_tags":         jsonb("tags", &row.JSONB.Tags),
+		"args":               row.Args,
+		"attempted_at":       sqliteTime("attempted_at", row.AttemptedAt),
+		"attempted_by":       attemptedBy,
+		"created_at":         sqliteTime("created_at", &row.CreatedAt),
+		"errors":             jsonTimes("errors", row.Errors),
+		"finalized_at":       sqliteTime("finalized_at", row.FinalizedAt),
+		"metadata":           jsonTimes("metadata", &metadata),
+		"scheduled_at":       sqliteTime("scheduled_at", &row.ScheduledAt),
+		"tags":               row.Tags,
 	}
 }
 

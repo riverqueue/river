@@ -35,7 +35,7 @@ import (
 )
 
 const (
-	adapterVersion        = 15
+	adapterVersion        = 16
 	implementationVersion = "0.47.0"
 	protocolRevision      = 1
 )
@@ -239,8 +239,21 @@ type rawJobRow struct {
 	CreatedAt   string  `json:"created_at"`
 	Errors      *string `json:"errors"`
 	FinalizedAt *string `json:"finalized_at"`
+	// JSONB is SQLite's stored JSONB bytes, and nil on PostgreSQL.
+	JSONB       *rawJSONBColumns `json:"jsonb"`
+	Metadata    string           `json:"metadata"`
+	ScheduledAt string           `json:"scheduled_at"`
+	Tags        string           `json:"tags"`
+}
+
+// rawJSONBColumns is a SQLite job's JSONB columns as uppercase hex, so
+// implementations can compare the element types SQLite stored as well as the
+// JSON text.
+type rawJSONBColumns struct {
+	Args        string  `json:"args"`
+	AttemptedBy *string `json:"attempted_by"`
+	Errors      *string `json:"errors"`
 	Metadata    string  `json:"metadata"`
-	ScheduledAt string  `json:"scheduled_at"`
 	Tags        string  `json:"tags"`
 }
 
@@ -2645,6 +2658,17 @@ func (s *sqliteAdapterState) handle(ctx context.Context, req *request) (any, err
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, notFound(err)
 		}
+		if err != nil {
+			return nil, err
+		}
+		row.JSONB = &rawJSONBColumns{}
+		err = s.pool.QueryRowContext(ctx, `
+			SELECT hex(args),
+				CASE WHEN attempted_by IS NULL THEN NULL ELSE hex(attempted_by) END,
+				CASE WHEN errors IS NULL THEN NULL ELSE hex(errors) END,
+				hex(metadata), hex(tags)
+			FROM river_job
+			WHERE id = ?`, id).Scan(&row.JSONB.Args, &row.JSONB.AttemptedBy, &row.JSONB.Errors, &row.JSONB.Metadata, &row.JSONB.Tags)
 		return row, err
 
 	case "raw_job_timestamps":
