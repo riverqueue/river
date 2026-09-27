@@ -612,12 +612,28 @@ func (e *Executor) JobGetStuck(ctx context.Context, params *riverdriver.JobGetSt
 func (e *Executor) JobInsertFastMany(ctx context.Context, params *riverdriver.JobInsertFastManyParams) ([]*riverdriver.JobInsertFastResult, error) {
 	// We use a special `(xmax != 0)` trick in Postgres to determine whether an
 	// upserted row was inserted or skipped, but as far as I can find, there's no
-	// such trick possible in SQLite. Instead, we roll a random nonce and insert
-	// it to metadata. If the same nonce comes back, we know we really inserted
-	// the row. If not, we're getting an existing row back.
-	uniqueNonce := randutil.Hex(8)
+	// such trick possible in SQLite. Instead, we insert a random nonce into
+	// each row's metadata. A returned nonce from this batch identifies an
+	// inserted row; another nonce identifies an existing row.
+	uniqueNonces := make([]string, len(params.Jobs))
+	uniqueNoncesInBatch := make(map[string]bool, len(params.Jobs))
+	uniqueKeysInBatch := make(map[string]bool, len(params.Jobs))
+	for i, job := range params.Jobs {
+		// PostgreSQL rejects a statement that affects the same unique row twice.
+		// SQLite allows it, so reject repeated keys covered by the unique index.
+		if len(job.UniqueKey) > 0 && job.UniqueStates&uniquestates.UniqueStatesToBitmask([]rivertype.JobState{job.State}) != 0 {
+			key := string(job.UniqueKey)
+			if uniqueKeysInBatch[key] {
+				return nil, errors.New("unique key appears more than once in batch")
+			}
+			uniqueKeysInBatch[key] = true
+		}
 
-	jobsParam, err := sqliteJobInsertFastManyJobsParam(params.Jobs, uniqueNonce)
+		uniqueNonces[i] = randutil.Hex(8)
+		uniqueNoncesInBatch[uniqueNonces[i]] = true
+	}
+
+	jobsParam, err := sqliteJobInsertFastManyJobsParam(params.Jobs, uniqueNonces)
 	if err != nil {
 		return nil, err
 	}
@@ -632,16 +648,17 @@ func (e *Executor) JobInsertFastMany(ctx context.Context, params *riverdriver.Jo
 		if err != nil {
 			return nil, err
 		}
+		returnedNonce, hasNonce := riverdriver.UniqueInsertMetadataNonce(job.Metadata)
 
 		return &riverdriver.JobInsertFastResult{
 			Job:                      job,
-			UniqueSkippedAsDuplicate: riverdriver.UniqueInsertMetadataIsDuplicate(job.Metadata, uniqueNonce),
+			UniqueSkippedAsDuplicate: !hasNonce || !uniqueNoncesInBatch[returnedNonce],
 		}, nil
 	})
 }
 
 func (e *Executor) JobInsertFastManyNoReturning(ctx context.Context, params *riverdriver.JobInsertFastManyParams) (int, error) {
-	jobsParam, err := sqliteJobInsertFastManyJobsParam(params.Jobs, "")
+	jobsParam, err := sqliteJobInsertFastManyJobsParam(params.Jobs, nil)
 	if err != nil {
 		return 0, err
 	}
@@ -1574,14 +1591,14 @@ func durationAsString(duration time.Duration) string {
 	return strconv.FormatFloat(duration.Seconds(), 'f', 3, 64) + " seconds"
 }
 
-func sqliteJobInsertFastManyJobsParam(jobs []*riverdriver.JobInsertFastParams, uniqueNonce string) ([]byte, error) {
+func sqliteJobInsertFastManyJobsParam(jobs []*riverdriver.JobInsertFastParams, uniqueNonces []string) ([]byte, error) {
 	jobsParam := make([]map[string]any, len(jobs))
 
 	for i, job := range jobs {
 		metadata := sliceutil.FirstNonEmpty(job.Metadata, []byte("{}"))
-		if uniqueNonce != "" {
+		if uniqueNonces != nil {
 			var err error
-			metadata, err = riverdriver.UniqueInsertMetadataWithNonce(metadata, uniqueNonce)
+			metadata, err = riverdriver.UniqueInsertMetadataWithNonce(metadata, uniqueNonces[i])
 			if err != nil {
 				return nil, err
 			}
