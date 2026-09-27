@@ -297,8 +297,6 @@ func (e *JobExecutor) watchStuck(ctx context.Context, jobTimeout time.Duration) 
 	// We add a WithoutCancel here so that this inner goroutine becomes
 	// immune to all context cancellations _except_ the one where it's
 	// cancelled because we leave JobExecutor.execute.
-	//
-	// This shadows the context outside the jobTimeout > 0 check.
 	ctx, cancel := context.WithCancel(context.WithoutCancel(ctx))
 
 	go func() {
