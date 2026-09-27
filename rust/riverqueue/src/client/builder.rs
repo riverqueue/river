@@ -7,7 +7,36 @@ use super::*;
 /// `JobRescuerRescueAfterDefault`).
 const RESCUE_AFTER_DEFAULT: Duration = Duration::from_hours(1);
 
+/// How long the job cleaner keeps finalized jobs of one state.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum Retention {
+    /// Delete jobs once they've been finalized for this long.
+    DeleteAfter(Duration),
+    /// Never delete these jobs.
+    Keep,
+}
+
+impl Retention {
+    const fn from_option(retention: Option<Duration>) -> Self {
+        match retention {
+            Some(duration) => Self::DeleteAfter(duration),
+            None => Self::Keep,
+        }
+    }
+
+    const fn into_option(self) -> Option<Duration> {
+        match self {
+            Self::DeleteAfter(duration) => Some(duration),
+            Self::Keep => None,
+        }
+    }
+}
+
 /// Leader-owned maintenance timing and retention settings.
+///
+/// Like River's other configuration values, `MaintenanceConfig` has a getter
+/// for each setting and a `with_*` method that returns the configuration
+/// with that setting changed. Defaults match River Go's.
 #[derive(Clone, Debug)]
 pub struct MaintenanceConfig {
     /// Retention for cancelled jobs; `None` disables deletion.
@@ -38,66 +67,76 @@ pub struct MaintenanceConfig {
     pub(crate) scheduler_interval: Duration,
 }
 
-macro_rules! maintenance_option {
-    ($getter:ident, $setter:ident, $field:ident) => {
-        #[doc = concat!("Returns `", stringify!($field), "`.")]
+macro_rules! maintenance_retention {
+    ($getter:ident, $setter:ident, $state:literal, $default:literal) => {
+        #[doc = concat!("Returns how long ", $state, " jobs are kept before the job cleaner deletes them.")]
         #[must_use]
-        pub const fn $getter(&self) -> Option<Duration> {
-            self.$field
+        pub const fn $getter(&self) -> Retention {
+            Retention::from_option(self.$getter)
         }
 
-        #[doc = concat!("Sets `", stringify!($field), "`.")]
+        #[doc = concat!("Sets how long ", $state, " jobs are kept before the job cleaner deletes them. Defaults to deleting them after ", $default, ".")]
         #[must_use]
-        pub const fn $setter(mut self, value: Option<Duration>) -> Self {
-            self.$field = value;
+        pub const fn $setter(mut self, retention: Retention) -> Self {
+            self.$getter = retention.into_option();
             self
         }
     };
 }
 
 macro_rules! maintenance_duration {
-    ($getter:ident, $setter:ident, $field:ident) => {
-        #[doc = concat!("Returns `", stringify!($field), "`.")]
+    ($getter:ident, $setter:ident, $what:literal, $default:literal) => {
+        #[doc = concat!("Returns ", $what, ".")]
         #[must_use]
         pub const fn $getter(&self) -> Duration {
-            self.$field
+            self.$getter
         }
 
-        #[doc = concat!("Sets `", stringify!($field), "`.")]
+        #[doc = concat!("Sets ", $what, ". Defaults to ", $default, ".")]
         #[must_use]
         pub const fn $setter(mut self, value: Duration) -> Self {
-            self.$field = value;
+            self.$getter = value;
             self
         }
     };
 }
 
 impl MaintenanceConfig {
-    maintenance_option!(
+    maintenance_retention!(
         cancelled_job_retention,
         with_cancelled_job_retention,
-        cancelled_job_retention
+        "cancelled",
+        "24 hours"
     );
-    maintenance_option!(
+    maintenance_retention!(
         completed_job_retention,
         with_completed_job_retention,
-        completed_job_retention
+        "completed",
+        "24 hours"
     );
-    maintenance_option!(
+    maintenance_retention!(
         discarded_job_retention,
         with_discarded_job_retention,
-        discarded_job_retention
+        "discarded",
+        "7 days"
     );
-    maintenance_duration!(elect_interval, with_elect_interval, elect_interval);
+    maintenance_duration!(
+        elect_interval,
+        with_elect_interval,
+        "how often the client bids for leadership, or renews it while leader",
+        "5 seconds"
+    );
     maintenance_duration!(
         job_cleaner_interval,
         with_job_cleaner_interval,
-        job_cleaner_interval
+        "how often the leader deletes finalized jobs past their retention",
+        "30 seconds"
     );
     maintenance_duration!(
         job_cleaner_timeout,
         with_job_cleaner_timeout,
-        job_cleaner_timeout
+        "the timeout for each batch the job cleaner deletes",
+        "30 seconds"
     );
 
     /// Returns the explicitly configured rescue age, if any.
@@ -121,17 +160,29 @@ impl MaintenanceConfig {
     pub(crate) const fn effective_rescue_after(&self) -> Duration {
         self.rescue_after_effective
     }
-    maintenance_duration!(rescuer_interval, with_rescuer_interval, rescuer_interval);
-    maintenance_duration!(queue_retention, with_queue_retention, queue_retention);
+    maintenance_duration!(
+        rescuer_interval,
+        with_rescuer_interval,
+        "how often the leader looks for stuck jobs to rescue",
+        "30 seconds"
+    );
+    maintenance_duration!(
+        queue_retention,
+        with_queue_retention,
+        "how long a queue record no client has touched is kept before the queue cleaner deletes it",
+        "24 hours"
+    );
     maintenance_duration!(
         queue_cleaner_interval,
         with_queue_cleaner_interval,
-        queue_cleaner_interval
+        "how often the leader deletes queue records past their retention",
+        "1 hour"
     );
     maintenance_duration!(
         scheduler_interval,
         with_scheduler_interval,
-        scheduler_interval
+        "how often the leader makes due scheduled and retryable jobs available",
+        "5 seconds"
     );
 }
 
@@ -317,10 +368,23 @@ impl ClientBuilder {
         self
     }
 
-    /// Sets the per-job timeout. `None` disables timeouts.
+    /// Sets how long a job may run before its
+    /// [`WorkContext::cancellation_token`] is cancelled and the attempt
+    /// fails, unless its worker overrides it. Defaults to one minute, like
+    /// Go's `JobTimeout`. The timeout must be positive; use
+    /// [`without_job_timeout`](Self::without_job_timeout) to let jobs run
+    /// without a limit.
     #[must_use]
-    pub fn job_timeout(mut self, timeout: Option<Duration>) -> Self {
-        self.job_timeout = timeout;
+    pub fn job_timeout(mut self, timeout: Duration) -> Self {
+        self.job_timeout = Some(timeout);
+        self
+    }
+
+    /// Lets jobs run without a time limit unless their worker sets one,
+    /// like Go's `JobTimeout: -1`.
+    #[must_use]
+    pub fn without_job_timeout(mut self) -> Self {
+        self.job_timeout = None;
         self
     }
 
@@ -443,8 +507,8 @@ impl ClientBuilder {
     }
 
     /// Escalates a soft stop to a hard stop after this duration, like Go's
-    /// `SoftStopTimeout`. `None`, the default, lets running jobs finish
-    /// without a limit.
+    /// `SoftStopTimeout`. By default, running jobs finish without a limit.
+    /// The timeout must be positive.
     ///
     /// The client starts this timer when fetching stops, however the stop was
     /// requested: [`RunHandle::shutdown`](crate::RunHandle::shutdown),
@@ -453,8 +517,8 @@ impl ClientBuilder {
     /// expires are cancelled as if by
     /// [`Stopper::stop_now`](crate::Stopper::stop_now).
     #[must_use]
-    pub fn soft_stop_timeout(mut self, timeout: Option<Duration>) -> Self {
-        self.soft_stop_timeout = timeout;
+    pub fn soft_stop_timeout(mut self, timeout: Duration) -> Self {
+        self.soft_stop_timeout = Some(timeout);
         self
     }
 
@@ -477,6 +541,13 @@ impl ClientBuilder {
         clippy::too_many_lines,
         reason = "central validation keeps builder failures deterministic before allocating runtime state"
     )]
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::Configuration`] when a setting is out of range or
+    /// settings conflict, such as queues configured without workers, a rescue
+    /// age shorter than the job timeout, or periodic jobs on a client without
+    /// leader election.
     pub fn build(self) -> Result<Client, Error> {
         if self.default_max_attempts < 1 {
             return Err(Error::configuration(
@@ -493,7 +564,12 @@ impl ClientBuilder {
             .is_some_and(|timeout| timeout.is_zero())
         {
             return Err(Error::configuration(
-                "soft stop timeout must be positive when configured".to_owned(),
+                "soft stop timeout must be positive".to_owned(),
+            ));
+        }
+        if self.job_timeout.is_some_and(|timeout| timeout.is_zero()) {
+            return Err(Error::configuration(
+                "job timeout must be positive; use without_job_timeout to disable it".to_owned(),
             ));
         }
         for (name, config) in &self.queues {

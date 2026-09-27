@@ -14,15 +14,15 @@ async fn upgrades_from_every_historical_version() {
     let reference_schema = format!("{prefix}_reference");
     recreate_schema(&pool, &reference_schema).await;
     let reference = PostgresMigrator::new(pool.clone())
-        .with_schema(SchemaName::new(reference_schema.clone()).unwrap());
+        .schema(SchemaName::new(reference_schema.clone()).unwrap());
     reference.migrate_up().await.unwrap();
     let expected = schema_snapshot(&pool, &reference_schema).await;
 
     for version in 1..=MIGRATION_VERSION_LATEST {
         let schema = format!("{prefix}_from_{version}");
         recreate_schema(&pool, &schema).await;
-        let migrator = PostgresMigrator::new(pool.clone())
-            .with_schema(SchemaName::new(schema.clone()).unwrap());
+        let migrator =
+            PostgresMigrator::new(pool.clone()).schema(SchemaName::new(schema.clone()).unwrap());
         migrator
             .migrate(
                 Direction::Up,
@@ -72,7 +72,7 @@ async fn main_line_migrations_preserve_other_lines() {
     recreate_schema(&pool, &schema).await;
     let schema_name = SchemaName::new(schema.clone()).unwrap();
     let table = schema_name.qualify("river_migration");
-    let migrator = PostgresMigrator::new(pool.clone()).with_schema(schema_name);
+    let migrator = PostgresMigrator::new(pool.clone()).schema(schema_name);
     migrator.migrate_up().await.unwrap();
     sqlx::query(AssertSqlSafe(format!(
         "INSERT INTO {table} (line, version) VALUES ('extension', 1), ('extension', 2)"
@@ -157,7 +157,7 @@ async fn mixed_case_schema_is_detected_as_migrated() {
     let schema = unique_schema("RiverMixedCase");
     recreate_schema(&pool, &schema).await;
     let migrator =
-        PostgresMigrator::new(pool.clone()).with_schema(SchemaName::new(schema.clone()).unwrap());
+        PostgresMigrator::new(pool.clone()).schema(SchemaName::new(schema.clone()).unwrap());
 
     migrator.migrate_up().await.unwrap();
     assert_eq!(
@@ -177,7 +177,7 @@ async fn unknown_versions_are_ignored_and_unapplied_down_targets_fail() {
     let schema = unique_schema("rust_migrate_semantics");
     recreate_schema(&pool, &schema).await;
     let schema_name = SchemaName::new(schema.clone()).unwrap();
-    let migrator = PostgresMigrator::new(pool.clone()).with_schema(schema_name.clone());
+    let migrator = PostgresMigrator::new(pool.clone()).schema(schema_name.clone());
     migrator.migrate_up().await.unwrap();
 
     // A newer River release recorded a version this crate does not bundle.

@@ -222,14 +222,18 @@ impl PostgresMigrator {
         }
     }
 
-    /// Uses an explicitly validated schema.
+    /// Migrates `schema` instead of the connection's current schema.
     #[must_use]
-    pub fn with_schema(mut self, schema: SchemaName) -> Self {
+    pub fn schema(mut self, schema: SchemaName) -> Self {
         self.schema = schema;
         self
     }
 
     /// Returns applied main-line versions in ascending order.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::Postgres`] when the query fails.
     pub async fn existing_versions(&self) -> Result<Vec<i64>, Error> {
         let table = self.schema.qualify("river_migration");
         // Pass the quoted, qualified name through unchanged like Go's
@@ -266,7 +270,11 @@ impl PostgresMigrator {
         Ok(rows.iter().map(|row| row.get("version")).collect())
     }
 
-    /// Applies all outstanding up migrations.
+    /// Applies all outstanding up migrations and returns their versions.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::Postgres`] when a migration fails.
     pub async fn migrate_up(&self) -> Result<Vec<i64>, Error> {
         Ok(self
             .migrate(Direction::Up, MigrateOpts::default())
@@ -278,6 +286,15 @@ impl PostgresMigrator {
     }
 
     /// Applies up or down migrations with target, step, and dry-run controls.
+    ///
+    /// Each migration runs in its own transaction, so a failure leaves the
+    /// migrations before it applied.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::Invalid`] when the options are inconsistent, for
+    /// example a target version that doesn't exist or, when migrating down,
+    /// isn't applied, and [`Error::Postgres`] when a migration fails.
     pub async fn migrate(
         &self,
         direction: Direction,
@@ -313,6 +330,11 @@ impl PostgresMigrator {
     }
 
     /// Checks that every migration through an optional target is applied.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::Invalid`] when the target version doesn't exist and
+    /// [`Error::Postgres`] when reading the applied versions fails.
     pub async fn validate(&self, target_version: Option<i64>) -> Result<ValidateResult, Error> {
         validate_target(&POSTGRES_MIGRATIONS, target_version, false)?;
         let applied = self.existing_versions().await?;

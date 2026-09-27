@@ -355,6 +355,14 @@ fn invalid_input(message: impl Into<String>) -> io::Error {
     io::Error::new(io::ErrorKind::InvalidInput, message.into())
 }
 
+/// Receiver capacity for a benchmark's completion events.
+fn event_capacity(backlog: u64) -> std::num::NonZeroUsize {
+    usize::try_from(backlog)
+        .ok()
+        .and_then(std::num::NonZeroUsize::new)
+        .unwrap_or(std::num::NonZeroUsize::MAX)
+}
+
 async fn run_benchmark(options: BenchOptions) -> Result<(), Box<dyn StdError + Send + Sync>> {
     eprintln!(
         "bench: WARNING: truncating {} in the selected database",
@@ -372,7 +380,7 @@ async fn run_benchmark(options: BenchOptions) -> Result<(), Box<dyn StdError + S
             EventKind::JobCompleted,
             EventKind::JobFailed,
         ])?
-        .with_buffer_capacity(usize::try_from(options.backlog).unwrap_or(usize::MAX))?,
+        .with_buffer_capacity(event_capacity(options.backlog)),
     )?;
     let inserted = Arc::new(AtomicU64::new(0));
     let progress = BenchmarkProgress::new();

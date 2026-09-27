@@ -1500,7 +1500,7 @@ impl Adapter {
                     .execute(&self.pool)
                     .await?;
                 }
-                let migrator = PostgresMigrator::new(self.pool.clone()).with_schema(schema);
+                let migrator = PostgresMigrator::new(self.pool.clone()).schema(schema);
                 let direction = match params
                     .get("direction")
                     .and_then(Value::as_str)
@@ -2016,14 +2016,14 @@ impl Adapter {
                     builder = builder.job_stuck_threshold(duration_millis(milliseconds)?);
                 }
                 if let Some(milliseconds) = optional_i64(&params, "job_timeout_ms") {
-                    builder = builder.job_timeout(Some(duration_millis(milliseconds)?));
+                    builder = builder.job_timeout(duration_millis(milliseconds)?);
                 }
                 if params
                     .get("job_timeout_disabled")
                     .and_then(Value::as_bool)
                     .unwrap_or(false)
                 {
-                    builder = builder.job_timeout(None);
+                    builder = builder.without_job_timeout();
                 }
                 if params
                     .get("periodic_run_on_start")
@@ -2039,7 +2039,7 @@ impl Adapter {
                         },
                         PeriodicJobOpts::new()
                             .with_id("conformance-periodic")
-                            .run_on_start(),
+                            .with_run_on_start(),
                     ));
                 }
                 if let Some(milliseconds) = optional_i64(&params, "retry_delay_ms") {
@@ -2883,14 +2883,14 @@ impl SqliteAdapter {
                     builder = builder.job_stuck_threshold(duration_millis(milliseconds)?);
                 }
                 if let Some(milliseconds) = optional_i64(&params, "job_timeout_ms") {
-                    builder = builder.job_timeout(Some(duration_millis(milliseconds)?));
+                    builder = builder.job_timeout(duration_millis(milliseconds)?);
                 }
                 if params
                     .get("job_timeout_disabled")
                     .and_then(Value::as_bool)
                     .unwrap_or(false)
                 {
-                    builder = builder.job_timeout(None);
+                    builder = builder.without_job_timeout();
                 }
                 if params
                     .get("periodic_run_on_start")
@@ -2906,7 +2906,7 @@ impl SqliteAdapter {
                         },
                         PeriodicJobOpts::new()
                             .with_id("conformance-periodic")
-                            .run_on_start(),
+                            .with_run_on_start(),
                     ));
                 }
                 if let Some(milliseconds) = optional_i64(&params, "retry_delay_ms") {
@@ -3524,13 +3524,15 @@ fn maintenance_config(
 ) -> Result<MaintenanceConfig, Box<dyn std::error::Error + Send + Sync>> {
     let mut maintenance = MaintenanceConfig::default();
     let retention = |name: &str| -> Result<
-        Option<Option<Duration>>,
+        Option<riverqueue::Retention>,
         Box<dyn std::error::Error + Send + Sync>,
     > {
         match optional_i64(params, name) {
             None => Ok(None),
-            Some(-1) => Ok(Some(None)),
-            Some(milliseconds) => Ok(Some(Some(duration_millis(milliseconds)?))),
+            Some(-1) => Ok(Some(riverqueue::Retention::Keep)),
+            Some(milliseconds) => Ok(Some(riverqueue::Retention::DeleteAfter(duration_millis(
+                milliseconds,
+            )?))),
         }
     };
     if let Some(retention) = retention("cancelled_job_retention_ms")? {

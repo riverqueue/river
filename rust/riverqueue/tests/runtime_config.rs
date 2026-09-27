@@ -308,8 +308,7 @@ async fn completion_burst_does_not_lag_large_subscription() {
         .subscribe_config(
             SubscribeConfig::new([EventKind::JobCompleted])
                 .unwrap()
-                .with_buffer_capacity(JOB_COUNT)
-                .unwrap(),
+                .with_buffer_capacity(std::num::NonZeroUsize::new(JOB_COUNT).unwrap()),
         )
         .unwrap();
     let jobs = (0..JOB_COUNT).map(|_| (BurstArgs {}, riverqueue::InsertOpts::default()));
@@ -661,7 +660,7 @@ async fn shutdown_waits_for_active_work_and_soft_stop_escalates() {
             .id("rust-runtime-soft-stop-escalation-test")
             .job_stuck_threshold(Duration::from_millis(10))
             .without_notifications()
-            .soft_stop_timeout(Some(Duration::from_millis(50)))
+            .soft_stop_timeout(Duration::from_millis(50))
             .workers(escalation_workers)
             .queue(
                 "escalation",
@@ -722,8 +721,7 @@ async fn poll_only_and_subscription_configuration() {
         .subscribe_config(
             SubscribeConfig::new([EventKind::JobCompleted])
                 .unwrap()
-                .with_buffer_capacity(4)
-                .unwrap(),
+                .with_buffer_capacity(std::num::NonZeroUsize::new(4).unwrap()),
         )
         .unwrap();
     let mut run_handle = client.start().unwrap();
@@ -776,8 +774,7 @@ async fn poll_only_and_subscription_configuration() {
         .subscribe_config(
             SubscribeConfig::new([EventKind::QueuePaused, EventKind::QueueResumed])
                 .unwrap()
-                .with_buffer_capacity(1)
-                .unwrap(),
+                .with_buffer_capacity(std::num::NonZeroUsize::new(1).unwrap()),
         )
         .unwrap();
     let mut transitions = client

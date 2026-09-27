@@ -1421,9 +1421,15 @@ async fn maintenance_cleans_old_jobs_and_queues_and_reindexes() {
     .id("rust-cleanup-client")
     .maintenance(
         MaintenanceConfig::default()
-            .with_cancelled_job_retention(Some(Duration::from_millis(1)))
-            .with_completed_job_retention(Some(Duration::from_millis(1)))
-            .with_discarded_job_retention(Some(Duration::from_millis(1)))
+            .with_cancelled_job_retention(riverqueue::Retention::DeleteAfter(
+                Duration::from_millis(1),
+            ))
+            .with_completed_job_retention(riverqueue::Retention::DeleteAfter(
+                Duration::from_millis(1),
+            ))
+            .with_discarded_job_retention(riverqueue::Retention::DeleteAfter(
+                Duration::from_millis(1),
+            ))
             .with_elect_interval(Duration::from_millis(20))
             .with_job_cleaner_interval(Duration::from_millis(20))
             .with_queue_cleaner_interval(Duration::from_millis(20))
@@ -1617,7 +1623,7 @@ async fn migrator_steps_a_custom_schema_up_and_down() {
     let database = support::PostgresSchema::unmigrated("rs_migrate_custom").await;
 
     let custom_migrator =
-        PostgresMigrator::new(database.pool.clone()).with_schema(database.schema.clone());
+        PostgresMigrator::new(database.pool.clone()).schema(database.schema.clone());
     let first_up = custom_migrator
         .migrate(Direction::Up, MigrateOpts::new().with_target_version(4))
         .await
@@ -1778,7 +1784,7 @@ async fn rescuer_honors_worker_timeout_and_retry_overrides() {
             .reindex(PostgresReindexConfig::default().with_index_names([] as [&str; 0])),
     )
     .id("rust-rescuer-timeout-client")
-    .job_timeout(Some(Duration::from_millis(100)))
+    .job_timeout(Duration::from_millis(100))
     .maintenance(
         MaintenanceConfig::default()
             .with_elect_interval(Duration::from_millis(20))
@@ -2232,7 +2238,7 @@ fn maintenance_client(pool: &PgPool, pilot: TestPilot) -> Client {
             },
             PeriodicJobOpts::new()
                 .with_id("rust-periodic")
-                .run_on_start(),
+                .with_run_on_start(),
         ))
         .pilot(pilot)
         .workers(maintenance_workers)

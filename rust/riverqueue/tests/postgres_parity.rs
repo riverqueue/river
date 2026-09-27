@@ -338,13 +338,13 @@ async fn rescue_after_defaults_and_validation_match_go() {
     // Like Go's `RescueStuckJobsAfter`, a rescue age shorter than the job
     // timeout is rejected, while an equal one is accepted.
     let error = Client::builder(pool.clone())
-        .job_timeout(Some(Duration::from_mins(5)))
+        .job_timeout(Duration::from_mins(5))
         .maintenance(MaintenanceConfig::default().with_rescue_after(Duration::from_mins(4)))
         .build()
         .unwrap_err();
     assert!(error.to_string().contains("rescue after"), "{error}");
     Client::builder(pool.clone())
-        .job_timeout(Some(Duration::from_mins(5)))
+        .job_timeout(Duration::from_mins(5))
         .maintenance(MaintenanceConfig::default().with_rescue_after(Duration::from_mins(5)))
         .build()
         .unwrap();

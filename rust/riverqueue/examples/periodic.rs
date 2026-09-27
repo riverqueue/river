@@ -57,7 +57,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
             || RefreshCache {},
             PeriodicJobOpts::new()
                 .with_id("refresh_cache")
-                .run_on_start(),
+                .with_run_on_start(),
         ))
         // Standard five-field cron syntax, as in River Go: 02:30 UTC daily.
         .periodic_job(PeriodicJob::with_options(

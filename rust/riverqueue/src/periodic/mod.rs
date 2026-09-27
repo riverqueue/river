@@ -29,6 +29,11 @@ pub struct IntervalSchedule(Duration);
 
 impl IntervalSchedule {
     /// Creates a fixed schedule. Intervals shorter than one second are rejected.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::Configuration`] for an interval shorter than one
+    /// second.
     pub fn new(interval: Duration) -> Result<Self, Error> {
         if interval < Duration::from_secs(1) {
             return Err(Error::invalid_job_context(
@@ -95,9 +100,10 @@ impl PeriodicJobOpts {
         self.run_on_start
     }
 
-    /// Inserts once whenever this client becomes leader.
+    /// Returns the options with an occurrence inserted whenever this client
+    /// becomes leader.
     #[must_use]
-    pub const fn run_on_start(mut self) -> Self {
+    pub const fn with_run_on_start(mut self) -> Self {
         self.run_on_start = true;
         self
     }

@@ -425,7 +425,7 @@ async fn rescuer_recovers_undecodable_stuck_jobs() {
     let database = TestDatabase::new(Duration::from_secs(5)).await;
     let client = Client::builder(database.pool.clone())
         .id("sqlite-resilience-rescue")
-        .job_timeout(Some(Duration::from_millis(100)))
+        .job_timeout(Duration::from_millis(100))
         .maintenance(
             MaintenanceConfig::default()
                 .with_elect_interval(Duration::from_millis(20))

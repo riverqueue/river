@@ -7,7 +7,7 @@ workers, migrators, and maintenance services can operate on one queue.
 
 This crate is a pre-release preview. Each release is matched to the River Go
 release with the same minor version; see the
-[mixed deployment guide](crate::guide::mixed_deployments) for running both
+[mixed deployment guide](https://docs.rs/riverqueue/latest/riverqueue/guide/mixed_deployments/index.html) for running both
 against one database.
 
 ## Quick start
@@ -241,8 +241,8 @@ never become leader, so at least one other client must stay eligible. The same
 leader-owned services run on SQLite, where they act on rows written by any
 implementation, exactly as Go's SQLite driver does.
 
-Periodic jobs are scheduled from the time each term begins, and `run_on_start`
-jobs are inserted once per gained term. As in Go, an occurrence whose insert
+Periodic jobs are scheduled from the time each term begins, and jobs with
+`PeriodicJobOpts::with_run_on_start` are inserted once per gained term. As in Go, an occurrence whose insert
 fails is logged and skipped, and a client that loses leadership stops
 inserting immediately.
 
@@ -306,6 +306,18 @@ let client = Client::builder(pool).build()?;
 - [`protocol`] — wire values such as notification topics and unique keys for
   tools that interoperate with River's tables directly.
 
+Setters follow two conventions. Builders and request parameters, which
+exist only to be passed on (`ClientBuilder`, `PostgresDatabase`,
+`JobListParams`, the migrators), take plain setter names such as
+`queue(..)` and `limit(..)`. Configuration values that also expose each
+setting through a same-named getter (`InsertOpts`, `QueueConfig`,
+`MaintenanceConfig`, `SubscribeConfig`) use `with_*` methods that return
+the value with one setting changed, like `PathBuf::with_extension`.
+Constructors with a required extra argument are also named `with_*`, like
+`Vec::with_capacity`. Durations that can be disabled are explicit, as in
+`ClientBuilder::without_job_timeout` and `Retention::Keep`, rather than
+`Option`s whose `None` means something.
+
 The crate's `examples` directory has runnable programs for a basic worker,
 graceful shutdown, cancellation, transactional enqueueing and completion,
 unique and periodic jobs, events, custom PostgreSQL schemas, SQLite, and a
@@ -316,22 +328,22 @@ crate's rustdoc and examples.
 
 ## Benchmarking
 
-The [`riverqueue-cli`](https://docs.rs/riverqueue-cli) crate provides
+The [`riverqueue-cli`](https://crates.io/crates/riverqueue-cli) crate provides
 `riverqueue bench`, a destructive development-database benchmark analogous to
 Go's `river bench`. It truncates the selected River job table and reports
 periodic throughput plus final throughput and p95 latency. Run
 `riverqueue bench --help` and use a disposable database.
 
-[`Client::start`]: crate::Client::start
-[`Hook`]: crate::Hook
-[`WorkMiddleware`]: crate::WorkMiddleware
-[`Worker`]: crate::Worker
-[`database`]: crate::database
-[`error`]: crate::error
-[`event`]: crate::event
-[`extension`]: crate::extension
-[`job`]: crate::job
-[`periodic`]: crate::periodic
-[`query`]: crate::query
-[`queue`]: crate::queue
-[`worker`]: crate::worker
+[`Client::start`]: https://docs.rs/riverqueue/latest/riverqueue/struct.Client.html#method.start
+[`Hook`]: https://docs.rs/riverqueue/latest/riverqueue/trait.Hook.html
+[`WorkMiddleware`]: https://docs.rs/riverqueue/latest/riverqueue/trait.WorkMiddleware.html
+[`Worker`]: https://docs.rs/riverqueue/latest/riverqueue/trait.Worker.html
+[`database`]: https://docs.rs/riverqueue/latest/riverqueue/database/index.html
+[`error`]: https://docs.rs/riverqueue/latest/riverqueue/error/index.html
+[`event`]: https://docs.rs/riverqueue/latest/riverqueue/event/index.html
+[`extension`]: https://docs.rs/riverqueue/latest/riverqueue/extension/index.html
+[`job`]: https://docs.rs/riverqueue/latest/riverqueue/job/index.html
+[`periodic`]: https://docs.rs/riverqueue/latest/riverqueue/periodic/index.html
+[`query`]: https://docs.rs/riverqueue/latest/riverqueue/query/index.html
+[`queue`]: https://docs.rs/riverqueue/latest/riverqueue/queue/index.html
+[`worker`]: https://docs.rs/riverqueue/latest/riverqueue/worker/index.html

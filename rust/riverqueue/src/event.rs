@@ -2,6 +2,7 @@
 
 use std::{
     collections::HashSet,
+    num::NonZeroUsize,
     sync::{
         Arc,
         atomic::{AtomicU64, Ordering},
@@ -257,15 +258,19 @@ pub struct JobStatistics {
     pub run_duration: Duration,
 }
 
+/// Receiver capacity of a subscription that doesn't set one.
+const DEFAULT_BUFFER_CAPACITY: NonZeroUsize = NonZeroUsize::new(1_000).unwrap();
+
 /// Configuration for one event subscription.
 #[derive(Clone, Debug)]
 pub struct SubscribeConfig {
-    buffer_capacity: usize,
+    buffer_capacity: NonZeroUsize,
     kinds: Vec<EventKind>,
 }
 
 impl SubscribeConfig {
-    /// Creates a subscription for at least one event kind.
+    /// Creates a subscription for at least one event kind, with a receiver
+    /// buffer of 1,000 events.
     ///
     /// # Errors
     ///
@@ -274,30 +279,23 @@ impl SubscribeConfig {
         let kinds = kinds.into_iter().collect::<Vec<_>>();
         validate_kinds(&kinds)?;
         Ok(Self {
-            buffer_capacity: 1_000,
+            buffer_capacity: DEFAULT_BUFFER_CAPACITY,
             kinds,
         })
     }
 
-    /// Sets the bounded receiver capacity.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error when `capacity` is zero.
-    pub fn with_buffer_capacity(mut self, capacity: usize) -> Result<Self, Error> {
-        if capacity == 0 {
-            return Err(Error::configuration_context(
-                "event subscription",
-                "event subscription buffer capacity must be positive".to_owned(),
-            ));
-        }
+    /// Returns the configuration with a receiver buffer of `capacity`
+    /// events. A receiver that falls further behind loses the oldest events
+    /// and learns how many on its next receive.
+    #[must_use]
+    pub const fn with_buffer_capacity(mut self, capacity: NonZeroUsize) -> Self {
         self.buffer_capacity = capacity;
-        Ok(self)
+        self
     }
 
     /// Returns the bounded receiver capacity.
     #[must_use]
-    pub const fn buffer_capacity(&self) -> usize {
+    pub const fn buffer_capacity(&self) -> NonZeroUsize {
         self.buffer_capacity
     }
 
@@ -307,7 +305,7 @@ impl SubscribeConfig {
         &self.kinds
     }
 
-    pub(crate) fn into_parts(self) -> (usize, Vec<EventKind>) {
+    pub(crate) fn into_parts(self) -> (NonZeroUsize, Vec<EventKind>) {
         (self.buffer_capacity, self.kinds)
     }
 }
@@ -351,6 +349,12 @@ impl EventReceiver {
     }
 
     /// Receives the next requested event.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`EventRecvError::Lagged`] with the number of events dropped
+    /// because the receiver fell behind, after which receiving resumes, and
+    /// [`EventRecvError::Closed`] once the client is gone.
     pub async fn recv(&mut self) -> Result<Event, EventRecvError> {
         let dropped = self.dropped.swap(0, Ordering::AcqRel);
         if dropped > 0 {
@@ -391,12 +395,11 @@ mod tests {
     #[test]
     fn subscription_is_valid_by_construction() {
         assert!(SubscribeConfig::new([]).is_err());
+        let capacity = NonZeroUsize::new(42).unwrap();
         let config = SubscribeConfig::new([EventKind::JobCompleted])
             .unwrap()
-            .with_buffer_capacity(42)
-            .unwrap();
-        assert_eq!(config.buffer_capacity(), 42);
+            .with_buffer_capacity(capacity);
+        assert_eq!(config.buffer_capacity(), capacity);
         assert_eq!(config.kinds(), [EventKind::JobCompleted]);
-        assert!(config.with_buffer_capacity(0).is_err());
     }
 }

@@ -97,7 +97,7 @@ pub(crate) async fn run(
             let pool = PgPool::connect(&args.database_url).await?;
             let mut migrator = PostgresMigrator::new(pool);
             if let Some(schema) = &args.schema {
-                migrator = migrator.with_schema(SchemaName::new(schema.clone())?);
+                migrator = migrator.schema(SchemaName::new(schema.clone())?);
             }
             CommandMigrator::Postgres(migrator)
         }

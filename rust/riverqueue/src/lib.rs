@@ -31,8 +31,8 @@ pub use client::{
     JobCancelRequest, JobCompleteRequest, JobCompleteTxRequest, JobDeleteManyRequest,
     JobDeleteRequest, JobGetRequest, JobListRequest, JobRetryRequest, JobUpdateRequest, Jobs,
     LocalQueues, MaintenanceConfig, QueueConfig, QueueGetRequest, QueueListRequest,
-    QueuePauseRequest, QueueResumeRequest, QueueUpdateRequest, Queues, ResignRequest, RunHandle,
-    Stopper,
+    QueuePauseRequest, QueueResumeRequest, QueueUpdateRequest, Queues, ResignRequest, Retention,
+    RunHandle, Stopper,
 };
 pub(crate) use database::SchemaName;
 pub use error::{

@@ -147,9 +147,13 @@ impl TestDatabase {
         max_workers: usize,
         soft_stop_timeout: Option<Duration>,
     ) -> Client {
-        Client::builder(self.pool.clone())
+        let builder = Client::builder(self.pool.clone());
+        let builder = match soft_stop_timeout {
+            Some(timeout) => builder.soft_stop_timeout(timeout),
+            None => builder,
+        };
+        builder
             .id("rust-lifecycle-test")
-            .soft_stop_timeout(soft_stop_timeout)
             .workers(gate.workers())
             .queue(
                 "default",

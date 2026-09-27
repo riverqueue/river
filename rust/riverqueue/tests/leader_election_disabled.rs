@@ -54,7 +54,7 @@ fn run_on_start_job() -> PeriodicJob {
     PeriodicJob::with_options(
         NeverSchedule,
         || NoopArgs {},
-        PeriodicJobOpts::new().run_on_start(),
+        PeriodicJobOpts::new().with_run_on_start(),
     )
 }
 

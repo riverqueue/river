@@ -121,7 +121,7 @@ impl TestDatabase {
             .unwrap();
         let schema = SchemaName::new(name.clone()).unwrap();
         PostgresMigrator::new(pool.clone())
-            .with_schema(schema.clone())
+            .schema(schema.clone())
             .migrate_up()
             .await
             .unwrap();
@@ -509,7 +509,11 @@ async fn job_cleaner_retention_exclusions_and_batches() {
     ];
     for (cancelled, completed, discarded) in retentions {
         let database = TestDatabase::new("rmt_job_cleaner").await;
-        let hours = |retention: Option<u64>| retention.map(Duration::from_hours);
+        let hours = |retention: Option<u64>| {
+            retention.map_or(crate::Retention::Keep, |hours| {
+                crate::Retention::DeleteAfter(Duration::from_hours(hours))
+            })
+        };
         let client = database
             .client()
             .with_pilot(ExcludingPilot)
@@ -964,7 +968,7 @@ async fn periodic_start_hooks_and_run_on_start_follow_each_leadership_gain() {
         .periodic_job(PeriodicJob::with_options(
             IntervalSchedule::new(Duration::from_hours(1)).unwrap(),
             || NoTimeoutArgs {},
-            PeriodicJobOpts::new().with_id("gain").run_on_start(),
+            PeriodicJobOpts::new().with_id("gain").with_run_on_start(),
         ))
         .queue("default", QueueConfig::new(1))
         .build()

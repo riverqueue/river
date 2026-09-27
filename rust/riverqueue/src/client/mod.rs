@@ -20,7 +20,7 @@ mod run;
 mod tests;
 mod validate;
 
-pub use self::builder::{ClientBuilder, MaintenanceConfig, QueueConfig};
+pub use self::builder::{ClientBuilder, MaintenanceConfig, QueueConfig, Retention};
 pub use self::extension::ExtensionClient;
 pub use self::insert::{InsertBatchRequest, InsertManyItem, InsertManyRequest, InsertRequest};
 pub use self::jobs::{
@@ -430,12 +430,22 @@ impl Client {
     }
 
     /// Subscribes to selected local client events with a bounded buffer.
+    ///
+    /// # Errors
+    ///
+    /// Returns the errors of [`Client::subscribe_config`], and an error when
+    /// `kinds` is empty.
     pub fn subscribe(&self, kinds: &[EventKind]) -> Result<EventReceiver, Error> {
         self.subscribe_config(SubscribeConfig::new(kinds.iter().copied())?)
     }
 
     /// Subscribes with an explicit bounded-buffer capacity. When the receiver
     /// falls behind, the next receive reports how many events were dropped.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::Configuration`] when the client works no queues, and
+    /// [`Error::RuntimeUnavailable`] outside a Tokio runtime.
     pub fn subscribe_config(&self, config: SubscribeConfig) -> Result<EventReceiver, Error> {
         let (buffer_capacity, kinds) = config.into_parts();
         if self
@@ -449,14 +459,9 @@ impl Client {
                 "event subscriptions require a client configured to work queues".to_owned(),
             ));
         }
-        if buffer_capacity == 0 {
-            return Err(Error::configuration(
-                "event subscription buffer capacity must be positive".to_owned(),
-            ));
-        }
         let kinds = crate::event::validate_kinds(&kinds)?;
         let mut source = self.inner.events.subscribe();
-        let (sender, receiver) = mpsc::channel(buffer_capacity);
+        let (sender, receiver) = mpsc::channel(buffer_capacity.get());
         let dropped = Arc::new(AtomicU64::new(0));
         let dropped_for_task = Arc::clone(&dropped);
         tokio::runtime::Handle::try_current().map_err(|_| Error::RuntimeUnavailable {

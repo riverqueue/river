@@ -41,7 +41,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
         .workers(workers)
         .queue("default", QueueConfig::new(10))
         // Cancel jobs still running 30 seconds after a graceful stop begins.
-        .soft_stop_timeout(Some(Duration::from_secs(30)))
+        .soft_stop_timeout(Duration::from_secs(30))
         .build()?;
     client.insert(GenerateReport { report_id: 42 }).await?;
 

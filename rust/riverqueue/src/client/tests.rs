@@ -541,3 +541,38 @@ async fn resign_requests_survive_a_burst_of_insert_notifications() {
         Err(broadcast::error::TryRecvError::Lagged(_))
     ));
 }
+
+#[cfg(feature = "sqlite")]
+#[tokio::test]
+async fn typed_timeouts_and_retentions_validate_at_build() {
+    let pool = sqlx::SqlitePool::connect_lazy("sqlite::memory:").unwrap();
+    let builder = || Client::builder(pool.clone());
+
+    let client = builder().build().unwrap();
+    assert_eq!(client.inner.job_timeout, Some(JOB_TIMEOUT_DEFAULT));
+    let client = builder().without_job_timeout().build().unwrap();
+    assert_eq!(client.inner.job_timeout, None);
+    let client = builder()
+        .job_timeout(Duration::from_secs(5))
+        .build()
+        .unwrap();
+    assert_eq!(client.inner.job_timeout, Some(Duration::from_secs(5)));
+    for error in [
+        builder().job_timeout(Duration::ZERO).build().unwrap_err(),
+        builder()
+            .soft_stop_timeout(Duration::ZERO)
+            .build()
+            .unwrap_err(),
+    ] {
+        assert!(matches!(error, Error::Configuration(_)), "{error}");
+    }
+
+    let defaults = MaintenanceConfig::default();
+    assert_eq!(
+        defaults.completed_job_retention(),
+        Retention::DeleteAfter(Duration::from_hours(24))
+    );
+    let keep = defaults.with_completed_job_retention(Retention::Keep);
+    assert_eq!(keep.completed_job_retention(), Retention::Keep);
+    assert_eq!(keep.completed_job_retention, None);
+}

@@ -196,7 +196,7 @@ impl TestSchema {
             .unwrap();
         let schema = SchemaName::new(name.clone()).unwrap();
         PostgresMigrator::new(pool.clone())
-            .with_schema(schema.clone())
+            .schema(schema.clone())
             .migrate_up()
             .await
             .unwrap();
@@ -872,7 +872,7 @@ async fn stuck_job_keeps_its_worker_slot_until_it_ends() {
         .id("postgres-resilience-stuck")
         .error_handler(stuck.clone())
         .job_stuck_threshold(Duration::from_millis(50))
-        .job_timeout(Some(Duration::from_millis(100)))
+        .job_timeout(Duration::from_millis(100))
         .without_notifications()
         .workers(blocking_workers(&gate, &timeline))
         .queue(

@@ -22,7 +22,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
         .execute(&pool)
         .await?;
     PostgresMigrator::new(pool.clone())
-        .with_schema(schema.clone())
+        .schema(schema.clone())
         .migrate_up()
         .await?;
 
