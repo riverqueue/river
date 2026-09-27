@@ -319,6 +319,7 @@ struct ResumableArgs {}
 #[river(kind = "rust_transactional")]
 struct TransactionalArgs {}
 
+#[derive(Default)]
 struct ResumableWorker {
     first_runs: Arc<AtomicUsize>,
     second_runs: Arc<AtomicUsize>,
@@ -328,7 +329,7 @@ struct TransactionalWorker {
     pool: PgPool,
 }
 
-#[derive(Clone)]
+#[derive(Clone, Default)]
 struct TestPilot {
     completions: Arc<AtomicUsize>,
     fetches: Arc<AtomicUsize>,
@@ -556,6 +557,204 @@ async fn cancellation_wins_over_rescheduling_completion_updates() {
     for direct_completion in [false, true] {
         assert_cancellation_wins(&pool, &schema, direct_completion).await;
     }
+
+    database.cleanup().await;
+}
+
+#[tokio::test]
+async fn client_cancels_a_running_job() {
+    let database = support::PostgresSchema::current("rs_cancel_job").await;
+    let client = worker_client(&database.pool, ResumableWorker::default());
+    let mut run_handle = client.start().unwrap();
+    // Remote cancellation arrives by notification, so the listener must be
+    // subscribed before the job is cancelled.
+    run_handle.wait_ready().await.unwrap();
+
+    let cancelling = client.insert(CancelArgs {}).await.unwrap();
+    wait_for_state(&client, cancelling.job.row.id, JobState::Running).await;
+    client.jobs().cancel(cancelling.job.row.id).await.unwrap();
+    let cancelled = wait_for_state(&client, cancelling.job.row.id, JobState::Cancelled).await;
+    assert!(cancelled.finalized_at.is_some());
+    assert!(cancelled.metadata.contains_key("cancel_attempted_at"));
+
+    run_handle.shutdown().await.unwrap();
+    database.cleanup().await;
+}
+
+#[tokio::test]
+async fn client_completes_a_job_with_output_and_event() {
+    let database = support::PostgresSchema::current("rs_complete_job").await;
+    let client = worker_client(&database.pool, ResumableWorker::default());
+
+    let inserted = client
+        .insert(EchoArgs {
+            message: "from Rust".to_owned(),
+        })
+        .await
+        .unwrap();
+    assert_eq!(inserted.job.row.state, JobState::Available);
+
+    let mut completed_events = client.subscribe(&[EventKind::JobCompleted]).unwrap();
+    let mut run_handle = client.start().unwrap();
+    let row = wait_for_state(&client, inserted.job.row.id, JobState::Completed).await;
+    assert_eq!(row.attempt, 1);
+    assert_eq!(row.attempted_by, ["rust-conformance-client"]);
+    assert_eq!(
+        row.decode_output::<serde_json::Value>().unwrap(),
+        Some(serde_json::json!({"message": "from Rust"}))
+    );
+    loop {
+        let event = tokio::time::timeout(Duration::from_secs(1), completed_events.recv())
+            .await
+            .unwrap()
+            .unwrap();
+        if event.as_job().unwrap().job.id == inserted.job.row.id {
+            break;
+        }
+    }
+
+    run_handle.shutdown().await.unwrap();
+    database.cleanup().await;
+}
+
+#[tokio::test]
+async fn client_discards_a_failing_job_after_max_attempts() {
+    let database = support::PostgresSchema::current("rs_discard_fail").await;
+    let client = worker_client(&database.pool, ResumableWorker::default());
+    let mut run_handle = client.start().unwrap();
+
+    let failed = client
+        .insert(FailArgs {})
+        .opts(InsertOpts::default().with_max_attempts(1))
+        .await
+        .unwrap();
+    let failed = wait_for_state(&client, failed.job.row.id, JobState::Discarded).await;
+    assert_eq!(failed.errors.len(), 1);
+    assert_eq!(failed.errors[0].error, "intentional failure");
+
+    run_handle.shutdown().await.unwrap();
+    database.cleanup().await;
+}
+
+#[tokio::test]
+async fn client_discards_a_job_of_an_unregistered_kind() {
+    let database = support::PostgresSchema::current("rs_unknown_kind").await;
+    let client = worker_client(&database.pool, ResumableWorker::default());
+    let mut run_handle = client.start().unwrap();
+
+    let unknown_kind_id: i64 = sqlx::query_scalar(
+        "INSERT INTO river_job (args, kind, max_attempts) \
+         VALUES ('{}'::jsonb, 'rust_unregistered_kind', 1) RETURNING id",
+    )
+    .fetch_one(&database.pool)
+    .await
+    .unwrap();
+    let unknown_kind = wait_for_state(&client, unknown_kind_id, JobState::Discarded).await;
+    assert_eq!(unknown_kind.attempt, 1);
+    assert_eq!(unknown_kind.errors.len(), 1);
+    assert_eq!(
+        unknown_kind.errors[0].error,
+        "job kind is not registered in the client's Workers bundle: rust_unregistered_kind"
+    );
+
+    run_handle.shutdown().await.unwrap();
+    database.cleanup().await;
+}
+
+#[tokio::test]
+async fn client_restarts_after_shutdown() {
+    let database = support::PostgresSchema::current("rs_restart").await;
+    let client = worker_client(&database.pool, ResumableWorker::default());
+
+    let mut run_handle = client.start().unwrap();
+    run_handle.wait_ready().await.unwrap();
+    run_handle.shutdown().await.unwrap();
+    let mut restarted_handle = client.start().unwrap();
+    restarted_handle.wait_ready().await.unwrap();
+    restarted_handle.shutdown().await.unwrap();
+
+    database.cleanup().await;
+}
+
+#[tokio::test]
+async fn client_resumes_resumable_steps_on_retry() {
+    let database = support::PostgresSchema::current("rs_resumable").await;
+    let resumable_worker = ResumableWorker::default();
+    let resumable_first_runs = Arc::clone(&resumable_worker.first_runs);
+    let resumable_second_runs = Arc::clone(&resumable_worker.second_runs);
+    let client = worker_client(&database.pool, resumable_worker);
+    let mut run_handle = client.start().unwrap();
+
+    let resumable = client
+        .insert(ResumableArgs {})
+        .opts(InsertOpts::default().with_max_attempts(2))
+        .await
+        .unwrap();
+    let resumable = wait_for_state(&client, resumable.job.row.id, JobState::Completed).await;
+    assert_eq!(
+        resumable
+            .metadata
+            .get::<String>("river:resumable_step")
+            .unwrap()
+            .as_deref(),
+        Some("first")
+    );
+    assert_eq!(resumable_first_runs.load(Ordering::SeqCst), 1);
+    assert_eq!(resumable_second_runs.load(Ordering::SeqCst), 2);
+
+    run_handle.shutdown().await.unwrap();
+    database.cleanup().await;
+}
+
+#[tokio::test]
+async fn complete_tx_requires_a_running_job_and_rolls_back() {
+    let database = support::PostgresSchema::current("rs_complete_tx").await;
+    let pool = database.pool.clone();
+    let client = worker_client(&pool, ResumableWorker::default());
+
+    let non_running = client
+        .insert(EchoArgs {
+            message: "not running".to_owned(),
+        })
+        .await
+        .unwrap();
+    let mut transaction = pool.begin().await.unwrap();
+    let error = client
+        .jobs()
+        .complete(non_running.job.row.id)
+        .tx(&mut transaction)
+        .await
+        .unwrap_err();
+    assert!(error.to_string().contains("job must be running"));
+    assert!(matches!(
+        client.jobs().complete(i64::MAX).tx(&mut transaction).await,
+        Err(riverqueue::Error::NotFound)
+    ));
+    transaction.rollback().await.unwrap();
+
+    sqlx::query("UPDATE river_job SET state = 'running' WHERE id = $1")
+        .bind(non_running.job.row.id)
+        .execute(&pool)
+        .await
+        .unwrap();
+    let mut transaction = pool.begin().await.unwrap();
+    let completed_then_rolled_back = client
+        .jobs()
+        .complete(non_running.job.row.id)
+        .tx(&mut transaction)
+        .await
+        .unwrap();
+    assert_eq!(completed_then_rolled_back.state, JobState::Completed);
+    transaction.rollback().await.unwrap();
+    assert_eq!(
+        client
+            .jobs()
+            .get(non_running.job.row.id)
+            .await
+            .unwrap()
+            .state,
+        JobState::Running
+    );
 
     database.cleanup().await;
 }
@@ -1065,218 +1264,9 @@ async fn insert_many_variants_preserve_order_and_transactionality() {
 }
 
 #[tokio::test]
-#[allow(clippy::too_many_lines)]
-async fn migrates_inserts_and_works_a_job() {
-    // The pool's `search_path` points at a fresh schema so that the default
-    // migrator and clients built without an explicit schema exercise the
-    // connection's current schema without touching `public`.
-    let database = support::PostgresSchema::current_unmigrated("rs_current").await;
-    let pool = database.pool.clone();
-    let migrator = PostgresMigrator::new(pool.clone());
-    migrator.migrate_up().await.unwrap();
-    assert_eq!(
-        migrator.existing_versions().await.unwrap(),
-        (1..=MIGRATION_VERSION_LATEST).collect::<Vec<_>>()
-    );
-
-    let custom_database = support::PostgresSchema::unmigrated("rs_migration").await;
-    let custom_migrator = PostgresMigrator::new(custom_database.pool.clone())
-        .with_schema(custom_database.schema.clone());
-    let first_up = custom_migrator
-        .migrate(Direction::Up, MigrateOpts::new().with_target_version(4))
-        .await
-        .unwrap();
-    assert_eq!(
-        first_up
-            .versions
-            .iter()
-            .map(|version| version.version)
-            .collect::<Vec<_>>(),
-        vec![1, 2, 3, 4]
-    );
-    assert!(!custom_migrator.validate(None).await.unwrap().ok);
-    custom_migrator.migrate_up().await.unwrap();
-    assert!(custom_migrator.validate(None).await.unwrap().ok);
-    custom_migrator
-        .migrate(Direction::Down, MigrateOpts::new().with_target_version(3))
-        .await
-        .unwrap();
-    assert_eq!(
-        custom_migrator.existing_versions().await.unwrap(),
-        vec![1, 2, 3]
-    );
-    custom_migrator.migrate_up().await.unwrap();
-    let dry_run = custom_migrator
-        .migrate(
-            Direction::Down,
-            MigrateOpts::new().with_dry_run(true).with_max_steps(2),
-        )
-        .await
-        .unwrap();
-    assert_eq!(dry_run.versions.len(), 2);
-    assert_eq!(
-        custom_migrator.existing_versions().await.unwrap(),
-        (1..=MIGRATION_VERSION_LATEST).collect::<Vec<_>>()
-    );
-    custom_migrator
-        .migrate(Direction::Down, MigrateOpts::new().with_target_version(-1))
-        .await
-        .unwrap();
-    assert!(
-        custom_migrator
-            .existing_versions()
-            .await
-            .unwrap()
-            .is_empty()
-    );
-    custom_database.cleanup().await;
-
-    let mut workers = WorkerRegistry::new();
-    workers.register::<CancelArgs, _>(CancelWorker).unwrap();
-    workers.register::<EchoArgs, _>(EchoWorker).unwrap();
-    workers.register::<FailArgs, _>(FailWorker).unwrap();
-    let resumable_first_runs = Arc::new(AtomicUsize::new(0));
-    let resumable_second_runs = Arc::new(AtomicUsize::new(0));
-    workers
-        .register::<ResumableArgs, _>(ResumableWorker {
-            first_runs: Arc::clone(&resumable_first_runs),
-            second_runs: Arc::clone(&resumable_second_runs),
-        })
-        .unwrap();
-    let client = Client::builder(pool.clone())
-        .id("rust-conformance-client")
-        .workers(workers)
-        .queue("default", QueueConfig::new(2))
-        .build()
-        .unwrap();
-
-    let inserted = client
-        .insert(EchoArgs {
-            message: "from Rust".to_owned(),
-        })
-        .await
-        .unwrap();
-    assert_eq!(inserted.job.row.state, JobState::Available);
-
-    let non_running = client
-        .insert(EchoArgs {
-            message: "not running".to_owned(),
-        })
-        .await
-        .unwrap();
-    let mut transaction = pool.begin().await.unwrap();
-    let error = client
-        .jobs()
-        .complete(non_running.job.row.id)
-        .tx(&mut transaction)
-        .await
-        .unwrap_err();
-    assert!(error.to_string().contains("job must be running"));
-    assert!(matches!(
-        client.jobs().complete(i64::MAX).tx(&mut transaction).await,
-        Err(riverqueue::Error::NotFound)
-    ));
-    transaction.rollback().await.unwrap();
-
-    sqlx::query("UPDATE river_job SET state = 'running' WHERE id = $1")
-        .bind(non_running.job.row.id)
-        .execute(&pool)
-        .await
-        .unwrap();
-    let mut transaction = pool.begin().await.unwrap();
-    let completed_then_rolled_back = client
-        .jobs()
-        .complete(non_running.job.row.id)
-        .tx(&mut transaction)
-        .await
-        .unwrap();
-    assert_eq!(completed_then_rolled_back.state, JobState::Completed);
-    transaction.rollback().await.unwrap();
-    assert_eq!(
-        client
-            .jobs()
-            .get(non_running.job.row.id)
-            .await
-            .unwrap()
-            .state,
-        JobState::Running
-    );
-    sqlx::query("UPDATE river_job SET state = 'available' WHERE id = $1")
-        .bind(non_running.job.row.id)
-        .execute(&pool)
-        .await
-        .unwrap();
-
-    let mut completed_events = client.subscribe(&[EventKind::JobCompleted]).unwrap();
-    let mut run_handle = client.start().unwrap();
-    let row = wait_for_state(&client, inserted.job.row.id, JobState::Completed).await;
-    assert_eq!(row.attempt, 1);
-    assert_eq!(row.attempted_by, ["rust-conformance-client"]);
-    assert_eq!(
-        row.decode_output::<serde_json::Value>().unwrap(),
-        Some(serde_json::json!({"message": "from Rust"}))
-    );
-    loop {
-        let event = tokio::time::timeout(Duration::from_secs(1), completed_events.recv())
-            .await
-            .unwrap()
-            .unwrap();
-        if event.as_job().unwrap().job.id == inserted.job.row.id {
-            break;
-        }
-    }
-
-    let failed = client
-        .insert(FailArgs {})
-        .opts(InsertOpts::default().with_max_attempts(1))
-        .await
-        .unwrap();
-    let failed = wait_for_state(&client, failed.job.row.id, JobState::Discarded).await;
-    assert_eq!(failed.errors.len(), 1);
-    assert_eq!(failed.errors[0].error, "intentional failure");
-
-    let resumable = client
-        .insert(ResumableArgs {})
-        .opts(InsertOpts::default().with_max_attempts(2))
-        .await
-        .unwrap();
-    let resumable = wait_for_state(&client, resumable.job.row.id, JobState::Completed).await;
-    assert_eq!(
-        resumable
-            .metadata
-            .get::<String>("river:resumable_step")
-            .unwrap()
-            .as_deref(),
-        Some("first")
-    );
-    assert_eq!(resumable_first_runs.load(Ordering::SeqCst), 1);
-    assert_eq!(resumable_second_runs.load(Ordering::SeqCst), 2);
-
-    let cancelling = client.insert(CancelArgs {}).await.unwrap();
-    wait_for_state(&client, cancelling.job.row.id, JobState::Running).await;
-    client.jobs().cancel(cancelling.job.row.id).await.unwrap();
-    let cancelled = wait_for_state(&client, cancelling.job.row.id, JobState::Cancelled).await;
-    assert!(cancelled.finalized_at.is_some());
-    assert!(cancelled.metadata.contains_key("cancel_attempted_at"));
-
-    client
-        .local_queues()
-        .add(
-            "dynamic",
-            QueueConfig::new(1)
-                .with_fetch_cooldown(Duration::from_millis(1))
-                .with_fetch_poll_interval(Duration::from_millis(10)),
-        )
-        .unwrap();
-    let dynamic = client
-        .insert(EchoArgs {
-            message: "dynamic queue".to_owned(),
-        })
-        .opts(InsertOpts::default().with_queue("dynamic"))
-        .await
-        .unwrap();
-    wait_for_state(&client, dynamic.job.row.id, JobState::Completed).await;
-    assert!(client.local_queues().remove("dynamic").is_some());
+async fn insert_unique_by_args_returns_the_existing_job() {
+    let database = support::PostgresSchema::current("rs_unique_insert").await;
+    let client = worker_client(&database.pool, ResumableWorker::default());
 
     let unique_options = InsertOpts::default().with_unique(UniqueOpts::new().by_args());
     let unique_first = client
@@ -1296,104 +1286,29 @@ async fn migrates_inserts_and_works_a_job() {
     assert_eq!(unique_first.job.row.id, unique_second.job.row.id);
     assert!(unique_second.unique_skipped_as_duplicate);
 
-    let unknown_kind_id: i64 = sqlx::query_scalar(
-        "INSERT INTO river_job (args, kind, max_attempts) \
-         VALUES ('{}'::jsonb, 'rust_unregistered_kind', 1) RETURNING id",
-    )
-    .fetch_one(&pool)
-    .await
-    .unwrap();
-    let unknown_kind = wait_for_state(&client, unknown_kind_id, JobState::Discarded).await;
-    assert_eq!(unknown_kind.attempt, 1);
-    assert_eq!(unknown_kind.errors.len(), 1);
-    assert_eq!(
-        unknown_kind.errors[0].error,
-        "job kind is not registered in the client's Workers bundle: rust_unregistered_kind"
-    );
+    database.cleanup().await;
+}
 
+#[tokio::test]
+async fn job_admin_lists_updates_retries_and_deletes() {
+    let database = support::PostgresSchema::current("rs_job_admin").await;
+    let client = worker_client(&database.pool, ResumableWorker::default());
+    let mut run_handle = client.start().unwrap();
+
+    let inserted = client
+        .insert(EchoArgs {
+            message: "from Rust".to_owned(),
+        })
+        .await
+        .unwrap();
+    let failed = client
+        .insert(FailArgs {})
+        .opts(InsertOpts::default().with_max_attempts(1))
+        .await
+        .unwrap();
+    wait_for_state(&client, inserted.job.row.id, JobState::Completed).await;
+    let failed = wait_for_state(&client, failed.job.row.id, JobState::Discarded).await;
     run_handle.shutdown().await.unwrap();
-    let mut restarted_handle = client.start().unwrap();
-    restarted_handle.wait_ready().await.unwrap();
-    restarted_handle.shutdown().await.unwrap();
-
-    let mut interrupt_workers = WorkerRegistry::new();
-    interrupt_workers
-        .register::<IgnoresCancelArgs, _>(IgnoresCancelWorker)
-        .unwrap();
-    let interrupt_client = Client::builder(pool.clone())
-        .id("rust-interrupt-client")
-        .job_stuck_threshold(Duration::from_millis(10))
-        .workers(interrupt_workers)
-        .queue("interrupt", QueueConfig::new(1))
-        .build()
-        .unwrap();
-    let interrupted = interrupt_client
-        .insert(IgnoresCancelArgs {})
-        .opts(InsertOpts::default().with_queue("interrupt"))
-        .await
-        .unwrap();
-    let mut interrupted_events = interrupt_client
-        .subscribe(&[EventKind::JobInterrupted])
-        .unwrap();
-    let mut interrupt_handle = interrupt_client.start().unwrap();
-    wait_for_state(&interrupt_client, interrupted.job.row.id, JobState::Running).await;
-    interrupt_handle.shutdown_now().await.unwrap();
-    let interrupted_row = interrupt_client
-        .jobs()
-        .get(interrupted.job.row.id)
-        .await
-        .unwrap();
-    assert_eq!(interrupted_row.attempt, 0);
-    assert_eq!(interrupted_row.state, JobState::Available);
-    assert!(interrupted_row.errors.is_empty());
-    let event = tokio::time::timeout(Duration::from_secs(1), interrupted_events.recv())
-        .await
-        .unwrap()
-        .unwrap();
-    assert_eq!(event.as_job().unwrap().job.id, interrupted.job.row.id);
-
-    let queue = client.queues().get("default").await.unwrap();
-    assert_eq!(queue.name, "default");
-    assert!(queue.paused_at.is_none());
-    client.queues().pause("default").await.unwrap();
-    assert!(
-        client
-            .queues()
-            .get("default")
-            .await
-            .unwrap()
-            .paused_at
-            .is_some()
-    );
-    client.queues().resume("default").await.unwrap();
-    assert!(
-        client
-            .queues()
-            .get("default")
-            .await
-            .unwrap()
-            .paused_at
-            .is_none()
-    );
-    let queue = client
-        .queues()
-        .update(
-            "default",
-            riverqueue::QueueUpdateParams::new().metadata(serde_json::Map::from_iter([(
-                "owner".to_owned(),
-                serde_json::json!("rust"),
-            )])),
-        )
-        .await
-        .unwrap();
-    assert_eq!(queue.metadata["owner"], "rust");
-    let queues = client
-        .queues()
-        .list(QueueListParams::default())
-        .await
-        .unwrap();
-    assert_eq!(queues.len(), 3);
-    assert!(queues.iter().any(|queue| queue.name == "dynamic"));
 
     let listed = client
         .jobs()
@@ -1425,247 +1340,57 @@ async fn migrates_inserts_and_works_a_job() {
         Err(riverqueue::Error::NotFound)
     ));
 
-    let mut transaction = pool.begin().await.unwrap();
-    let transaction_insert = client
-        .insert(EchoArgs {
-            message: "from Rust".to_owned(),
-        })
-        .tx(&mut transaction)
-        .await
-        .unwrap();
-    let raw_transaction_insert = riverqueue::__private::ExtensionClient::new(&client)
-        .insert_raw_tx(
-            &mut transaction,
-            EchoArgs::KIND,
-            &[],
-            serde_json::value::to_raw_value(&serde_json::json!({"message": "raw from Rust"}))
-                .unwrap(),
-            InsertOpts::default(),
-        )
-        .await
-        .unwrap();
-    assert!(matches!(
-        client.jobs().get(transaction_insert.job.row.id).await,
-        Err(riverqueue::Error::NotFound)
-    ));
-    assert!(matches!(
-        client.jobs().get(raw_transaction_insert.job.id).await,
-        Err(riverqueue::Error::NotFound)
-    ));
-    transaction.commit().await.unwrap();
-    assert_eq!(
-        client
-            .jobs()
-            .get(transaction_insert.job.row.id)
-            .await
-            .unwrap()
-            .state,
-        JobState::Available
-    );
-    assert_eq!(
-        client
-            .jobs()
-            .get(raw_transaction_insert.job.id)
-            .await
-            .unwrap()
-            .decode_args::<serde_json::Value>()
-            .unwrap()["message"],
-        "raw from Rust"
-    );
-    let pool_connection = client
-        .postgres_pool()
-        .expect("client is configured for PostgreSQL")
-        .acquire()
-        .await
-        .unwrap();
-    // Return the connection so closing the pool at cleanup doesn't wait on it.
-    drop(pool_connection);
+    database.cleanup().await;
+}
 
-    let mut transaction = pool.begin().await.unwrap();
-    let tx_row = client
-        .jobs()
-        .get(transaction_insert.job.row.id)
-        .tx(&mut transaction)
-        .await
-        .unwrap();
-    assert_eq!(tx_row.id, transaction_insert.job.row.id);
+#[tokio::test]
+async fn local_queue_added_at_runtime_works_jobs() {
+    let database = support::PostgresSchema::current("rs_dynamic_queue").await;
+    let client = worker_client(&database.pool, ResumableWorker::default());
+    let mut run_handle = client.start().unwrap();
+    run_handle.wait_ready().await.unwrap();
+
     client
-        .jobs()
-        .update(
-            tx_row.id,
-            JobUpdateParams::default().with_output(serde_json::json!("transactional")),
-        )
-        .tx(&mut transaction)
-        .await
-        .unwrap();
-    transaction.rollback().await.unwrap();
-    assert!(
-        client
-            .jobs()
-            .get(transaction_insert.job.row.id)
-            .await
-            .unwrap()
-            .output()
-            .is_none()
-    );
-
-    let mut maintenance_workers = WorkerRegistry::new();
-    maintenance_workers
-        .register::<EchoArgs, _>(EchoWorker)
-        .unwrap();
-    maintenance_workers
-        .register::<TransactionalArgs, _>(TransactionalWorker { pool: pool.clone() })
-        .unwrap();
-    let pilot_completions = Arc::new(AtomicUsize::new(0));
-    let pilot_fetches = Arc::new(AtomicUsize::new(0));
-    let pilot_maintenance_starts = Arc::new(AtomicUsize::new(0));
-    let pilot_maintenance_stops = Arc::new(AtomicUsize::new(0));
-    let pilot_runtime_starts = Arc::new(AtomicUsize::new(0));
-    let pilot_runtime_stops = Arc::new(AtomicUsize::new(0));
-    let maintenance_client = Client::builder(pool.clone())
-        .id("rust-maintenance-client")
-        .maintenance(
-            MaintenanceConfig::default()
-                .with_elect_interval(Duration::from_millis(20))
-                // Like Go, the rescue age cannot be shorter than the default
-                // one-minute job timeout.
-                .with_rescue_after(Duration::from_mins(1))
-                .with_rescuer_interval(Duration::from_millis(20))
-                .with_scheduler_interval(Duration::from_millis(20)),
-        )
-        .periodic_job(PeriodicJob::with_options(
-            IntervalSchedule::new(Duration::from_mins(1)).unwrap(),
-            || EchoArgs {
-                message: "periodic run on start".to_owned(),
-            },
-            PeriodicJobOpts::new()
-                .with_id("rust-periodic")
-                .run_on_start(),
-        ))
-        .pilot(TestPilot {
-            completions: Arc::clone(&pilot_completions),
-            fetches: Arc::clone(&pilot_fetches),
-            maintenance_starts: Arc::clone(&pilot_maintenance_starts),
-            maintenance_stops: Arc::clone(&pilot_maintenance_stops),
-            runtime_starts: Arc::clone(&pilot_runtime_starts),
-            runtime_stops: Arc::clone(&pilot_runtime_stops),
-        })
-        .workers(maintenance_workers)
-        .queue(
-            "default",
+        .local_queues()
+        .add(
+            "dynamic",
             QueueConfig::new(1)
                 .with_fetch_cooldown(Duration::from_millis(1))
                 .with_fetch_poll_interval(Duration::from_millis(10)),
         )
-        .build()
         .unwrap();
-    let scheduled = maintenance_client
+    let dynamic = client
         .insert(EchoArgs {
-            message: "scheduled by leader".to_owned(),
+            message: "dynamic queue".to_owned(),
         })
-        .opts(
-            InsertOpts::default()
-                .with_scheduled_at(chrono::Utc::now() + chrono::Duration::milliseconds(100)),
-        )
+        .opts(InsertOpts::default().with_queue("dynamic"))
         .await
         .unwrap();
-    let transactional = maintenance_client
-        .insert(TransactionalArgs {})
-        .await
-        .unwrap();
-    let stuck_id: i64 = sqlx::query_scalar(
-        "INSERT INTO river_job (args, attempt, attempted_at, attempted_by, kind, max_attempts, state) \
-         VALUES ('{}'::jsonb, 1, now() - interval '2 hours', ARRAY['dead-client'], \
-                 'unregistered_stuck_kind', 2, 'running') RETURNING id",
-    )
-    .fetch_one(&pool)
-    .await
-    .unwrap();
-    let mut maintenance_handle = maintenance_client.start().unwrap();
-    let periodic = wait_for_job_matching(&maintenance_client, |row| {
-        row.metadata
-            .get::<String>("river:periodic_job_id")
-            .ok()
-            .flatten()
-            .as_deref()
-            == Some("rust-periodic")
-    })
-    .await;
-    assert_eq!(
-        periodic.metadata.get::<bool>("periodic").unwrap(),
-        Some(true)
-    );
-    wait_for_state(
-        &maintenance_client,
-        scheduled.job.row.id,
-        JobState::Completed,
-    )
-    .await;
-    let transactional = wait_for_state(
-        &maintenance_client,
-        transactional.job.row.id,
-        JobState::Completed,
-    )
-    .await;
-    assert_eq!(
-        transactional
-            .metadata
-            .get::<bool>("transactional_completion")
-            .unwrap(),
-        Some(true)
-    );
-    assert_eq!(
-        transactional
-            .metadata
-            .get::<bool>("extension_handled")
-            .unwrap(),
-        Some(true)
-    );
-    assert!(pilot_fetches.load(Ordering::SeqCst) > 0);
-    assert!(pilot_completions.load(Ordering::SeqCst) > 0);
-    assert_eq!(
-        maintenance_client
-            .jobs()
-            .get(scheduled.job.row.id)
-            .await
-            .unwrap()
-            .metadata
-            .get::<bool>("extension_handled")
-            .unwrap(),
-        Some(true)
-    );
-    assert_eq!(pilot_maintenance_starts.load(Ordering::SeqCst), 1);
-    assert_eq!(pilot_runtime_starts.load(Ordering::SeqCst), 1);
-    let rescued = wait_for_state(&maintenance_client, stuck_id, JobState::Discarded).await;
-    assert_eq!(
-        rescued.metadata.get::<i64>("river:rescue_count").unwrap(),
-        Some(1)
-    );
-    assert_eq!(
-        rescued.errors.last().unwrap().error,
-        "Stuck job rescued by JobRescuer"
-    );
-    let leader_id: String = sqlx::query_scalar("SELECT leader_id FROM river_leader")
-        .fetch_one(&pool)
-        .await
-        .unwrap();
-    assert_eq!(leader_id, "rust-maintenance-client");
-    maintenance_handle.shutdown().await.unwrap();
-    assert_eq!(pilot_maintenance_stops.load(Ordering::SeqCst), 1);
-    assert_eq!(pilot_runtime_stops.load(Ordering::SeqCst), 1);
-    let leader_count: i64 = sqlx::query_scalar("SELECT count(*) FROM river_leader")
-        .fetch_one(&pool)
-        .await
-        .unwrap();
-    assert_eq!(leader_count, 0);
+    wait_for_state(&client, dynamic.job.row.id, JobState::Completed).await;
+    assert!(client.local_queues().remove("dynamic").is_some());
+    run_handle.shutdown().await.unwrap();
 
-    sqlx::raw_sql(
-        "TRUNCATE river_job, river_notification, river_queue, river_leader RESTART IDENTITY CASCADE; \
-         CREATE INDEX rust_maintenance_reindex_idx ON river_job (id)",
-    )
-    .execute(&pool)
-    .await
-    .unwrap();
+    // The removed queue's row stays behind alongside the configured one.
+    let queues = client
+        .queues()
+        .list(QueueListParams::default())
+        .await
+        .unwrap();
+    assert_eq!(queues.len(), 2);
+    assert!(queues.iter().any(|queue| queue.name == "dynamic"));
+
+    database.cleanup().await;
+}
+
+#[tokio::test]
+async fn maintenance_cleans_old_jobs_and_queues_and_reindexes() {
+    let database = support::PostgresSchema::current("rs_cleanup").await;
+    let pool = database.pool.clone();
+
+    sqlx::raw_sql("CREATE INDEX rust_maintenance_reindex_idx ON river_job (id)")
+        .execute(&pool)
+        .await
+        .unwrap();
     let cleanup_job_ids = sqlx::query_scalar::<_, i64>(
         "INSERT INTO river_job (args, finalized_at, kind, state) VALUES \
          ('{}'::jsonb, now() - interval '1 hour', 'cleanup_cancelled', 'cancelled'), \
@@ -1751,6 +1476,250 @@ async fn migrates_inserts_and_works_a_job() {
         tokio::time::sleep(Duration::from_millis(20)).await;
     }
     cleanup_handle.shutdown().await.unwrap();
+
+    database.cleanup().await;
+}
+
+#[tokio::test]
+async fn maintenance_client_runs_pilot_periodic_scheduled_and_transactional_jobs() {
+    let database = support::PostgresSchema::current("rs_pilot").await;
+    let pilot = TestPilot::default();
+    let maintenance_client = maintenance_client(&database.pool, pilot.clone());
+
+    let scheduled = maintenance_client
+        .insert(EchoArgs {
+            message: "scheduled by leader".to_owned(),
+        })
+        .opts(
+            InsertOpts::default()
+                .with_scheduled_at(chrono::Utc::now() + chrono::Duration::milliseconds(100)),
+        )
+        .await
+        .unwrap();
+    let transactional = maintenance_client
+        .insert(TransactionalArgs {})
+        .await
+        .unwrap();
+    let mut maintenance_handle = maintenance_client.start().unwrap();
+    let periodic = wait_for_job_matching(&maintenance_client, |row| {
+        row.metadata
+            .get::<String>("river:periodic_job_id")
+            .ok()
+            .flatten()
+            .as_deref()
+            == Some("rust-periodic")
+    })
+    .await;
+    assert_eq!(
+        periodic.metadata.get::<bool>("periodic").unwrap(),
+        Some(true)
+    );
+    wait_for_state(
+        &maintenance_client,
+        scheduled.job.row.id,
+        JobState::Completed,
+    )
+    .await;
+    let transactional = wait_for_state(
+        &maintenance_client,
+        transactional.job.row.id,
+        JobState::Completed,
+    )
+    .await;
+    assert_eq!(
+        transactional
+            .metadata
+            .get::<bool>("transactional_completion")
+            .unwrap(),
+        Some(true)
+    );
+    assert_eq!(
+        transactional
+            .metadata
+            .get::<bool>("extension_handled")
+            .unwrap(),
+        Some(true)
+    );
+    assert!(pilot.fetches.load(Ordering::SeqCst) > 0);
+    assert!(pilot.completions.load(Ordering::SeqCst) > 0);
+    assert_eq!(
+        maintenance_client
+            .jobs()
+            .get(scheduled.job.row.id)
+            .await
+            .unwrap()
+            .metadata
+            .get::<bool>("extension_handled")
+            .unwrap(),
+        Some(true)
+    );
+    assert_eq!(pilot.maintenance_starts.load(Ordering::SeqCst), 1);
+    assert_eq!(pilot.runtime_starts.load(Ordering::SeqCst), 1);
+    maintenance_handle.shutdown().await.unwrap();
+    assert_eq!(pilot.maintenance_stops.load(Ordering::SeqCst), 1);
+    assert_eq!(pilot.runtime_stops.load(Ordering::SeqCst), 1);
+
+    database.cleanup().await;
+}
+
+#[tokio::test]
+async fn maintenance_leader_rescues_stuck_jobs_and_resigns_on_shutdown() {
+    let database = support::PostgresSchema::current("rs_rescue_leader").await;
+    let pool = database.pool.clone();
+    let maintenance_client = maintenance_client(&pool, TestPilot::default());
+
+    let stuck_id: i64 = sqlx::query_scalar(
+        "INSERT INTO river_job (args, attempt, attempted_at, attempted_by, kind, max_attempts, state) \
+         VALUES ('{}'::jsonb, 1, now() - interval '2 hours', ARRAY['dead-client'], \
+                 'unregistered_stuck_kind', 2, 'running') RETURNING id",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    let mut maintenance_handle = maintenance_client.start().unwrap();
+    let rescued = wait_for_state(&maintenance_client, stuck_id, JobState::Discarded).await;
+    assert_eq!(
+        rescued.metadata.get::<i64>("river:rescue_count").unwrap(),
+        Some(1)
+    );
+    assert_eq!(
+        rescued.errors.last().unwrap().error,
+        "Stuck job rescued by JobRescuer"
+    );
+    let leader_id: String = sqlx::query_scalar("SELECT leader_id FROM river_leader")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(leader_id, "rust-maintenance-client");
+    maintenance_handle.shutdown().await.unwrap();
+    let leader_count: i64 = sqlx::query_scalar("SELECT count(*) FROM river_leader")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(leader_count, 0);
+
+    database.cleanup().await;
+}
+
+#[tokio::test]
+async fn migrator_migrates_the_current_schema() {
+    // The pool's `search_path` points at a fresh schema, so the default
+    // migrator targets the connection's current schema without touching
+    // `public`.
+    let database = support::PostgresSchema::current_unmigrated("rs_migrate_current").await;
+
+    let migrator = PostgresMigrator::new(database.pool.clone());
+    migrator.migrate_up().await.unwrap();
+    assert_eq!(
+        migrator.existing_versions().await.unwrap(),
+        (1..=MIGRATION_VERSION_LATEST).collect::<Vec<_>>()
+    );
+
+    database.cleanup().await;
+}
+
+#[tokio::test]
+async fn migrator_steps_a_custom_schema_up_and_down() {
+    let database = support::PostgresSchema::unmigrated("rs_migrate_custom").await;
+
+    let custom_migrator =
+        PostgresMigrator::new(database.pool.clone()).with_schema(database.schema.clone());
+    let first_up = custom_migrator
+        .migrate(Direction::Up, MigrateOpts::new().with_target_version(4))
+        .await
+        .unwrap();
+    assert_eq!(
+        first_up
+            .versions
+            .iter()
+            .map(|version| version.version)
+            .collect::<Vec<_>>(),
+        vec![1, 2, 3, 4]
+    );
+    assert!(!custom_migrator.validate(None).await.unwrap().ok);
+    custom_migrator.migrate_up().await.unwrap();
+    assert!(custom_migrator.validate(None).await.unwrap().ok);
+    custom_migrator
+        .migrate(Direction::Down, MigrateOpts::new().with_target_version(3))
+        .await
+        .unwrap();
+    assert_eq!(
+        custom_migrator.existing_versions().await.unwrap(),
+        vec![1, 2, 3]
+    );
+    custom_migrator.migrate_up().await.unwrap();
+    let dry_run = custom_migrator
+        .migrate(
+            Direction::Down,
+            MigrateOpts::new().with_dry_run(true).with_max_steps(2),
+        )
+        .await
+        .unwrap();
+    assert_eq!(dry_run.versions.len(), 2);
+    assert_eq!(
+        custom_migrator.existing_versions().await.unwrap(),
+        (1..=MIGRATION_VERSION_LATEST).collect::<Vec<_>>()
+    );
+    custom_migrator
+        .migrate(Direction::Down, MigrateOpts::new().with_target_version(-1))
+        .await
+        .unwrap();
+    assert!(
+        custom_migrator
+            .existing_versions()
+            .await
+            .unwrap()
+            .is_empty()
+    );
+
+    database.cleanup().await;
+}
+
+#[tokio::test]
+async fn queue_admin_gets_pauses_resumes_and_updates() {
+    let database = support::PostgresSchema::current("rs_queue_admin").await;
+    let client = worker_client(&database.pool, ResumableWorker::default());
+    // Starting the client records its configured queue.
+    let mut run_handle = client.start().unwrap();
+    run_handle.wait_ready().await.unwrap();
+    run_handle.shutdown().await.unwrap();
+
+    let queue = client.queues().get("default").await.unwrap();
+    assert_eq!(queue.name, "default");
+    assert!(queue.paused_at.is_none());
+    client.queues().pause("default").await.unwrap();
+    assert!(
+        client
+            .queues()
+            .get("default")
+            .await
+            .unwrap()
+            .paused_at
+            .is_some()
+    );
+    client.queues().resume("default").await.unwrap();
+    assert!(
+        client
+            .queues()
+            .get("default")
+            .await
+            .unwrap()
+            .paused_at
+            .is_none()
+    );
+    let queue = client
+        .queues()
+        .update(
+            "default",
+            riverqueue::QueueUpdateParams::new().metadata(serde_json::Map::from_iter([(
+                "owner".to_owned(),
+                serde_json::json!("rust"),
+            )])),
+        )
+        .await
+        .unwrap();
+    assert_eq!(queue.metadata["owner"], "rust");
+
     database.cleanup().await;
 }
 
@@ -2003,6 +1972,157 @@ async fn resumable_cursor_and_transactional_checkpoints() {
     database.cleanup().await;
 }
 
+#[tokio::test]
+async fn shutdown_now_interrupts_a_job_ignoring_cancellation() {
+    let database = support::PostgresSchema::current("rs_interrupt").await;
+
+    let mut interrupt_workers = WorkerRegistry::new();
+    interrupt_workers
+        .register::<IgnoresCancelArgs, _>(IgnoresCancelWorker)
+        .unwrap();
+    let interrupt_client = Client::builder(database.pool.clone())
+        .id("rust-interrupt-client")
+        .job_stuck_threshold(Duration::from_millis(10))
+        .workers(interrupt_workers)
+        .queue("interrupt", QueueConfig::new(1))
+        .build()
+        .unwrap();
+    let interrupted = interrupt_client
+        .insert(IgnoresCancelArgs {})
+        .opts(InsertOpts::default().with_queue("interrupt"))
+        .await
+        .unwrap();
+    let mut interrupted_events = interrupt_client
+        .subscribe(&[EventKind::JobInterrupted])
+        .unwrap();
+    let mut interrupt_handle = interrupt_client.start().unwrap();
+    wait_for_state(&interrupt_client, interrupted.job.row.id, JobState::Running).await;
+    interrupt_handle.shutdown_now().await.unwrap();
+    let interrupted_row = interrupt_client
+        .jobs()
+        .get(interrupted.job.row.id)
+        .await
+        .unwrap();
+    assert_eq!(interrupted_row.attempt, 0);
+    assert_eq!(interrupted_row.state, JobState::Available);
+    assert!(interrupted_row.errors.is_empty());
+    let event = tokio::time::timeout(Duration::from_secs(1), interrupted_events.recv())
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(event.as_job().unwrap().job.id, interrupted.job.row.id);
+
+    database.cleanup().await;
+}
+
+#[tokio::test]
+async fn transactional_get_and_update_roll_back() {
+    let database = support::PostgresSchema::current("rs_tx_update").await;
+    let pool = database.pool.clone();
+    let client = worker_client(&pool, ResumableWorker::default());
+    let inserted = client
+        .insert(EchoArgs {
+            message: "from Rust".to_owned(),
+        })
+        .await
+        .unwrap();
+
+    let mut transaction = pool.begin().await.unwrap();
+    let tx_row = client
+        .jobs()
+        .get(inserted.job.row.id)
+        .tx(&mut transaction)
+        .await
+        .unwrap();
+    assert_eq!(tx_row.id, inserted.job.row.id);
+    client
+        .jobs()
+        .update(
+            tx_row.id,
+            JobUpdateParams::default().with_output(serde_json::json!("transactional")),
+        )
+        .tx(&mut transaction)
+        .await
+        .unwrap();
+    transaction.rollback().await.unwrap();
+    assert!(
+        client
+            .jobs()
+            .get(inserted.job.row.id)
+            .await
+            .unwrap()
+            .output()
+            .is_none()
+    );
+
+    database.cleanup().await;
+}
+
+#[tokio::test]
+async fn transactional_inserts_become_visible_on_commit() {
+    let database = support::PostgresSchema::current("rs_tx_insert").await;
+    let pool = database.pool.clone();
+    let client = worker_client(&pool, ResumableWorker::default());
+
+    let mut transaction = pool.begin().await.unwrap();
+    let transaction_insert = client
+        .insert(EchoArgs {
+            message: "from Rust".to_owned(),
+        })
+        .tx(&mut transaction)
+        .await
+        .unwrap();
+    let raw_transaction_insert = riverqueue::__private::ExtensionClient::new(&client)
+        .insert_raw_tx(
+            &mut transaction,
+            EchoArgs::KIND,
+            &[],
+            serde_json::value::to_raw_value(&serde_json::json!({"message": "raw from Rust"}))
+                .unwrap(),
+            InsertOpts::default(),
+        )
+        .await
+        .unwrap();
+    assert!(matches!(
+        client.jobs().get(transaction_insert.job.row.id).await,
+        Err(riverqueue::Error::NotFound)
+    ));
+    assert!(matches!(
+        client.jobs().get(raw_transaction_insert.job.id).await,
+        Err(riverqueue::Error::NotFound)
+    ));
+    transaction.commit().await.unwrap();
+    assert_eq!(
+        client
+            .jobs()
+            .get(transaction_insert.job.row.id)
+            .await
+            .unwrap()
+            .state,
+        JobState::Available
+    );
+    assert_eq!(
+        client
+            .jobs()
+            .get(raw_transaction_insert.job.id)
+            .await
+            .unwrap()
+            .decode_args::<serde_json::Value>()
+            .unwrap()["message"],
+        "raw from Rust"
+    );
+    let pool_connection = client
+        .postgres_pool()
+        .expect("client is configured for PostgreSQL")
+        .acquire()
+        .await
+        .unwrap();
+    // Return the connection so closing the pool at cleanup doesn't wait on it.
+    drop(pool_connection);
+
+    database.cleanup().await;
+}
+
 async fn assert_cancellation_wins(pool: &PgPool, schema: &SchemaName, direct_completion: bool) {
     const ATTEMPT: i16 = 7;
 
@@ -2091,6 +2211,47 @@ async fn assert_cancellation_wins(pool: &PgPool, schema: &SchemaName, direct_com
     run.shutdown().await.unwrap();
 }
 
+/// Builds the maintenance client shared by the pilot and rescuer tests.
+fn maintenance_client(pool: &PgPool, pilot: TestPilot) -> Client {
+    let mut maintenance_workers = WorkerRegistry::new();
+    maintenance_workers
+        .register::<EchoArgs, _>(EchoWorker)
+        .unwrap();
+    maintenance_workers
+        .register::<TransactionalArgs, _>(TransactionalWorker { pool: pool.clone() })
+        .unwrap();
+    Client::builder(pool.clone())
+        .id("rust-maintenance-client")
+        .maintenance(
+            MaintenanceConfig::default()
+                .with_elect_interval(Duration::from_millis(20))
+                // Like Go, the rescue age cannot be shorter than the default
+                // one-minute job timeout.
+                .with_rescue_after(Duration::from_mins(1))
+                .with_rescuer_interval(Duration::from_millis(20))
+                .with_scheduler_interval(Duration::from_millis(20)),
+        )
+        .periodic_job(PeriodicJob::with_options(
+            IntervalSchedule::new(Duration::from_mins(1)).unwrap(),
+            || EchoArgs {
+                message: "periodic run on start".to_owned(),
+            },
+            PeriodicJobOpts::new()
+                .with_id("rust-periodic")
+                .run_on_start(),
+        ))
+        .pilot(pilot)
+        .workers(maintenance_workers)
+        .queue(
+            "default",
+            QueueConfig::new(1)
+                .with_fetch_cooldown(Duration::from_millis(1))
+                .with_fetch_poll_interval(Duration::from_millis(10)),
+        )
+        .build()
+        .unwrap()
+}
+
 async fn wait_for_job_matching(client: &Client, predicate: impl Fn(&JobRow) -> bool) -> JobRow {
     let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
     loop {
@@ -2125,4 +2286,20 @@ async fn wait_for_state(client: &Client, id: i64, expected: JobState) -> JobRow 
         );
         tokio::time::sleep(Duration::from_millis(20)).await;
     }
+}
+
+/// Builds a client on the pool's current schema that works the basic
+/// conformance job kinds.
+fn worker_client(pool: &PgPool, resumable: ResumableWorker) -> Client {
+    let mut workers = WorkerRegistry::new();
+    workers.register::<CancelArgs, _>(CancelWorker).unwrap();
+    workers.register::<EchoArgs, _>(EchoWorker).unwrap();
+    workers.register::<FailArgs, _>(FailWorker).unwrap();
+    workers.register::<ResumableArgs, _>(resumable).unwrap();
+    Client::builder(pool.clone())
+        .id("rust-conformance-client")
+        .workers(workers)
+        .queue("default", QueueConfig::new(2))
+        .build()
+        .unwrap()
 }
