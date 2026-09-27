@@ -11,9 +11,10 @@ mod support;
 use std::{convert::Infallible, time::Duration};
 
 use riverqueue::{
-    Client, Error, EventKind, InsertOpts, Job, JobArgs, JobDeleteManyParams, JobListParams,
-    JobState, JobUpdateParams, QueueConfig, QueueListParams, QueueSelector, QueueUpdateParams,
-    WorkContext, WorkOutcome, WorkerRegistry,
+    Client, Error, EventKind, InsertBatch, InsertContext, InsertMiddleware, InsertNext, InsertOpts,
+    InsertedJobs, Job, JobArgs, JobDeleteManyParams, JobListParams, JobState, JobUpdateParams,
+    QueueConfig, QueueListParams, QueueSelector, QueueUpdateParams, WorkContext, WorkOutcome,
+    WorkerRegistry,
 };
 use serde::{Deserialize, Serialize};
 
@@ -31,6 +32,24 @@ struct HandleArgs {
 fn args(name: &str) -> HandleArgs {
     HandleArgs {
         name: name.to_owned(),
+    }
+}
+
+/// Fails every insertion after River has written its jobs.
+struct FailAfterWrite;
+
+impl InsertMiddleware for FailAfterWrite {
+    async fn insert_many(
+        &self,
+        jobs: Vec<InsertContext>,
+        next: InsertNext<'_>,
+    ) -> Result<InsertedJobs, Error> {
+        let inserted = next.run(jobs).await?;
+        assert!(!inserted.is_empty());
+        Err(Error::extension(
+            "insert middleware",
+            std::io::Error::other("failed after the write"),
+        ))
     }
 }
 
@@ -103,6 +122,34 @@ macro_rules! scenarios {
             client.jobs().cancel(id).await.unwrap();
             wait_for_completion(&client, id).await;
             run.shutdown().await.unwrap();
+            fixture.cleanup().await;
+        }
+
+        // Like Go's `Insert` and `InsertMany`, an insertion without a
+        // caller transaction runs middleware, hooks, and the write in one
+        // transaction, so middleware failing after the write rolls it back.
+        #[tokio::test(flavor = "multi_thread")]
+        async fn insert_middleware_error_after_write_rolls_back() {
+            let fixture = Fixture::new().await;
+            let client = fixture
+                .builder()
+                .insert_middleware(FailAfterWrite)
+                .build()
+                .unwrap();
+
+            let error = client.insert(args("single")).await.unwrap_err();
+            assert!(matches!(error, Error::Extension { .. }), "{error}");
+            let error = client
+                .insert_many([args("many_1"), args("many_2")])
+                .await
+                .unwrap_err();
+            assert!(matches!(error, Error::Extension { .. }), "{error}");
+            let mut batch = InsertBatch::new();
+            batch.push(args("batch_1")).push(BlockingArgs {});
+            let error = client.insert_batch(batch).await.unwrap_err();
+            assert!(matches!(error, Error::Extension { .. }), "{error}");
+
+            assert_eq!(fixture.job_count().await, 0);
             fixture.cleanup().await;
         }
 
@@ -661,6 +708,16 @@ mod postgres {
             self.pool.begin().await.unwrap()
         }
 
+        async fn job_count(&self) -> i64 {
+            sqlx::query_scalar(sqlx::AssertSqlSafe(format!(
+                "SELECT count(*) FROM {}",
+                self.schema.table("river_job")
+            )))
+            .fetch_one(&self.pool)
+            .await
+            .unwrap()
+        }
+
         async fn insert_queue(&self, name: &str) {
             sqlx::query(sqlx::AssertSqlSafe(format!(
                 "INSERT INTO {} (name, created_at, metadata, updated_at) \
@@ -726,6 +783,13 @@ mod sqlite {
 
         async fn begin(&self) -> Transaction<'static, Sqlite> {
             self.pool.begin_with("BEGIN IMMEDIATE").await.unwrap()
+        }
+
+        async fn job_count(&self) -> i64 {
+            sqlx::query_scalar("SELECT count(*) FROM river_job")
+                .fetch_one(&self.pool)
+                .await
+                .unwrap()
         }
 
         async fn insert_queue(&self, name: &str) {
