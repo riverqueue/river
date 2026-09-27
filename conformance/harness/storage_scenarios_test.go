@@ -651,9 +651,13 @@ func verifyJobListCursorInterchange(t *testing.T, first, second *adapter) {
 }
 
 // verifyDifferentialQueueCRUD compares persisted queue rows and metadata
-// updates across implementations.
-func verifyDifferentialQueueCRUD(t *testing.T, goAdapter, candidateAdapter *adapter) {
+// updates across implementations, including the `metadata_changed` control
+// notification an update sends, which River Go's producers hand to their
+// extension.
+func verifyDifferentialQueueCRUD(t *testing.T, observer *postgresObserver, goAdapter, candidateAdapter *adapter) {
 	t.Helper()
+
+	controlChannel := observer.currentSchema(t) + ".river_control"
 
 	for _, pair := range []struct {
 		reader *adapter
@@ -673,10 +677,16 @@ func verifyDifferentialQueueCRUD(t *testing.T, goAdapter, candidateAdapter *adap
 		require.Equal(t, writerQueue, readerQueue)
 		require.Equal(t, "default", writerQueue.Name)
 		require.Nil(t, writerQueue.PausedAt)
+		listener := observer.listen(t, controlChannel)
 		pair.reader.call(t, "queue_update", map[string]any{
 			"metadata": map[string]any{"updated_by": pair.reader.name}, "name": "default",
 		}, &updatedQueue)
 		require.Equal(t, map[string]any{"updated_by": pair.reader.name}, updatedQueue.Metadata)
+		payloads := listener.receiveUntilMarker(t, observer, pair.reader.name+"-queue-update-marker")
+		require.Len(t, payloads, 1, "%s: one control notification per metadata update", pair.reader.name)
+		require.JSONEq(t,
+			`{"action":"metadata_changed","metadata":{"updated_by":"`+pair.reader.name+`"},"queue":"default"}`,
+			payloads[0], pair.reader.name)
 		pair.writer.call(t, "queue_get", map[string]any{"name": "default"}, &writerQueue)
 		require.Equal(t, updatedQueue, writerQueue)
 		var readerQueues, writerQueues struct {

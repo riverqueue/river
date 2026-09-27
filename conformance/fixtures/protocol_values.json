@@ -229,7 +229,7 @@
       "key": "periodic"
     },
     {
-      "applicability": "not_applicable",
+      "applicability": "protocol_visible",
       "key": "river:log"
     },
     {

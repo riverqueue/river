@@ -508,7 +508,7 @@
       "area": "config",
       "detail": "time.Duration",
       "id": "config.FetchCooldown",
-      "rationale": "Per-process minimum interval between fetches (a throughput throttle). Implementations expose an equivalent knob; it has no cross-process contract.",
+      "rationale": "Per-process minimum interval between fetches (a throughput throttle). Implementations expose an equivalent knob. It changes neither rows nor notifications, only how often one process claims, so it has no cross-process contract.",
       "source": "client.go:river.Config.FetchCooldown"
     },
     {
@@ -614,11 +614,15 @@
       "source": "client.go:river.Config.Logger"
     },
     {
-      "applicability": "api_equivalent",
+      "applicability": "protocol_visible",
       "area": "config",
       "detail": "int",
       "id": "config.MaxAttempts",
-      "rationale": "Client-wide default applied to inserted rows' max_attempts (25). Implementations expose an equivalent default; the per-insert value is classified as insert_opts.MaxAttempts.",
+      "rationale": "Client-wide default for inserted rows' max_attempts. Its value (25) is persisted in every row inserted without an override, which any implementation may then work, so it must match. The per-insert value is classified as insert_opts.MaxAttempts.",
+      "scenarios": [
+        "candidate_insert_reference_work",
+        "reference_insert_candidate_work"
+      ],
       "source": "client.go:river.Config.MaxAttempts"
     },
     {
@@ -757,7 +761,10 @@
       "area": "config",
       "detail": "bool",
       "id": "config.SkipUnknownJobCheck",
-      "rationale": "Allows inserting kinds without a locally registered worker; implementations offer an equivalent option for clients inserting work for other processes.",
+      "rationale": "Insert-time validation local to the inserting client: it only decides whether that client refuses kinds it has no worker for. The rows it lets through are ordinary jobs, and how a worker treats a kind it doesn't know is covered by mixed_unknown_kind_error.",
+      "scenarios": [
+        "mixed_unknown_kind_error"
+      ],
       "source": "client.go:river.Config.SkipUnknownJobCheck"
     },
     {
@@ -765,7 +772,10 @@
       "area": "config",
       "detail": "time.Duration",
       "id": "config.SoftStopTimeout",
-      "rationale": "Local graceful-stop deadline before escalating to cancellation; each implementation offers an equivalent shutdown control.",
+      "rationale": "Local graceful-stop deadline before escalating to cancellation; each implementation offers an equivalent shutdown control. Only when the escalation happens is local; what it persists is a hard stop's outcome, which the cited scenario covers.",
+      "scenarios": [
+        "hard_shutdown_soft_stop_classification"
+      ],
       "source": "client.go:river.Config.SoftStopTimeout"
     },
     {
@@ -2338,11 +2348,14 @@
       "source": "internal/maintenance/periodic_job_enqueuer.go:maintenance.PeriodicJobEnqueuer.insertParamsFromConstructor"
     },
     {
-      "applicability": "not_applicable",
+      "applicability": "protocol_visible",
       "area": "metadata_key",
       "detail": "go:const, go:gjson.GetBytes, go:json_tag, go:metadata_updates_index",
       "id": "metadata_key.river:log",
-      "rationale": "Written only by the optional Go riverlog middleware. Other implementations need not write it and preserve it like any other metadata.",
+      "rationale": "Written only by the optional Go riverlog middleware; other implementations need not write it. Every implementation must carry it through snoozes, cancellations, and completions unchanged, like other metadata it doesn't own.",
+      "scenarios": [
+        "reserved_metadata_cross_engine"
+      ],
       "source": "riverlog/river_log.go:riverlog.Middleware.Work, riverlog/river_log.go:riverlog.appendLogDataWithCap, riverlog/river_log.go:riverlog.metadataKey, riverlog/river_log.go:riverlog.metadataWithLog"
     },
     {
@@ -2618,11 +2631,14 @@
       "source": "producer.go:river.controlActionCancel"
     },
     {
-      "applicability": "internal",
+      "applicability": "protocol_visible",
       "area": "notification_payload",
       "detail": "controlActionMetadataChanged",
       "id": "notification_payload.control.action.metadata_changed",
-      "rationale": "Emitted on queue metadata updates. The standard producer only forwards it to the extension seam (riverpilot.Pilot.QueueMetadataChanged), which does nothing by default, so there is no observable cross-language behavior to test yet.",
+      "rationale": "Sent on the shared control channel by a queue metadata update from any implementation. River Go's producers react at once by passing the new metadata to their extension, so every implementation must send the same payload.",
+      "scenarios": [
+        "differential_queue_crud"
+      ],
       "source": "producer.go:river.controlActionMetadataChanged"
     },
     {

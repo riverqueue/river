@@ -74,7 +74,7 @@ stale.
 
 | Area | `protocol_visible` | `api_equivalent` | `driver_specific` | `internal` | `not_applicable` | `unclassified` | Total |
 |---|---:|---:|---:|---:|---:|---:|---:|
-| [`config`](#config) | 13 | 15 | 0 | 2 | 5 | 0 | 35 |
+| [`config`](#config) | 14 | 14 | 0 | 2 | 5 | 0 | 35 |
 | [`insert_opts`](#insert_opts) | 8 | 0 | 0 | 0 | 0 | 0 | 8 |
 | [`unique_opts`](#unique_opts) | 5 | 0 | 0 | 0 | 0 | 0 | 5 |
 | [`queue_config`](#queue_config) | 0 | 3 | 0 | 0 | 0 | 0 | 3 |
@@ -85,9 +85,9 @@ stale.
 | [`queue_list_params`](#queue_list_params) | 0 | 1 | 0 | 0 | 0 | 0 | 1 |
 | [`job_state`](#job_state) | 8 | 0 | 0 | 0 | 0 | 0 | 8 |
 | [`event_kind`](#event_kind) | 0 | 7 | 0 | 0 | 0 | 0 | 7 |
-| [`metadata_key`](#metadata_key) | 9 | 0 | 0 | 1 | 1 | 0 | 11 |
+| [`metadata_key`](#metadata_key) | 10 | 0 | 0 | 1 | 0 | 0 | 11 |
 | [`notification_topic`](#notification_topic) | 3 | 0 | 0 | 0 | 0 | 0 | 3 |
-| [`notification_payload`](#notification_payload) | 10 | 0 | 0 | 1 | 0 | 0 | 11 |
+| [`notification_payload`](#notification_payload) | 11 | 0 | 0 | 0 | 0 | 0 | 11 |
 | [`driver`](#driver) | 0 | 0 | 92 | 0 | 0 | 0 | 92 |
 | [`extension`](#extension) | 0 | 6 | 0 | 19 | 11 | 0 | 36 |
 | [`migration`](#migration) | 14 | 0 | 0 | 0 | 0 | 0 | 14 |
@@ -103,7 +103,7 @@ Exported fields of `river.Config`.
 | `config.CompletedJobRetentionPeriod` | protocol_visible | `maintenance_job_cleaner_retention` (TestMaintenanceConformance) | The job cleaner deletes completed rows after this period; deletion is visible to every implementation sharing the database. |
 | `config.DiscardedJobRetentionPeriod` | protocol_visible | `maintenance_job_cleaner_retention` (TestMaintenanceConformance) | The job cleaner deletes discarded rows after this period; deletion is visible to every implementation sharing the database. |
 | `config.ErrorHandler` | api_equivalent | `error_handler_cancel_override` (TestMixedConformance) | Language-native error/panic callback. Its persisted effect (overriding the outcome, e.g. cancel) is exercised through the adapter's error_handler_cancel start option. |
-| `config.FetchCooldown` | api_equivalent |  | Per-process minimum interval between fetches (a throughput throttle). Implementations expose an equivalent knob; it has no cross-process contract. |
+| `config.FetchCooldown` | api_equivalent |  | Per-process minimum interval between fetches (a throughput throttle). Implementations expose an equivalent knob. It changes neither rows nor notifications, only how often one process claims, so it has no cross-process contract. |
 | `config.FetchPollInterval` | api_equivalent | `lost_notification_poll_recovery` (TestMixedConformance)<br>`notification_only_wakeups` (TestMixedConformance) | Per-process polling fallback interval. The adapter's fetch_poll_interval_ms option exercises both the polling fallback and notification-only wakeups with polling effectively disabled. |
 | `config.Hooks` | api_equivalent |  | Registration of global hooks in each language's idiom. Hook ordering semantics are exercised through plugin registration in extension_hook_middleware_order. |
 | `config.ID` | protocol_visible | `process_kill_restart_and_rescue` (TestMixedConformance)<br>`sqlite_runtime_attempted_by_ordering` (TestMixedSQLiteRuntimeConformance) | Persisted in attempted_by and used as leader_id; scenarios assert attempted_by client IDs across implementations. |
@@ -114,7 +114,7 @@ Exported fields of `river.Config`.
 | `config.JobTimeout` | protocol_visible | `timeout_cancellation` (TestMixedConformance) | Timed-out attempts are cancelled and recorded as errors with retry scheduling, which other implementations observe. |
 | `config.LeaderElectionDisabled` | protocol_visible | `leader_election_disabled_both_directions` (TestMixedConformance)<br>`multi_engine_leader_election_disabled` (TestMultiEngineConformance)<br>`sqlite_runtime_leader_election_disabled` (TestMixedSQLiteRuntimeConformance) | A client kept out of leader election never writes river_leader or runs leader-owned maintenance while it works jobs alongside eligible clients of any implementation, and rejects periodic jobs. |
 | `config.Logger` | api_equivalent |  | Each implementation uses its own logging facility. |
-| `config.MaxAttempts` | api_equivalent |  | Client-wide default applied to inserted rows' max_attempts (25). Implementations expose an equivalent default; the per-insert value is classified as insert_opts.MaxAttempts. |
+| `config.MaxAttempts` | protocol_visible | `candidate_insert_reference_work` (TestMixedConformance)<br>`reference_insert_candidate_work` (TestMixedConformance) | Client-wide default for inserted rows' max_attempts. Its value (25) is persisted in every row inserted without an override, which any implementation may then work, so it must match. The per-insert value is classified as insert_opts.MaxAttempts. |
 | `config.Middleware` | api_equivalent |  | Registration of global middleware in each language's idiom. Middleware ordering semantics are exercised through plugin registration in extension_hook_middleware_order. |
 | `config.PeriodicJobs` | protocol_visible | `mixed_leader_death_failover_both_directions` (TestMixedConformance)<br>`periodic_due_job_available` (TestMaintenanceConformance)<br>`periodic_run_on_start` (TestMixedConformance)<br>`sqlite_runtime_periodic_scheduler` (TestMixedSQLiteRuntimeConformance) | Only the elected leader enqueues periodic jobs, tagging them with reserved metadata; duplicate or missing enqueues are visible across implementations. |
 | `config.Plugins` | api_equivalent | `extension_hook_middleware_order` (TestMixedConformance) | Language-native plugin registration; the adapter's instrumented option installs a plugin and the scenario checks hook and middleware ordering. |
@@ -127,8 +127,8 @@ Exported fields of `river.Config`.
 | `config.RetryPolicy` | protocol_visible | `default_retry_policy_schedule` (TestMixedConformance)<br>`deterministic_retry_clock_rng` (TestMixedConformance) | Determines scheduled_at for retryable jobs, which is persisted and observed by every implementation. |
 | `config.Schema` | protocol_visible | `custom_schema_candidate_migrate_reference_work` (TestMixedConformance)<br>`custom_schema_reference_migrate_candidate_work` (TestMixedConformance) | Custom schemas qualify every table and notification topic. |
 | `config.SkipJobKindValidation` | api_equivalent |  | Deprecated escape hatch that skips kind-format validation at insert time; implementations may offer an equivalent legacy-kind option. |
-| `config.SkipUnknownJobCheck` | api_equivalent |  | Allows inserting kinds without a locally registered worker; implementations offer an equivalent option for clients inserting work for other processes. |
-| `config.SoftStopTimeout` | api_equivalent |  | Local graceful-stop deadline before escalating to cancellation; each implementation offers an equivalent shutdown control. |
+| `config.SkipUnknownJobCheck` | api_equivalent | `mixed_unknown_kind_error` (TestMixedConformance) | Insert-time validation local to the inserting client: it only decides whether that client refuses kinds it has no worker for. The rows it lets through are ordinary jobs, and how a worker treats a kind it doesn't know is covered by mixed_unknown_kind_error. |
+| `config.SoftStopTimeout` | api_equivalent | `hard_shutdown_soft_stop_classification` (TestResilienceConformance) | Local graceful-stop deadline before escalating to cancellation; each implementation offers an equivalent shutdown control. Only when the escalation happens is local; what it persists is a hard stop's outcome, which the cited scenario covers. |
 | `config.Test` | not_applicable |  | Go test-environment settings (time generator, unique enforcement toggle). Conformance drives time through the adapter's clock_set instead. |
 | `config.TestOnly` | not_applicable |  | Go test-suite switch that removes startup jitter; not part of any production behavior. |
 | `config.WorkerMiddleware` | not_applicable |  | Deprecated Go field superseded by Plugins. The worker-middleware concept is classified under extension.rivertype.WorkerMiddleware. |
@@ -309,7 +309,7 @@ Reserved job metadata keys written or read by River, from Go constants, Go metad
 | `metadata_key.cancel_attempted_at` | protocol_visible | `reserved_metadata_cross_engine` (TestMixedConformance) | Written by cancellation of a running job; tells the rescuer not to rescue it. |
 | `metadata_key.output` | protocol_visible | `differential_job_crud` (TestMixedConformance)<br>`reserved_metadata_cross_engine` (TestMixedConformance) | Recorded job output; the adapter's update output writes it and the other implementation reads it. |
 | `metadata_key.periodic` | protocol_visible | `periodic_run_on_start` (TestMixedConformance) | Marks jobs inserted by the periodic job enqueuer. |
-| `metadata_key.river:log` | not_applicable |  | Written only by the optional Go riverlog middleware. Other implementations need not write it and preserve it like any other metadata. |
+| `metadata_key.river:log` | protocol_visible | `reserved_metadata_cross_engine` (TestMixedConformance) | Written only by the optional Go riverlog middleware; other implementations need not write it. Every implementation must carry it through snoozes, cancellations, and completions unchanged, like other metadata it doesn't own. |
 | `metadata_key.river:periodic_job_id` | protocol_visible | `periodic_run_on_start` (TestMixedConformance)<br>`sqlite_runtime_periodic_scheduler` (TestMixedSQLiteRuntimeConformance) | Identifies the periodic job that enqueued a job. |
 | `metadata_key.river:rescue_count` | protocol_visible | `reserved_metadata_cross_engine` (TestMixedConformance) | Incremented by the rescuer each time a stuck job is rescued. |
 | `metadata_key.river:resumable_cursor` | protocol_visible | `resumable_cross_engine_cursor` (TestMixedConformance)<br>`resumable_validation` (TestMixedConformance) | Resumable job cursor state carried across attempts and engines. |
@@ -336,7 +336,7 @@ Notification payload shapes and action values, from Go payload structs and `pg_n
 |---|---|---|---|
 | `notification_payload.control` | protocol_visible | `pause_resume_notification` (TestMixedConformance)<br>`remote_cancel_notification` (TestMixedConformance)<br>`remote_queue_subscription_events` (TestMixedConformance) | JSON shape of control notifications. |
 | `notification_payload.control.action.cancel` | protocol_visible | `remote_cancel_notification` (TestMixedConformance)<br>`transactional_cross_language_cancel` (TestMixedConformance) | Cancels a running job on the client working it. |
-| `notification_payload.control.action.metadata_changed` | internal |  | Emitted on queue metadata updates. The standard producer only forwards it to the extension seam (riverpilot.Pilot.QueueMetadataChanged), which does nothing by default, so there is no observable cross-language behavior to test yet. |
+| `notification_payload.control.action.metadata_changed` | protocol_visible | `differential_queue_crud` (TestMixedConformance) | Sent on the shared control channel by a queue metadata update from any implementation. River Go's producers react at once by passing the new metadata to their extension, so every implementation must send the same payload. |
 | `notification_payload.control.action.pause` | protocol_visible | `pause_resume_notification` (TestMixedConformance)<br>`remote_queue_subscription_events` (TestMixedConformance) | Pauses fetching for a queue on every client. |
 | `notification_payload.control.action.resume` | protocol_visible | `pause_resume_notification` (TestMixedConformance)<br>`remote_queue_subscription_events` (TestMixedConformance) | Resumes fetching for a queue on every client. |
 | `notification_payload.insert` | protocol_visible | `notification_only_wakeups` (TestMixedConformance)<br>`transactional_insert_notification_commit_only` (TestMixedConformance) | JSON shape of insert wakeup notifications. |

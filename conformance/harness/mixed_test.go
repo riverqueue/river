@@ -132,7 +132,7 @@ func TestMixedConformance(t *testing.T) {
 	t.Run("differential_queue_crud", func(t *testing.T) {
 		defer scenarios.record(t)
 
-		verifyDifferentialQueueCRUD(t, goAdapter, candidateAdapter)
+		verifyDifferentialQueueCRUD(t, observer, goAdapter, candidateAdapter)
 	})
 	t.Run("job_row_round_trip_all_fields", func(t *testing.T) {
 		defer scenarios.record(t)
@@ -542,6 +542,9 @@ func verifyInsertThenWork(t *testing.T, inserter, worker *adapter) {
 	require.Equal(t, "conformance_echo", inserted.Kind)
 	require.Equal(t, 0, inserted.Attempt)
 	require.Empty(t, inserted.AttemptedBy)
+	// River's client default, persisted in the row that other
+	// implementations work.
+	require.Equal(t, 25, inserted.MaxAttempts)
 	worker.call(t, "get", map[string]any{"id": inserted.ID}, &observed)
 	require.Equal(t, inserted, observed)
 

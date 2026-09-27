@@ -438,7 +438,11 @@ func verifyReservedMetadata(t *testing.T, repositoryRoot string, worker, control
 
 	worker.call(t, "reset", map[string]any{}, nil)
 	worker.call(t, "start", map[string]any{"client_id": worker.name + "-reserved-metadata", "max_workers": 2}, nil)
-	userMetadata := map[string]any{"user": "kept"}
+	// `river:log` stands in for metadata written by an extension of one
+	// implementation, such as Go's log middleware, which the other must
+	// carry through unchanged.
+	riverLog := []any{map[string]any{"attempt": float64(1), "log": "logged by an earlier attempt"}}
+	userMetadata := map[string]any{"river:log": riverLog, "user": "kept"}
 	var output, snoozed, cancelled normalizedJob
 	controller.call(t, "insert", map[string]any{
 		"behavior": "output", "message": "reserved output", "opts": map[string]any{"metadata": userMetadata},
@@ -454,6 +458,7 @@ func verifyReservedMetadata(t *testing.T, repositoryRoot string, worker, control
 	for _, job := range []*normalizedJob{&output, &snoozed, &cancelled} {
 		controller.call(t, "wait", map[string]any{"id": job.ID}, job)
 		require.Equal(t, "kept", job.Metadata["user"], "user metadata lost on job %d", job.ID)
+		require.Equal(t, riverLog, job.Metadata["river:log"], "river:log changed on job %d", job.ID)
 		for key := range job.Metadata {
 			if key != "user" {
 				require.Contains(t, reserved, key, "job %d carries metadata key %q outside the reserved set", job.ID, key)
