@@ -6,6 +6,8 @@
 
 #![cfg(feature = "postgres-tests")]
 
+mod support;
+
 use std::{
     convert::Infallible,
     future::Future,
@@ -185,12 +187,8 @@ struct TestSchema {
 
 impl TestSchema {
     async fn new(label: &str) -> Self {
-        static SCHEMA_NONCE: AtomicUsize = AtomicUsize::new(0);
-        let name = format!(
-            "river_res_{label}_{}_{}",
-            std::process::id(),
-            SCHEMA_NONCE.fetch_add(1, Ordering::Relaxed)
-        );
+        let mut name = format!("river_res_{label}_{}", support::unique_suffix());
+        name.truncate(riverqueue::migrate::SCHEMA_MAX_LEN);
         let pool = PgPool::connect(&database_url()).await.unwrap();
         sqlx::raw_sql(AssertSqlSafe(format!("CREATE SCHEMA {name}")))
             .execute(&pool)

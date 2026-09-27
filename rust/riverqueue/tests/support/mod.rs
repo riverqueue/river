@@ -15,7 +15,10 @@ use riverqueue_migrate::PostgresMigrator;
 #[cfg(feature = "sqlite")]
 use riverqueue_migrate::SqliteMigrator;
 #[cfg(feature = "postgres")]
-use sqlx::{AssertSqlSafe, PgPool, postgres::PgPoolOptions};
+use sqlx::{
+    AssertSqlSafe, PgPool,
+    postgres::{PgConnectOptions, PgPoolOptions},
+};
 #[cfg(feature = "sqlite")]
 use sqlx::{
     SqlitePool,
@@ -38,7 +41,8 @@ pub fn unique_suffix() -> String {
     )
 }
 
-/// A migrated PostgreSQL schema owned by one test.
+/// A uniquely named PostgreSQL schema owned by one test, migrated unless
+/// created by an `unmigrated` constructor.
 #[cfg(feature = "postgres")]
 pub struct PostgresSchema {
     pub pool: PgPool,
@@ -55,25 +59,59 @@ impl PostgresSchema {
     /// Panics when `RIVER_RUST_DATABASE_URL` is unset so an explicitly
     /// selected database test can never pass vacuously.
     pub async fn new(prefix: &str) -> Self {
+        Self::create(prefix, false, true).await
+    }
+
+    /// Creates and migrates a uniquely named schema and makes it the current
+    /// schema of every pool connection through `search_path`.
+    ///
+    /// Use it for tests that exercise unqualified access through the
+    /// connection's current schema rather than an explicit schema, without
+    /// touching `public`.
+    pub async fn current(prefix: &str) -> Self {
+        Self::create(prefix, true, true).await
+    }
+
+    /// Like [`PostgresSchema::current`], but leaves the schema empty.
+    pub async fn current_unmigrated(prefix: &str) -> Self {
+        Self::create(prefix, true, false).await
+    }
+
+    /// Creates a uniquely named schema without migrating it.
+    pub async fn unmigrated(prefix: &str) -> Self {
+        Self::create(prefix, false, false).await
+    }
+
+    async fn create(prefix: &str, search_path: bool, migrate: bool) -> Self {
         let url = std::env::var("RIVER_RUST_DATABASE_URL")
             .expect("RIVER_RUST_DATABASE_URL must point at a disposable test database");
-        let pool = PgPoolOptions::new()
-            .max_connections(16)
-            .connect(&url)
-            .await
-            .expect("connect to RIVER_RUST_DATABASE_URL");
         let mut name = format!("{prefix}_{}", unique_suffix());
         name.truncate(riverqueue::migrate::SCHEMA_MAX_LEN);
+        let mut options: PgConnectOptions = url
+            .parse()
+            .expect("parse RIVER_RUST_DATABASE_URL as PostgreSQL connect options");
+        if search_path {
+            // Test schema names are lowercase identifiers, so no quoting is
+            // needed in the startup parameter.
+            options = options.options([("search_path", name.as_str())]);
+        }
+        let pool = PgPoolOptions::new()
+            .max_connections(16)
+            .connect_with(options)
+            .await
+            .expect("connect to RIVER_RUST_DATABASE_URL");
         sqlx::raw_sql(AssertSqlSafe(format!("CREATE SCHEMA \"{name}\"")))
             .execute(&pool)
             .await
             .expect("create test schema");
         let schema = SchemaName::new(name.clone()).expect("valid test schema name");
-        PostgresMigrator::new(pool.clone())
-            .with_schema(schema.clone())
-            .migrate_up()
-            .await
-            .expect("migrate test schema");
+        if migrate {
+            PostgresMigrator::new(pool.clone())
+                .with_schema(schema.clone())
+                .migrate_up()
+                .await
+                .expect("migrate test schema");
+        }
         Self { pool, schema, name }
     }
 

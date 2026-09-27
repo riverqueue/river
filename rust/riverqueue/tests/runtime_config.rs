@@ -1,5 +1,7 @@
 #![cfg(feature = "postgres-tests")]
 
+mod support;
+
 use std::{
     collections::HashSet,
     convert::Infallible,
@@ -16,9 +18,8 @@ use riverqueue::{
     PeriodicJobs, Plugin, QueueConfig, SubscribeConfig, WorkContext, WorkError, WorkMiddleware,
     WorkNext, WorkOutcome, Worker, WorkerRegistry, database::PostgresDatabase,
 };
-use riverqueue_migrate::PostgresMigrator;
 use serde::{Deserialize, Serialize};
-use sqlx::{AssertSqlSafe, PgPool};
+use sqlx::AssertSqlSafe;
 use tokio::sync::Semaphore;
 use tokio_util::sync::CancellationToken;
 
@@ -254,21 +255,10 @@ impl Worker<RuntimeArgs> for RuntimeWorker {
     }
 }
 
-async fn setup_runtime(database_url: &str) -> (Client, Arc<RuntimeCounts>) {
-    let pool = PgPool::connect(database_url).await.unwrap();
-    let schema = riverqueue::database::SchemaName::new("rust_runtime_config_test").unwrap();
-    sqlx::raw_sql(AssertSqlSafe(
-        "DROP SCHEMA IF EXISTS rust_runtime_config_test CASCADE; \
-         CREATE SCHEMA rust_runtime_config_test",
-    ))
-    .execute(&pool)
-    .await
-    .unwrap();
-    PostgresMigrator::new(pool.clone())
-        .with_schema(schema.clone())
-        .migrate_up()
-        .await
-        .unwrap();
+async fn setup_runtime() -> (Client, Arc<RuntimeCounts>, support::PostgresSchema) {
+    let database = support::PostgresSchema::new("rt_config").await;
+    let pool = database.pool.clone();
+    let schema = database.schema.clone();
 
     let mut workers = WorkerRegistry::new();
     workers.register::<RuntimeArgs, _>(RuntimeWorker).unwrap();
@@ -289,30 +279,16 @@ async fn setup_runtime(database_url: &str) -> (Client, Arc<RuntimeCounts>) {
         )
         .build()
         .unwrap();
-    (client, counts)
+    (client, counts, database)
 }
 
 #[tokio::test]
 async fn completion_burst_does_not_lag_large_subscription() {
     const JOB_COUNT: usize = 6_000;
 
-    let database_url = std::env::var("RIVER_RUST_DATABASE_URL")
-        .expect("RIVER_RUST_DATABASE_URL must point at a disposable test database");
-
-    let pool = PgPool::connect(&database_url).await.unwrap();
-    let schema = riverqueue::database::SchemaName::new("rust_runtime_burst_test").unwrap();
-    sqlx::raw_sql(AssertSqlSafe(
-        "DROP SCHEMA IF EXISTS rust_runtime_burst_test CASCADE; \
-         CREATE SCHEMA rust_runtime_burst_test",
-    ))
-    .execute(&pool)
-    .await
-    .unwrap();
-    PostgresMigrator::new(pool.clone())
-        .with_schema(schema.clone())
-        .migrate_up()
-        .await
-        .unwrap();
+    let database = support::PostgresSchema::new("rt_burst").await;
+    let pool = database.pool.clone();
+    let schema = database.schema.clone();
 
     let mut workers = WorkerRegistry::new();
     workers.register::<BurstArgs, _>(BurstWorker).unwrap();
@@ -383,30 +359,14 @@ async fn completion_burst_does_not_lag_large_subscription() {
     .await
     .unwrap();
     assert_eq!(completed_count, i64::try_from(JOB_COUNT).unwrap());
-    sqlx::raw_sql("DROP SCHEMA rust_runtime_burst_test CASCADE")
-        .execute(&pool)
-        .await
-        .unwrap();
+    database.cleanup().await;
 }
 
 #[tokio::test]
 async fn extension_claimed_outcomes_use_postgres_completion_batcher() {
-    let database_url = std::env::var("RIVER_RUST_DATABASE_URL")
-        .expect("RIVER_RUST_DATABASE_URL must point at a disposable test database");
-    let pool = PgPool::connect(&database_url).await.unwrap();
-    let schema = riverqueue::database::SchemaName::new("rust_extension_completion_test").unwrap();
-    sqlx::raw_sql(AssertSqlSafe(
-        "DROP SCHEMA IF EXISTS rust_extension_completion_test CASCADE; \
-         CREATE SCHEMA rust_extension_completion_test",
-    ))
-    .execute(&pool)
-    .await
-    .unwrap();
-    PostgresMigrator::new(pool.clone())
-        .with_schema(schema.clone())
-        .migrate_up()
-        .await
-        .unwrap();
+    let database = support::PostgresSchema::new("rt_ext_completion").await;
+    let pool = database.pool.clone();
+    let schema = database.schema.clone();
 
     let mut workers = WorkerRegistry::new();
     workers.register::<BurstArgs, _>(BurstWorker).unwrap();
@@ -462,30 +422,14 @@ async fn extension_claimed_outcomes_use_postgres_completion_batcher() {
     assert!(event.statistics.is_some());
 
     run.shutdown().await.unwrap();
-    sqlx::raw_sql("DROP SCHEMA rust_extension_completion_test CASCADE")
-        .execute(&pool)
-        .await
-        .unwrap();
+    database.cleanup().await;
 }
 
 #[tokio::test]
 async fn external_terminal_state_wins_worker_completion_race() {
-    let database_url = std::env::var("RIVER_RUST_DATABASE_URL")
-        .expect("RIVER_RUST_DATABASE_URL must point at a disposable test database");
-    let pool = PgPool::connect(&database_url).await.unwrap();
-    let schema = riverqueue::database::SchemaName::new("rust_runtime_terminal_race_test").unwrap();
-    sqlx::raw_sql(AssertSqlSafe(
-        "DROP SCHEMA IF EXISTS rust_runtime_terminal_race_test CASCADE; \
-         CREATE SCHEMA rust_runtime_terminal_race_test",
-    ))
-    .execute(&pool)
-    .await
-    .unwrap();
-    PostgresMigrator::new(pool.clone())
-        .with_schema(schema.clone())
-        .migrate_up()
-        .await
-        .unwrap();
+    let database = support::PostgresSchema::new("rt_terminal_race").await;
+    let pool = database.pool.clone();
+    let schema = database.schema.clone();
 
     let finish = Arc::new(Semaphore::new(0));
     let started = Arc::new(Semaphore::new(0));
@@ -570,30 +514,14 @@ async fn external_terminal_state_wins_worker_completion_race() {
     }
 
     run_handle.shutdown().await.unwrap();
-    sqlx::raw_sql("DROP SCHEMA rust_runtime_terminal_race_test CASCADE")
-        .execute(&pool)
-        .await
-        .unwrap();
+    database.cleanup().await;
 }
 
 #[tokio::test]
 async fn remote_cancellation_overrides_worker_snooze() {
-    let database_url = std::env::var("RIVER_RUST_DATABASE_URL")
-        .expect("RIVER_RUST_DATABASE_URL must point at a disposable test database");
-    let pool = PgPool::connect(&database_url).await.unwrap();
-    let schema = riverqueue::database::SchemaName::new("rust_runtime_cancel_snooze_test").unwrap();
-    sqlx::raw_sql(AssertSqlSafe(
-        "DROP SCHEMA IF EXISTS rust_runtime_cancel_snooze_test CASCADE; \
-         CREATE SCHEMA rust_runtime_cancel_snooze_test",
-    ))
-    .execute(&pool)
-    .await
-    .unwrap();
-    PostgresMigrator::new(pool.clone())
-        .with_schema(schema.clone())
-        .migrate_up()
-        .await
-        .unwrap();
+    let database = support::PostgresSchema::new("rt_cancel_snooze").await;
+    let pool = database.pool.clone();
+    let schema = database.schema.clone();
 
     let started = Arc::new(Semaphore::new(0));
     let mut workers = WorkerRegistry::new();
@@ -634,31 +562,15 @@ async fn remote_cancellation_overrides_worker_snooze() {
     assert_eq!(row.attempt, 1);
 
     run_handle.shutdown().await.unwrap();
-    sqlx::raw_sql("DROP SCHEMA rust_runtime_cancel_snooze_test CASCADE")
-        .execute(&pool)
-        .await
-        .unwrap();
+    database.cleanup().await;
 }
 
 #[tokio::test]
 #[allow(clippy::too_many_lines)]
 async fn shutdown_waits_for_active_work_and_soft_stop_escalates() {
-    let database_url = std::env::var("RIVER_RUST_DATABASE_URL")
-        .expect("RIVER_RUST_DATABASE_URL must point at a disposable test database");
-    let pool = PgPool::connect(&database_url).await.unwrap();
-    let schema = riverqueue::database::SchemaName::new("rust_runtime_shutdown_test").unwrap();
-    sqlx::raw_sql(AssertSqlSafe(
-        "DROP SCHEMA IF EXISTS rust_runtime_shutdown_test CASCADE; \
-         CREATE SCHEMA rust_runtime_shutdown_test",
-    ))
-    .execute(&pool)
-    .await
-    .unwrap();
-    PostgresMigrator::new(pool.clone())
-        .with_schema(schema.clone())
-        .migrate_up()
-        .await
-        .unwrap();
+    let database = support::PostgresSchema::new("rt_shutdown").await;
+    let pool = database.pool.clone();
+    let schema = database.schema.clone();
 
     let graceful_finish = Arc::new(Semaphore::new(0));
     let graceful_started = Arc::new(Semaphore::new(0));
@@ -792,10 +704,7 @@ async fn shutdown_waits_for_active_work_and_soft_stop_escalates() {
         .unwrap();
     assert_eq!(event.as_job().unwrap().job.id, stuck.job.row.id);
 
-    sqlx::raw_sql("DROP SCHEMA rust_runtime_shutdown_test CASCADE")
-        .execute(&pool)
-        .await
-        .unwrap();
+    database.cleanup().await;
 }
 
 async fn next_queue_event(receiver: &mut EventReceiver) -> EventKind {
@@ -808,9 +717,7 @@ async fn next_queue_event(receiver: &mut EventReceiver) -> EventKind {
 
 #[tokio::test]
 async fn poll_only_and_subscription_configuration() {
-    let database_url = std::env::var("RIVER_RUST_DATABASE_URL")
-        .expect("RIVER_RUST_DATABASE_URL must point at a disposable test database");
-    let (client, counts) = setup_runtime(&database_url).await;
+    let (client, counts, database) = setup_runtime().await;
     let mut completed = client
         .subscribe_config(
             SubscribeConfig::new([EventKind::JobCompleted])
@@ -902,37 +809,22 @@ async fn poll_only_and_subscription_configuration() {
         client.jobs().get(inserted.job.row.id).await.unwrap().state,
         JobState::Completed
     );
+    database.cleanup().await;
 }
 
 #[test]
 fn start_without_runtime_returns_error_and_is_restartable() {
-    let database_url = std::env::var("RIVER_RUST_DATABASE_URL")
-        .expect("RIVER_RUST_DATABASE_URL must point at a disposable test database");
-    let schema = riverqueue::database::SchemaName::new("rust_runtime_missing_test").unwrap();
     let runtime = tokio::runtime::Runtime::new().unwrap();
-    let pool = runtime.block_on(async {
-        let pool = PgPool::connect(&database_url).await.unwrap();
-        sqlx::raw_sql(AssertSqlSafe(
-            "DROP SCHEMA IF EXISTS rust_runtime_missing_test CASCADE; \
-             CREATE SCHEMA rust_runtime_missing_test",
-        ))
-        .execute(&pool)
-        .await
-        .unwrap();
-        PostgresMigrator::new(pool.clone())
-            .with_schema(schema.clone())
-            .migrate_up()
-            .await
-            .unwrap();
-        pool
-    });
+    let database = runtime.block_on(support::PostgresSchema::new("rt_missing"));
     let mut workers = WorkerRegistry::new();
     workers.register::<BurstArgs, _>(BurstWorker).unwrap();
-    let client = Client::builder(PostgresDatabase::new(pool.clone()).schema(schema))
-        .queue("default", QueueConfig::new(1))
-        .workers(workers)
-        .build()
-        .unwrap();
+    let client = Client::builder(
+        PostgresDatabase::new(database.pool.clone()).schema(database.schema.clone()),
+    )
+    .queue("default", QueueConfig::new(1))
+    .workers(workers)
+    .build()
+    .unwrap();
 
     let Err(error) = client.start() else {
         panic!("start should require Tokio");
@@ -945,10 +837,7 @@ fn start_without_runtime_returns_error_and_is_restartable() {
             .expect("failed start must not poison the client");
         run.wait_ready().await.unwrap();
         run.shutdown_now().await.unwrap();
-        sqlx::raw_sql("DROP SCHEMA rust_runtime_missing_test CASCADE")
-            .execute(&pool)
-            .await
-            .unwrap();
+        database.cleanup().await;
     });
     drop(client);
     runtime.shutdown_background();

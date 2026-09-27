@@ -1,5 +1,7 @@
 #![cfg(feature = "postgres-tests")]
 
+mod support;
+
 use std::{
     convert::Infallible,
     sync::{
@@ -547,31 +549,15 @@ impl Worker<TransactionalArgs> for TransactionalWorker {
 
 #[tokio::test]
 async fn cancellation_wins_over_rescheduling_completion_updates() {
-    let database_url = std::env::var("RIVER_RUST_DATABASE_URL")
-        .expect("RIVER_RUST_DATABASE_URL must point at a disposable test database");
-    let pool = PgPool::connect(&database_url).await.unwrap();
-    let schema = SchemaName::new("rust_cancellation_winner_test").unwrap();
-    sqlx::raw_sql(
-        "DROP SCHEMA IF EXISTS rust_cancellation_winner_test CASCADE; \
-         CREATE SCHEMA rust_cancellation_winner_test",
-    )
-    .execute(&pool)
-    .await
-    .unwrap();
-    PostgresMigrator::new(pool.clone())
-        .with_schema(schema.clone())
-        .migrate_up()
-        .await
-        .unwrap();
+    let database = support::PostgresSchema::new("rs_cancel_win").await;
+    let pool = database.pool.clone();
+    let schema = database.schema.clone();
 
     for direct_completion in [false, true] {
         assert_cancellation_wins(&pool, &schema, direct_completion).await;
     }
 
-    sqlx::raw_sql("DROP SCHEMA rust_cancellation_winner_test CASCADE")
-        .execute(&pool)
-        .await
-        .unwrap();
+    database.cleanup().await;
 }
 
 #[tokio::test]
@@ -579,22 +565,9 @@ async fn cancellation_wins_over_rescheduling_completion_updates() {
 async fn concurrent_unique_inserts_return_the_conflicting_job() {
     const INSERT_COUNT: usize = 32;
 
-    let database_url = std::env::var("RIVER_RUST_DATABASE_URL")
-        .expect("RIVER_RUST_DATABASE_URL must point at a disposable test database");
-    let pool = PgPool::connect(&database_url).await.unwrap();
-    let schema = SchemaName::new("rust_unique_concurrency_test").unwrap();
-    sqlx::raw_sql(
-        "DROP SCHEMA IF EXISTS rust_unique_concurrency_test CASCADE; \
-         CREATE SCHEMA rust_unique_concurrency_test",
-    )
-    .execute(&pool)
-    .await
-    .unwrap();
-    PostgresMigrator::new(pool.clone())
-        .with_schema(schema.clone())
-        .migrate_up()
-        .await
-        .unwrap();
+    let database = support::PostgresSchema::new("rs_unique_conc").await;
+    let pool = database.pool.clone();
+    let schema = database.schema.clone();
     let client = Client::builder(PostgresDatabase::new(pool.clone()).schema(schema))
         .build()
         .unwrap();
@@ -675,10 +648,7 @@ async fn concurrent_unique_inserts_return_the_conflicting_job() {
         );
     }
 
-    sqlx::raw_sql("DROP SCHEMA rust_unique_concurrency_test CASCADE")
-        .execute(&pool)
-        .await
-        .unwrap();
+    database.cleanup().await;
 }
 
 #[tokio::test]
@@ -687,22 +657,9 @@ async fn concurrent_unique_inserts_return_the_conflicting_job() {
     reason = "one backend regression verifies atomic selection, ordering, row updates, and decode rollback"
 )]
 async fn extension_claim_returns_ordered_rows_and_rolls_back_decode_errors() {
-    let database_url = std::env::var("RIVER_RUST_DATABASE_URL")
-        .expect("RIVER_RUST_DATABASE_URL must point at a disposable test database");
-    let pool = PgPool::connect(&database_url).await.unwrap();
-    let schema = SchemaName::new("rust_extension_claim_test").unwrap();
-    sqlx::raw_sql(
-        "DROP SCHEMA IF EXISTS rust_extension_claim_test CASCADE; \
-         CREATE SCHEMA rust_extension_claim_test",
-    )
-    .execute(&pool)
-    .await
-    .unwrap();
-    PostgresMigrator::new(pool.clone())
-        .with_schema(schema.clone())
-        .migrate_up()
-        .await
-        .unwrap();
+    let database = support::PostgresSchema::new("rs_ext_claim").await;
+    let pool = database.pool.clone();
+    let schema = database.schema.clone();
     let client = Client::builder(PostgresDatabase::new(pool.clone()).schema(schema.clone()))
         .id("postgres-extension-claimer")
         .build()
@@ -825,31 +782,15 @@ async fn extension_claim_returns_ordered_rows_and_rolls_back_decode_errors() {
     assert_eq!(state, "available");
     assert_eq!(attempt, 0);
 
-    sqlx::raw_sql("DROP SCHEMA rust_extension_claim_test CASCADE")
-        .execute(&pool)
-        .await
-        .unwrap();
+    database.cleanup().await;
 }
 
 #[tokio::test]
 #[allow(clippy::too_many_lines)]
 async fn insert_many_variants_preserve_order_and_transactionality() {
-    let database_url = std::env::var("RIVER_RUST_DATABASE_URL")
-        .expect("RIVER_RUST_DATABASE_URL must point at a disposable test database");
-    let pool = PgPool::connect(&database_url).await.unwrap();
-    let schema = SchemaName::new("rust_insert_many_test").unwrap();
-    sqlx::raw_sql(
-        "DROP SCHEMA IF EXISTS rust_insert_many_test CASCADE; \
-         CREATE SCHEMA rust_insert_many_test",
-    )
-    .execute(&pool)
-    .await
-    .unwrap();
-    PostgresMigrator::new(pool.clone())
-        .with_schema(schema.clone())
-        .migrate_up()
-        .await
-        .unwrap();
+    let database = support::PostgresSchema::new("rs_insert_many").await;
+    let pool = database.pool.clone();
+    let schema = database.schema.clone();
     let client = Client::builder(PostgresDatabase::new(pool.clone()).schema(schema.clone()))
         .build()
         .unwrap();
@@ -1120,18 +1061,17 @@ async fn insert_many_variants_preserve_order_and_transactionality() {
     assert_eq!(ordinary_control_count, 1);
     assert_eq!(ordinary_batch_count, 0);
 
-    sqlx::raw_sql("DROP SCHEMA rust_insert_many_test CASCADE")
-        .execute(&pool)
-        .await
-        .unwrap();
+    database.cleanup().await;
 }
 
 #[tokio::test]
 #[allow(clippy::too_many_lines)]
 async fn migrates_inserts_and_works_a_job() {
-    let database_url = std::env::var("RIVER_RUST_DATABASE_URL")
-        .expect("RIVER_RUST_DATABASE_URL must point at a disposable test database");
-    let pool = PgPool::connect(&database_url).await.unwrap();
+    // The pool's `search_path` points at a fresh schema so that the default
+    // migrator and clients built without an explicit schema exercise the
+    // connection's current schema without touching `public`.
+    let database = support::PostgresSchema::current_unmigrated("rs_current").await;
+    let pool = database.pool.clone();
     let migrator = PostgresMigrator::new(pool.clone());
     migrator.migrate_up().await.unwrap();
     assert_eq!(
@@ -1139,14 +1079,9 @@ async fn migrates_inserts_and_works_a_job() {
         (1..=MIGRATION_VERSION_LATEST).collect::<Vec<_>>()
     );
 
-    sqlx::raw_sql(
-        "DROP SCHEMA IF EXISTS rust_migration_test CASCADE; CREATE SCHEMA rust_migration_test",
-    )
-    .execute(&pool)
-    .await
-    .unwrap();
-    let custom_migrator = PostgresMigrator::new(pool.clone())
-        .with_schema(riverqueue::database::SchemaName::new("rust_migration_test").unwrap());
+    let custom_database = support::PostgresSchema::unmigrated("rs_migration").await;
+    let custom_migrator = PostgresMigrator::new(custom_database.pool.clone())
+        .with_schema(custom_database.schema.clone());
     let first_up = custom_migrator
         .migrate(Direction::Up, MigrateOpts::new().with_target_version(4))
         .await
@@ -1194,15 +1129,7 @@ async fn migrates_inserts_and_works_a_job() {
             .unwrap()
             .is_empty()
     );
-    sqlx::raw_sql("DROP SCHEMA rust_migration_test CASCADE")
-        .execute(&pool)
-        .await
-        .unwrap();
-
-    sqlx::raw_sql("TRUNCATE river_job, river_notification, river_queue RESTART IDENTITY CASCADE")
-        .execute(&pool)
-        .await
-        .unwrap();
+    custom_database.cleanup().await;
 
     let mut workers = WorkerRegistry::new();
     workers.register::<CancelArgs, _>(CancelWorker).unwrap();
@@ -1545,12 +1472,14 @@ async fn migrates_inserts_and_works_a_job() {
             .unwrap()["message"],
         "raw from Rust"
     );
-    let _pool_connection = client
+    let pool_connection = client
         .postgres_pool()
         .expect("client is configured for PostgreSQL")
         .acquire()
         .await
         .unwrap();
+    // Return the connection so closing the pool at cleanup doesn't wait on it.
+    drop(pool_connection);
 
     let mut transaction = pool.begin().await.unwrap();
     let tx_row = client
@@ -1732,7 +1661,6 @@ async fn migrates_inserts_and_works_a_job() {
 
     sqlx::raw_sql(
         "TRUNCATE river_job, river_notification, river_queue, river_leader RESTART IDENTITY CASCADE; \
-         DROP INDEX IF EXISTS rust_maintenance_reindex_idx; \
          CREATE INDEX rust_maintenance_reindex_idx ON river_job (id)",
     )
     .execute(&pool)
@@ -1823,10 +1751,7 @@ async fn migrates_inserts_and_works_a_job() {
         tokio::time::sleep(Duration::from_millis(20)).await;
     }
     cleanup_handle.shutdown().await.unwrap();
-    sqlx::query("DROP INDEX rust_maintenance_reindex_idx")
-        .execute(&pool)
-        .await
-        .unwrap();
+    database.cleanup().await;
 }
 
 #[tokio::test]
@@ -1835,22 +1760,9 @@ async fn migrates_inserts_and_works_a_job() {
     reason = "one end-to-end rescuer scenario compares all worker timeout and retry overrides"
 )]
 async fn rescuer_honors_worker_timeout_and_retry_overrides() {
-    let database_url = std::env::var("RIVER_RUST_DATABASE_URL")
-        .expect("RIVER_RUST_DATABASE_URL must point at a disposable test database");
-    let pool = PgPool::connect(&database_url).await.unwrap();
-    let schema = SchemaName::new("rust_rescuer_timeout_test").unwrap();
-    sqlx::raw_sql(
-        "DROP SCHEMA IF EXISTS rust_rescuer_timeout_test CASCADE; \
-         CREATE SCHEMA rust_rescuer_timeout_test",
-    )
-    .execute(&pool)
-    .await
-    .unwrap();
-    PostgresMigrator::new(pool.clone())
-        .with_schema(schema.clone())
-        .migrate_up()
-        .await
-        .unwrap();
+    let database = support::PostgresSchema::new("rs_rescue_timeout").await;
+    let pool = database.pool.clone();
+    let schema = database.schema.clone();
 
     let table = schema.qualify("river_job");
     let insert_sql = format!(
@@ -1951,10 +1863,7 @@ async fn rescuer_honors_worker_timeout_and_retry_overrides() {
     }
 
     handle.shutdown().await.unwrap();
-    sqlx::raw_sql("DROP SCHEMA rust_rescuer_timeout_test CASCADE")
-        .execute(&pool)
-        .await
-        .unwrap();
+    database.cleanup().await;
 }
 
 #[tokio::test]
@@ -1970,22 +1879,9 @@ async fn resumable_cursor_and_transactional_checkpoints() {
             .contains("resumable cursor can only be set inside a resumable cursor step")
     );
 
-    let database_url = std::env::var("RIVER_RUST_DATABASE_URL")
-        .expect("RIVER_RUST_DATABASE_URL must point at a disposable test database");
-    let pool = PgPool::connect(&database_url).await.unwrap();
-    let schema = SchemaName::new("rust_resumable_checkpoint_test").unwrap();
-    sqlx::raw_sql(
-        "DROP SCHEMA IF EXISTS rust_resumable_checkpoint_test CASCADE; \
-         CREATE SCHEMA rust_resumable_checkpoint_test",
-    )
-    .execute(&pool)
-    .await
-    .unwrap();
-    PostgresMigrator::new(pool.clone())
-        .with_schema(schema.clone())
-        .migrate_up()
-        .await
-        .unwrap();
+    let database = support::PostgresSchema::new("rs_resumable_ckpt").await;
+    let pool = database.pool.clone();
+    let schema = database.schema.clone();
 
     let cursor_values = Arc::new(Mutex::new(Vec::new()));
     let validate_runs = Arc::new(AtomicUsize::new(0));
@@ -2104,10 +2000,7 @@ async fn resumable_cursor_and_transactional_checkpoints() {
     }
 
     handle.shutdown().await.unwrap();
-    sqlx::raw_sql("DROP SCHEMA rust_resumable_checkpoint_test CASCADE")
-        .execute(&pool)
-        .await
-        .unwrap();
+    database.cleanup().await;
 }
 
 async fn assert_cancellation_wins(pool: &PgPool, schema: &SchemaName, direct_completion: bool) {
