@@ -80,6 +80,16 @@ impl ClientBuilderExt for crate::ClientBuilder {
     }
 }
 
+/// Formats an error and its sources the way River records a job's error,
+/// `outer: inner`, with a message that repeats its source's shortened.
+///
+/// Add-on crates use it for error text they persist themselves, so it reads
+/// the same as the errors River records.
+#[must_use]
+pub fn error_chain(error: &(dyn std::error::Error + 'static)) -> String {
+    crate::error::Chain(error).to_string()
+}
+
 /// Encodes a UTC timestamp in River's canonical SQLite wire format.
 ///
 /// This keeps companion crates aligned with River and Go's
