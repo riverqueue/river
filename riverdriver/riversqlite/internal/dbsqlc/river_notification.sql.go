@@ -89,6 +89,25 @@ func (q *Queries) NotificationGetLastID(ctx context.Context, db DBTX) (int64, er
 	return column_1, err
 }
 
+const notificationInsertJobCancel = `-- name: NotificationInsertJobCancel :exec
+INSERT INTO /* TEMPLATE: schema */river_notification (payload, topic)
+VALUES (
+    json_object('action', 'cancel', 'job_id', cast(?1 AS integer), 'queue', cast(?2 AS text)),
+    ?3
+)
+`
+
+type NotificationInsertJobCancelParams struct {
+	JobID int64
+	Queue string
+	Topic string
+}
+
+func (q *Queries) NotificationInsertJobCancel(ctx context.Context, db DBTX, arg *NotificationInsertJobCancelParams) error {
+	_, err := db.ExecContext(ctx, notificationInsertJobCancel, arg.JobID, arg.Queue, arg.Topic)
+	return err
+}
+
 const notificationInsertMany = `-- name: NotificationInsertMany :exec
 INSERT INTO /* TEMPLATE: schema */river_notification (
     payload,

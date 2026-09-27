@@ -8,8 +8,11 @@ import (
 
 	"github.com/stretchr/testify/require"
 
+	"github.com/riverqueue/river/internal/notifier"
 	"github.com/riverqueue/river/riverdbtest"
 	"github.com/riverqueue/river/riverdriver"
+	"github.com/riverqueue/river/rivershared/testfactory"
+	"github.com/riverqueue/river/rivertype"
 )
 
 type testListenerBundle[TTx any] struct {
@@ -69,6 +72,48 @@ func exerciseListener[TTx any](ctx context.Context, t *testing.T, driverWithPool
 
 		listener, _ := setupListener(ctx, t, driverWithPool)
 		require.NoError(t, listener.Close(ctx))
+	})
+
+	t.Run("JobCancelNotificationTransaction", func(t *testing.T) {
+		t.Parallel()
+
+		listener, bundle := setupListener(ctx, t, driverWithPool)
+		connectListener(ctx, t, listener)
+		require.NoError(t, listener.Listen(ctx, string(notifier.NotificationTopicControl)))
+
+		cancelInTx := func(jobID int64) riverdriver.ExecutorTx {
+			t.Helper()
+
+			tx, err := bundle.exec.Begin(ctx)
+			require.NoError(t, err)
+			_, err = tx.JobCancel(ctx, &riverdriver.JobCancelParams{
+				CancelAttemptedAt: time.Now().UTC(),
+				ControlTopic:      string(notifier.NotificationTopicControl),
+				ID:                jobID,
+				Schema:            listener.Schema(),
+			})
+			require.NoError(t, err)
+			return tx
+		}
+
+		rolledBackJob := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{
+			Schema: listener.Schema(), State: new(rivertype.JobStateRunning),
+		})
+		require.NoError(t, cancelInTx(rolledBackJob.ID).Rollback(ctx))
+		requireNoNotification(ctx, t, listener)
+
+		committedJob := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{
+			Schema: listener.Schema(), State: new(rivertype.JobStateRunning),
+		})
+		tx := cancelInTx(committedJob.ID)
+		requireNoNotification(ctx, t, listener)
+		require.NoError(t, tx.Commit(ctx))
+
+		notification := waitForNotification(ctx, t, listener)
+		require.Equal(t, string(notifier.NotificationTopicControl), notification.Topic)
+		require.JSONEq(t, fmt.Sprintf(`{"action":"cancel","job_id":%d,"queue":%q}`,
+			committedJob.ID, committedJob.Queue), notification.Payload)
+		requireNoNotification(ctx, t, listener)
 	})
 
 	t.Run("Listen_DoesNotReplayBeforeSubscription", func(t *testing.T) {

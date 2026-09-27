@@ -393,16 +393,17 @@ func ExerciseClient[TTx any](ctx context.Context, t *testing.T,
 		t.Parallel()
 
 		config, bundle := setupConfig(t)
-		if bundle.driver.DatabaseName() != riverdriver.DatabaseNamePostgres || !bundle.driver.SupportsListener() {
-			t.Skip("requires a Postgres listener")
+		if !bundle.driver.SupportsListener() {
+			t.Skip("requires a listener")
 		}
 		config.FetchPollInterval = time.Minute
 
 		client, err := river.NewClient(bundle.driver, config)
 		require.NoError(t, err)
 
-		var jobStarted testsignal.TestSignal[int64]
+		var jobStarted, jobContextCancelled testsignal.TestSignal[int64]
 		jobStarted.Init(t)
+		jobContextCancelled.Init(t)
 
 		type JobArgs struct {
 			testutil.JobArgsReflectKind[JobArgs]
@@ -411,6 +412,7 @@ func ExerciseClient[TTx any](ctx context.Context, t *testing.T,
 		river.AddWorker(bundle.config.Workers, river.WorkFunc(func(ctx context.Context, job *river.Job[JobArgs]) error {
 			jobStarted.Signal(job.ID)
 			<-ctx.Done()
+			jobContextCancelled.Signal(job.ID)
 			return ctx.Err()
 		}))
 
@@ -419,15 +421,79 @@ func ExerciseClient[TTx any](ctx context.Context, t *testing.T,
 
 		insertRes, err := client.Insert(ctx, &JobArgs{}, nil)
 		require.NoError(t, err)
+
+		// Cancel only after work starts so the listener must reach an active
+		// worker, rather than just changing a queued job's state.
 		require.Equal(t, insertRes.Job.ID, jobStarted.WaitOrTimeout())
 
 		updatedJob, err := client.JobCancel(ctx, insertRes.Job.ID)
 		require.NoError(t, err)
 		require.Equal(t, rivertype.JobStateRunning, updatedJob.State)
+		require.Equal(t, insertRes.Job.ID, jobContextCancelled.WaitOrTimeout())
 
 		event := riversharedtest.WaitOrTimeout(t, subscribeChan)
 		require.Equal(t, river.EventKindJobCancelled, event.Kind)
 		require.Equal(t, rivertype.JobStateCancelled, event.Job.State)
+	})
+
+	t.Run("CancelRunningJobWithListenerTx", func(t *testing.T) {
+		t.Parallel()
+
+		config, bundle := setupConfig(t)
+		if !bundle.driver.SupportsListener() {
+			t.Skip("requires a listener")
+		}
+		config.FetchPollInterval = time.Minute
+
+		client, err := river.NewClient(bundle.driver, config)
+		require.NoError(t, err)
+
+		var jobStarted, jobContextCancelled testsignal.TestSignal[int64]
+		jobStarted.Init(t)
+		jobContextCancelled.Init(t)
+
+		type JobArgs struct {
+			testutil.JobArgsReflectKind[JobArgs]
+		}
+
+		river.AddWorker(bundle.config.Workers, river.WorkFunc(func(ctx context.Context, job *river.Job[JobArgs]) error {
+			jobStarted.Signal(job.ID)
+			<-ctx.Done()
+			jobContextCancelled.Signal(job.ID)
+			return ctx.Err()
+		}))
+
+		events := subscribe(t, client)
+		startClient(ctx, t, client)
+
+		insertRes, err := client.Insert(ctx, &JobArgs{}, nil)
+		require.NoError(t, err)
+
+		// Wait until the worker is running so a state update alone cannot pass.
+		require.Equal(t, insertRes.Job.ID, jobStarted.WaitOrTimeout())
+
+		// A rolled-back cancellation must leave both the job and worker active.
+		tx, execTx := beginTx(ctx, t, bundle)
+		_, err = client.JobCancelTx(ctx, tx, insertRes.Job.ID)
+		require.NoError(t, err)
+		require.NoError(t, execTx.Rollback(ctx))
+
+		jobAfterRollback, err := client.JobGet(ctx, insertRes.Job.ID)
+		require.NoError(t, err)
+		require.Equal(t, rivertype.JobStateRunning, jobAfterRollback.State)
+		require.NotContains(t, string(jobAfterRollback.Metadata), `"cancel_attempted_at"`)
+		jobContextCancelled.RequireEmpty()
+
+		// Committing the same request should deliver the control notification.
+		tx, execTx = beginTx(ctx, t, bundle)
+		updatedJob, err := client.JobCancelTx(ctx, tx, insertRes.Job.ID)
+		require.NoError(t, err)
+		require.Equal(t, rivertype.JobStateRunning, updatedJob.State)
+		require.NoError(t, execTx.Commit(ctx))
+		require.Equal(t, insertRes.Job.ID, jobContextCancelled.WaitOrTimeout())
+
+		event := riversharedtest.WaitOrTimeout(t, events)
+		require.Equal(t, river.EventKindJobCancelled, event.Kind)
 	})
 
 	// Keys containing gjson/sjson path syntax (and the empty key) are distinct
