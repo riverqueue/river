@@ -1059,22 +1059,25 @@ func run(ctx context.Context) error {
 		if profile != "portable-storage-v1" && profile != "sqlite-runtime-v1" {
 			return fmt.Errorf("unsupported SQLite conformance profile %q", profile)
 		}
-		pool, err := sql.Open("sqlite", databaseURL)
+		// Apply the pragmas through the DSN so every pooled connection gets
+		// them. database/sql replaces a connection after an interrupted
+		// statement (for example during Client.Stop), and a pragma executed
+		// once would only reach the first one. The busy timeout comes first:
+		// another adapter may be switching the same new database to WAL at the
+		// same moment.
+		separator := "?"
+		if strings.Contains(databaseURL, "?") {
+			separator = "&"
+		}
+		pool, err := sql.Open("sqlite", databaseURL+separator+
+			"_pragma=busy_timeout(5000)&_pragma=journal_mode(WAL)&_pragma=foreign_keys(1)")
 		if err != nil {
 			return err
 		}
 		defer pool.Close()
 		pool.SetMaxOpenConns(1)
-		// Set the busy timeout first: another adapter may be switching the
-		// same new database to WAL at the same moment.
-		if _, err := pool.ExecContext(ctx, "PRAGMA busy_timeout = 5000"); err != nil {
-			return fmt.Errorf("set SQLite busy timeout: %w", err)
-		}
-		if _, err := pool.ExecContext(ctx, "PRAGMA journal_mode = WAL"); err != nil {
-			return fmt.Errorf("enable SQLite WAL: %w", err)
-		}
-		if _, err := pool.ExecContext(ctx, "PRAGMA foreign_keys = ON"); err != nil {
-			return fmt.Errorf("enable SQLite foreign keys: %w", err)
+		if err := pool.PingContext(ctx); err != nil {
+			return fmt.Errorf("open SQLite database: %w", err)
 		}
 		state := &sqliteAdapterState{
 			barriers:     newBarrierRegistry(),
