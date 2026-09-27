@@ -121,11 +121,13 @@ impl<E: std::fmt::Display> std::fmt::Display for TestWorkError<E> {
     }
 }
 
+/// Transparent, like [`WorkError`]: displays and reports the source of the
+/// error it holds.
 impl<E: std::error::Error + 'static> std::error::Error for TestWorkError<E> {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
-            Self::Resumable(error) => Some(error),
-            Self::Worker(error) => Some(error),
+            Self::Resumable(error) => error.source(),
+            Self::Worker(error) => error.source(),
         }
     }
 }

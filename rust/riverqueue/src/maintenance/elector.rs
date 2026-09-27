@@ -239,7 +239,7 @@ impl Elector {
                 Ok(Ok(None)) => {}
                 Ok(Err(elect_error)) => {
                     let backoff = exponential_backoff(attempt, BACKOFF_RESET);
-                    error!(error = %elect_error, attempt, ?backoff, "River leader election failed");
+                    error!(error = %crate::error::Chain(&elect_error), attempt, ?backoff, "River leader election failed");
                     if !sleep_cancellable(cancel, backoff).await {
                         return None;
                     }
@@ -355,7 +355,7 @@ impl Elector {
                     }
                     let backoff = exponential_backoff(errors, 3).min(remaining);
                     if let Ok(Err(renew_error)) = failure {
-                        error!(error = %renew_error, attempt = errors, ?backoff, "River leader renewal failed");
+                        error!(error = %crate::error::Chain(&renew_error), attempt = errors, ?backoff, "River leader renewal failed");
                     } else {
                         error!(attempt = errors, ?backoff, "River leader renewal timed out");
                     }
@@ -384,7 +384,7 @@ impl Elector {
                     return;
                 }
                 Ok(Err(resign_error)) => {
-                    error!(error = %resign_error, attempt, "River leader resignation failed");
+                    error!(error = %crate::error::Chain(&resign_error), attempt, "River leader resignation failed");
                 }
                 Err(_) => error!(attempt, "River leader resignation timed out"),
             }
@@ -638,7 +638,7 @@ mod unit_tests {
                 }
                 Some(Reelect::SlowFailure(delay)) => {
                     tokio::time::advance(delay).await;
-                    Err(Error::runtime("renewal failed".to_owned()))
+                    Err(Error::runtime_context("leader election", "renewal failed"))
                 }
                 // Later terms only need to stay alive until the test stops.
                 None => std::future::pending().await,

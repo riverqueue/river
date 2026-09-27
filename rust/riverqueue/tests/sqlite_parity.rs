@@ -15,11 +15,11 @@ async fn queue_pause_and_resume() {
 
     assert!(matches!(
         client.queues().pause("missing").await,
-        Err(Error::NotFound)
+        Err(Error::NotFound(_))
     ));
     assert!(matches!(
         client.queues().resume("missing").await,
-        Err(Error::NotFound)
+        Err(Error::NotFound(_))
     ));
     client
         .queues()

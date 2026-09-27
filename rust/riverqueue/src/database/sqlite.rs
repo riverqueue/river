@@ -362,7 +362,8 @@ fn decode_json_strings(encoded: Option<&str>) -> Result<Vec<String>, serde_json:
 fn decode_unique_states(bits: i64) -> Result<Vec<JobState>, String> {
     let bits = u8::try_from(bits).map_err(|_| format!("value out of range for byte: {bits}"))?;
     Ok(JobState::ALL
-        .into_iter()
+        .iter()
+        .copied()
         .filter(|state| bits & state.unique_bit() != 0)
         .collect())
 }
@@ -1939,7 +1940,7 @@ mod tests {
             unique_nonce: Some("first"),
             unique_states: Some(
                 JobState::UNIQUE_DEFAULT
-                    .into_iter()
+                    .iter()
                     .fold(0, |bits, state| bits | state.unique_bit()),
             ),
         };

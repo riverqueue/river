@@ -96,14 +96,14 @@ pub(super) async fn run(context: std::sync::Arc<ServiceContext>) {
                         Ok(false) => {}
                         Err(MaintenanceError::Cancelled) => return,
                         Err(reindex_error) => {
-                            error!(error = %reindex_error, index_name, "River reindexer failed");
+                            error!(error = %crate::error::Chain(&reindex_error), index_name, "River reindexer failed");
                         }
                     }
                 }
             }
             Err(MaintenanceError::Cancelled) => return,
             Err(list_error) => {
-                error!(error = %list_error, "River reindexer could not list indexes");
+                error!(error = %crate::error::Chain(&list_error), "River reindexer could not list indexes");
             }
         }
         scheduled = next_run(config.schedule(), scheduled);
@@ -241,7 +241,7 @@ async fn reindex_one(
     }
     if let Err(reset_error) = reset {
         // Never return a connection with a lingering session timeout.
-        debug!(error = %reset_error, "River reindexer closing a connection it could not reset");
+        debug!(error = %crate::error::Chain(&reset_error), "River reindexer closing a connection it could not reset");
         let _ = connection.detach();
     }
     result.map(|_| true)
@@ -280,7 +280,7 @@ async fn drop_artifacts(
             .execute(&mut *connection)
             .await
             {
-                error!(error = %drop_error, artifact, "River reindexer could not drop an artifact");
+                error!(error = %crate::error::Chain(&drop_error), artifact, "River reindexer could not drop an artifact");
             }
         }
         Ok::<_, sqlx::Error>(())
@@ -288,7 +288,7 @@ async fn drop_artifacts(
     match tokio::time::timeout(ARTIFACT_CLEANUP_TIMEOUT, cleanup).await {
         Ok(Ok(())) => {}
         Ok(Err(list_error)) => {
-            error!(error = %list_error, "River reindexer could not list artifacts");
+            error!(error = %crate::error::Chain(&list_error), "River reindexer could not list artifacts");
         }
         Err(_) => {
             cancel_backend(pool, backend_pid).await;

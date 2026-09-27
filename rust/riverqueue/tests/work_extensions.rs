@@ -144,7 +144,7 @@ impl Hook for TracingHook {
             Err(error)
                 if self.snooze_failures
                     && error
-                        .source_ref()
+                        .get_ref()
                         .downcast_ref::<PurposefulFailure>()
                         .is_some() =>
             {

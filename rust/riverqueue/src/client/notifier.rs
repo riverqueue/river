@@ -47,7 +47,7 @@ pub(crate) enum RuntimeNotification {
 }
 
 /// Readiness reported once by the notification path.
-pub(super) type ReadySender = oneshot::Sender<Result<(), String>>;
+pub(super) type ReadySender = oneshot::Sender<()>;
 
 /// Holds the notification path's readiness until a listener reports it. The
 /// supervisor keeps the slot, so a listener restarted after a panic still
@@ -60,7 +60,7 @@ fn report_ready(ready: &ReadySlot) {
         .unwrap_or_else(std::sync::PoisonError::into_inner)
         .take()
     {
-        let _ = ready.send(Ok(()));
+        let _ = ready.send(());
     }
 }
 
@@ -172,7 +172,7 @@ pub(super) async fn run_notifications(
         let sleep = exponential_backoff(attempt);
         error!(
             attempt,
-            error = %listener_error,
+            error = %crate::error::Chain(&listener_error),
             sleep_duration = ?sleep,
             "River notification listener failed (will reconnect after backoff); producers keep polling"
         );
@@ -214,7 +214,12 @@ async fn listen_until_error(
                     "timed out resolving the current schema".to_owned(),
                 )
             })??
-            .ok_or_else(|| Error::invalid_job("PostgreSQL current_schema() is null".to_owned()))?,
+            .ok_or_else(|| {
+                Error::runtime_context(
+                    "notification listener",
+                    "PostgreSQL current_schema() is null",
+                )
+            })?,
         };
         schema.insert(resolved).clone()
     };
@@ -369,7 +374,7 @@ pub(super) async fn run_sqlite_notifications(
             let sleep = exponential_backoff(attempt);
             error!(
                 attempt,
-                error = %poll_error,
+                error = %crate::error::Chain(&poll_error),
                 sleep_duration = ?sleep,
                 "River notification poll failed (will retry after backoff); producers keep polling"
             );

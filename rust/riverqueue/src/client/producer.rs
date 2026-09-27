@@ -275,14 +275,14 @@ pub(super) async fn run_queue(
             Ok(queue_row) => break queue_row,
             Err(queue_error) => {
                 let sleep = if start_time.elapsed() < START_FAST_RETRY_WINDOW {
-                    debug!(error = %queue_error, "River queue startup failed; retrying");
+                    debug!(error = %crate::error::Chain(&queue_error), "River queue startup failed; retrying");
                     START_FAST_RETRY_INTERVAL
                 } else {
                     start_attempt += 1;
                     let sleep = exponential_backoff(start_attempt);
                     error!(
                         queue = %queue,
-                        error = %queue_error,
+                        error = %crate::error::Chain(&queue_error),
                         sleep_duration = ?sleep,
                         "River queue startup failed (will retry after backoff)"
                     );
@@ -319,7 +319,7 @@ pub(super) async fn run_queue(
                 match unless_cancelled(&fetch_cancel, crate::storage::touch_queue(&inner, &queue)).await {
                     None => break,
                     Some(Err(queue_error)) => {
-                        error!(error = %queue_error, "River queue heartbeat failed; retrying");
+                        error!(error = %crate::error::Chain(&queue_error), "River queue heartbeat failed; retrying");
                     }
                     Some(Ok(_)) => {}
                 }
@@ -373,7 +373,7 @@ pub(super) async fn run_queue(
                 }
                 Ok(None) => {}
                 Err(queue_error) => {
-                    error!(error = %queue_error, "River queue state refresh failed; retrying");
+                    error!(error = %crate::error::Chain(&queue_error), "River queue state refresh failed; retrying");
                     continue;
                 }
             }
@@ -424,7 +424,7 @@ pub(super) async fn run_queue(
                 }
                 (Ok(rows), Err(fetch_error)) | (Err(fetch_error), Ok(rows)) => {
                     error!(
-                        error = %fetch_error,
+                        error = %crate::error::Chain(&fetch_error),
                         "one parallel River job fetch failed; working the successfully fetched jobs"
                     );
                     rows
@@ -432,8 +432,8 @@ pub(super) async fn run_queue(
                 (Err(fetch_error), Err(second_fetch_error)) => {
                     last_fetch = Some(tokio::time::Instant::now());
                     error!(
-                        error = %fetch_error,
-                        secondary_error = %second_fetch_error,
+                        error = %crate::error::Chain(&fetch_error),
+                        secondary_error = %crate::error::Chain(&second_fetch_error),
                         "River job fetch failed; retrying"
                     );
                     continue;
@@ -444,7 +444,7 @@ pub(super) async fn run_queue(
                 Ok(rows) => rows,
                 Err(fetch_error) => {
                     last_fetch = Some(tokio::time::Instant::now());
-                    error!(error = %fetch_error, "River job fetch failed; retrying");
+                    error!(error = %crate::error::Chain(&fetch_error), "River job fetch failed; retrying");
                     continue;
                 }
             }
@@ -470,7 +470,7 @@ pub(super) async fn run_queue(
             let permit = Arc::clone(&permits)
                 .acquire_owned()
                 .await
-                .map_err(|_| Error::invalid_job("queue worker semaphore closed".to_owned()))?;
+                .map_err(|_| Error::runtime_context("producer", "queue worker semaphore closed"))?;
             let hard_cancel = work_cancel.child_token();
             let cancellation = hard_cancel.child_token();
             register_running_attempt(
@@ -524,7 +524,7 @@ async fn notify_queue_metadata(inner: &ClientInner, queue: &str, metadata: &Map<
         queue: queue.to_owned(),
     };
     if let Err(hook_error) = inner.pilot.queue_metadata_changed(&params).await {
-        error!(queue = %queue, error = %hook_error, "River extension queue metadata hook failed");
+        error!(queue = %queue, error = %crate::error::Chain(&*hook_error), "River extension queue metadata hook failed");
     }
 }
 
@@ -558,7 +558,7 @@ async fn finish_fetch(
         ] {
             for hook in &inner.hooks {
                 if let Err(hook_error) = hook.metric_emit(metric).await {
-                    error!(error = %hook_error, "River metric hook failed");
+                    error!(error = %crate::error::Chain(&hook_error), "River metric hook failed");
                 }
             }
         }
@@ -598,7 +598,7 @@ pub(super) async fn fetch_jobs(
 ) -> Result<FetchedJobs, Error> {
     let fetch_started = (!inner.hooks.is_empty()).then(std::time::Instant::now);
     let maximum = i32::try_from(maximum)
-        .map_err(|_| Error::invalid_job("fetch maximum exceeds i32".to_owned()))?;
+        .map_err(|_| Error::runtime_context("job fetch", "fetch maximum exceeds i32"))?;
     #[cfg(feature = "sqlite")]
     if let Some(pool) = inner.sqlite_pool() {
         let params = crate::database::sqlite::ClaimJobs {
@@ -624,7 +624,7 @@ pub(super) async fn fetch_jobs(
                 )
                 .await
                 .map_err(|source| Error::Extension {
-                    phase: "fetch claim",
+                    phase: crate::ExtensionPhase::AddOnFetchClaim,
                     source,
                 })?;
             let (rows, claims) = if let Some(claimed) = claimed {
@@ -644,7 +644,7 @@ pub(super) async fn fetch_jobs(
                     )
                     .await
                     .map_err(|source| Error::Extension {
-                        phase: "fetch selection",
+                        phase: crate::ExtensionPhase::AddOnFetchSelection,
                         source,
                     })?;
                 let claims = selected_ids
@@ -718,7 +718,7 @@ pub(super) async fn fetch_jobs(
                 )
                 .await
                 .map_err(|source| Error::Extension {
-                    phase: "fetch claim",
+                    phase: crate::ExtensionPhase::AddOnFetchClaim,
                     source,
                 })?;
             let (rows, claims) = if let Some(claimed) = claimed {
@@ -738,7 +738,7 @@ pub(super) async fn fetch_jobs(
                     )
                     .await
                     .map_err(|source| Error::Extension {
-                        phase: "fetch selection",
+                        phase: crate::ExtensionPhase::AddOnFetchSelection,
                         source,
                     })?;
                 let claims = selected_ids
@@ -791,8 +791,9 @@ pub(super) async fn fetch_jobs(
         return Ok(finish_fetch(inner, fetch_started, rows).await);
     }
     #[allow(unreachable_code)]
-    Err(Error::runtime(
-        "database dispatch selected no supported backend".to_owned(),
+    Err(Error::runtime_context(
+        "job fetch",
+        "database dispatch selected no supported backend",
     ))
 }
 

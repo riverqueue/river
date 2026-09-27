@@ -94,7 +94,7 @@ impl Client {
             .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
             .is_err()
         {
-            return Err(Error::runtime("client is already running".to_owned()));
+            return Err(Error::AlreadyRunning);
         }
         let stopper = Stopper {
             fetch_cancel: CancellationToken::new(),
@@ -232,7 +232,7 @@ impl Supervisor {
                 Err(service_error) if stopping && !service.is_essential() => {
                     debug!(
                         service = service.name(),
-                        error = %service_error,
+                        error = %crate::error::Chain(&service_error),
                         "River service stopped with an error during shutdown"
                     );
                 }
@@ -242,7 +242,7 @@ impl Supervisor {
                     });
                     error!(
                         service = service.name(),
-                        error = %service_error,
+                        error = %crate::error::Chain(&service_error),
                         "River service failed; stopping the client after in-flight work"
                     );
                     fatal.get_or_insert(service_error);
@@ -294,7 +294,7 @@ impl Supervisor {
         );
         let (notifier_ready_sender, notifier_ready) = oneshot::channel();
         if inner.poll_only {
-            let _ = notifier_ready_sender.send(Ok(()));
+            let _ = notifier_ready_sender.send(());
         } else {
             *self
                 .notifier_ready
@@ -312,12 +312,9 @@ impl Supervisor {
                 () = stopped.cancelled() => return Ok(()),
                 notifier_ready = notifier_ready => notifier_ready,
             };
-            let result = match notifier_ready {
-                Ok(Ok(())) if queues_ready.await.is_ok() => Ok(()),
-                Ok(Err(message)) => Err(message),
-                Ok(Ok(())) | Err(_) => return Ok(()),
-            };
-            let _ = ready.send(result);
+            if notifier_ready.is_ok() && queues_ready.await.is_ok() {
+                let _ = ready.send(());
+            }
             Ok(())
         });
         if !inner.leader_election_disabled {
@@ -396,7 +393,7 @@ impl Supervisor {
                             .run(pool, database, service_cancel)
                             .await
                             .map_err(|service_error| Error::Extension {
-                                phase: "runtime service",
+                                phase: crate::ExtensionPhase::AddOnRuntimeService,
                                 source: service_error,
                             })
                     })
@@ -569,9 +566,9 @@ pub struct RunHandle {
 /// Whether the client's notification path has become ready.
 #[derive(Debug)]
 enum Readiness {
-    Failed(String),
-    Pending(oneshot::Receiver<Result<(), String>>),
+    Pending(oneshot::Receiver<()>),
     Ready,
+    Stopped,
 }
 
 impl std::fmt::Debug for RunHandle {
@@ -686,18 +683,17 @@ impl RunHandle {
     ///
     /// # Errors
     ///
-    /// Returns an error when the client stops before becoming ready, or when
-    /// its notification path failed to start.
+    /// Returns [`Error::ClientStopped`] when the client stops before becoming
+    /// ready.
     pub async fn wait_ready(&mut self) -> Result<(), Error> {
         if let Readiness::Pending(receiver) = &mut self.ready {
             self.ready = match receiver.await {
-                Ok(Ok(())) => Readiness::Ready,
-                Ok(Err(message)) => Readiness::Failed(message),
-                Err(_) => Readiness::Failed("client stopped before becoming ready".to_owned()),
+                Ok(()) => Readiness::Ready,
+                Err(_) => Readiness::Stopped,
             };
         }
         match &self.ready {
-            Readiness::Failed(message) => Err(Error::runtime(message.clone())),
+            Readiness::Stopped => Err(Error::ClientStopped),
             Readiness::Pending(_) | Readiness::Ready => Ok(()),
         }
     }

@@ -70,7 +70,7 @@ impl WorkContext {
     /// # Errors
     ///
     /// Returns [`Error::Runtime`] when this context doesn't belong to a
-    /// running worker, [`Error::InvalidJob`] when the job is no longer
+    /// running worker, [`Error::JobNotRunning`] when the job is no longer
     /// running, [`Error::DatabaseMismatch`] for a transaction from another
     /// backend, [`Error::Extension`] when an extension's completion hook
     /// fails, and [`Error::Database`] when the database operation fails.
@@ -565,8 +565,8 @@ where
     /// Any error convertible into [`BoxError`] works, including concrete
     /// error types, `Box<dyn Error + Send + Sync>`, and report types such as
     /// `anyhow::Error` or `eyre::Report`. Hooks and error handlers receive it
-    /// as a [`WorkError`], whose [`source_ref`](WorkError::source_ref) can be
-    /// downcast to a concrete error type. A report type converts into its own
+    /// as a [`WorkError`], whose [`downcast_ref`](WorkError::downcast_ref)
+    /// returns the concrete error type. A report type converts into its own
     /// wrapper, which keeps its message and source chain but can't be
     /// downcast to the type it wraps; return a concrete error type when an
     /// extension needs to downcast it.
@@ -997,7 +997,12 @@ mod tests {
             })
             .await
             .unwrap_err();
-        assert!(error.to_string().contains("invalid type"));
+        assert!(
+            crate::error::Chain(&error)
+                .to_string()
+                .contains("invalid type"),
+            "{error}"
+        );
         assert!(context.resumable_set_cursor(&1).is_err());
         assert!(context.resumable_finish(false).is_some());
         assert_eq!(
@@ -1093,7 +1098,7 @@ mod tests {
             .await
             .unwrap()
             .unwrap_err();
-        assert!(error.source_ref().downcast_ref::<FunctionError>().is_some());
+        assert!(error.get_ref().downcast_ref::<FunctionError>().is_some());
     }
 
     static COUNTED_DECODES: AtomicUsize = AtomicUsize::new(0);
@@ -1183,7 +1188,7 @@ mod tests {
             .await
             .unwrap_err();
 
-        assert!(error.source_ref().is::<serde_json::Error>());
+        assert!(error.get_ref().is::<serde_json::Error>());
         assert!(timeout_receiver.await.is_err());
     }
 
@@ -1228,7 +1233,7 @@ mod tests {
         assert_eq!(error.to_string(), "writing report");
         // The report's source chain is preserved for inspection.
         let root = error
-            .source_ref()
+            .get_ref()
             .source()
             .and_then(|source| source.downcast_ref::<std::io::Error>())
             .expect("anyhow context source");
@@ -1258,7 +1263,7 @@ mod tests {
         let error = run_once(&workers, &job_row(FunctionJobArgs::KIND, false))
             .await
             .unwrap_err();
-        assert!(error.source_ref().downcast_ref::<FunctionError>().is_some());
+        assert!(error.get_ref().downcast_ref::<FunctionError>().is_some());
     }
 
     #[tokio::test]

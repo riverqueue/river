@@ -659,7 +659,7 @@ impl Client {
                 .before_jobs_insert(connection.reborrow(), &mut params)
                 .await
                 .map_err(|source| Error::Extension {
-                    phase: "job insertion",
+                    phase: crate::ExtensionPhase::AddOnInsertion,
                     source,
                 })?;
         }
@@ -718,7 +718,7 @@ impl Client {
             )
             .await
             .map_err(|source| Error::Extension {
-                phase: "job insertion",
+                phase: crate::ExtensionPhase::AddOnInsertion,
                 source,
             })
     }

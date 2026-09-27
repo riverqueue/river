@@ -149,6 +149,16 @@ impl std::fmt::Display for MaintenanceError {
     }
 }
 
+impl std::error::Error for MaintenanceError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            // Displayed transparently, so its source is the error's own.
+            Self::Failed(error) => error.source(),
+            Self::Cancelled | Self::TimedOut => None,
+        }
+    }
+}
+
 impl From<Error> for MaintenanceError {
     fn from(error: Error) -> Self {
         Self::Failed(error)

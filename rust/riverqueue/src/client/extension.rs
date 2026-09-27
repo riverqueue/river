@@ -69,7 +69,7 @@ impl ExtensionClient<'_> {
 
     /// Computes the configured retry delay for an exact-version extension.
     #[must_use]
-    pub fn retry_delay(&self, row: &JobRow, error: &str, now: DateTime<Utc>) -> Duration {
+    pub fn retry_delay(&self, row: &JobRow, error: &WorkError, now: DateTime<Utc>) -> Duration {
         self.client.inner.retry_policy.next_retry(row, error, now)
     }
 
@@ -172,7 +172,9 @@ impl ExtensionClient<'_> {
                 .await
             {
                 Ok(decision) => error_handler_result = decision,
-                Err(error) => error!(error = %error, "River error handler failed"),
+                Err(error) => {
+                    error!(error = %crate::error::Chain(&error), "River error handler failed");
+                }
             }
         }
         let queue_wait_duration = row

@@ -465,14 +465,14 @@ impl PeriodicJobs {
                     match result {
                         Ok(Ok(_)) => {}
                         Ok(Err(error)) => {
-                            tracing::error!(error = %error, "River periodic job insertion failed");
+                            tracing::error!(error = %crate::error::Chain(&error), "River periodic job insertion failed");
                         }
                         Err(_) => tracing::error!("River periodic job insertion timed out"),
                     }
                 }
                 Ok(None) => {}
                 Err(error) => {
-                    tracing::error!(error = %error, "River periodic job constructor failed");
+                    tracing::error!(error = %crate::error::Chain(&error), "River periodic job constructor failed");
                 }
             }
 

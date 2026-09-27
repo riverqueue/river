@@ -67,9 +67,15 @@ impl Backend for PostgresBackend<'_> {
         .fetch_optional(&mut *self.connection)
         .await?;
         match state.as_deref() {
-            None => return Err(Error::NotFound),
+            None => return Err(Error::NotFound(crate::Record::Job(id))),
             Some("running") => {}
-            Some(state) => return Err(super::job_not_running(state)),
+            Some(state) => {
+                return Err(super::job_not_running(
+                    state
+                        .parse()
+                        .map_err(|error| Error::Database(Box::new(error)))?,
+                ));
+            }
         }
         let sql = format!(
             "UPDATE {table} AS job SET state = 'completed', finalized_at = now(), \
@@ -83,7 +89,7 @@ impl Backend for PostgresBackend<'_> {
             .bind(Json(metadata_updates))
             .fetch_optional(&mut *self.connection)
             .await?
-            .ok_or(Error::NotFound)?
+            .ok_or(Error::NotFound(crate::Record::Job(id)))?
             .into_job_row()
     }
 
@@ -96,7 +102,7 @@ impl Backend for PostgresBackend<'_> {
         .fetch_optional(&mut *self.connection)
         .await?;
         match state.as_deref() {
-            None => return Err(Error::NotFound),
+            None => return Err(Error::NotFound(crate::Record::Job(id))),
             Some("running") => return Err(Error::JobRunning),
             Some(_) => {}
         }

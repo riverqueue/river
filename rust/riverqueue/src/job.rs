@@ -590,8 +590,12 @@ impl JobRow {
 }
 
 /// Persisted River job state.
+///
+/// Displays as its database string, like [`JobState::as_str`]. River has
+/// added states before, so matches outside this crate need a wildcard arm.
 #[derive(Clone, Copy, Debug, Deserialize, Eq, Hash, PartialEq, Serialize)]
 #[serde(rename_all = "lowercase")]
+#[non_exhaustive]
 pub enum JobState {
     /// Eligible to run now.
     Available,
@@ -613,7 +617,7 @@ pub enum JobState {
 
 impl JobState {
     /// All states in River's canonical bit order.
-    pub const ALL: [Self; 8] = [
+    pub const ALL: &'static [Self] = &[
         Self::Available,
         Self::Cancelled,
         Self::Completed,
@@ -625,7 +629,7 @@ impl JobState {
     ];
 
     /// States required for a custom unique-state set.
-    pub const UNIQUE_REQUIRED: [Self; 4] = [
+    pub const UNIQUE_REQUIRED: &'static [Self] = &[
         Self::Available,
         Self::Pending,
         Self::Running,
@@ -633,7 +637,7 @@ impl JobState {
     ];
 
     /// Default states that enforce uniqueness.
-    pub const UNIQUE_DEFAULT: [Self; 6] = [
+    pub const UNIQUE_DEFAULT: &'static [Self] = &[
         Self::Available,
         Self::Completed,
         Self::Pending,
@@ -669,6 +673,12 @@ impl JobState {
             Self::Running => 0b0100_0000,
             Self::Scheduled => 0b1000_0000,
         }
+    }
+}
+
+impl std::fmt::Display for JobState {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(self.as_str())
     }
 }
 
@@ -828,7 +838,7 @@ impl UniqueOpts {
         self.by_state
             .as_deref()
             .filter(|states| !states.is_empty())
-            .unwrap_or(&JobState::UNIQUE_DEFAULT)
+            .unwrap_or(JobState::UNIQUE_DEFAULT)
             .iter()
             .fold(0, |mask, state| mask | state.unique_bit())
     }
@@ -876,7 +886,7 @@ mod tests {
             error,
             "unique states must contain required states: pending, running, scheduled"
         );
-        let required = UniqueOpts::new().by_states(JobState::UNIQUE_REQUIRED);
+        let required = UniqueOpts::new().by_states(JobState::UNIQUE_REQUIRED.iter().copied());
         assert!(required.validate().is_ok());
 
         // As in Go, where a non-nil empty `ByState` enables uniqueness with

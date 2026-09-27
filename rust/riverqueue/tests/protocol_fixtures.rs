@@ -89,7 +89,7 @@ fn go_protocol_values_match_rust() {
         let row = retry_row(test_case.job_id, test_case.now, test_case.error_count - 1);
         let delay = DefaultRetryPolicy::with_seed(test_case.seed).next_retry(
             &row,
-            "fixture failure",
+            &riverqueue::WorkError::new("fixture failure"),
             test_case.now,
         );
         let delay = delay.as_nanos();

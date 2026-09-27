@@ -188,13 +188,13 @@ pub enum Error {
 
     /// PostgreSQL operation failed.
     #[cfg(feature = "postgres")]
-    #[error("PostgreSQL: {0}")]
+    #[error(transparent)]
     Postgres(#[from] sqlx::Error),
 
     /// SQLite operation failed.
     #[cfg(feature = "sqlite")]
-    #[error("SQLite: {0}")]
-    Sqlite(#[source] sqlx::Error),
+    #[error(transparent)]
+    Sqlite(sqlx::Error),
 }
 
 /// Applies and validates River's PostgreSQL migration history.

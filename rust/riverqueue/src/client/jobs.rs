@@ -392,7 +392,7 @@ impl<'a> JobCompleteRequest<'a> {
 /// # Errors
 ///
 /// Awaiting it returns [`Error::NotFound`] when the job doesn't exist,
-/// [`Error::InvalidJob`] when the job isn't running,
+/// [`Error::JobNotRunning`] when the job isn't running,
 /// [`Error::DatabaseMismatch`] for a transaction from another backend,
 /// [`Error::Extension`] when an extension's completion hook fails, and
 /// [`Error::Database`] when the database operation fails.

@@ -88,10 +88,10 @@ impl Backend for SqliteBackend<'_> {
             .await
             .map_err(database_error)?
         else {
-            return Err(Error::NotFound);
+            return Err(Error::NotFound(crate::Record::Job(id)));
         };
         if job.state != JobState::Running {
-            return Err(super::job_not_running(job.state.as_str()));
+            return Err(super::job_not_running(job.state));
         }
         let now = Utc::now();
         sqlite::complete(
@@ -109,7 +109,7 @@ impl Backend for SqliteBackend<'_> {
         )
         .await
         .map_err(database_error)?
-        .ok_or(Error::NotFound)
+        .ok_or(Error::NotFound(crate::Record::Job(id)))
     }
 
     async fn job_delete(&mut self, id: i64) -> Result<JobRow, Error> {
@@ -124,7 +124,7 @@ impl Backend for SqliteBackend<'_> {
             .map_err(database_error)?
         {
             Some(job) if job.state == JobState::Running => Err(Error::JobRunning),
-            None | Some(_) => Err(Error::NotFound),
+            None | Some(_) => Err(Error::NotFound(crate::Record::Job(id))),
         }
     }
 

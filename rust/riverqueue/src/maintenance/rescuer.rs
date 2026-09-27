@@ -146,8 +146,11 @@ fn decide(inner: &ClientInner, row: &JobRow, now: DateTime<Utc>) -> Result<Decis
             (JobState::Discarded, Some(now), row.scheduled_at)
         }
     };
+    // Retry policies see the error the rescue records, as in Go, where the
+    // attempt error is appended before the policy runs.
+    let rescued_error = crate::WorkError::new(RESCUE_ERROR);
     let client_retry = |row: &JobRow| -> Result<DateTime<Utc>, Error> {
-        let delay = inner.retry_policy.next_retry(row, "", now);
+        let delay = inner.retry_policy.next_retry(row, &rescued_error, now);
         Ok(now
             + chrono::Duration::from_std(delay)
                 .map_err(|error| Error::invalid_job_context("maintenance", error.to_string()))?)
@@ -177,9 +180,6 @@ fn decide(inner: &ClientInner, row: &JobRow, now: DateTime<Utc>) -> Result<Decis
         return Ok(None);
     }
 
-    let rescued_error = crate::WorkError::new(Box::new(std::io::Error::other(
-        "job rescued after its worker stopped responding",
-    )));
     let retry_at = match inner.workers.next_retry(row, &rescued_error, now) {
         Ok(Some(delay)) => {
             now + chrono::Duration::from_std(delay)
@@ -236,7 +236,7 @@ async fn rescue_batch_postgres(
             )
             .await
             .map_err(|source| Error::Extension {
-                phase: "rescue selection",
+                phase: crate::ExtensionPhase::AddOnRescueSelection,
                 source,
             })?
     } else {
@@ -312,7 +312,7 @@ async fn rescue_batch_postgres(
             )
             .await
             .map_err(|source| Error::Extension {
-                phase: "rescue",
+                phase: crate::ExtensionPhase::AddOnRescue,
                 source,
             })?
     } else {
@@ -400,7 +400,7 @@ async fn rescue_batch_sqlite(
             )
             .await
             .map_err(|source| Error::Extension {
-                phase: "rescue selection",
+                phase: crate::ExtensionPhase::AddOnRescueSelection,
                 source,
             })?
     } else {
@@ -435,7 +435,7 @@ async fn rescue_batch_sqlite(
                 .rescue_jobs(PilotDatabaseConnection::Sqlite(&mut transaction), &params)
                 .await
                 .map_err(|source| Error::Extension {
-                    phase: "rescue",
+                    phase: crate::ExtensionPhase::AddOnRescue,
                     source,
                 })?
         } else {

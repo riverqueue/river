@@ -131,7 +131,7 @@ pub(super) async fn execute_job(
             {
                 Ok(handler_result) => error_handler_result = handler_result,
                 Err(handler_error) => {
-                    error!(error = %handler_error, "River error handler failed");
+                    error!(error = %crate::error::Chain(&handler_error), "River error handler failed");
                 }
             }
         }
@@ -160,7 +160,7 @@ pub(super) async fn execute_job(
         // Once enqueued, the completer owns the running attempt until the
         // result is written.
         if let Err(operation_error) = persisted {
-            error!(error = %operation_error, "failed to persist River job result");
+            error!(error = %crate::error::Chain(&operation_error), "failed to persist River job result");
             remove_running_attempt(&inner.running, row.id, &cancellation);
         }
     }
@@ -314,7 +314,7 @@ pub(super) async fn finish_cancelled_task(
     if let Some(error_handler) = &inner.error_handler
         && let Err(handler_error) = error_handler.handle_stuck(row).await
     {
-        error!(error = %handler_error, "River stuck handler failed");
+        error!(error = %crate::error::Chain(&handler_error), "River stuck handler failed");
     }
     worker_task.abort();
     let result = tokio::select! {
@@ -354,7 +354,7 @@ pub(super) fn is_soft_stop_failure(failure: &WorkerFailure) -> bool {
         WorkerFailureKind::Error => failure
             .source
             .as_ref()
-            .is_some_and(|error| WorkCancelled::is_in_chain(error.source_ref())),
+            .is_some_and(|error| WorkCancelled::is_in_chain(error.get_ref())),
         WorkerFailureKind::Cancelled
         | WorkerFailureKind::Interrupted
         | WorkerFailureKind::Panic => false,
@@ -414,7 +414,9 @@ pub(super) fn public_work_result(result: &WorkerResult) -> WorkResult {
                 }))
             }
             WorkerFailureKind::Interrupted => WorkResult::Interrupted,
-            WorkerFailureKind::Panic => WorkResult::Panicked(failure.error.clone()),
+            WorkerFailureKind::Panic => {
+                WorkResult::Panicked(PanicError::new(failure.error.clone()))
+            }
         },
     }
 }
@@ -551,11 +553,8 @@ pub(super) async fn persist_result(
                     } else {
                         None
                     };
-                    let delay = worker_retry_after.unwrap_or_else(|| {
-                        inner
-                            .retry_policy
-                            .next_retry(row, &attempt_error.error, now)
-                    });
+                    let delay = worker_retry_after
+                        .unwrap_or_else(|| inner.retry_policy.next_retry(row, &retry_error, now));
                     let scheduled_at = scheduled_after(now, delay);
                     let state = if delay <= inner.maintenance.scheduler_interval {
                         JobState::Available
@@ -589,7 +588,7 @@ pub(super) async fn persist_result(
             timing: completion.timing,
         })
         .await
-        .map_err(|_| Error::runtime("completion batcher stopped".to_owned()))
+        .map_err(|_| Error::runtime_context("job completion", "completion batcher stopped"))
 }
 
 /// Longest delay River schedules ahead, matching Go's `time.Duration` range.

@@ -78,7 +78,7 @@ impl ErrorHandler for CompletionErrorHandler {
         };
         assert!(
             error
-                .source_ref()
+                .get_ref()
                 .downcast_ref::<ExtensionExecutionError>()
                 .is_some()
         );
@@ -113,9 +113,9 @@ impl Hook for WrapperTransformHook {
         // are preserved.
         let mut outer: std::collections::HashMap<String, Box<serde_json::value::RawValue>> =
             job.decode_args()?;
-        job.encoded_args = outer.remove(self.0).ok_or_else(|| {
-            riverqueue::Error::runtime(format!("missing outer insertion wrapper {:?}", self.0))
-        })?;
+        job.encoded_args = outer
+            .remove(self.0)
+            .ok_or_else(|| format!("missing outer insertion wrapper {:?}", self.0))?;
         Ok(())
     }
 
@@ -1146,7 +1146,16 @@ async fn sqlite_pilot_insert_uses_the_insertion_transaction() {
         .insert(RuntimeArgs { value: 32 })
         .await
         .unwrap_err();
-    assert!(error.to_string().contains("insert interception failed"));
+    assert!(
+        matches!(
+            &error,
+            riverqueue::Error::Extension {
+                phase: riverqueue::ExtensionPhase::AddOnInsertion,
+                source,
+            } if source.to_string().contains("insert interception failed")
+        ),
+        "{error:?}"
+    );
     let failed_jobs: i64 = sqlx::query_scalar(
         "SELECT count(*) FROM river_job WHERE json_extract(args, '$.value') = 32",
     )
@@ -1625,7 +1634,7 @@ async fn sqlite_transaction_insert_respects_rollback() {
     transaction.rollback().await.unwrap();
 
     let error = client.jobs().get(inserted.job.row.id).await.unwrap_err();
-    assert!(matches!(error, riverqueue::Error::NotFound));
+    assert!(matches!(error, riverqueue::Error::NotFound(_)));
 }
 
 #[tokio::test]

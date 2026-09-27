@@ -53,7 +53,7 @@ impl InsertMiddleware for FailAfterWrite {
         let inserted = next.run(jobs).await?;
         assert!(!inserted.is_empty());
         Err(Error::extension(
-            "insert middleware",
+            riverqueue::ExtensionPhase::InsertMiddleware,
             std::io::Error::other("failed after the write"),
         ))
     }
@@ -445,7 +445,7 @@ macro_rules! scenarios {
             // Reads in the transaction see its uncommitted writes.
             assert!(matches!(
                 jobs.get(deleted).tx(&mut tx).await,
-                Err(Error::NotFound)
+                Err(Error::NotFound(_))
             ));
             let inserted = client
                 .insert(args("uncommitted"))
@@ -498,7 +498,7 @@ macro_rules! scenarios {
                 jobs.get(cancelled).await.unwrap().state,
                 JobState::Available
             );
-            assert!(matches!(jobs.get(deleted).await, Err(Error::NotFound)));
+            assert!(matches!(jobs.get(deleted).await, Err(Error::NotFound(_))));
 
             fixture.cleanup().await;
         }
@@ -536,9 +536,15 @@ macro_rules! scenarios {
             assert_eq!(jobs.cancel(first).await.unwrap().state, JobState::Cancelled);
             assert_eq!(jobs.retry(first).await.unwrap().state, JobState::Available);
             assert_eq!(jobs.delete(second).await.unwrap().id, second);
-            assert!(matches!(jobs.delete(second).await, Err(Error::NotFound)));
-            assert!(matches!(jobs.cancel(i64::MAX).await, Err(Error::NotFound)));
-            assert!(matches!(jobs.retry(i64::MAX).await, Err(Error::NotFound)));
+            assert!(matches!(jobs.delete(second).await, Err(Error::NotFound(_))));
+            assert!(matches!(
+                jobs.cancel(i64::MAX).await,
+                Err(Error::NotFound(_))
+            ));
+            assert!(matches!(
+                jobs.retry(i64::MAX).await,
+                Err(Error::NotFound(_))
+            ));
 
             fixture.cleanup().await;
         }
@@ -683,17 +689,20 @@ macro_rules! scenarios {
                 QueueSelector::Named("*".to_owned())
             );
             // `*` is only a name, and no queue can have it.
-            assert!(matches!(queues.pause("*").await, Err(Error::NotFound)));
-            assert!(matches!(queues.resume("*").await, Err(Error::NotFound)));
+            assert!(matches!(queues.pause("*").await, Err(Error::NotFound(_))));
+            assert!(matches!(queues.resume("*").await, Err(Error::NotFound(_))));
             assert!(paused(&fixture.client).await.is_empty());
             assert!(matches!(
                 queues.pause("missing").await,
-                Err(Error::NotFound)
+                Err(Error::NotFound(_))
             ));
-            assert!(matches!(queues.get("missing").await, Err(Error::NotFound)));
+            assert!(matches!(
+                queues.get("missing").await,
+                Err(Error::NotFound(_))
+            ));
             assert!(matches!(
                 queues.update("missing", QueueUpdateParams::new()).await,
-                Err(Error::NotFound)
+                Err(Error::NotFound(_))
             ));
 
             // Updating without metadata keeps it while refreshing the record.

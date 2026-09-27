@@ -197,7 +197,8 @@ impl JobRecord {
                 .map(|bits| {
                     u8::from_str_radix(&bits, 2).map(|bitmask| {
                         JobState::ALL
-                            .into_iter()
+                            .iter()
+                            .copied()
                             .filter(|state| bitmask & state.unique_bit() != 0)
                             .collect()
                     })

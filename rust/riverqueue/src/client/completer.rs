@@ -202,7 +202,7 @@ impl CompletionBatcher {
             }
             Err(error) if self.stop_retrying || is_non_retryable_completion_error(&error) => {
                 error!(
-                    error = %error,
+                    error = %crate::error::Chain(&error),
                     num_jobs = batch.len(),
                     "River could not persist job completions; the rescuer will retry them"
                 );
@@ -213,7 +213,7 @@ impl CompletionBatcher {
             }
             Err(error) => {
                 debug!(
-                    error = %error,
+                    error = %crate::error::Chain(&error),
                     num_jobs = batch.len(),
                     "requeued River completion batch after repeated errors"
                 );
@@ -391,7 +391,12 @@ impl CompletionBatcher {
 /// `isNonRetryableCompleterError` for a closed pool.
 fn is_non_retryable_completion_error(error: &Error) -> bool {
     let mut source: Option<&(dyn std::error::Error + 'static)> = Some(error);
-    while let Some(current) = source {
+    while let Some(mut current) = source {
+        // A database error is transparent, so its driver error appears in
+        // the chain only through the variant.
+        if let Some(Error::Database(inner)) = current.downcast_ref::<Error>() {
+            current = &**inner;
+        }
         if matches!(
             current.downcast_ref::<sqlx::Error>(),
             Some(sqlx::Error::PoolClosed)
@@ -428,7 +433,7 @@ where
         if attempt_number >= COMPLETION_RETRY_ATTEMPTS {
             error!(
                 attempt = attempt_number,
-                error = %error,
+                error = %crate::error::Chain(&error),
                 operation,
                 "River completer error; too many errors, giving up on this attempt cycle"
             );
@@ -437,7 +442,7 @@ where
         let sleep = exponential_backoff(attempt_number);
         error!(
             attempt = attempt_number,
-            error = %error,
+            error = %crate::error::Chain(&error),
             operation,
             sleep_duration = ?sleep,
             "River completer error (will retry after sleep)"
@@ -492,7 +497,7 @@ async fn notify_interrupted_jobs(inner: &ClientInner, batch: &[CompletionUpdate]
             .execute(pool)
             .await
             {
-                debug!(error = %error, queue, "could not notify peers about interrupted River jobs");
+                debug!(error = %crate::error::Chain(&error), queue, "could not notify peers about interrupted River jobs");
             }
         }
     }
@@ -689,8 +694,9 @@ pub(super) async fn persist_completion_batch(
         return Ok(decode_completion_rows(&query.fetch_all(pool).await?));
     }
     #[allow(unreachable_code)]
-    Err(Error::runtime(
-        "database dispatch selected no supported backend".to_owned(),
+    Err(Error::runtime_context(
+        "job completion",
+        "database dispatch selected no supported backend",
     ))
 }
 
@@ -723,7 +729,7 @@ pub(crate) async fn after_jobs_set_state(
         .after_jobs_set_state(connection, &params)
         .await
         .map_err(|source| Error::Extension {
-            phase: "job set state",
+            phase: crate::ExtensionPhase::AddOnJobSetState,
             source,
         })
 }

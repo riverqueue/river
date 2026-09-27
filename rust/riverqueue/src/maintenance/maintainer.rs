@@ -100,7 +100,7 @@ async fn run_term(inner: Arc<ClientInner>, breakers: Arc<Breakers>, term: Term) 
             }
             Err(MaintenanceError::Cancelled) => return,
             Err(start_error) => {
-                error!(error = %start_error, attempt, "River maintenance start failed");
+                error!(error = %crate::error::Chain(&start_error), attempt, "River maintenance start failed");
                 if attempt < START_ATTEMPTS
                     && !sleep_cancellable(&cancel, exponential_backoff(attempt, 7)).await
                 {
@@ -120,7 +120,7 @@ async fn run_term(inner: Arc<ClientInner>, breakers: Arc<Breakers>, term: Term) 
             inner: Arc::clone(&inner),
         };
         if let Err(resign_error) = client.request_resign().await {
-            error!(error = %resign_error, "River could not request leader resignation");
+            error!(error = %crate::error::Chain(&resign_error), "River could not request leader resignation");
         }
         return;
     }
@@ -177,7 +177,7 @@ async fn run_term(inner: Arc<ClientInner>, breakers: Arc<Breakers>, term: Term) 
         let service_cancel = cancel.child_token();
         services.spawn(async move {
             if let Err(service_error) = service.run(pool, database, service_cancel).await {
-                error!(error = %service_error, "River extension maintenance service failed");
+                error!(error = %crate::error::Chain(&*service_error), "River extension maintenance service failed");
             }
         });
     }
@@ -235,7 +235,7 @@ async fn run_periodically(
                 if context.cancel.is_cancelled() {
                     return;
                 }
-                error!(error = %run_error, service = name, "River maintenance service failed");
+                error!(error = %crate::error::Chain(&run_error), service = name, "River maintenance service failed");
             }
         }
     }

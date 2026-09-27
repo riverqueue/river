@@ -35,15 +35,17 @@ pub use client::{
     Stopper,
 };
 pub(crate) use database::SchemaName;
-pub use error::{BoxError, ConfigurationError, Error, JobValidationError, RuntimeError};
+pub use error::{
+    BoxError, ConfigurationError, Error, ExtensionPhase, JobValidationError, Record, RuntimeError,
+};
 pub use event::{
     Event, EventKind, EventKindMismatch, EventReceiver, EventRecvError, JobEvent, JobEventKind,
     JobStatistics, QueueEvent, QueueEventKind, SubscribeConfig,
 };
 pub use extension::{
     DefaultRetryPolicy, ErrorHandler, ErrorHandlerDecision, Extensions, Hook, InsertContext,
-    InsertMiddleware, InsertNext, InsertedJob, InsertedJobs, Metric, MetricName, Plugin,
-    RetryPolicy, WorkCancelled, WorkError, WorkMiddleware, WorkNext, WorkResult,
+    InsertMiddleware, InsertNext, InsertedJob, InsertedJobs, Metric, MetricName, PanicError,
+    Plugin, RetryPolicy, WorkCancelled, WorkError, WorkMiddleware, WorkNext, WorkResult,
 };
 pub use job::{
     AttemptError, InsertBatch, InsertBatchResult, InsertOpts, InsertParams, InsertResult, Job,

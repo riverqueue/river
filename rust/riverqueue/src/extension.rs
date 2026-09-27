@@ -6,50 +6,77 @@ use chrono::{DateTime, Utc};
 
 use crate::{BoxError, Error, InsertParams, JobRow, PeriodicJobs, WorkContext, WorkOutcome};
 
-/// Cloneable worker error passed to hooks and error handlers.
+/// Cloneable worker error passed to hooks, error handlers, and retry
+/// policies.
+///
+/// A `WorkError` is transparent: it displays as the error it wraps and
+/// reports that error's source as its own, so a report of the whole chain
+/// shows each message once. Use [`WorkError::get_ref`] or
+/// [`WorkError::downcast_ref`] to inspect the wrapped error itself.
 #[derive(Clone)]
 pub struct WorkError {
-    message: String,
-    source: Arc<dyn std::error::Error + Send + Sync>,
+    inner: Arc<dyn std::error::Error + Send + Sync>,
 }
 
 impl WorkError {
     /// Wraps an error, for example one a [`WorkMiddleware`] or
     /// [`Hook::work_end`] returns in place of the worker's result.
     pub fn new(error: impl Into<BoxError>) -> Self {
-        let error = error.into();
-        let message = error.to_string();
         Self {
-            message,
-            source: error.into(),
+            inner: Arc::from(error.into()),
         }
     }
 
-    /// Returns the concrete worker error for inspection or downcasting.
+    /// Returns the wrapped worker error for inspection.
     #[must_use]
-    pub fn source_ref(&self) -> &(dyn std::error::Error + Send + Sync + 'static) {
-        self.source.as_ref()
+    pub fn get_ref(&self) -> &(dyn std::error::Error + Send + Sync + 'static) {
+        self.inner.as_ref()
+    }
+
+    /// Returns the wrapped worker error as a `T`, if it is one.
+    #[must_use]
+    pub fn downcast_ref<T: std::error::Error + 'static>(&self) -> Option<&T> {
+        self.inner.downcast_ref()
     }
 }
 
 impl fmt::Debug for WorkError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter
-            .debug_struct("WorkError")
-            .field("message", &self.message)
-            .finish_non_exhaustive()
+        fmt::Debug::fmt(&self.inner, formatter)
     }
 }
 
 impl fmt::Display for WorkError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter.write_str(&self.message)
+        fmt::Display::fmt(&self.inner, formatter)
     }
 }
 
 impl std::error::Error for WorkError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
-        Some(self.source.as_ref())
+        self.inner.source()
+    }
+}
+
+/// A worker panic, reported as [`WorkResult::Panicked`].
+#[derive(Clone, Debug, Eq, PartialEq, thiserror::Error)]
+#[error("worker panicked: {message}")]
+pub struct PanicError {
+    message: String,
+}
+
+impl PanicError {
+    pub(crate) fn new(message: impl Into<String>) -> Self {
+        Self {
+            message: message.into(),
+        }
+    }
+
+    /// Returns the panic's message, or a placeholder for a panic whose
+    /// payload isn't a string.
+    #[must_use]
+    pub fn message(&self) -> &str {
+        &self.message
     }
 }
 
@@ -175,7 +202,7 @@ pub enum WorkResult {
     /// Worker returned an error.
     Failed(WorkError),
     /// Worker panicked.
-    Panicked(String),
+    Panicked(PanicError),
     /// Worker was aborted after ignoring cancellation.
     Aborted,
     /// Worker returned because its client was shutting down.
@@ -310,7 +337,7 @@ pub(crate) trait DynHook: Send + Sync + 'static {
     ) -> BoxFuture<'a, Result<WorkOutcome, WorkError>>;
 }
 
-fn hook_error(phase: &'static str) -> impl FnOnce(BoxError) -> Error {
+fn hook_error(phase: crate::ExtensionPhase) -> impl FnOnce(BoxError) -> Error {
     move |source| Error::Extension { phase, source }
 }
 
@@ -319,7 +346,7 @@ impl<H: Hook> DynHook for H {
         Box::pin(async move {
             Hook::decode_insert_result(self, job)
                 .await
-                .map_err(hook_error("insert result decode hook"))
+                .map_err(hook_error(crate::ExtensionPhase::InsertResultDecodeHook))
         })
     }
 
@@ -330,16 +357,17 @@ impl<H: Hook> DynHook for H {
         Box::pin(async move {
             Hook::insert_begin(self, insert)
                 .await
-                .map_err(hook_error("insert begin hook"))
+                .map_err(hook_error(crate::ExtensionPhase::InsertBeginHook))
         })
     }
 
     fn metric_emit(&self, metric: Metric) -> BoxFuture<'_, Result<(), Error>> {
         // A panicking metric hook would otherwise unwind the queue's producer
         // and abort every job it's working.
-        Box::pin(recover_extension_panic("metric hook", async move {
-            Hook::metric_emit(self, metric).await
-        }))
+        Box::pin(recover_extension_panic(
+            crate::ExtensionPhase::MetricEmitHook,
+            async move { Hook::metric_emit(self, metric).await },
+        ))
     }
 
     fn periodic_jobs_start<'a>(
@@ -349,7 +377,7 @@ impl<H: Hook> DynHook for H {
         Box::pin(async move {
             Hook::periodic_jobs_start(self, jobs)
                 .await
-                .map_err(hook_error("periodic jobs start hook"))
+                .map_err(hook_error(crate::ExtensionPhase::PeriodicJobsStartHook))
         })
     }
 
@@ -648,8 +676,9 @@ impl fmt::Debug for WorkNext<'_> {
 
 /// Retry scheduling policy for ordinary worker errors and panics.
 pub trait RetryPolicy: Send + Sync + 'static {
-    /// Returns the delay before another attempt.
-    fn next_retry(&self, job: &JobRow, error: &str, now: DateTime<Utc>) -> Duration;
+    /// Returns the delay before another attempt of `job`, whose attempt
+    /// failed with `error`.
+    fn next_retry(&self, job: &JobRow, error: &WorkError, now: DateTime<Utc>) -> Duration;
 }
 
 /// River's quartic retry policy with compatibility jitter.
@@ -667,7 +696,7 @@ impl DefaultRetryPolicy {
 }
 
 impl RetryPolicy for DefaultRetryPolicy {
-    fn next_retry(&self, job: &JobRow, _error: &str, now: DateTime<Utc>) -> Duration {
+    fn next_retry(&self, job: &JobRow, _error: &WorkError, now: DateTime<Utc>) -> Duration {
         crate::client::default_retry_delay(job, now, self.seed)
     }
 }
@@ -726,15 +755,17 @@ impl<H: ErrorHandler> DynErrorHandler for H {
         job: &'a JobRow,
         result: &'a WorkResult,
     ) -> BoxFuture<'a, Result<ErrorHandlerDecision, Error>> {
-        Box::pin(recover_extension_panic("error handler", async move {
-            ErrorHandler::handle_error(self, context, job, result).await
-        }))
+        Box::pin(recover_extension_panic(
+            crate::ExtensionPhase::ErrorHandler,
+            async move { ErrorHandler::handle_error(self, context, job, result).await },
+        ))
     }
 
     fn handle_stuck<'a>(&'a self, job: &'a JobRow) -> BoxFuture<'a, Result<(), Error>> {
-        Box::pin(recover_extension_panic("stuck job handler", async move {
-            ErrorHandler::handle_stuck(self, job).await
-        }))
+        Box::pin(recover_extension_panic(
+            crate::ExtensionPhase::StuckJobHandler,
+            async move { ErrorHandler::handle_stuck(self, job).await },
+        ))
     }
 }
 
@@ -743,7 +774,7 @@ impl<H: ErrorHandler> DynErrorHandler for H {
 /// `invokeErrorHandler`: the job's result is still persisted rather than the
 /// panic unwinding the executor and leaving the job running.
 async fn recover_extension_panic<T>(
-    phase: &'static str,
+    phase: crate::ExtensionPhase,
     handler: impl Future<Output = Result<T, BoxError>>,
 ) -> Result<T, Error> {
     use futures_util::FutureExt as _;

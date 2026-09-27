@@ -243,7 +243,11 @@ impl<'c> Storage<'c> {
     /// Cancels a job and returns its current row. The running client is
     /// notified when the transaction commits.
     pub(crate) async fn job_cancel(&mut self, id: i64) -> Result<JobRow, Error> {
-        let row = self.backend.job_cancel(id).await?.ok_or(Error::NotFound)?;
+        let row = self
+            .backend
+            .job_cancel(id)
+            .await?
+            .ok_or(Error::NotFound(crate::Record::Job(id)))?;
         self.after_job_update(&row, JobUpdate::Cancel).await?;
         Ok(row)
     }
@@ -289,7 +293,10 @@ impl<'c> Storage<'c> {
     }
 
     pub(crate) async fn job_get(&mut self, id: i64) -> Result<JobRow, Error> {
-        self.backend.job_get(id).await?.ok_or(Error::NotFound)
+        self.backend
+            .job_get(id)
+            .await?
+            .ok_or(Error::NotFound(crate::Record::Job(id)))
     }
 
     pub(crate) async fn job_list(&mut self, params: &JobListParams) -> Result<Vec<JobRow>, Error> {
@@ -299,7 +306,11 @@ impl<'c> Storage<'c> {
 
     /// Makes a non-running job available again and returns its current row.
     pub(crate) async fn job_retry(&mut self, id: i64) -> Result<JobRow, Error> {
-        let row = self.backend.job_retry(id).await?.ok_or(Error::NotFound)?;
+        let row = self
+            .backend
+            .job_retry(id)
+            .await?
+            .ok_or(Error::NotFound(crate::Record::Job(id)))?;
         self.after_job_update(&row, JobUpdate::Retry).await?;
         Ok(row)
     }
@@ -318,7 +329,7 @@ impl<'c> Storage<'c> {
         self.backend
             .job_update(id, &metadata)
             .await?
-            .ok_or(Error::NotFound)
+            .ok_or(Error::NotFound(crate::Record::Job(id)))
     }
 
     /// Claims available jobs matching an extension's filter for this client.
@@ -367,7 +378,7 @@ impl<'c> Storage<'c> {
     pub(crate) async fn queue_set_paused(&mut self, name: &str, paused: bool) -> Result<(), Error> {
         let updated = self.backend.queue_set_paused(name, paused).await?;
         if updated == 0 && name != QUEUE_ALL {
-            return Err(Error::NotFound);
+            return Err(Error::NotFound(crate::Record::Queue(name.to_owned())));
         }
         let payload = serde_json::json!({
             "action": if paused { "pause" } else { "resume" },
@@ -393,7 +404,7 @@ impl<'c> Storage<'c> {
             .backend
             .queue_update(name, metadata)
             .await?
-            .ok_or(Error::NotFound)?;
+            .ok_or_else(|| Error::NotFound(crate::Record::Queue(name.to_owned())))?;
         // Like Go, only a metadata change notifies clients.
         if let Some(metadata) = metadata {
             let payload = serde_json::json!({
@@ -423,11 +434,11 @@ impl<'c> Storage<'c> {
         let connection = self.backend.connection();
         let (phase, result) = match update {
             JobUpdate::Cancel => (
-                "job cancel",
+                crate::ExtensionPhase::AddOnJobCancel,
                 pilot.after_job_cancel(connection, &params).await,
             ),
             JobUpdate::Retry => (
-                "job retry",
+                crate::ExtensionPhase::AddOnJobRetry,
                 pilot.after_job_retry(connection, &params).await,
             ),
         };
@@ -443,11 +454,8 @@ enum JobUpdate {
 }
 
 /// Error for transactional completion of a job that isn't running.
-fn job_not_running(state: &str) -> Error {
-    Error::invalid_job_context(
-        "storage parameters",
-        format!("job must be running for transactional completion; state is {state}"),
-    )
+fn job_not_running(state: crate::JobState) -> Error {
+    Error::JobNotRunning { state }
 }
 
 /// How an operation River runs on its own pool uses its connection.

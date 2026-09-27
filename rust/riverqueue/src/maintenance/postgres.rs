@@ -122,7 +122,7 @@ pub(super) async fn cancel_backend(pool: &PgPool, backend_pid: i32) {
     match result {
         Ok(Ok(_)) => {}
         Ok(Err(error)) => {
-            debug!(error = %error, backend_pid, "River could not cancel a maintenance statement");
+            debug!(error = %crate::error::Chain(&error), backend_pid, "River could not cancel a maintenance statement");
         }
         Err(_) => {
             debug!(

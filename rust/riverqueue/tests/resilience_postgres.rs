@@ -450,7 +450,12 @@ impl ErrorHandler for RecordingErrorHandler {
 struct RetryAnHourLater;
 
 impl RetryPolicy for RetryAnHourLater {
-    fn next_retry(&self, _job: &JobRow, _error: &str, _now: DateTime<Utc>) -> Duration {
+    fn next_retry(
+        &self,
+        _job: &JobRow,
+        _error: &riverqueue::WorkError,
+        _now: DateTime<Utc>,
+    ) -> Duration {
         Duration::from_hours(1)
     }
 }
@@ -1311,7 +1316,7 @@ async fn extension_set_state_hook_runs_in_the_completion_transaction() {
     assert_eq!(schema.job_state(kept.job.row.id).await, "completed");
     assert!(matches!(
         client.jobs().get(deleted.job.row.id).await,
-        Err(riverqueue::Error::NotFound)
+        Err(riverqueue::Error::NotFound(_))
     ));
     let mut seen = pilot.seen.lock().unwrap().clone();
     seen.sort_unstable();

@@ -75,15 +75,9 @@ async fn empty_batches_are_rejected_before_database_work() {
         .insert_many(Vec::<EmptyBatchArgs>::new())
         .await
         .unwrap_err();
-    assert_eq!(
-        empty_many.to_string(),
-        "invalid job: job: no jobs to insert"
-    );
+    assert_eq!(empty_many.to_string(), "invalid job: no jobs to insert");
     let empty_batch = client.insert_batch(InsertBatch::new()).await.unwrap_err();
-    assert_eq!(
-        empty_batch.to_string(),
-        "invalid job: job: no jobs to insert"
-    );
+    assert_eq!(empty_batch.to_string(), "invalid job: no jobs to insert");
 
     let mut transaction = pool.begin().await.unwrap();
     let empty_many_tx = client
@@ -91,19 +85,13 @@ async fn empty_batches_are_rejected_before_database_work() {
         .tx(&mut transaction)
         .await
         .unwrap_err();
-    assert_eq!(
-        empty_many_tx.to_string(),
-        "invalid job: job: no jobs to insert"
-    );
+    assert_eq!(empty_many_tx.to_string(), "invalid job: no jobs to insert");
     let empty_batch_tx = client
         .insert_batch(InsertBatch::new())
         .tx(&mut transaction)
         .await
         .unwrap_err();
-    assert_eq!(
-        empty_batch_tx.to_string(),
-        "invalid job: job: no jobs to insert"
-    );
+    assert_eq!(empty_batch_tx.to_string(), "invalid job: no jobs to insert");
     transaction.commit().await.unwrap();
 
     pool.close().await;
@@ -332,7 +320,7 @@ async fn job_crud_preserves_sqlite_semantics() {
     assert_eq!(deleted.id, delete_id);
     assert!(matches!(
         client.jobs().get(delete_id).await,
-        Err(Error::NotFound)
+        Err(Error::NotFound(_))
     ));
 
     let still_running_id = insert_job(

@@ -207,7 +207,7 @@ impl ExpectedJob {
 fn params(kinds: impl IntoIterator<Item = &'static str>) -> JobListParams {
     JobListParams::default()
         .kinds(kinds)
-        .states(JobState::ALL)
+        .states(JobState::ALL.iter().copied())
         .order_by(JobListOrderBy::Id)
         .limit(LIST_LIMIT)
 }

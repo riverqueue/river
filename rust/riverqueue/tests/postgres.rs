@@ -216,7 +216,7 @@ struct ResumableCheckpointWorker {
 }
 
 impl Worker<ResumableCheckpointArgs> for ResumableCheckpointWorker {
-    type Error = riverqueue::Error;
+    type Error = riverqueue::BoxError;
 
     fn next_retry(
         &self,
@@ -251,11 +251,9 @@ impl Worker<ResumableCheckpointArgs> for ResumableCheckpointWorker {
                             if attempt == 1 {
                                 cursor_context
                                     .resumable_set_cursor(&ResumableCursor { offset: 42 })?;
-                                return Err(riverqueue::Error::runtime(
-                                    "intentional resumable cursor failure".to_owned(),
-                                ));
+                                return Err("intentional resumable cursor failure".into());
                             }
-                            Ok(())
+                            Ok::<(), riverqueue::BoxError>(())
                         },
                     )
                     .await?;
@@ -302,9 +300,7 @@ impl Worker<ResumableCheckpointArgs> for ResumableCheckpointWorker {
                     .await?;
             }
             mode => {
-                return Err(riverqueue::Error::runtime(format!(
-                    "unknown test mode {mode}"
-                )));
+                return Err(format!("unknown test mode {mode}").into());
             }
         }
         Ok(WorkOutcome::Complete)
@@ -367,7 +363,7 @@ impl RetryPolicy for LongRetryPolicy {
     fn next_retry(
         &self,
         _job: &JobRow,
-        _error: &str,
+        _error: &riverqueue::WorkError,
         _now: chrono::DateTime<chrono::Utc>,
     ) -> Duration {
         Duration::from_hours(1)
@@ -725,10 +721,20 @@ async fn complete_tx_requires_a_running_job_and_rolls_back() {
         .tx(&mut transaction)
         .await
         .unwrap_err();
-    assert!(error.to_string().contains("job must be running"));
+    assert!(
+        matches!(
+            error,
+            riverqueue::Error::JobNotRunning {
+                state: JobState::Available
+            }
+        ),
+        "{error}"
+    );
     assert!(matches!(
         client.jobs().complete(i64::MAX).tx(&mut transaction).await,
-        Err(riverqueue::Error::NotFound)
+        Err(riverqueue::Error::NotFound(riverqueue::Record::Job(
+            i64::MAX
+        )))
     ));
     transaction.rollback().await.unwrap();
 
@@ -999,34 +1005,22 @@ async fn insert_many_variants_preserve_order_and_transactionality() {
         .insert_many(Vec::<EchoArgs>::new())
         .await
         .unwrap_err();
-    assert_eq!(
-        empty_many.to_string(),
-        "invalid job: job: no jobs to insert"
-    );
+    assert_eq!(empty_many.to_string(), "invalid job: no jobs to insert");
     let empty_batch = client.insert_batch(InsertBatch::new()).await.unwrap_err();
-    assert_eq!(
-        empty_batch.to_string(),
-        "invalid job: job: no jobs to insert"
-    );
+    assert_eq!(empty_batch.to_string(), "invalid job: no jobs to insert");
     let mut empty_transaction = pool.begin().await.unwrap();
     let empty_many_tx = client
         .insert_many(Vec::<EchoArgs>::new())
         .tx(&mut empty_transaction)
         .await
         .unwrap_err();
-    assert_eq!(
-        empty_many_tx.to_string(),
-        "invalid job: job: no jobs to insert"
-    );
+    assert_eq!(empty_many_tx.to_string(), "invalid job: no jobs to insert");
     let empty_batch_tx = client
         .insert_batch(InsertBatch::new())
         .tx(&mut empty_transaction)
         .await
         .unwrap_err();
-    assert_eq!(
-        empty_batch_tx.to_string(),
-        "invalid job: job: no jobs to insert"
-    );
+    assert_eq!(empty_batch_tx.to_string(), "invalid job: no jobs to insert");
     empty_transaction.commit().await.unwrap();
 
     let past_scheduled_at = chrono::Utc::now() - chrono::Duration::minutes(1);
@@ -1337,7 +1331,7 @@ async fn job_admin_lists_updates_retries_and_deletes() {
     assert_eq!(deleted.id, retried.id);
     assert!(matches!(
         client.jobs().get(retried.id).await,
-        Err(riverqueue::Error::NotFound)
+        Err(riverqueue::Error::NotFound(_))
     ));
 
     database.cleanup().await;
@@ -2085,11 +2079,11 @@ async fn transactional_inserts_become_visible_on_commit() {
         .unwrap();
     assert!(matches!(
         client.jobs().get(transaction_insert.job.row.id).await,
-        Err(riverqueue::Error::NotFound)
+        Err(riverqueue::Error::NotFound(_))
     ));
     assert!(matches!(
         client.jobs().get(raw_transaction_insert.job.id).await,
-        Err(riverqueue::Error::NotFound)
+        Err(riverqueue::Error::NotFound(_))
     ));
     transaction.commit().await.unwrap();
     assert_eq!(

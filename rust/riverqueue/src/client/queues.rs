@@ -166,7 +166,7 @@ impl QueueGetRequest<'_> {
             .storage(inner)
             .queue_get(&self.name)
             .await?
-            .ok_or(Error::NotFound)
+            .ok_or_else(|| Error::NotFound(crate::Record::Queue(self.name.clone())))
     }
 }
 
@@ -215,7 +215,9 @@ async fn set_paused(
     paused: bool,
 ) -> Result<(), Error> {
     let Some(name) = selector.protocol_name() else {
-        return Err(Error::NotFound);
+        return Err(Error::NotFound(crate::Record::Queue(
+            crate::storage::QUEUE_ALL.to_owned(),
+        )));
     };
     let inner = &client.inner;
     let own_transaction = !target.is_transaction();

@@ -326,6 +326,13 @@ impl AdapterError {
         }
     }
 
+    fn rejected(message: impl Into<String>) -> Self {
+        Self {
+            code: error_code::REJECTED,
+            message: message.into(),
+        }
+    }
+
     fn unsupported(message: impl Into<String>) -> Self {
         Self {
             code: error_code::UNSUPPORTED,
@@ -351,7 +358,7 @@ fn error_code(error: &(dyn std::error::Error + Send + Sync + 'static)) -> i32 {
     }
     if let Some(error) = error.downcast_ref::<riverqueue::Error>() {
         return match error {
-            riverqueue::Error::NotFound => error_code::NOT_FOUND,
+            riverqueue::Error::NotFound(_) => error_code::NOT_FOUND,
             riverqueue::Error::Database(_) => error_code::DATABASE,
             _ => error_code::REJECTED,
         };
@@ -1040,11 +1047,21 @@ impl InsertMiddleware for ProbeInsertMiddleware {
     ) -> Result<InsertedJobs, riverqueue::Error> {
         self.0
             .add_trace("middleware:insert_before")
-            .map_err(|error| riverqueue::Error::runtime(error.to_string()))?;
+            .map_err(|error| {
+                riverqueue::Error::extension(
+                    riverqueue::ExtensionPhase::InsertMiddleware,
+                    error.to_string(),
+                )
+            })?;
         let inserted = next.run(jobs).await;
         self.0
             .add_trace("middleware:insert_after")
-            .map_err(|error| riverqueue::Error::runtime(error.to_string()))?;
+            .map_err(|error| {
+                riverqueue::Error::extension(
+                    riverqueue::ExtensionPhase::InsertMiddleware,
+                    error.to_string(),
+                )
+            })?;
         inserted
     }
 }
@@ -1083,7 +1100,12 @@ impl Plugin for ConformancePlugin {
 struct FixedRetryPolicy(Duration);
 
 impl RetryPolicy for FixedRetryPolicy {
-    fn next_retry(&self, _job: &JobRow, _error: &str, now: DateTime<Utc>) -> Duration {
+    fn next_retry(
+        &self,
+        _job: &JobRow,
+        _error: &riverqueue::WorkError,
+        now: DateTime<Utc>,
+    ) -> Duration {
         let _ = now;
         self.0
     }
@@ -1540,7 +1562,7 @@ impl Adapter {
                 let row = retry_row(required_i64(&params, "job_id")?, now, error_count - 1)?;
                 let delay = DefaultRetryPolicy::with_seed(self.rng_seed).next_retry(
                     &row,
-                    "conformance retry",
+                    &riverqueue::WorkError::new("conformance retry"),
                     now,
                 );
                 Ok(json!({"delay_ns": u64::try_from(delay.as_nanos())?}))
@@ -2329,23 +2351,25 @@ impl Adapter {
         }
     }
 
-    fn client(&self) -> Result<Client, riverqueue::Error> {
+    fn client(&self) -> Result<Client, AdapterError> {
         self.client_for_schema("")
     }
 
-    fn client_for_schema(&self, schema: &str) -> Result<Client, riverqueue::Error> {
-        let schema = SchemaName::new(schema)
-            .map_err(|error| riverqueue::Error::invalid_job(error.to_string()))?;
+    fn client_for_schema(&self, schema: &str) -> Result<Client, AdapterError> {
+        let schema =
+            SchemaName::new(schema).map_err(|error| AdapterError::rejected(error.to_string()))?;
         if let Some(running) = &self.running {
             if running.client.postgres_schema() != Some(&schema) {
-                return Err(riverqueue::Error::invalid_job(format!(
+                return Err(AdapterError::rejected(format!(
                     "running client schema {:?} does not match requested schema {schema}",
                     running.client.postgres_schema()
                 )));
             }
             return Ok(running.client.clone());
         }
-        Client::builder(PostgresDatabase::new(self.pool.clone()).schema(schema)).build()
+        Client::builder(PostgresDatabase::new(self.pool.clone()).schema(schema))
+            .build()
+            .map_err(|error| AdapterError::rejected(error.to_string()))
     }
 }
 
@@ -2477,7 +2501,7 @@ impl SqliteAdapter {
                 let row = retry_row(required_i64(&params, "job_id")?, now, error_count - 1)?;
                 let delay = DefaultRetryPolicy::with_seed(self.rng_seed).next_retry(
                     &row,
-                    "conformance retry",
+                    &riverqueue::WorkError::new("conformance retry"),
                     now,
                 );
                 Ok(json!({"delay_ns": u64::try_from(delay.as_nanos())?}))
@@ -3199,9 +3223,9 @@ fn parse_sqlite_time(value: &str) -> Result<DateTime<Utc>, chrono::ParseError> {
         .map(|value| value.and_utc())
 }
 
-fn schema_name(schema: Option<&str>) -> Result<SchemaName, riverqueue::Error> {
+fn schema_name(schema: Option<&str>) -> Result<SchemaName, AdapterError> {
     SchemaName::new(schema.unwrap_or_default())
-        .map_err(|error| riverqueue::Error::invalid_job(error.to_string()))
+        .map_err(|error| AdapterError::rejected(error.to_string()))
 }
 
 fn retry_row(
