@@ -13,8 +13,8 @@ use std::{convert::Infallible, time::Duration};
 use riverqueue::{
     Client, Error, EventKind, InsertBatch, InsertContext, InsertMiddleware, InsertNext, InsertOpts,
     InsertedJobs, Job, JobArgs, JobDeleteManyParams, JobListParams, JobState, JobUpdateParams,
-    QueueConfig, QueueListParams, QueueSelector, QueueUpdateParams, WorkContext, WorkOutcome,
-    WorkerRegistry,
+    QueueConfig, QueueListParams, QueueSelector, QueueUpdateParams, UniqueOpts, WorkContext,
+    WorkOutcome, WorkerRegistry,
 };
 use serde::{Deserialize, Serialize};
 
@@ -183,6 +183,45 @@ macro_rules! scenarios {
             }
 
             assert_eq!(fixture.job_count().await, 0);
+            fixture.cleanup().await;
+        }
+
+        // Like Go, a custom unique state set must include the states a job
+        // passes through while it's being worked; an empty set means the
+        // default states.
+        #[tokio::test(flavor = "multi_thread")]
+        async fn insert_requires_unique_states_to_include_required_states() {
+            let fixture = Fixture::new().await;
+            let client = fixture.builder().build().unwrap();
+
+            let missing = InsertOpts::default().with_unique(
+                UniqueOpts::new().by_states([JobState::Available, JobState::Completed]),
+            );
+            let error = client
+                .insert(args("missing_states"))
+                .opts(missing)
+                .await
+                .unwrap_err();
+            assert!(matches!(error, Error::InvalidJob(_)), "{error}");
+            assert!(
+                error.to_string().contains("pending, running, scheduled"),
+                "{error}"
+            );
+            assert_eq!(fixture.job_count().await, 0);
+
+            let empty = InsertOpts::default().with_unique(UniqueOpts::new().by_states([]));
+            let first = client
+                .insert(args("empty_states"))
+                .opts(empty.clone())
+                .await
+                .unwrap();
+            let duplicate = client
+                .insert(args("empty_states"))
+                .opts(empty)
+                .await
+                .unwrap();
+            assert!(duplicate.unique_skipped_as_duplicate);
+            assert_eq!(duplicate.id(), first.id());
             fixture.cleanup().await;
         }
 

@@ -819,10 +819,12 @@ impl UniqueOpts {
             && !self.exclude_kind
     }
 
-    /// Canonical persisted bitmask for the configured states.
+    /// Canonical persisted bitmask for the configured states. Like Go, an
+    /// empty custom set means the default states.
     pub(crate) fn state_bitmask(&self) -> u8 {
         self.by_state
             .as_deref()
+            .filter(|states| !states.is_empty())
             .unwrap_or(&JobState::UNIQUE_DEFAULT)
             .iter()
             .fold(0, |mask, state| mask | state.unique_bit())
@@ -835,7 +837,11 @@ impl UniqueOpts {
         {
             return Err("unique period must be at least one second".to_owned());
         }
-        if let Some(states) = &self.by_state {
+        // Like Go, an empty custom set means the default states, which
+        // include every required one.
+        if let Some(states) = &self.by_state
+            && !states.is_empty()
+        {
             let missing = JobState::UNIQUE_REQUIRED
                 .iter()
                 .filter(|state| !states.contains(state))
@@ -856,6 +862,30 @@ impl UniqueOpts {
 mod tests {
     use super::*;
     use crate::MAX_ATTEMPTS_DEFAULT;
+
+    #[test]
+    fn unique_states_must_include_the_required_states() {
+        let error = UniqueOpts::new()
+            .by_states([JobState::Available, JobState::Completed])
+            .validate()
+            .unwrap_err();
+        assert_eq!(
+            error,
+            "unique states must contain required states: pending, running, scheduled"
+        );
+        let required = UniqueOpts::new().by_states(JobState::UNIQUE_REQUIRED);
+        assert!(required.validate().is_ok());
+
+        // As in Go, where a non-nil empty `ByState` enables uniqueness with
+        // the default states.
+        let empty = UniqueOpts::new().by_states([]);
+        assert!(!empty.is_empty());
+        assert!(empty.validate().is_ok());
+        assert_eq!(
+            empty.state_bitmask(),
+            UniqueOpts::new().by_args().state_bitmask()
+        );
+    }
 
     #[test]
     fn insertion_options_resolve_by_layer_without_sentinels() {
