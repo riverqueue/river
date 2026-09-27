@@ -85,6 +85,9 @@ election can't configure periodic jobs, but still work those a leader enqueues
 in their queues.
 
 Cron schedules use Go River's standard five-field syntax in both languages.
+A schedule with a `CRON_TZ=` prefix naming an IANA zone parses in Rust only
+with the `chrono-tz` feature enabled; without it, Rust rejects the schedule
+rather than evaluating it in another zone.
 
 ## SQLite
 

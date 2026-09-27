@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"time"
+	_ "time/tzdata" // named cron zones resolve the same on every host
 
 	"github.com/robfig/cron/v3"
 	"github.com/tidwall/gjson"
@@ -20,6 +21,7 @@ type maintenanceFixture struct {
 	Schema           string              `json:"$schema"`
 	CronCases        []cronCase          `json:"cron_cases"`
 	CronInvalid      []string            `json:"cron_invalid"`
+	CronNamedZones   []cronCase          `json:"cron_named_zone_cases"`
 	ProtocolRevision int                 `json:"protocol_revision"`
 	SnoozeCounters   []snoozeCounterCase `json:"snooze_counters"`
 }
@@ -29,6 +31,12 @@ type cronCase struct {
 	From       time.Time   `json:"from"`
 	Name       string      `json:"name"`
 	Next       []time.Time `json:"next"`
+}
+
+type cronCaseInput struct {
+	expression string
+	from       time.Time
+	name       string
 }
 
 type snoozeCounterCase struct {
@@ -49,11 +57,7 @@ func makeMaintenanceFixture() maintenanceFixture {
 	utcFrom := time.Date(2026, time.January, 2, 3, 4, 5, 678_900_000, time.UTC)
 	eastern := time.FixedZone("", -5*60*60)
 	kolkata := time.FixedZone("", 5*60*60+30*60)
-	for _, testCase := range []struct {
-		expression string
-		from       time.Time
-		name       string
-	}{
+	for _, testCase := range []cronCaseInput{
 		{expression: "* * * * *", from: utcFrom, name: "every_minute"},
 		{expression: "30 * * * *", from: utcFrom, name: "half_past_every_hour"},
 		{expression: "0 9 * * 1", from: utcFrom, name: "monday_numeric_weekday"},
@@ -91,25 +95,24 @@ func makeMaintenanceFixture() maintenanceFixture {
 		{expression: "TZ=UTC 0 9 * * *", from: time.Date(2026, time.March, 7, 8, 0, 0, 0, eastern), name: "tz_utc_prefix"},
 		{expression: "  0   9 * *   1 ", from: utcFrom, name: "extra_whitespace"},
 	} {
-		schedule, err := cron.ParseStandard(testCase.expression)
-		if err != nil {
-			fatal(err)
-		}
-		next := make([]time.Time, 0, cronNextCount)
-		current := testCase.from
-		for range cronNextCount {
-			current = schedule.Next(current)
-			if current.IsZero() {
-				break
-			}
-			next = append(next, current)
-		}
-		fixture.CronCases = append(fixture.CronCases, cronCase{
-			Expression: testCase.expression,
-			From:       testCase.from,
-			Name:       testCase.name,
-			Next:       next,
-		})
+		fixture.CronCases = append(fixture.CronCases, makeCronCase(testCase))
+	}
+
+	// IANA zones named in `CRON_TZ=`/`TZ=` prefixes, including daylight
+	// saving transitions. Kept apart from `cron_cases` because an
+	// implementation may need an optional time zone database for them.
+	for _, testCase := range []cronCaseInput{
+		{expression: "CRON_TZ=America/New_York 0 9 * * *", from: time.Date(2026, time.March, 6, 12, 0, 0, 0, time.UTC), name: "new_york_across_dst_start"},
+		{expression: "CRON_TZ=America/New_York 30 2 * * *", from: time.Date(2026, time.March, 6, 12, 0, 0, 0, time.UTC), name: "new_york_skipped_wall_time"},
+		{expression: "CRON_TZ=America/New_York 30 1 * * *", from: time.Date(2026, time.October, 30, 12, 0, 0, 0, time.UTC), name: "new_york_repeated_wall_time"},
+		{expression: "CRON_TZ=America/New_York 0 * * * *", from: time.Date(2026, time.November, 1, 4, 30, 0, 0, time.UTC), name: "new_york_hourly_across_dst_end"},
+		{expression: "CRON_TZ=Europe/London 0 0 * * *", from: time.Date(2026, time.October, 23, 12, 0, 0, 0, time.UTC), name: "london_across_dst_end"},
+		{expression: "CRON_TZ=America/Santiago 0 0 * * *", from: time.Date(2026, time.September, 3, 12, 0, 0, 0, time.UTC), name: "santiago_skipped_midnight"},
+		{expression: "CRON_TZ=America/Santiago 0 12 * * *", from: time.Date(2026, time.September, 3, 12, 0, 0, 0, time.UTC), name: "santiago_day_after_skipped_midnight"},
+		{expression: "CRON_TZ=America/Santiago 30 23 * * *", from: time.Date(2026, time.April, 2, 12, 0, 0, 0, time.UTC), name: "santiago_repeated_hour_before_midnight"},
+		{expression: "TZ=Asia/Kolkata 0 9 * * mon", from: time.Date(2026, time.January, 2, 3, 4, 5, 0, eastern), name: "kolkata_tz_prefix"},
+	} {
+		fixture.CronNamedZones = append(fixture.CronNamedZones, makeCronCase(testCase))
 	}
 
 	for _, expression := range []string{
@@ -171,4 +174,27 @@ func makeMaintenanceFixture() maintenanceFixture {
 	}
 
 	return fixture
+}
+
+// makeCronCase records the occurrences Go computes for one cron case.
+func makeCronCase(testCase cronCaseInput) cronCase {
+	schedule, err := cron.ParseStandard(testCase.expression)
+	if err != nil {
+		fatal(err)
+	}
+	next := make([]time.Time, 0, cronNextCount)
+	current := testCase.from
+	for range cronNextCount {
+		current = schedule.Next(current)
+		if current.IsZero() {
+			break
+		}
+		next = append(next, current)
+	}
+	return cronCase{
+		Expression: testCase.expression,
+		From:       testCase.from,
+		Name:       testCase.name,
+		Next:       next,
+	}
 }

@@ -16,6 +16,9 @@ all-features = true
 
 [features]
 default = ["postgres"]
+# Resolves IANA zone names such as `America/New_York` in cron `CRON_TZ=`
+# prefixes, as River Go does, from a bundled time zone database.
+chrono-tz = ["dep:chrono-tz"]
 postgres = ["riverqueue-migrate/postgres", "sqlx/postgres"]
 postgres-tests = ["postgres"]
 sqlite = ["dep:rand", "riverqueue-migrate/sqlite", "sqlx/sqlite"]
@@ -24,6 +27,7 @@ sqlite = ["dep:rand", "riverqueue-migrate/sqlite", "sqlx/sqlite"]
 async-trait.workspace = true
 base64.workspace = true
 chrono.workspace = true
+chrono-tz = { version = "0.10.4", optional = true }
 futures-util.workspace = true
 riverqueue-migrate = { path = "../riverqueue-migrate", version = "=0.47.0-alpha.1", default-features = false }
 riverqueue-macros = { path = "../riverqueue-macros", version = "=0.47.0-alpha.1" }

@@ -194,7 +194,10 @@ have no global completion order.
   runtime. Stable IDs prevent duplicate registration. `CronSchedule` accepts
   River Go's standard five-field cron syntax and descriptors such as `@hourly`
   and `@every 90s` with identical semantics, evaluated in the process's local
-  time zone like Go unless another `CronTimeZone` is chosen.
+  time zone like Go unless another `CronTimeZone` is chosen. `CRON_TZ=` and
+  `TZ=` prefixes naming IANA zones such as `America/New_York` need the
+  `chrono-tz` feature, which bundles the time zone database; without it only
+  `UTC`, `Local`, and `Etc/GMT±N` names parse.
 - Resumable steps persist the last completed step and optional cursor. Use the
   transactional checkpoint helpers when progress and business data must commit
   together.

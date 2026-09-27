@@ -19,6 +19,22 @@
       "type": "array"
     },
     "cron_invalid": { "items": { "type": "string" }, "minItems": 1, "type": "array" },
+    "cron_named_zone_cases": {
+      "description": "Cron cases whose CRON_TZ or TZ prefix names an IANA zone. Implementations without a time zone database may reject these expressions instead.",
+      "items": {
+        "additionalProperties": false,
+        "properties": {
+          "expression": { "type": "string" },
+          "from": { "format": "date-time", "type": "string" },
+          "name": { "type": "string" },
+          "next": { "items": { "format": "date-time", "type": "string" }, "type": "array" }
+        },
+        "required": ["expression", "from", "name", "next"],
+        "type": "object"
+      },
+      "minItems": 1,
+      "type": "array"
+    },
     "protocol_revision": { "minimum": 1, "type": "integer" },
     "snooze_counters": {
       "items": {
@@ -35,7 +51,7 @@
       "type": "array"
     }
   },
-  "required": ["$schema", "cron_cases", "cron_invalid", "protocol_revision", "snooze_counters"],
+  "required": ["$schema", "cron_cases", "cron_invalid", "cron_named_zone_cases", "protocol_revision", "snooze_counters"],
   "title": "River maintenance protocol values",
   "type": "object"
 }

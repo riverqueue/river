@@ -451,6 +451,116 @@
     "@reboot",
     "CRON_TZ=Nowhere/Invalid 0 9 * * *"
   ],
+  "cron_named_zone_cases": [
+    {
+      "expression": "CRON_TZ=America/New_York 0 9 * * *",
+      "from": "2026-03-06T12:00:00Z",
+      "name": "new_york_across_dst_start",
+      "next": [
+        "2026-03-06T14:00:00Z",
+        "2026-03-07T14:00:00Z",
+        "2026-03-08T13:00:00Z",
+        "2026-03-09T13:00:00Z",
+        "2026-03-10T13:00:00Z"
+      ]
+    },
+    {
+      "expression": "CRON_TZ=America/New_York 30 2 * * *",
+      "from": "2026-03-06T12:00:00Z",
+      "name": "new_york_skipped_wall_time",
+      "next": [
+        "2026-03-07T07:30:00Z",
+        "2026-03-09T06:30:00Z",
+        "2026-03-10T06:30:00Z",
+        "2026-03-11T06:30:00Z",
+        "2026-03-12T06:30:00Z"
+      ]
+    },
+    {
+      "expression": "CRON_TZ=America/New_York 30 1 * * *",
+      "from": "2026-10-30T12:00:00Z",
+      "name": "new_york_repeated_wall_time",
+      "next": [
+        "2026-10-31T05:30:00Z",
+        "2026-11-01T05:30:00Z",
+        "2026-11-01T06:30:00Z",
+        "2026-11-02T06:30:00Z",
+        "2026-11-03T06:30:00Z"
+      ]
+    },
+    {
+      "expression": "CRON_TZ=America/New_York 0 * * * *",
+      "from": "2026-11-01T04:30:00Z",
+      "name": "new_york_hourly_across_dst_end",
+      "next": [
+        "2026-11-01T05:00:00Z",
+        "2026-11-01T06:00:00Z",
+        "2026-11-01T07:00:00Z",
+        "2026-11-01T08:00:00Z",
+        "2026-11-01T09:00:00Z"
+      ]
+    },
+    {
+      "expression": "CRON_TZ=Europe/London 0 0 * * *",
+      "from": "2026-10-23T12:00:00Z",
+      "name": "london_across_dst_end",
+      "next": [
+        "2026-10-23T23:00:00Z",
+        "2026-10-24T23:00:00Z",
+        "2026-10-26T00:00:00Z",
+        "2026-10-27T00:00:00Z",
+        "2026-10-28T00:00:00Z"
+      ]
+    },
+    {
+      "expression": "CRON_TZ=America/Santiago 0 0 * * *",
+      "from": "2026-09-03T12:00:00Z",
+      "name": "santiago_skipped_midnight",
+      "next": [
+        "2026-09-04T04:00:00Z",
+        "2026-09-05T04:00:00Z",
+        "2026-09-07T03:00:00Z",
+        "2026-09-08T03:00:00Z",
+        "2026-09-09T03:00:00Z"
+      ]
+    },
+    {
+      "expression": "CRON_TZ=America/Santiago 0 12 * * *",
+      "from": "2026-09-03T12:00:00Z",
+      "name": "santiago_day_after_skipped_midnight",
+      "next": [
+        "2026-09-03T16:00:00Z",
+        "2026-09-04T16:00:00Z",
+        "2026-09-05T16:00:00Z",
+        "2026-09-06T15:00:00Z",
+        "2026-09-07T15:00:00Z"
+      ]
+    },
+    {
+      "expression": "CRON_TZ=America/Santiago 30 23 * * *",
+      "from": "2026-04-02T12:00:00Z",
+      "name": "santiago_repeated_hour_before_midnight",
+      "next": [
+        "2026-04-03T02:30:00Z",
+        "2026-04-04T02:30:00Z",
+        "2026-04-05T02:30:00Z",
+        "2026-04-05T03:30:00Z",
+        "2026-04-06T03:30:00Z"
+      ]
+    },
+    {
+      "expression": "TZ=Asia/Kolkata 0 9 * * mon",
+      "from": "2026-01-02T03:04:05-05:00",
+      "name": "kolkata_tz_prefix",
+      "next": [
+        "2026-01-04T22:30:00-05:00",
+        "2026-01-11T22:30:00-05:00",
+        "2026-01-18T22:30:00-05:00",
+        "2026-01-25T22:30:00-05:00",
+        "2026-02-01T22:30:00-05:00"
+      ]
+    }
+  ],
   "protocol_revision": 1,
   "snooze_counters": [
     {
