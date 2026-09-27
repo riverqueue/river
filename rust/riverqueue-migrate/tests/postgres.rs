@@ -9,15 +9,17 @@ use sqlx::{AssertSqlSafe, PgPool};
 async fn upgrades_from_every_historical_version() {
     let pool = test_pool().await;
 
-    let reference_schema = "rust_migrate_reference";
-    recreate_schema(&pool, reference_schema).await;
-    let reference =
-        PostgresMigrator::new(pool.clone()).with_schema(SchemaName::new(reference_schema).unwrap());
+    // Unique names keep concurrent runs against one database apart.
+    let prefix = unique_schema("rust_migrate");
+    let reference_schema = format!("{prefix}_reference");
+    recreate_schema(&pool, &reference_schema).await;
+    let reference = PostgresMigrator::new(pool.clone())
+        .with_schema(SchemaName::new(reference_schema.clone()).unwrap());
     reference.migrate_up().await.unwrap();
-    let expected = schema_snapshot(&pool, reference_schema).await;
+    let expected = schema_snapshot(&pool, &reference_schema).await;
 
     for version in 1..=MIGRATION_VERSION_LATEST {
-        let schema = format!("rust_migrate_from_{version}");
+        let schema = format!("{prefix}_from_{version}");
         recreate_schema(&pool, &schema).await;
         let migrator = PostgresMigrator::new(pool.clone())
             .with_schema(SchemaName::new(schema.clone()).unwrap());
@@ -53,10 +55,100 @@ async fn upgrades_from_every_historical_version() {
     }
 
     for version in 1..=MIGRATION_VERSION_LATEST {
-        let schema = format!("rust_migrate_from_{version}");
+        let schema = format!("{prefix}_from_{version}");
         drop_schema(&pool, &schema).await;
     }
-    drop_schema(&pool, reference_schema).await;
+    drop_schema(&pool, &reference_schema).await;
+}
+
+// Other migration lines share `river_migration` with River's main line. Main
+// line operations must neither read nor remove their rows, and reverting
+// version 005, which would drop the `line` column and lose them, must fail
+// as it does in Go.
+#[tokio::test]
+async fn main_line_migrations_preserve_other_lines() {
+    let pool = test_pool().await;
+    let schema = unique_schema("rust_migrate_lines");
+    recreate_schema(&pool, &schema).await;
+    let schema_name = SchemaName::new(schema.clone()).unwrap();
+    let table = schema_name.qualify("river_migration");
+    let migrator = PostgresMigrator::new(pool.clone()).with_schema(schema_name);
+    migrator.migrate_up().await.unwrap();
+    sqlx::query(AssertSqlSafe(format!(
+        "INSERT INTO {table} (line, version) VALUES ('extension', 1), ('extension', 2)"
+    )))
+    .execute(&pool)
+    .await
+    .unwrap();
+    let extension_versions = || {
+        let pool = pool.clone();
+        let table = table.clone();
+        async move {
+            sqlx::query_scalar::<_, i64>(AssertSqlSafe(format!(
+                "SELECT version FROM {table} WHERE line = 'extension' ORDER BY version"
+            )))
+            .fetch_all(&pool)
+            .await
+            .unwrap()
+        }
+    };
+
+    let all_main = (1..=MIGRATION_VERSION_LATEST).collect::<Vec<_>>();
+    assert_eq!(migrator.existing_versions().await.unwrap(), all_main);
+    assert!(migrator.validate(None).await.unwrap().ok);
+    assert!(migrator.migrate_up().await.unwrap().is_empty());
+
+    // Down to 005 and back up only touches the main line.
+    migrator
+        .migrate(Direction::Down, MigrateOpts::new().with_target_version(5))
+        .await
+        .unwrap();
+    assert_eq!(
+        migrator.existing_versions().await.unwrap(),
+        (1..=5).collect::<Vec<_>>()
+    );
+    assert_eq!(extension_versions().await, [1, 2]);
+    migrator.migrate_up().await.unwrap();
+    assert_eq!(migrator.existing_versions().await.unwrap(), all_main);
+    assert_eq!(extension_versions().await, [1, 2]);
+
+    // Reverting 005 would lose the other line, so it fails and changes
+    // nothing.
+    migrator
+        .migrate(Direction::Down, MigrateOpts::new().with_target_version(5))
+        .await
+        .unwrap();
+    let error = migrator
+        .migrate(Direction::Down, MigrateOpts::new().with_target_version(4))
+        .await
+        .unwrap_err();
+    assert!(
+        error.to_string().contains("non-main migration lines"),
+        "{error}"
+    );
+    assert_eq!(
+        migrator.existing_versions().await.unwrap(),
+        (1..=5).collect::<Vec<_>>()
+    );
+    assert_eq!(extension_versions().await, [1, 2]);
+
+    // Without other lines, 005 reverts.
+    sqlx::query(AssertSqlSafe(format!(
+        "DELETE FROM {table} WHERE line = 'extension'"
+    )))
+    .execute(&pool)
+    .await
+    .unwrap();
+    migrator
+        .migrate(Direction::Down, MigrateOpts::new().with_target_version(4))
+        .await
+        .unwrap();
+    assert_eq!(
+        migrator.existing_versions().await.unwrap(),
+        (1..=4).collect::<Vec<_>>()
+    );
+
+    drop_schema(&pool, &schema).await;
 }
 
 #[tokio::test]
