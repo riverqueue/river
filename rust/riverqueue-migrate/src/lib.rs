@@ -186,15 +186,9 @@ pub enum Error {
     #[error("invalid migration request: {0}")]
     Invalid(String),
 
-    /// PostgreSQL operation failed.
-    #[cfg(feature = "postgres")]
+    /// A database operation failed.
     #[error(transparent)]
-    Postgres(#[from] sqlx::Error),
-
-    /// SQLite operation failed.
-    #[cfg(feature = "sqlite")]
-    #[error(transparent)]
-    Sqlite(sqlx::Error),
+    Database(#[from] sqlx::Error),
 }
 
 /// Applies and validates River's PostgreSQL migration history.
@@ -233,7 +227,7 @@ impl PostgresMigrator {
     ///
     /// # Errors
     ///
-    /// Returns [`Error::Postgres`] when the query fails.
+    /// Returns [`Error::Database`] when the query fails.
     pub async fn existing_versions(&self) -> Result<Vec<i64>, Error> {
         let table = self.schema.qualify("river_migration");
         // Pass the quoted, qualified name through unchanged like Go's
@@ -274,7 +268,7 @@ impl PostgresMigrator {
     ///
     /// # Errors
     ///
-    /// Returns [`Error::Postgres`] when a migration fails.
+    /// Returns [`Error::Database`] when a migration fails.
     pub async fn migrate_up(&self) -> Result<Vec<i64>, Error> {
         Ok(self
             .migrate(Direction::Up, MigrateOpts::default())
@@ -294,7 +288,7 @@ impl PostgresMigrator {
     ///
     /// Returns [`Error::Invalid`] when the options are inconsistent, for
     /// example a target version that doesn't exist or, when migrating down,
-    /// isn't applied, and [`Error::Postgres`] when a migration fails.
+    /// isn't applied, and [`Error::Database`] when a migration fails.
     pub async fn migrate(
         &self,
         direction: Direction,
@@ -334,7 +328,7 @@ impl PostgresMigrator {
     /// # Errors
     ///
     /// Returns [`Error::Invalid`] when the target version doesn't exist and
-    /// [`Error::Postgres`] when reading the applied versions fails.
+    /// [`Error::Database`] when reading the applied versions fails.
     pub async fn validate(&self, target_version: Option<i64>) -> Result<ValidateResult, Error> {
         validate_target(&POSTGRES_MIGRATIONS, target_version, false)?;
         let applied = self.existing_versions().await?;

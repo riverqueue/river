@@ -132,13 +132,13 @@ impl FromStr for JobListCursor {
 #[non_exhaustive]
 pub enum JobListCursorError {
     /// Cursor text is neither URL-safe nor standard Base64.
-    #[error("invalid job-list cursor base64: {0}")]
+    #[error("invalid job-list cursor base64")]
     Base64(#[source] base64::DecodeError),
     /// List parameters cannot produce a valid cursor.
     #[error("invalid job-list parameters: {0}")]
     InvalidListParams(String),
     /// Cursor contents are not valid JSON.
-    #[error("invalid job-list cursor JSON: {0}")]
+    #[error("invalid job-list cursor JSON")]
     Json(#[source] serde_json::Error),
     /// Cursor names an unsupported ordering field.
     #[error("unknown job-list cursor sort field {0:?}")]

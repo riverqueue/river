@@ -56,14 +56,14 @@ impl SqliteMigrator {
     ///
     /// # Errors
     ///
-    /// Returns [`Error::Sqlite`] when the query fails.
+    /// Returns [`Error::Database`] when the query fails.
     pub async fn existing_versions(&self) -> Result<Vec<i64>, Error> {
         let exists: bool = sqlx::query_scalar(
             "SELECT EXISTS (SELECT 1 FROM sqlite_schema WHERE type = 'table' AND name = 'river_migration')",
         )
         .fetch_one(&self.pool)
         .await
-        .map_err(Error::Sqlite)?;
+        .map_err(Error::Database)?;
         if !exists {
             return Ok(Vec::new());
         }
@@ -73,18 +73,18 @@ impl SqliteMigrator {
         )
         .fetch_one(&self.pool)
         .await
-        .map_err(Error::Sqlite)?;
+        .map_err(Error::Database)?;
         let rows = if has_line {
             sqlx::query("SELECT version FROM river_migration WHERE line = ?1 ORDER BY version")
                 .bind(MIGRATION_LINE_MAIN)
                 .fetch_all(&self.pool)
                 .await
-                .map_err(Error::Sqlite)?
+                .map_err(Error::Database)?
         } else {
             sqlx::query("SELECT version FROM river_migration ORDER BY version")
                 .fetch_all(&self.pool)
                 .await
-                .map_err(Error::Sqlite)?
+                .map_err(Error::Database)?
         };
         Ok(rows.iter().map(|row| row.get("version")).collect())
     }
@@ -98,7 +98,7 @@ impl SqliteMigrator {
     ///
     /// Returns [`Error::Invalid`] when the options are inconsistent, for
     /// example a target version that doesn't exist or, when migrating down,
-    /// isn't applied, and [`Error::Sqlite`] when a migration fails.
+    /// isn't applied, and [`Error::Database`] when a migration fails.
     pub async fn migrate(
         &self,
         direction: Direction,
@@ -134,7 +134,7 @@ impl SqliteMigrator {
     ///
     /// # Errors
     ///
-    /// Returns [`Error::Sqlite`] when a migration fails.
+    /// Returns [`Error::Database`] when a migration fails.
     pub async fn migrate_up(&self) -> Result<Vec<i64>, Error> {
         Ok(self
             .migrate(Direction::Up, MigrateOpts::default())
@@ -150,7 +150,7 @@ impl SqliteMigrator {
     /// # Errors
     ///
     /// Returns [`Error::Invalid`] when the target version doesn't exist and
-    /// [`Error::Sqlite`] when reading the applied versions fails.
+    /// [`Error::Database`] when reading the applied versions fails.
     pub async fn validate(&self, target_version: Option<i64>) -> Result<ValidateResult, Error> {
         validate_target(&SQLITE_MIGRATIONS, target_version, false)?;
         let applied = self.existing_versions().await?;
@@ -171,7 +171,7 @@ impl SqliteMigrator {
             .pool
             .begin_with("BEGIN IMMEDIATE")
             .await
-            .map_err(Error::Sqlite)?;
+            .map_err(Error::Database)?;
         if direction == Direction::Down && migration.version == 5 {
             let has_other_lines: bool = sqlx::query_scalar(
                 "SELECT EXISTS (SELECT 1 FROM river_migration WHERE line <> ?1)",
@@ -179,7 +179,7 @@ impl SqliteMigrator {
             .bind(MIGRATION_LINE_MAIN)
             .fetch_one(&mut *transaction)
             .await
-            .map_err(Error::Sqlite)?;
+            .map_err(Error::Database)?;
             if has_other_lines {
                 return Err(Error::Invalid(
                     "found non-main migration lines; version 005 is irreversible without losing migration information"
@@ -191,7 +191,7 @@ impl SqliteMigrator {
         sqlx::raw_sql(sqlx::AssertSqlSafe(sql))
             .execute(&mut *transaction)
             .await
-            .map_err(Error::Sqlite)?;
+            .map_err(Error::Database)?;
         match direction {
             Direction::Down if migration.version == 1 => {}
             Direction::Down if migration.version <= 5 => {
@@ -199,7 +199,7 @@ impl SqliteMigrator {
                     .bind(migration.version)
                     .execute(&mut *transaction)
                     .await
-                    .map_err(Error::Sqlite)?;
+                    .map_err(Error::Database)?;
             }
             Direction::Down => {
                 sqlx::query("DELETE FROM river_migration WHERE line = ?1 AND version = ?2")
@@ -207,7 +207,7 @@ impl SqliteMigrator {
                     .bind(migration.version)
                     .execute(&mut *transaction)
                     .await
-                    .map_err(Error::Sqlite)?;
+                    .map_err(Error::Database)?;
             }
             Direction::Up if migration.version >= 5 => {
                 sqlx::query("INSERT INTO river_migration (line, version) VALUES (?1, ?2)")
@@ -215,17 +215,17 @@ impl SqliteMigrator {
                     .bind(migration.version)
                     .execute(&mut *transaction)
                     .await
-                    .map_err(Error::Sqlite)?;
+                    .map_err(Error::Database)?;
             }
             Direction::Up => {
                 sqlx::query("INSERT INTO river_migration (version) VALUES (?1)")
                     .bind(migration.version)
                     .execute(&mut *transaction)
                     .await
-                    .map_err(Error::Sqlite)?;
+                    .map_err(Error::Database)?;
             }
         }
-        transaction.commit().await.map_err(Error::Sqlite)?;
+        transaction.commit().await.map_err(Error::Database)?;
         Ok(())
     }
 }
