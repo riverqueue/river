@@ -44,10 +44,7 @@ use tokio::sync::{broadcast, mpsc};
 use tokio_util::sync::CancellationToken;
 use tracing::warn;
 
-use crate::{
-    Error,
-    client::{ClientInner, RuntimeNotification},
-};
+use crate::{Error, client::ClientInner};
 
 /// Batch size used by bulk maintenance services (Go `BatchSizeDefault`).
 pub(crate) const BATCH_SIZE_DEFAULT: i64 = 10_000;
@@ -69,7 +66,7 @@ const STAGGER_MAX: Duration = Duration::from_secs(1);
 pub(crate) async fn run_maintenance(
     inner: Arc<ClientInner>,
     cancel: CancellationToken,
-    notifications: broadcast::Receiver<RuntimeNotification>,
+    notifications: broadcast::Receiver<LeadershipWakeup>,
 ) -> Result<(), Error> {
     let (wakeup_sender, wakeup_receiver) = mpsc::unbounded_channel();
     let (term_sender, term_receiver) = mpsc::unbounded_channel();
@@ -96,15 +93,15 @@ pub(crate) enum LeadershipWakeup {
     RequestResign,
 }
 
-/// Moves leadership notifications off the shared runtime broadcast channel.
+/// Moves leadership notifications from the client's broadcast channel into
+/// the elector's unbounded queue.
 ///
-/// The broadcast channel also carries insert and queue-control wakeups, so a
-/// busy receiver can lag and lose messages. This task does nothing but relay
-/// leadership events into an unbounded queue, and if it ever lags it still
-/// emits a wakeup so the elector re-checks the lease rather than silently
-/// missing a transition.
+/// The channel carries only leadership events, which are rare, so it lagging
+/// would take over a thousand of them arriving at once. Should it ever lag,
+/// the relay still emits a wakeup so the elector re-checks the lease rather
+/// than silently missing a transition.
 async fn forward_leadership_notifications(
-    mut notifications: broadcast::Receiver<RuntimeNotification>,
+    mut notifications: broadcast::Receiver<LeadershipWakeup>,
     wakeups: mpsc::UnboundedSender<LeadershipWakeup>,
     cancel: CancellationToken,
 ) {
@@ -115,9 +112,7 @@ async fn forward_leadership_notifications(
             notification = notifications.recv() => notification,
         };
         let wakeup = match notification {
-            Ok(RuntimeNotification::LeadershipChanged) => LeadershipWakeup::Changed,
-            Ok(RuntimeNotification::LeadershipRequestResign) => LeadershipWakeup::RequestResign,
-            Ok(RuntimeNotification::Insert(_) | RuntimeNotification::QueueControl(_)) => continue,
+            Ok(wakeup) => wakeup,
             Err(broadcast::error::RecvError::Lagged(count)) => {
                 warn!(
                     skipped = count,

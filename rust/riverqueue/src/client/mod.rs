@@ -87,6 +87,7 @@ use crate::__private::{
 };
 
 use crate::extension::{WorkEndpoint, WorkNext};
+use crate::maintenance::LeadershipWakeup;
 use crate::{
     AttemptError, BoxError, DefaultRetryPolicy, Error, ErrorHandler, ErrorHandlerDecision, Event,
     EventKind, EventReceiver, FETCH_COOLDOWN_DEFAULT, FETCH_COOLDOWN_MIN,
@@ -127,6 +128,10 @@ pub(crate) struct ClientInner {
     job_stuck_threshold: Duration,
     pub(crate) job_timeout: Option<Duration>,
     leader_election_disabled: bool,
+    /// Leadership notifications for the elector, kept off the busier
+    /// producer channel so that insert wakeups can't crowd out a resignation
+    /// request.
+    pub(crate) leadership_wakeups: broadcast::Sender<LeadershipWakeup>,
     pub(crate) maintenance: MaintenanceConfig,
     /// Notification listener starts that panic before doing anything, so
     /// tests can exercise the supervisor's restart path.

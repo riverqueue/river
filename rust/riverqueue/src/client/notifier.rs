@@ -37,11 +37,12 @@ pub(super) struct LeadershipNotification {
     pub(super) leader_id: Option<String>,
 }
 
+/// Wakeups for producers. Leadership events travel separately, on
+/// [`ClientInner::leadership_wakeups`], so this busier channel lagging can
+/// never drop one.
 #[derive(Clone, Debug)]
 pub(crate) enum RuntimeNotification {
     Insert(String),
-    LeadershipChanged,
-    LeadershipRequestResign,
     QueueControl(String),
 }
 
@@ -72,7 +73,7 @@ fn wake_all_producers(queue_notifications: &broadcast::Sender<RuntimeNotificatio
 }
 
 /// Routes one River notification to local producers and services.
-fn dispatch_notification(
+pub(super) fn dispatch_notification(
     inner: &ClientInner,
     queue_notifications: &broadcast::Sender<RuntimeNotification>,
     topic: &str,
@@ -91,12 +92,12 @@ fn dispatch_notification(
                 {
                     return;
                 }
-                let notification = if payload.action == "request_resign" {
-                    RuntimeNotification::LeadershipRequestResign
+                let wakeup = if payload.action == "request_resign" {
+                    LeadershipWakeup::RequestResign
                 } else {
-                    RuntimeNotification::LeadershipChanged
+                    LeadershipWakeup::Changed
                 };
-                let _ = queue_notifications.send(notification);
+                let _ = inner.leadership_wakeups.send(wakeup);
             }
         }
         crate::NOTIFICATION_TOPIC_CONTROL => {

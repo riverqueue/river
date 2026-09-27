@@ -51,8 +51,8 @@ impl ResignRequest<'_> {
         // also signalling it locally would deliver the request twice.
         if own_transaction && inner.poll_only {
             let _ = inner
-                .queue_notifications
-                .send(RuntimeNotification::LeadershipRequestResign);
+                .leadership_wakeups
+                .send(LeadershipWakeup::RequestResign);
         }
         Ok(())
     }

@@ -347,7 +347,7 @@ impl Supervisor {
                 Service::Maintenance => Box::pin(crate::maintenance::run_maintenance(
                     Arc::clone(&inner),
                     cancel.clone(),
-                    inner.queue_notifications.subscribe(),
+                    inner.leadership_wakeups.subscribe(),
                 )),
                 Service::Notifier => {
                     let ready = self.notifier_ready.clone();

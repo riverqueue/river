@@ -586,6 +586,7 @@ impl ClientBuilder {
             .unwrap_or_else(SchemaName::current);
         let (events, _) = broadcast::channel(EVENT_BUFFER_CAPACITY);
         let (queue_changes, _) = watch::channel(0_u64);
+        let (leadership_wakeups, _) = broadcast::channel(1_024);
         let (queue_notifications, _) = broadcast::channel(1_024);
         Ok(Client {
             inner: Arc::new(ClientInner {
@@ -600,6 +601,7 @@ impl ClientBuilder {
                 job_stuck_threshold: self.job_stuck_threshold,
                 job_timeout: self.job_timeout,
                 leader_election_disabled: self.leader_election_disabled,
+                leadership_wakeups,
                 maintenance,
                 #[cfg(test)]
                 notifier_start_panics: AtomicU64::new(0),

@@ -342,11 +342,7 @@ pub(super) async fn run_queue(
                     false,
                     notification_queue == "*" || notification_queue == queue,
                 ),
-                Ok(
-                    RuntimeNotification::LeadershipChanged
-                        | RuntimeNotification::LeadershipRequestResign,
-                )
-                | Err(broadcast::error::RecvError::Closed) => (false, false),
+                Err(broadcast::error::RecvError::Closed) => (false, false),
                 Err(broadcast::error::RecvError::Lagged(_)) => (true, true),
             },
         };

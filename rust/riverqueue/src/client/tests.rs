@@ -500,3 +500,44 @@ async fn readiness_survives_a_notification_listener_panic() {
         let _ = std::fs::remove_file(file);
     }
 }
+
+/// Insert wakeups are far more frequent than leadership events. A burst of
+/// them must not push a resignation request out of the elector's channel, as
+/// it could when both shared one lagging broadcast channel.
+#[cfg(feature = "sqlite")]
+#[tokio::test]
+async fn resign_requests_survive_a_burst_of_insert_notifications() {
+    let pool = sqlx::SqlitePool::connect_lazy("sqlite::memory:").unwrap();
+    let client = Client::builder(pool).build().unwrap();
+    let inner = &client.inner;
+    // The receiver the supervisor hands to maintenance.
+    let mut leadership = inner.leadership_wakeups.subscribe();
+    let mut producer = inner.queue_notifications.subscribe();
+
+    dispatch_notification(
+        inner,
+        &inner.queue_notifications,
+        crate::NOTIFICATION_TOPIC_LEADERSHIP,
+        r#"{"action":"request_resign"}"#,
+    );
+    for _ in 0..4_096 {
+        dispatch_notification(
+            inner,
+            &inner.queue_notifications,
+            crate::NOTIFICATION_TOPIC_INSERT,
+            r#"{"queue":"default"}"#,
+        );
+    }
+
+    assert!(matches!(
+        leadership.try_recv(),
+        Ok(LeadershipWakeup::RequestResign)
+    ));
+    assert!(leadership.try_recv().is_err());
+    // The producers' channel lagged, which producers recover from by
+    // fetching and refreshing everything.
+    assert!(matches!(
+        producer.try_recv(),
+        Err(broadcast::error::TryRecvError::Lagged(_))
+    ));
+}
