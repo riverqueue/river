@@ -78,6 +78,20 @@ func exerciseJobUpdate[TTx any](ctx context.Context, t *testing.T, executorWithT
 	t.Run("JobCancel", func(t *testing.T) {
 		t.Parallel()
 
+		t.Run("CancelsWithoutControlTopic", func(t *testing.T) {
+			t.Parallel()
+
+			exec, _ := setup(ctx, t)
+			job := testfactory.Job(ctx, t, exec, &testfactory.JobOpts{})
+
+			jobAfter, err := exec.JobCancel(ctx, &riverdriver.JobCancelParams{
+				CancelAttemptedAt: time.Now(),
+				ID:                job.ID,
+			})
+			require.NoError(t, err)
+			require.Equal(t, rivertype.JobStateCancelled, jobAfter.State)
+		})
+
 		for _, startingState := range []rivertype.JobState{
 			rivertype.JobStateAvailable,
 			rivertype.JobStateRetryable,

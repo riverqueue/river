@@ -31,7 +31,9 @@ FROM /* TEMPLATE: schema */river_notification;
 -- name: NotificationInsertJobCancel :exec
 INSERT INTO /* TEMPLATE: schema */river_notification (payload, topic)
 VALUES (
-    json_object('action', 'cancel', 'job_id', cast(@job_id AS integer), 'queue', cast(@queue AS text)),
+    -- Match PostgreSQL's json_build_object text, including spaces.
+    printf('{"action" : "cancel", "job_id" : %d, "queue" : %s}',
+        cast(@job_id AS integer), json_quote(cast(@queue AS text))),
     @topic
 );
 

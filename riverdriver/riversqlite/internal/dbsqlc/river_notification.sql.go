@@ -92,7 +92,9 @@ func (q *Queries) NotificationGetLastID(ctx context.Context, db DBTX) (int64, er
 const notificationInsertJobCancel = `-- name: NotificationInsertJobCancel :exec
 INSERT INTO /* TEMPLATE: schema */river_notification (payload, topic)
 VALUES (
-    json_object('action', 'cancel', 'job_id', cast(?1 AS integer), 'queue', cast(?2 AS text)),
+    -- Match PostgreSQL's json_build_object text, including spaces.
+    printf('{"action" : "cancel", "job_id" : %d, "queue" : %s}',
+        cast(?1 AS integer), json_quote(cast(?2 AS text))),
     ?3
 )
 `

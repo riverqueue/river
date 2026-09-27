@@ -1,16 +1,23 @@
 package riversqlite
 
 import (
+	"bytes"
 	"context"
 	"database/sql"
 	"errors"
+	"fmt"
+	"path/filepath"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/require"
+	_ "modernc.org/sqlite"
 
+	"github.com/riverqueue/river/internal/notifier"
 	"github.com/riverqueue/river/riverdriver"
+	"github.com/riverqueue/river/rivermigrate"
 	"github.com/riverqueue/river/rivershared/sqlctemplate"
+	"github.com/riverqueue/river/rivershared/testfactory"
 	"github.com/riverqueue/river/rivertype"
 )
 
@@ -30,6 +37,43 @@ func TestInterpretError(t *testing.T) {
 	require.EqualError(t, interpretError(errors.New("an error")), "an error")
 	require.ErrorIs(t, interpretError(sql.ErrNoRows), rivertype.ErrNotFound)
 	require.NoError(t, interpretError(nil))
+}
+
+func TestJobCancelWritesNotification(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	pool, err := sql.Open("sqlite", "file:"+filepath.Join(t.TempDir(), "river.sqlite"))
+	require.NoError(t, err)
+	pool.SetMaxOpenConns(1)
+	t.Cleanup(func() { require.NoError(t, pool.Close()) })
+	driver := New(pool)
+	migrator, err := rivermigrate.New(driver, nil)
+	require.NoError(t, err)
+	_, err = migrator.Migrate(ctx, rivermigrate.DirectionUp, nil)
+	require.NoError(t, err)
+
+	queue := "a<>&/\u2028\n\"\\\x01"
+	job := testfactory.Job(ctx, t, driver.GetExecutor(), &testfactory.JobOpts{
+		Queue: &queue,
+		State: new(rivertype.JobStateRunning),
+	})
+	_, err = driver.GetExecutor().JobCancel(ctx, &riverdriver.JobCancelParams{
+		CancelAttemptedAt: time.Now(),
+		ControlTopic:      string(notifier.NotificationTopicControl),
+		ID:                job.ID,
+	})
+	require.NoError(t, err)
+
+	var payload, topic string
+	require.NoError(t, pool.QueryRowContext(ctx,
+		"SELECT payload, topic FROM river_notification",
+	).Scan(&payload, &topic))
+	require.Equal(t, string(notifier.NotificationTopicControl), topic)
+
+	// JSONEq would allow the whitespace difference this test detects.
+	expected := fmt.Sprintf("{\"action\" : \"cancel\", \"job_id\" : %d, \"queue\" : \"a<>&/\u2028\\n\\\"\\\\\\u0001\"}", job.ID)
+	require.True(t, bytes.Equal([]byte(expected), []byte(payload)), "got %q, want %q", payload, expected)
 }
 
 func TestTimeString(t *testing.T) {

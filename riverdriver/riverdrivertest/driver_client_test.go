@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"maps"
 	"math"
+	"path/filepath"
 	"slices"
 	"testing"
 	"time"
@@ -24,6 +25,7 @@ import (
 	"github.com/riverqueue/river/riverdriver/riverdatabasesql"
 	"github.com/riverqueue/river/riverdriver/riverpgxv5"
 	"github.com/riverqueue/river/riverdriver/riversqlite"
+	"github.com/riverqueue/river/rivermigrate"
 	"github.com/riverqueue/river/rivershared/riversharedtest"
 	"github.com/riverqueue/river/rivershared/testfactory"
 	"github.com/riverqueue/river/rivershared/testsignal"
@@ -208,6 +210,59 @@ func TestClientWithDriverRiverSQLiteModernC(t *testing.T) {
 			return driver, schema
 		},
 	)
+}
+
+func TestClientWithDriverRiverSQLiteModernCCancelAcrossClients(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	dbPath := "file:" + filepath.Join(t.TempDir(), "river.sqlite")
+	workerPool, err := sql.Open("sqlite", dbPath)
+	require.NoError(t, err)
+	workerPool.SetMaxOpenConns(1)
+	t.Cleanup(func() { require.NoError(t, workerPool.Close()) })
+	cancellerPool, err := sql.Open("sqlite", dbPath)
+	require.NoError(t, err)
+	cancellerPool.SetMaxOpenConns(1)
+	t.Cleanup(func() { require.NoError(t, cancellerPool.Close()) })
+
+	workerDriver := riversqlite.New(workerPool)
+	migrator, err := rivermigrate.New(workerDriver, nil)
+	require.NoError(t, err)
+	_, err = migrator.Migrate(ctx, rivermigrate.DirectionUp, nil)
+	require.NoError(t, err)
+
+	type JobArgs struct {
+		testutil.JobArgsReflectKind[JobArgs]
+	}
+
+	var jobStarted, jobContextCancelled testsignal.TestSignal[int64]
+	jobStarted.Init(t)
+	jobContextCancelled.Init(t)
+
+	workerConfig := newTestConfig(t, "")
+	river.AddWorker(workerConfig.Workers, river.WorkFunc(func(ctx context.Context, job *river.Job[JobArgs]) error {
+		jobStarted.Signal(job.ID)
+		<-ctx.Done()
+		jobContextCancelled.Signal(job.ID)
+		return ctx.Err()
+	}))
+	workerClient, err := river.NewClient(workerDriver, workerConfig)
+	require.NoError(t, err)
+	startClient(ctx, t, workerClient)
+
+	// The cancelling client has a separate pool and no local worker to signal.
+	cancellerClient, err := river.NewClient(riversqlite.New(cancellerPool), newTestConfig(t, ""))
+	require.NoError(t, err)
+
+	insertRes, err := workerClient.Insert(ctx, &JobArgs{}, nil)
+	require.NoError(t, err)
+	require.Equal(t, insertRes.Job.ID, jobStarted.WaitOrTimeout())
+
+	updatedJob, err := cancellerClient.JobCancel(ctx, insertRes.Job.ID)
+	require.NoError(t, err)
+	require.Equal(t, rivertype.JobStateRunning, updatedJob.State)
+	require.Equal(t, insertRes.Job.ID, jobContextCancelled.WaitOrTimeout())
 }
 
 func TestClientWithDriverRiverTurso(t *testing.T) {
