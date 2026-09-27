@@ -89,12 +89,14 @@ impl WorkContext {
     ///
     /// # Errors
     ///
-    /// Returns an error when `value` can't be serialized to JSON.
+    /// Returns an error when `value` can't be serialized to JSON, including
+    /// when it contains a non-finite float, which River Go can't encode.
     pub fn metadata_set(
         &self,
         key: impl Into<String>,
         value: impl Serialize,
     ) -> Result<(), serde_json::Error> {
+        crate::encoding::check_finite(&value)?;
         let value = serde_json::to_value(value)?;
         self.insert_metadata(key.into(), value);
         Ok(())
@@ -106,9 +108,11 @@ impl WorkContext {
     ///
     /// # Errors
     ///
-    /// Returns an error when `output` can't be serialized to JSON or its JSON
-    /// is larger than 32 MB.
+    /// Returns an error when `output` can't be serialized to JSON (including
+    /// when it contains a non-finite float, as in Go) or its JSON is larger
+    /// than 32 MB.
     pub fn record_output(&self, output: impl Serialize) -> Result<(), serde_json::Error> {
+        crate::encoding::check_finite(&output)?;
         let output = serde_json::to_value(output)?;
         check_output_size(&output).map_err(<serde_json::Error as serde::ser::Error>::custom)?;
         self.insert_metadata(crate::METADATA_KEY_OUTPUT.to_owned(), output);
@@ -1295,6 +1299,8 @@ mod tests {
 
         let bad_output = std::collections::BTreeMap::from([((1, 2), true)]);
         assert!(context.record_output(&bad_output).is_err());
+        assert!(context.record_output(vec![1.0, f64::NAN]).is_err());
+        assert!(context.metadata_set("ratio", f64::INFINITY).is_err());
         assert_eq!(
             context.metadata_updates(),
             json!({"attempts": 4, "output": {"delivered": true}})

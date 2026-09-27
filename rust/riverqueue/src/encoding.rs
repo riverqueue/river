@@ -25,7 +25,9 @@
 //! * Go encodes `time.Time` with RFC 3339 and the shortest fractional
 //!   seconds, while `chrono` pads fractional seconds to 3, 6, or 9 digits. Use
 //!   [`go_time`] for `DateTime<Utc>` fields that participate in unique keys.
-//! * Non-finite floats encode as `null`, where Go reports an error.
+//!
+//! Like Go, encoding fails for non-finite floats (`NaN` and infinities)
+//! instead of writing them as `null` the way [`serde_json`] does.
 //!
 //! These rules match Go 1.22 and later, which escape backspace and form feed
 //! as `\b` and `\f`.
@@ -39,6 +41,10 @@ use serde_json::{
     value::RawValue,
 };
 
+mod finite;
+
+pub(crate) use finite::check as check_finite;
+
 /// Encodes job arguments to JSON bytes identical to those Go's
 /// `encoding/json` produces for an equivalent Go value.
 ///
@@ -49,7 +55,9 @@ use serde_json::{
 /// # Errors
 ///
 /// Returns an error when the value's [`Serialize`] implementation fails, for
-/// example because a map has non-string keys.
+/// example because a map has non-string keys, or when it contains a
+/// non-finite float, which Go's `encoding/json` rejects as an unsupported
+/// value.
 pub fn encode_args<T: Serialize + ?Sized>(args: &T) -> Result<Box<RawValue>, serde_json::Error> {
     RawValue::from_string(to_go_string(args)?)
 }
@@ -375,8 +383,9 @@ pub(crate) fn go_compact(json: &str) -> String {
 }
 
 /// Serializes `value` to JSON text with Go's `encoding/json` output rules,
-/// as [`encode_args`] does.
+/// as [`encode_args`] does, including its rejection of non-finite floats.
 pub(crate) fn to_go_string<T: Serialize + ?Sized>(value: &T) -> Result<String, serde_json::Error> {
+    check_finite(value)?;
     let mut buffer = Vec::with_capacity(128);
     value.serialize(&mut serde_json::Serializer::with_formatter(
         &mut buffer,
@@ -472,9 +481,36 @@ mod tests {
     }
 
     #[test]
-    fn encodes_non_finite_floats_as_null() {
-        assert_eq!(encoded(&f64::NAN), "null");
-        assert_eq!(encoded(&f64::INFINITY), "null");
+    fn rejects_non_finite_floats_like_go() {
+        #[derive(Serialize)]
+        struct Args {
+            nested: Vec<Option<BTreeMap<&'static str, f32>>>,
+            value: f64,
+        }
+
+        // Messages match Go's `json: unsupported value: ...` after the prefix.
+        for (value, message) in [
+            (f64::NAN, "unsupported value: NaN"),
+            (f64::INFINITY, "unsupported value: +Inf"),
+            (f64::NEG_INFINITY, "unsupported value: -Inf"),
+        ] {
+            assert_eq!(encode_args(&value).unwrap_err().to_string(), message);
+            let args = Args {
+                nested: Vec::new(),
+                value,
+            };
+            assert_eq!(encode_args(&args).unwrap_err().to_string(), message);
+        }
+        let nested = Args {
+            nested: vec![None, Some(BTreeMap::from([("x", f32::NAN)]))],
+            value: 1.0,
+        };
+        assert_eq!(
+            encode_args(&nested).unwrap_err().to_string(),
+            "unsupported value: NaN"
+        );
+        assert!(to_go_string(&serde_json::json!({"x": [1.5, null]})).is_ok());
+        assert_eq!(encoded(&Option::<f64>::None), "null");
     }
 
     #[test]

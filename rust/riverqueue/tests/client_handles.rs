@@ -35,6 +35,12 @@ fn args(name: &str) -> HandleArgs {
     }
 }
 
+#[derive(Clone, Debug, Deserialize, JobArgs, Serialize)]
+#[river(kind = "client_handles_float")]
+struct FloatArgs {
+    value: f64,
+}
+
 /// Fails every insertion after River has written its jobs.
 struct FailAfterWrite;
 
@@ -148,6 +154,33 @@ macro_rules! scenarios {
             batch.push(args("batch_1")).push(BlockingArgs {});
             let error = client.insert_batch(batch).await.unwrap_err();
             assert!(matches!(error, Error::Extension { .. }), "{error}");
+
+            assert_eq!(fixture.job_count().await, 0);
+            fixture.cleanup().await;
+        }
+
+        // Go's `encoding/json` can't encode NaN or infinities, so River Go
+        // refuses such arguments. River Rust refuses them too rather than
+        // storing `null`, which a Go worker would decode as a different
+        // value.
+        #[tokio::test(flavor = "multi_thread")]
+        async fn insert_rejects_non_finite_float_args() {
+            let fixture = Fixture::new().await;
+            let client = fixture.builder().build().unwrap();
+
+            for value in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
+                let error = client.insert(FloatArgs { value }).await.unwrap_err();
+                assert!(matches!(error, Error::Json(_)), "{error}");
+                let error = client
+                    .insert_many([FloatArgs { value: 1.0 }, FloatArgs { value }])
+                    .await
+                    .unwrap_err();
+                assert!(matches!(error, Error::Json(_)), "{error}");
+                let mut batch = InsertBatch::new();
+                batch.push(args("batch")).push(FloatArgs { value });
+                let error = client.insert_batch(batch).await.unwrap_err();
+                assert!(matches!(error, Error::Json(_)), "{error}");
+            }
 
             assert_eq!(fixture.job_count().await, 0);
             fixture.cleanup().await;
