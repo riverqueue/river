@@ -145,6 +145,31 @@ impl Backend for SqliteBackend<'_> {
         Ok(deleted)
     }
 
+    async fn job_claim(
+        &mut self,
+        id: i64,
+        client_id: &str,
+        max_attempted_by: i32,
+    ) -> Result<Option<JobRow>, Error> {
+        let claimed = sqlite::claim_selected(
+            self.connection,
+            &sqlite::ClaimJobs {
+                client_id,
+                limit: 1,
+                max_attempted_by,
+                now: Utc::now(),
+                queue: "",
+            },
+            &[id],
+        )
+        .await
+        .map_err(database_error)?;
+        Ok(claimed
+            .into_iter()
+            .next()
+            .and_then(crate::client::tolerant_row))
+    }
+
     async fn job_get(&mut self, id: i64) -> Result<Option<JobRow>, Error> {
         sqlite::get(self.connection, id)
             .await

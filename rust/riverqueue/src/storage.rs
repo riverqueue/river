@@ -58,6 +58,15 @@ pub(crate) trait Backend {
     /// Deletes a non-running job.
     async fn job_delete(&mut self, id: i64) -> Result<JobRow, Error>;
 
+    /// Claims an available job for `client_id` like a fetch does. `None`
+    /// means the job doesn't exist or isn't available.
+    async fn job_claim(
+        &mut self,
+        id: i64,
+        client_id: &str,
+        max_attempted_by: i32,
+    ) -> Result<Option<JobRow>, Error>;
+
     /// Deletes non-running jobs matching a validated filter.
     async fn job_delete_many(&mut self, filter: &JobListParams) -> Result<Vec<JobRow>, Error>;
 
@@ -152,6 +161,15 @@ impl Backend for AnyBackend<'_> {
 
     async fn job_delete_many(&mut self, filter: &JobListParams) -> Result<Vec<JobRow>, Error> {
         dispatch!(self, backend => backend.job_delete_many(filter).await)
+    }
+
+    async fn job_claim(
+        &mut self,
+        id: i64,
+        client_id: &str,
+        max_attempted_by: i32,
+    ) -> Result<Option<JobRow>, Error> {
+        dispatch!(self, backend => backend.job_claim(id, client_id, max_attempted_by).await)
     }
 
     async fn job_get(&mut self, id: i64) -> Result<Option<JobRow>, Error> {
@@ -290,6 +308,22 @@ impl<'c> Storage<'c> {
         }
         params.filter.validate().map_err(Error::invalid_job)?;
         self.backend.job_delete_many(&params.filter).await
+    }
+
+    /// Claims one available job for this client, as a fetch would.
+    pub(crate) async fn job_claim(&mut self, id: i64) -> Result<JobRow, Error> {
+        if let Some(row) = self
+            .backend
+            .job_claim(id, &self.inner.id, crate::client::ATTEMPTED_BY_MAX)
+            .await?
+        {
+            return Ok(row);
+        }
+        let row = self.job_get(id).await?;
+        Err(Error::invalid_job(format!(
+            "job {id} must be available to be claimed; state is {}",
+            row.state
+        )))
     }
 
     pub(crate) async fn job_get(&mut self, id: i64) -> Result<JobRow, Error> {

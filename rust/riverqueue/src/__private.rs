@@ -120,6 +120,34 @@ pub fn work_context_for_job(job: &JobRow) -> crate::WorkContext {
     crate::WorkContext::for_test_job(job)
 }
 
+/// Claims an available job for `client` as a fetch would, marking it
+/// running with a new attempt, and returns a work context for that attempt
+/// whose [`WorkContext::client`](crate::WorkContext::client) is `client`.
+///
+/// # Errors
+///
+/// Returns [`Error::NotFound`](crate::Error::NotFound) for a missing job, an
+/// invalid-job error when the job isn't available, and a database error when
+/// the claim fails.
+pub async fn claim_job_for_test(
+    client: &crate::Client,
+    id: i64,
+) -> Result<(JobRow, crate::WorkContext), crate::Error> {
+    let inner = &client.inner;
+    let mut session =
+        crate::storage::Session::begin(&inner.database, crate::storage::Access::Transaction)
+            .await?;
+    let row = session.storage(inner).job_claim(id).await?;
+    session.commit().await?;
+    let context = crate::WorkContext::for_job(
+        client.clone(),
+        CancellationToken::new(),
+        row.id,
+        &row.metadata,
+    );
+    Ok((row, context))
+}
+
 /// Returns a snapshot of metadata recorded during an attempt.
 #[must_use]
 pub fn work_context_metadata_updates(context: &crate::WorkContext) -> Map<String, Value> {

@@ -171,6 +171,33 @@ impl Backend for PostgresBackend<'_> {
         records.into_iter().map(JobRecord::into_job_row).collect()
     }
 
+    async fn job_claim(
+        &mut self,
+        id: i64,
+        client_id: &str,
+        max_attempted_by: i32,
+    ) -> Result<Option<JobRow>, Error> {
+        let table = self.schema.qualify("river_job");
+        let sql = format!(
+            "UPDATE {table} AS job SET state = 'running', attempt = job.attempt + 1, \
+             attempted_at = now(), attempted_by = array_append(\
+                 CASE WHEN array_length(job.attempted_by, 1) >= $3 \
+                      THEN job.attempted_by[array_length(job.attempted_by, 1) + 2 - $3:] \
+                      ELSE job.attempted_by END, $2) \
+             WHERE id = $1 AND state = 'available' \
+             RETURNING {}, false AS unique_skipped_as_duplicate",
+            job_projection("job")
+        );
+        sqlx::query_as::<_, JobRecord>(AssertSqlSafe(sql))
+            .bind(id)
+            .bind(client_id)
+            .bind(max_attempted_by)
+            .fetch_optional(&mut *self.connection)
+            .await?
+            .map(JobRecord::into_job_row)
+            .transpose()
+    }
+
     async fn job_retry(&mut self, id: i64) -> Result<Option<JobRow>, Error> {
         let table = self.schema.qualify("river_job");
         let sql = format!(

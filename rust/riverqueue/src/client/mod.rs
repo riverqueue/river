@@ -102,7 +102,7 @@ use crate::{
     unique::build_unique_key_parts,
 };
 
-const ATTEMPTED_BY_MAX: i32 = 100;
+pub(crate) const ATTEMPTED_BY_MAX: i32 = 100;
 const EVENT_BUFFER_CAPACITY: usize = 10_000;
 const PENDING_CANCELLATION_LIMIT: usize = 10_000;
 const PENDING_CANCELLATION_RETENTION: Duration = Duration::from_mins(1);

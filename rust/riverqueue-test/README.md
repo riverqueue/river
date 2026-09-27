@@ -1,7 +1,7 @@
 # riverqueue-test
 
 Test helpers for applications using River's Rust client: assertions about
-inserted jobs, and a database-free way to run a worker once.
+inserted jobs, and ways to run a worker once, with or without a database.
 
 ## Asserting on inserted jobs
 
@@ -91,3 +91,14 @@ worker catches. Its result distinguishes `TestWorkError::Worker` from
 The helper does not run client hooks, middleware, database transactions,
 retries, or completion persistence. Use River's integration and shared
 conformance suites when those boundaries are under test.
+
+## Running a worker with a client
+
+`work_with_client` is the database-backed counterpart, like Go's
+`rivertest.Worker`. It inserts the job with a client, claims it the way a
+fetch does, and runs the worker with that client in its `WorkContext`, so a
+worker that inserts follow-up jobs through `context.client()` or completes
+its job in its own transaction with `context.job_complete_tx` runs as it
+would in production. The client doesn't need to be started. River doesn't
+record the worker's result, so the job stays running unless the worker
+completed it itself.

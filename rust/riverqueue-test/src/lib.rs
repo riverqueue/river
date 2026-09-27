@@ -4,8 +4,8 @@
 
 use chrono::Utc;
 use riverqueue::{
-    __private, Error, Job, JobArgs, JobRow, JobState, MAX_ATTEMPTS_DEFAULT, PRIORITY_DEFAULT,
-    QUEUE_DEFAULT, WorkContext, WorkError, WorkOutcome, Worker,
+    __private, Client, Error, Job, JobArgs, JobRow, JobState, MAX_ATTEMPTS_DEFAULT,
+    PRIORITY_DEFAULT, QUEUE_DEFAULT, WorkContext, WorkError, WorkOutcome, Worker,
 };
 use serde_json::{Map, Value};
 
@@ -154,13 +154,58 @@ impl<E> TestWorkResult<E> {
 ///
 /// Initializes resumable steps from the job's metadata and records checkpoints
 /// on failure, including step errors caught by the worker. This helper does not
-/// simulate queue scheduling, timeouts, middleware, or database transactions.
+/// simulate queue scheduling, timeouts, middleware, or database transactions,
+/// and the worker's [`WorkContext::client`] is `None`; use
+/// [`work_with_client`] for a worker that enqueues jobs or completes its job
+/// in a transaction.
 pub async fn work_once<A, W>(worker: &W, job: Job<A>) -> TestWorkResult<W::Error>
 where
     A: JobArgs,
     W: Worker<A>,
 {
     let context = __private::work_context_for_job(&job.row);
+    run_worker(worker, context, job).await
+}
+
+/// Inserts `args` with `client` and works the job once with `worker`, like
+/// Go's `rivertest.Worker`.
+///
+/// The job is inserted with its type's default options and claimed for
+/// `client` the way a fetch claims it, so it is `running` with its first
+/// attempt when the worker starts, and the worker's [`WorkContext::client`]
+/// is `client`. A worker can therefore insert follow-up jobs through the
+/// client, or complete its job in its own transaction with
+/// [`WorkContext::job_complete_tx`], exactly as it would in production.
+/// `client` doesn't need to be started, but it must be able to insert jobs of
+/// this kind.
+///
+/// River doesn't record the worker's result: the job stays `running` unless
+/// the worker completed it transactionally. Returns the job as claimed, and
+/// the worker's result as [`work_once`] reports it.
+///
+/// # Errors
+///
+/// Returns the error from inserting or claiming the job.
+pub async fn work_with_client<A, W>(
+    client: &Client,
+    worker: &W,
+    args: A,
+) -> Result<(JobRow, TestWorkResult<W::Error>), Error>
+where
+    A: JobArgs + Clone,
+    W: Worker<A>,
+{
+    let inserted = client.insert(args.clone()).await?;
+    let (row, context) = __private::claim_job_for_test(client, inserted.id()).await?;
+    let result = run_worker(worker, context, Job::new(args, row.clone())).await;
+    Ok((row, result))
+}
+
+async fn run_worker<A, W>(worker: &W, context: WorkContext, job: Job<A>) -> TestWorkResult<W::Error>
+where
+    A: JobArgs,
+    W: Worker<A>,
+{
     let mut result = match __private::work_context_resumable_validate(&context) {
         Ok(()) => worker
             .work(context.clone(), job)
@@ -382,5 +427,79 @@ mod tests {
         );
         assert!(worked.context.client().is_none());
         assert!(!worked.context.cancellation_token().is_cancelled());
+    }
+
+    /// Inserts a follow-up job through its context's client and completes
+    /// its own job in a transaction.
+    #[cfg(feature = "sqlite")]
+    struct ChainingWorker {
+        pool: sqlx::SqlitePool,
+    }
+
+    #[cfg(feature = "sqlite")]
+    impl Worker<TestArgs> for ChainingWorker {
+        type Error = Error;
+
+        async fn work(
+            &self,
+            context: WorkContext,
+            job: Job<TestArgs>,
+        ) -> Result<WorkOutcome, Self::Error> {
+            let client = context.client().expect("worked with a client");
+            client
+                .insert(TestArgs {
+                    message: format!("after {}", job.args.message),
+                })
+                .await?;
+            let mut transaction = riverqueue::database::begin_sqlite_write(&self.pool).await?;
+            context.job_complete_tx(&mut transaction).await?;
+            transaction.commit().await?;
+            Ok(WorkOutcome::Complete)
+        }
+    }
+
+    #[cfg(feature = "sqlite")]
+    #[tokio::test]
+    async fn work_with_client_supports_follow_ups_and_transactional_completion() {
+        let pool = sqlx::sqlite::SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect("sqlite::memory:")
+            .await
+            .unwrap();
+        riverqueue_migrate::SqliteMigrator::new(pool.clone())
+            .migrate_up()
+            .await
+            .unwrap();
+        let client = Client::builder(pool.clone()).build().unwrap();
+        let worker = ChainingWorker { pool: pool.clone() };
+
+        let (claimed, attempt) = work_with_client(
+            &client,
+            &worker,
+            TestArgs {
+                message: "first".to_owned(),
+            },
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(claimed.state, JobState::Running);
+        assert_eq!(claimed.attempt, 1);
+        assert!(matches!(attempt.result, Ok(WorkOutcome::Complete)));
+        assert_eq!(
+            client.jobs().get(claimed.id).await.unwrap().state,
+            JobState::Completed
+        );
+        let jobs = client
+            .jobs()
+            .list(riverqueue::JobListParams::default())
+            .await
+            .unwrap()
+            .jobs;
+        assert_eq!(jobs.len(), 2);
+        assert!(
+            jobs.iter()
+                .any(|row| row.encoded_args.get() == r#"{"message":"after first"}"#)
+        );
     }
 }
