@@ -12,97 +12,90 @@ import (
 
 func TestDebouncedChan_TriggersImmediately(t *testing.T) {
 	t.Parallel()
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
 
-	debouncedChan := NewDebouncedChan(ctx, 200*time.Millisecond, true)
-	go debouncedChan.Call()
+	synctest.Test(t, func(t *testing.T) {
+		ctx, cancel := context.WithCancel(t.Context())
+		defer cancel()
 
-	select {
-	case <-debouncedChan.C():
-	case <-time.After(50 * time.Millisecond):
-		t.Fatal("timed out waiting for debounced chan to trigger")
-	}
+		const cooldown = 200 * time.Millisecond
+		debouncedChan := NewDebouncedChan(ctx, cooldown, true)
+		go debouncedChan.Call()
+		synctest.Wait()
 
-	// shouldn't trigger immediately again
-	go debouncedChan.Call()
-	select {
-	case <-debouncedChan.C():
-		t.Fatal("received from debounced chan unexpectedly")
-	case <-time.After(50 * time.Millisecond):
-	}
+		require.Len(t, debouncedChan.C(), 1)
+		<-debouncedChan.C()
 
-	var wg sync.WaitGroup
-	wg.Add(5)
-	for range 5 {
-		go func() {
-			debouncedChan.Call()
-			wg.Done()
-		}()
-	}
-	wg.Wait()
+		// Concurrent calls during the cooldown coalesce into one trailing event.
+		var wg sync.WaitGroup
+		for range 5 {
+			wg.Go(debouncedChan.Call)
+		}
+		wg.Wait()
+		synctest.Wait()
+		require.Empty(t, debouncedChan.C())
 
-	// should trigger again after debounce period
-	select {
-	case <-debouncedChan.C():
-	case <-time.After(250 * time.Millisecond):
-		t.Fatal("timed out waiting for debounced chan to trigger")
-	}
+		time.Sleep(cooldown - time.Nanosecond)
+		synctest.Wait()
+		require.Empty(t, debouncedChan.C())
 
-	// shouldn't trigger immediately again
-	select {
-	case <-debouncedChan.C():
-		t.Fatal("received from debounced chan unexpectedly")
-	case <-time.After(50 * time.Millisecond):
-	}
+		time.Sleep(time.Nanosecond)
+		synctest.Wait()
+		require.Len(t, debouncedChan.C(), 1)
+		<-debouncedChan.C()
+
+		// No further calls means no additional trailing event.
+		time.Sleep(cooldown)
+		synctest.Wait()
+		require.Empty(t, debouncedChan.C())
+	})
 }
 
 func TestDebouncedChan_OnlyBuffersOneEvent(t *testing.T) {
 	t.Parallel()
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
 
-	debouncedChan := NewDebouncedChan(ctx, 100*time.Millisecond, true)
-	debouncedChan.Call()
-	time.Sleep(150 * time.Millisecond)
-	debouncedChan.Call()
+	synctest.Test(t, func(t *testing.T) {
+		ctx, cancel := context.WithCancel(t.Context())
+		defer cancel()
 
-	select {
-	case <-debouncedChan.C():
-	case <-time.After(20 * time.Millisecond):
-		t.Fatal("timed out waiting for debounced chan to trigger")
-	}
+		const cooldown = 100 * time.Millisecond
+		debouncedChan := NewDebouncedChan(ctx, cooldown, true)
+		debouncedChan.Call()
+		time.Sleep(cooldown)
+		synctest.Wait()
+		debouncedChan.Call()
+		synctest.Wait()
 
-	// shouldn't trigger immediately again
-	select {
-	case <-debouncedChan.C():
-		t.Fatal("received from debounced chan unexpectedly")
-	case <-time.After(20 * time.Millisecond):
-	}
+		require.Len(t, debouncedChan.C(), 1)
+		<-debouncedChan.C()
+
+		time.Sleep(cooldown)
+		synctest.Wait()
+		require.Empty(t, debouncedChan.C())
+	})
 }
 
 func TestDebouncedChan_SendLeadingDisabled(t *testing.T) {
 	t.Parallel()
 
-	ctx := context.Background()
+	synctest.Test(t, func(t *testing.T) {
+		ctx, cancel := context.WithCancel(t.Context())
+		defer cancel()
 
-	debouncedChan := NewDebouncedChan(ctx, 100*time.Millisecond, false)
-	debouncedChan.Call()
+		const cooldown = 100 * time.Millisecond
+		debouncedChan := NewDebouncedChan(ctx, cooldown, false)
+		debouncedChan.Call()
+		synctest.Wait()
+		require.Empty(t, debouncedChan.C())
 
-	// Expect nothing right away because sendLeading is disabled.
-	select {
-	case <-debouncedChan.C():
-		t.Fatal("received from debounced chan unexpectedly")
-	case <-time.After(20 * time.Millisecond):
-	}
+		time.Sleep(cooldown - time.Nanosecond)
+		synctest.Wait()
+		require.Empty(t, debouncedChan.C())
 
-	time.Sleep(100 * time.Millisecond)
-
-	select {
-	case <-debouncedChan.C():
-	case <-time.After(20 * time.Millisecond):
-		t.Fatal("timed out waiting for debounced chan to trigger")
-	}
+		time.Sleep(time.Nanosecond)
+		synctest.Wait()
+		require.Len(t, debouncedChan.C(), 1)
+		<-debouncedChan.C()
+	})
 }
 
 func TestDebouncedChan_ContinuousOperation(t *testing.T) {

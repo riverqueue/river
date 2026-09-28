@@ -3,6 +3,7 @@ package serviceutil
 import (
 	"context"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/stretchr/testify/require"
@@ -14,28 +15,30 @@ func TestCancellableSleep(t *testing.T) {
 	testCancellableSleep := func(t *testing.T, startSleepFunc func(ctx context.Context) <-chan struct{}) {
 		t.Helper()
 
-		ctx := context.Background()
+		synctest.Test(t, func(t *testing.T) {
+			ctx, cancel := context.WithCancel(t.Context())
+			defer cancel()
 
-		ctx, cancel := context.WithCancel(ctx)
-		t.Cleanup(cancel)
+			sleepDone := startSleepFunc(ctx)
+			synctest.Wait()
 
-		sleepDone := startSleepFunc(ctx)
+			// Advance to just before the sleep would finish naturally.
+			time.Sleep(5*time.Second - time.Nanosecond)
+			synctest.Wait()
+			select {
+			case <-sleepDone:
+				t.Fatal("Sleep returned sooner than expected")
+			default:
+			}
 
-		// Wait a very nominal amount of time just to make sure that some sleep is
-		// actually happening.
-		select {
-		case <-sleepDone:
-			require.FailNow(t, "Sleep returned sooner than expected")
-		case <-time.After(50 * time.Millisecond):
-		}
-
-		cancel()
-
-		select {
-		case <-sleepDone:
-		case <-time.After(50 * time.Millisecond):
-			require.FailNow(t, "Timed out waiting for sleep to finish after cancel")
-		}
+			cancel()
+			synctest.Wait()
+			select {
+			case <-sleepDone:
+			default:
+				t.Fatal("Sleep did not finish after cancel")
+			}
+		})
 	}
 
 	// Starts sleep for sleep functions that don't return a channel, returning a

@@ -9,6 +9,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/stretchr/testify/require"
@@ -696,46 +697,49 @@ func TestPeriodicJobEnqueuer(t *testing.T) {
 		require.Len(t, svc.periodicJobs, 1)
 	})
 
-	// To suss out any race conditions in the add/remove/clear/run loop code,
-	// and interactions between them.
+	// Exercise concurrent changes to the in-memory periodic job registry.
 	t.Run("AddRemoveStress", func(t *testing.T) {
 		t.Parallel()
 
-		svc, _ := setup(t)
+		synctest.Test(t, func(t *testing.T) {
+			// This test only mutates the in-memory registry; no service is started.
+			svc, err := NewPeriodicJobEnqueuer(riversharedtest.BaseServiceArchetype(t), &PeriodicJobEnqueuerConfig{}, nil)
+			require.NoError(t, err)
 
-		var wg sync.WaitGroup
+			var wg sync.WaitGroup
 
-		randomSleep := func() {
-			time.Sleep(time.Duration(randutil.IntBetween(1, 5)) * time.Millisecond)
-		}
+			randomSleepFunc := func() {
+				time.Sleep(time.Duration(randutil.IntBetween(1, 5)) * time.Millisecond)
+			}
 
-		for i := range 10 {
-			wg.Add(1)
+			for i := range 10 {
+				wg.Add(1)
 
-			jobBaseName := fmt.Sprintf("periodic_job_1ms_%02d", i)
+				jobBaseName := fmt.Sprintf("periodic_job_1ms_%02d", i)
 
-			go func() {
-				defer wg.Done()
+				go func() {
+					defer wg.Done()
 
-				for range 50 {
-					handle, err := svc.AddSafely(&PeriodicJob{ScheduleFunc: periodicIntervalSchedule(time.Millisecond), ConstructorFunc: jobConstructorFunc(jobBaseName, false)})
-					require.NoError(t, err)
-					randomSleep()
+					for range 50 {
+						handle, err := svc.AddSafely(&PeriodicJob{ScheduleFunc: periodicIntervalSchedule(time.Millisecond), ConstructorFunc: jobConstructorFunc(jobBaseName, false)})
+						require.NoError(t, err)
+						randomSleepFunc()
 
-					_, err = svc.AddSafely(&PeriodicJob{ScheduleFunc: periodicIntervalSchedule(time.Millisecond), ConstructorFunc: jobConstructorFunc(jobBaseName+"_second", false)})
-					require.NoError(t, err)
-					randomSleep()
+						_, err = svc.AddSafely(&PeriodicJob{ScheduleFunc: periodicIntervalSchedule(time.Millisecond), ConstructorFunc: jobConstructorFunc(jobBaseName+"_second", false)})
+						require.NoError(t, err)
+						randomSleepFunc()
 
-					svc.Remove(handle)
-					randomSleep()
+						svc.Remove(handle)
+						randomSleepFunc()
 
-					svc.Clear()
-					randomSleep()
-				}
-			}()
-		}
+						svc.Clear()
+						randomSleepFunc()
+					}
+				}()
+			}
 
-		wg.Wait()
+			wg.Wait()
+		})
 	})
 
 	t.Run("NoJobsConfigured", func(t *testing.T) {

@@ -3,11 +3,11 @@ package timeutil_test
 import (
 	"context"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/stretchr/testify/require"
 
-	"github.com/riverqueue/river/rivershared/riversharedtest"
 	"github.com/riverqueue/river/rivershared/util/timeutil"
 )
 
@@ -20,28 +20,52 @@ func TestSecondsAsDuration(t *testing.T) {
 func TestTickerWithInitialTick(t *testing.T) {
 	t.Parallel()
 
-	ctx := context.Background()
-
 	t.Run("TicksImmediately", func(t *testing.T) {
 		t.Parallel()
 
-		ctx, cancel := context.WithCancel(ctx)
-		t.Cleanup(cancel)
+		synctest.Test(t, func(t *testing.T) {
+			ctx, cancel := context.WithCancel(t.Context())
+			defer cancel()
 
-		ticker := timeutil.NewTickerWithInitialTick(ctx, 1*time.Hour)
-		riversharedtest.WaitOrTimeout(t, ticker.C)
+			now := time.Now()
+			ticker := timeutil.NewTickerWithInitialTick(ctx, time.Hour)
+			synctest.Wait()
+			select {
+			case tick := <-ticker.C:
+				require.Equal(t, now, tick)
+			default:
+				t.Fatal("Initial tick was not immediate")
+			}
+		})
 	})
 
 	t.Run("TicksPeriodically", func(t *testing.T) {
 		t.Parallel()
 
-		ctx, cancel := context.WithCancel(ctx)
-		t.Cleanup(cancel)
+		synctest.Test(t, func(t *testing.T) {
+			ctx, cancel := context.WithCancel(t.Context())
+			defer cancel()
 
-		ticker := timeutil.NewTickerWithInitialTick(ctx, 100*time.Microsecond)
-		for i := range 10 {
-			t.Logf("Waiting on tick %d", i)
-			riversharedtest.WaitOrTimeout(t, ticker.C)
-		}
+			const interval = 100 * time.Microsecond
+			now := time.Now()
+			ticker := timeutil.NewTickerWithInitialTick(ctx, interval)
+			synctest.Wait()
+			require.Equal(t, now, <-ticker.C)
+
+			for range 9 {
+				time.Sleep(interval - time.Nanosecond)
+				synctest.Wait()
+				require.Empty(t, ticker.C)
+				time.Sleep(time.Nanosecond)
+				synctest.Wait()
+				now = now.Add(interval)
+				select {
+				case tick := <-ticker.C:
+					require.Equal(t, now, tick)
+				default:
+					t.Fatal("Periodic tick was not delivered")
+				}
+			}
+		})
 	})
 }
