@@ -776,6 +776,36 @@ func TestJobExecutor_Execute(t *testing.T) {
 				require.Equal(t, fmt.Sprintf("job error %d", i), got.Errors[0].Error)
 			}
 		})
+
+		t.Run("ErrorHandlerReceivesEachJob", func(t *testing.T) {
+			t.Parallel()
+
+			executor, bundle := setup(t)
+			allJobs := append([]*rivertype.JobRow{bundle.jobRow}, makeExtraRunningJobs(t, bundle.exec)...)
+			perJob := make(map[int64]error, len(allJobs))
+			for _, job := range allJobs {
+				perJob[job.ID] = errors.New("job error")
+			}
+			executor.WorkUnit = newWorkUnitFactoryWithCustomRetry(func() error {
+				return &errorBundle{errorsByID: perJob, jobs: allJobs}
+			}, nil).MakeUnit(bundle.jobRow)
+
+			var handledJobs []*rivertype.JobRow
+			bundle.errorHandler.HandleErrorFunc = func(ctx context.Context, job *rivertype.JobRow, err error) *ErrorHandlerResult {
+				handledJobs = append(handledJobs, job)
+				return nil
+			}
+
+			executor.Execute(ctx)
+			riversharedtest.WaitOrTimeoutN(t, bundle.updateCh, len(allJobs))
+
+			// The executor starts with allJobs[0]; later handler calls must
+			// receive their own job rows.
+			require.Len(t, handledJobs, len(allJobs))
+			for i, job := range handledJobs {
+				require.Same(t, allJobs[i], job)
+			}
+		})
 	})
 
 	configureStuckDetection := func(executor *JobExecutor) {
