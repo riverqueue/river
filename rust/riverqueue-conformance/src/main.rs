@@ -6,11 +6,19 @@ use std::{
     collections::HashMap,
     io::{self, BufRead, Write},
     str::FromStr,
-    sync::{Arc, Mutex},
+    sync::{
+        Arc, Mutex,
+        atomic::{AtomicBool, Ordering},
+    },
     time::Duration,
 };
 
+use async_trait::async_trait;
 use chrono::{DateTime, SecondsFormat, Utc};
+use riverqueue::__private::{
+    ClaimedJob, ClientBuilderExt, Pilot, PilotError, PilotProducer, ProducerClaimContext,
+    ProducerClaimNext, ProducerStartContext,
+};
 use riverqueue::database::SchemaName;
 use riverqueue::{
     AttemptError, BoxError, Client, CronSchedule, DefaultRetryPolicy, ErrorHandler,
@@ -38,7 +46,7 @@ use sqlx::{
 };
 use tokio::sync::watch;
 
-const ADAPTER_VERSION: u32 = 17;
+const ADAPTER_VERSION: u32 = 18;
 const PROTOCOL_REVISION: u32 = 1;
 
 const ADAPTER_METHODS: &[&str] = &[
@@ -475,6 +483,16 @@ struct RawJobRow {
     metadata: String,
     scheduled_at: String,
     tags: String,
+    /// The stored unique key as uppercase hex.
+    unique_key: Option<String>,
+    /// SQLite's `typeof(unique_key)`; `None` on PostgreSQL.
+    #[sqlx(skip)]
+    unique_key_type: Option<String>,
+    /// The stored state mask as the database renders it as text.
+    unique_states: Option<String>,
+    /// SQLite's `typeof(unique_states)`; `None` on PostgreSQL.
+    #[sqlx(skip)]
+    unique_states_type: Option<String>,
 }
 
 /// A SQLite job's JSONB columns as uppercase hex, so implementations can
@@ -792,6 +810,9 @@ impl Worker<ConformanceArgs> for ConformanceWorker {
                 panic!("conformance panic after cancellation")
             }
             "cooperative_cancel" => {
+                if context.cancellation_token().is_cancelled() {
+                    self.probe.increment_cancelled_at_start()?;
+                }
                 context.cancellation_token().cancelled().await;
                 Err(io::Error::other(WorkCancelled))
             }
@@ -879,6 +900,7 @@ struct RuntimeProbe {
 
 #[derive(Default)]
 struct RuntimeProbeState {
+    cancelled_at_start: usize,
     error_handler_calls: usize,
     events: Vec<String>,
     periodic_starts: usize,
@@ -904,6 +926,14 @@ impl RuntimeProbe {
             .map_err(|_| io::Error::other("runtime probe lock poisoned"))?
             .trace
             .push(entry.to_owned());
+        Ok(())
+    }
+
+    fn increment_cancelled_at_start(&self) -> io::Result<()> {
+        self.state
+            .lock()
+            .map_err(|_| io::Error::other("runtime probe lock poisoned"))?
+            .cancelled_at_start += 1;
         Ok(())
     }
 
@@ -953,6 +983,7 @@ impl RuntimeProbe {
             .lock()
             .map_err(|_| io::Error::other("runtime probe lock poisoned"))?;
         Ok(json!({
+            "cancelled_at_start": state.cancelled_at_start,
             "error_handler_calls": state.error_handler_calls,
             "events": state.events,
             "periodic_starts": state.periodic_starts,
@@ -1113,12 +1144,133 @@ impl RetryPolicy for FixedRetryPolicy {
     }
 }
 
-#[derive(Default)]
+/// Holds the result of a client's first claim that returns jobs until a
+/// named barrier is released. The claim has committed by then, so the jobs
+/// are running without having started while the client keeps handling
+/// notifications, such as a cancellation.
+#[derive(Debug)]
+struct ClaimBarrierPilot {
+    barriers: Arc<BarrierRegistry>,
+    name: String,
+    waited: Arc<AtomicBool>,
+}
+
+#[async_trait]
+impl Pilot for ClaimBarrierPilot {
+    async fn start_producer(
+        &self,
+        _context: ProducerStartContext,
+    ) -> Result<Option<Box<dyn PilotProducer>>, PilotError> {
+        Ok(Some(Box::new(ClaimBarrierProducer {
+            barriers: Arc::clone(&self.barriers),
+            name: self.name.clone(),
+            waited: Arc::clone(&self.waited),
+        })))
+    }
+}
+
+/// A producer session that claims like River and then waits on the pilot's
+/// barrier once.
+#[derive(Debug)]
+struct ClaimBarrierProducer {
+    barriers: Arc<BarrierRegistry>,
+    name: String,
+    waited: Arc<AtomicBool>,
+}
+
+#[async_trait]
+impl PilotProducer for ClaimBarrierProducer {
+    fn intercepts_claim(&self) -> bool {
+        true
+    }
+
+    async fn claim(
+        &self,
+        context: ProducerClaimContext<'_>,
+        next: ProducerClaimNext<'_>,
+    ) -> Result<Vec<ClaimedJob>, PilotError> {
+        let mut transaction = context.database.begin().await?;
+        let jobs = next.claim(transaction.connection()).await?;
+        transaction.commit().await?;
+        if !jobs.is_empty() && !self.waited.swap(true, Ordering::SeqCst) {
+            // The jobs are claimed either way, so they're returned even when
+            // the producer stops claiming while waiting.
+            tokio::select! {
+                _ = self.barriers.wait(&self.name) => {}
+                () = context.claim_stop.cancelled() => {}
+            }
+        }
+        Ok(jobs)
+    }
+}
+
+/// The periodic jobs `periodic_run_on_start` configures: one run-on-start
+/// job, unique by arguments and queue with `periodic_unique`, which also adds
+/// a non-unique marker job after it whose insertion shows the unique job's
+/// insertion was attempted.
+fn periodic_run_on_start_jobs(params: &Value) -> Result<Vec<PeriodicJob>, BoxError> {
+    let flag = |name: &str| params.get(name).and_then(Value::as_bool).unwrap_or(false);
+    let unique = flag("periodic_unique");
+    if !flag("periodic_run_on_start") {
+        if unique {
+            return Err(AdapterError::invalid_params(
+                "periodic_unique requires periodic_run_on_start",
+            )
+            .into());
+        }
+        return Ok(Vec::new());
+    }
+    let job = |id: &str, message: &'static str, opts: InsertOpts| {
+        Ok::<_, BoxError>(PeriodicJob::conditional_with_options(
+            IntervalSchedule::new(Duration::from_hours(1))?,
+            move || {
+                Some((
+                    ConformanceArgs {
+                        behavior: String::new(),
+                        duration_ms: 0,
+                        message: message.to_owned(),
+                    },
+                    opts.clone(),
+                ))
+            },
+            PeriodicJobOpts::new().with_id(id).with_run_on_start(),
+        ))
+    };
+    if !unique {
+        return Ok(vec![job(
+            "conformance-periodic",
+            "periodic run on start",
+            InsertOpts::default(),
+        )?]);
+    }
+    Ok(vec![
+        job(
+            "conformance-periodic",
+            "periodic run on start",
+            InsertOpts::default().with_unique(UniqueOpts::new().by_args().by_queue()),
+        )?,
+        job(
+            "conformance-periodic-marker",
+            "periodic marker",
+            InsertOpts::default(),
+        )?,
+    ])
+}
+
+#[derive(Debug, Default)]
 struct BarrierRegistry {
     senders: Mutex<HashMap<String, watch::Sender<bool>>>,
 }
 
 impl BarrierRegistry {
+    fn exists(&self, name: &str) -> io::Result<bool> {
+        Ok(self
+            .senders
+            .lock()
+            .map_err(|_| io::Error::other("barrier registry lock poisoned"))?
+            .contains_key(name))
+    }
+
     fn clear(&self) -> io::Result<()> {
         self.senders
             .lock()
@@ -1934,7 +2086,8 @@ impl Adapter {
                      attempted_by::text AS attempted_by, created_at::text AS created_at, \
                      errors::text AS errors, finalized_at::text AS finalized_at, \
                      metadata::text AS metadata, scheduled_at::text AS scheduled_at, \
-                     tags::text AS tags FROM river_job WHERE id = $1",
+                     tags::text AS tags, upper(encode(unique_key, 'hex')) AS unique_key, \
+                     unique_states::text AS unique_states FROM river_job WHERE id = $1",
                 )
                 .bind(required_i64(&params, "id")?)
                 .fetch_optional(&self.pool)
@@ -2039,22 +2192,21 @@ impl Adapter {
                 {
                     builder = builder.without_job_timeout();
                 }
-                if params
-                    .get("periodic_run_on_start")
-                    .and_then(Value::as_bool)
-                    .unwrap_or(false)
-                {
-                    builder = builder.periodic_job(PeriodicJob::with_options(
-                        IntervalSchedule::new(Duration::from_hours(1))?,
-                        || ConformanceArgs {
-                            behavior: String::new(),
-                            duration_ms: 0,
-                            message: "periodic run on start".to_owned(),
-                        },
-                        PeriodicJobOpts::new()
-                            .with_id("conformance-periodic")
-                            .with_run_on_start(),
-                    ));
+                for job in periodic_run_on_start_jobs(&params)? {
+                    builder = builder.periodic_job(job);
+                }
+                if let Some(name) = params.get("claim_barrier").and_then(Value::as_str) {
+                    if !self.barriers.exists(name)? {
+                        return Err(AdapterError::invalid_params(format!(
+                            "claim_barrier {name:?} does not exist"
+                        ))
+                        .into());
+                    }
+                    builder = builder.pilot(ClaimBarrierPilot {
+                        barriers: Arc::clone(&self.barriers),
+                        name: name.to_owned(),
+                        waited: Arc::new(AtomicBool::new(false)),
+                    });
                 }
                 if let Some(milliseconds) = optional_i64(&params, "retry_delay_ms") {
                     builder =
@@ -2696,7 +2848,9 @@ impl SqliteAdapter {
                      json(attempted_by) AS attempted_by, CAST(created_at AS TEXT) AS created_at, \
                      json(errors) AS errors, CAST(finalized_at AS TEXT) AS finalized_at, \
                      json(metadata) AS metadata, CAST(scheduled_at AS TEXT) AS scheduled_at, \
-                     json(tags) AS tags FROM river_job WHERE id = ?",
+                     json(tags) AS tags, \
+                     CASE WHEN unique_key IS NULL THEN NULL ELSE hex(unique_key) END AS unique_key, \
+                     CAST(unique_states AS TEXT) AS unique_states FROM river_job WHERE id = ?",
                 )
                 .bind(id)
                 .fetch_optional(&self.pool)
@@ -2715,6 +2869,16 @@ impl SqliteAdapter {
                     .fetch_one(&self.pool)
                     .await?,
                 );
+                (row.unique_key_type, row.unique_states_type) =
+                    sqlx::query_as::<_, (Option<String>, Option<String>)>(
+                        "SELECT \
+                         CASE WHEN unique_key IS NULL THEN NULL ELSE typeof(unique_key) END, \
+                         CASE WHEN unique_states IS NULL THEN NULL ELSE typeof(unique_states) END \
+                         FROM river_job WHERE id = ?",
+                    )
+                    .bind(id)
+                    .fetch_one(&self.pool)
+                    .await?;
                 Ok(serde_json::to_value(row)?)
             }
             "raw_job_timestamps" => {
@@ -2936,22 +3100,21 @@ impl SqliteAdapter {
                 {
                     builder = builder.without_job_timeout();
                 }
-                if params
-                    .get("periodic_run_on_start")
-                    .and_then(Value::as_bool)
-                    .unwrap_or(false)
-                {
-                    builder = builder.periodic_job(PeriodicJob::with_options(
-                        IntervalSchedule::new(Duration::from_hours(1))?,
-                        || ConformanceArgs {
-                            behavior: String::new(),
-                            duration_ms: 0,
-                            message: "periodic run on start".to_owned(),
-                        },
-                        PeriodicJobOpts::new()
-                            .with_id("conformance-periodic")
-                            .with_run_on_start(),
-                    ));
+                for job in periodic_run_on_start_jobs(&params)? {
+                    builder = builder.periodic_job(job);
+                }
+                if let Some(name) = params.get("claim_barrier").and_then(Value::as_str) {
+                    if !self.barriers.exists(name)? {
+                        return Err(AdapterError::invalid_params(format!(
+                            "claim_barrier {name:?} does not exist"
+                        ))
+                        .into());
+                    }
+                    builder = builder.pilot(ClaimBarrierPilot {
+                        barriers: Arc::clone(&self.barriers),
+                        name: name.to_owned(),
+                        waited: Arc::new(AtomicBool::new(false)),
+                    });
                 }
                 if let Some(milliseconds) = optional_i64(&params, "retry_delay_ms") {
                     builder =

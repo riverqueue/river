@@ -233,7 +233,7 @@
       "type": "string"
     }
   },
-  "adapter_version": 17,
+  "adapter_version": 18,
   "errors": [
     {
       "code": -32700,
@@ -1301,7 +1301,7 @@
     },
     {
       "capability": "job_crud",
-      "description": "Read a job's JSON and timestamp columns exactly as the database renders them: SQLite `json(column)` and `CAST(column AS TEXT)`, PostgreSQL `column::text`. SQLite keeps each JSON string's escapes and member order as written, so this compares the bytes implementations write. On SQLite, `jsonb` also holds each JSONB column's stored bytes as `hex(column)`, which record each element's JSONB type (for example, whether a string was parsed from JSON text or bound as SQL text); it is null on PostgreSQL.",
+      "description": "Read a job's JSON and timestamp columns exactly as the database renders them: SQLite `json(column)` and `CAST(column AS TEXT)`, PostgreSQL `column::text`. SQLite keeps each JSON string's escapes and member order as written, so this compares the bytes implementations write. On SQLite, `jsonb` also holds each JSONB column's stored bytes as `hex(column)`, which record each element's JSONB type (for example, whether a string was parsed from JSON text or bound as SQL text); it is null on PostgreSQL. `unique_key` holds the stored unique key as uppercase hex and `unique_states` the stored state mask as the database renders it as text (PostgreSQL `bit(8)` text such as `11110101`, SQLite the integer), both null when the job isn't unique. On SQLite, `unique_key_type` and `unique_states_type` hold each column's `typeof`; they are null on PostgreSQL.",
       "name": "raw_job_row",
       "params": {
         "additionalProperties": false,
@@ -1398,6 +1398,31 @@
           },
           "tags": {
             "type": "string"
+          },
+          "unique_key": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "pattern": "^([0-9A-F]{2})*$"
+          },
+          "unique_key_type": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "unique_states": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "unique_states_type": {
+            "type": [
+              "string",
+              "null"
+            ]
           }
         },
         "type": "object",
@@ -1411,7 +1436,11 @@
           "jsonb",
           "metadata",
           "scheduled_at",
-          "tags"
+          "tags",
+          "unique_key",
+          "unique_key_type",
+          "unique_states",
+          "unique_states_type"
         ]
       }
     },
@@ -1633,6 +1662,11 @@
       "result": {
         "additionalProperties": false,
         "properties": {
+          "cancelled_at_start": {
+            "description": "Attempts of the `cooperative_cancel` behavior whose cancellation was already requested when the worker started.",
+            "minimum": 0,
+            "type": "integer"
+          },
           "error_handler_calls": {
             "minimum": 0,
             "type": "integer"
@@ -1670,6 +1704,7 @@
         },
         "type": "object",
         "required": [
+          "cancelled_at_start",
           "error_handler_calls",
           "events",
           "periodic_starts",
@@ -1691,6 +1726,11 @@
             "description": "Retention for jobs finalized in this state before the job cleaner deletes them; `-1` keeps them forever.",
             "minimum": -1,
             "type": "integer"
+          },
+          "claim_barrier": {
+            "description": "Name of a barrier created with `barrier_create` that holds the client's first claim that returns jobs: once that claim commits, the client keeps its jobs without starting them until the barrier is released, while it keeps receiving notifications. Stopping the client releases it, and later claims don't wait. A name that isn't a current barrier is rejected with `invalid_params`. The harness uses it to deliver a cancellation between a claim and the start of the claimed job.",
+            "minLength": 1,
+            "type": "string"
           },
           "client_id": {
             "minLength": 1,
@@ -1747,6 +1787,10 @@
             "type": "integer"
           },
           "periodic_run_on_start": {
+            "type": "boolean"
+          },
+          "periodic_unique": {
+            "description": "With `periodic_run_on_start`, insert the run-on-start periodic job (ID `conformance-periodic`) with unique options `by_args` and `by_queue`, so a later leader of any implementation skips its own run-on-start insertion as a duplicate, and register after it a second, non-unique run-on-start periodic job (ID `conformance-periodic-marker`, message `periodic marker`), whose insertion shows the unique one's was attempted. Rejected without `periodic_run_on_start`.",
             "type": "boolean"
           },
           "poll_only": {

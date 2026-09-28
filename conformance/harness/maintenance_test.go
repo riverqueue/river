@@ -260,12 +260,19 @@ func verifyCronScheduleGoldens(t *testing.T, repositoryRoot string, adapters ...
 			Name       string      `json:"name"`
 			Next       []time.Time `json:"next"`
 		} `json:"cron_cases"`
-		CronInvalid []string `json:"cron_invalid"`
+		CronInvalid        []string `json:"cron_invalid"`
+		CronNamedZoneCases []struct {
+			Expression string      `json:"expression"`
+			From       time.Time   `json:"from"`
+			Name       string      `json:"name"`
+			Next       []time.Time `json:"next"`
+		} `json:"cron_named_zone_cases"`
 	}
 	contents, err := os.ReadFile(filepath.Join(repositoryRoot, "conformance/fixtures/maintenance_values.json"))
 	require.NoError(t, err)
 	require.NoError(t, json.Unmarshal(contents, &fixture))
 	require.NotEmpty(t, fixture.CronCases)
+	require.NotEmpty(t, fixture.CronNamedZoneCases)
 
 	for _, testCase := range fixture.CronCases {
 		for _, adapter := range adapters {
@@ -285,6 +292,26 @@ func verifyCronScheduleGoldens(t *testing.T, repositoryRoot string, adapters ...
 				_, expectedOffset := expected.Zone()
 				_, actualOffset := actual.Zone()
 				require.Equal(t, expectedOffset, actualOffset, "%s adapter case %s offset", adapter.name, testCase.Name)
+			}
+		}
+	}
+	// Named `CRON_TZ=` zones, including across daylight saving transitions,
+	// must yield the same instants as Go. The fixture records them in UTC,
+	// and implementations may render them in the schedule's zone.
+	for _, testCase := range fixture.CronNamedZoneCases {
+		for _, adapter := range adapters {
+			var result struct {
+				Next []time.Time `json:"next"`
+			}
+			adapter.call(t, "cron_next", map[string]any{
+				"count":      len(testCase.Next),
+				"expression": testCase.Expression,
+				"from":       testCase.From.Format(time.RFC3339Nano),
+			}, &result)
+			require.Len(t, result.Next, len(testCase.Next), "%s adapter case %s", adapter.name, testCase.Name)
+			for index, expected := range testCase.Next {
+				require.True(t, expected.Equal(result.Next[index]), "%s adapter case %s occurrence %d: %s != %s",
+					adapter.name, testCase.Name, index, result.Next[index], expected)
 			}
 		}
 	}

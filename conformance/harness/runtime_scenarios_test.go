@@ -12,6 +12,7 @@ import (
 )
 
 type runtimeStats struct {
+	CancelledAtStart    int      `json:"cancelled_at_start"`
 	ErrorHandlerCalls   int      `json:"error_handler_calls"`
 	Events              []string `json:"events"`
 	PeriodicStarts      int      `json:"periodic_starts"`

@@ -966,6 +966,7 @@ dependencies = [
 name = "riverqueue-conformance"
 version = "0.47.0-alpha.1"
 dependencies = [
+ "async-trait",
  "chrono",
  "riverqueue",
  "riverqueue-migrate",

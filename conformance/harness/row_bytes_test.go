@@ -10,6 +10,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 )
@@ -35,6 +36,15 @@ type rawJobRow struct {
 	Metadata    string `json:"metadata"`
 	ScheduledAt string `json:"scheduled_at"`
 	Tags        string `json:"tags"`
+	// UniqueKey is the stored unique key as uppercase hex.
+	UniqueKey *string `json:"unique_key"`
+	// UniqueKeyType is SQLite's typeof(unique_key), and nil on PostgreSQL.
+	UniqueKeyType *string `json:"unique_key_type"`
+	// UniqueStates is the stored state mask rendered as text.
+	UniqueStates *string `json:"unique_states"`
+	// UniqueStatesType is SQLite's typeof(unique_states), and nil on
+	// PostgreSQL.
+	UniqueStatesType *string `json:"unique_states_type"`
 }
 
 // jsonbTypeNames names SQLite's JSONB element types by their header code.
@@ -223,6 +233,9 @@ func comparableJobRow(t *testing.T, writer string, row rawJobRow) map[string]any
 		"metadata":           jsonTimes("metadata", &metadata),
 		"scheduled_at":       sqliteTime("scheduled_at", &row.ScheduledAt),
 		"tags":               row.Tags,
+		"unique": uniqueColumns{
+			Key: row.UniqueKey, KeyType: row.UniqueKeyType, States: row.UniqueStates, StatesType: row.UniqueStatesType,
+		},
 	}
 }
 
@@ -350,5 +363,109 @@ func verifySQLiteWorkedJobRowBytes(t *testing.T, goAdapter, candidateAdapter *ad
 	}
 	for index, behavior := range behaviors {
 		requireSameJobRowBytes(t, "work "+behavior, goAdapter, candidateAdapter, referenceIDs[index], candidateIDs[index])
+	}
+}
+
+// verifySQLiteRuntimeJobRowBytes compares the SQLite bytes each
+// implementation's client writes when it claims a job, snoozes one, discards
+// a retry that conflicts with a unique job, and rescues an abandoned job.
+// Go sets up the same jobs for both, so every other column matches too.
+func verifySQLiteRuntimeJobRowBytes(t *testing.T, repositoryRoot, databaseURL, profile string, goAdapter, candidateAdapter *adapter) {
+	t.Helper()
+
+	operations := []string{"claim", "snooze", "scheduler discard", "rescue"}
+	crashes := 0
+	write := func(actor *adapter) map[string]rawJobRow {
+		t.Helper()
+
+		rows := make(map[string]rawJobRow, len(operations))
+		read := func(operation string, id int64) {
+			t.Helper()
+
+			var row rawJobRow
+			goAdapter.call(t, "raw_job_row", map[string]any{"id": id}, &row)
+			rows[operation] = row
+		}
+		goAdapter.call(t, "reset", map[string]any{}, nil)
+		opts := map[string]any{"metadata": map[string]any{"note": rowBytesText}, "tags": []string{"row-bytes"}}
+
+		// Claim and snooze: the actor works jobs Go inserts, one held on a
+		// barrier while running and one snoozed well beyond the scheduler's
+		// threshold so it stays scheduled.
+		const barrier = "row-bytes-claim"
+		actor.call(t, "barrier_create", map[string]any{"name": barrier}, nil)
+		actor.call(t, "start", map[string]any{"client_id": "row-bytes-runtime", "max_workers": 2}, nil)
+		var claimed, snoozed normalizedJob
+		goAdapter.call(t, "insert", map[string]any{"behavior": "barrier_wait", "message": barrier, "opts": opts}, &claimed)
+		goAdapter.call(t, "wait", map[string]any{"id": claimed.ID, "states": []string{"running"}}, &claimed)
+		read("claim", claimed.ID)
+		actor.call(t, "barrier_release", map[string]any{"name": barrier}, nil)
+		goAdapter.call(t, "insert", map[string]any{
+			"behavior": "snooze_once", "duration_ms": 60_000, "message": rowBytesText, "opts": opts,
+		}, &snoozed)
+		goAdapter.call(t, "wait", map[string]any{"id": snoozed.ID, "states": []string{"scheduled"}}, &snoozed)
+		read("snooze", snoozed.ID)
+		goAdapter.call(t, "wait", map[string]any{"id": claimed.ID}, &claimed)
+		actor.call(t, "stop", map[string]any{}, nil)
+
+		// Scheduler discard: a retryable unique job whose unique states
+		// exclude retryable becomes due while another job holds its key, so
+		// the leader's scheduler discards it. The retry delay exceeds Go's
+		// default scheduler interval, so the retry stays retryable until then.
+		uniqueOpts := map[string]any{
+			"max_attempts": 3, "queue": "row_bytes_discard",
+			"unique": map[string]any{"by_args": true, "by_state": []string{"available", "pending", "running", "scheduled"}},
+		}
+		goAdapter.call(t, "start", map[string]any{
+			"client_id": "row-bytes-setup", "leader_election_disabled": true, "max_workers": 1,
+			"queue": "row_bytes_discard", "retry_delay_ms": 5_500,
+		}, nil)
+		var discarded, holder normalizedJob
+		goAdapter.call(t, "insert", map[string]any{"behavior": "error", "message": rowBytesText, "opts": uniqueOpts}, &discarded)
+		goAdapter.call(t, "wait", map[string]any{"id": discarded.ID, "states": []string{"retryable"}}, &discarded)
+		goAdapter.call(t, "stop", map[string]any{}, nil)
+		goAdapter.call(t, "insert", map[string]any{"behavior": "error", "message": rowBytesText, "opts": uniqueOpts}, &holder)
+		require.NotEqual(t, discarded.ID, holder.ID, "a retryable job outside its unique states blocked insertion")
+		time.Sleep(time.Until(parseTime(t, discarded.ScheduledAt).Add(100 * time.Millisecond)))
+		actor.startWithTuning(t, map[string]any{"client_id": "row-bytes-scheduler", "max_workers": 1},
+			map[string]any{"elect_interval_ms": 20, "scheduler_interval_ms": 20})
+		goAdapter.call(t, "wait", map[string]any{"id": discarded.ID, "states": []string{"discarded"}}, &discarded)
+		read("scheduler discard", discarded.ID)
+		actor.call(t, "stop", map[string]any{}, nil)
+
+		// Rescue: a process holding a running attempt dies, and the actor's
+		// leader rescues the abandoned attempt.
+		crashes++
+		const rescueAfter = time.Second
+		crasher := startReferenceAdapterForProfile(t, repositoryRoot, databaseURL, "sqlite", profile,
+			fmt.Sprintf("go-row-bytes-crasher-%d", crashes))
+		crasher.call(t, "start", map[string]any{
+			"client_id": "row-bytes-crasher", "leader_election_disabled": true, "max_workers": 1, "queue": "row_bytes_rescue",
+		}, nil)
+		var rescued normalizedJob
+		goAdapter.call(t, "insert", map[string]any{
+			"behavior": "sleep", "duration_ms": 60_000, "message": rowBytesText,
+			"opts": map[string]any{"max_attempts": 3, "queue": "row_bytes_rescue", "tags": []string{"row-bytes"}},
+		}, &rescued)
+		goAdapter.call(t, "wait", map[string]any{"id": rescued.ID, "states": []string{"running"}}, &rescued)
+		crasher.kill(t)
+		waitUntilRescuable(t, rescued, rescueAfter)
+		actor.startWithTuning(t, map[string]any{
+			"client_id": "row-bytes-rescuer", "job_timeout_ms": rescueAfter.Milliseconds(), "max_workers": 1,
+			"rescue_after_ms": rescueAfter.Milliseconds(),
+		}, map[string]any{"elect_interval_ms": 20, "rescuer_interval_ms": 20})
+		goAdapter.call(t, "wait", map[string]any{"id": rescued.ID, "states": []string{"available", "retryable"}}, &rescued)
+		read("rescue", rescued.ID)
+		actor.call(t, "stop", map[string]any{}, nil)
+		return rows
+	}
+
+	reference := write(goAdapter)
+	candidate := write(candidateAdapter)
+	for _, operation := range operations {
+		require.Equal(t,
+			comparableJobRow(t, goAdapter.name, reference[operation]),
+			comparableJobRow(t, candidateAdapter.name, candidate[operation]),
+			"%s: %s and %s wrote different bytes", operation, goAdapter.name, candidateAdapter.name)
 	}
 }

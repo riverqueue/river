@@ -17,6 +17,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -28,14 +29,17 @@ import (
 	"github.com/riverqueue/river"
 	"github.com/riverqueue/river/internal/dbunique"
 	"github.com/riverqueue/river/internal/retrypolicy"
+	"github.com/riverqueue/river/riverdriver"
 	"github.com/riverqueue/river/riverdriver/riverpgxv5"
 	"github.com/riverqueue/river/riverdriver/riversqlite"
 	"github.com/riverqueue/river/rivermigrate"
+	"github.com/riverqueue/river/rivershared/baseservice"
+	"github.com/riverqueue/river/rivershared/riverpilot"
 	"github.com/riverqueue/river/rivertype"
 )
 
 const (
-	adapterVersion        = 17
+	adapterVersion        = 18
 	implementationVersion = "0.47.0"
 	protocolRevision      = 1
 )
@@ -245,6 +249,16 @@ type rawJobRow struct {
 	Metadata    string           `json:"metadata"`
 	ScheduledAt string           `json:"scheduled_at"`
 	Tags        string           `json:"tags"`
+	// UniqueKey is the stored unique key as uppercase hex.
+	UniqueKey *string `json:"unique_key"`
+	// UniqueKeyType is SQLite's typeof(unique_key), and nil on PostgreSQL.
+	UniqueKeyType *string `json:"unique_key_type"`
+	// UniqueStates is the stored state mask as the database renders it as
+	// text.
+	UniqueStates *string `json:"unique_states"`
+	// UniqueStatesType is SQLite's typeof(unique_states), and nil on
+	// PostgreSQL.
+	UniqueStatesType *string `json:"unique_states_type"`
 }
 
 // rawJSONBColumns is a SQLite job's JSONB columns as uppercase hex, so
@@ -263,7 +277,7 @@ type rawJSONBColumns struct {
 func (row *rawJobRow) scanTargets() []any {
 	return []any{
 		&row.Args, &row.AttemptedAt, &row.AttemptedBy, &row.CreatedAt, &row.Errors,
-		&row.FinalizedAt, &row.Metadata, &row.ScheduledAt, &row.Tags,
+		&row.FinalizedAt, &row.Metadata, &row.ScheduledAt, &row.Tags, &row.UniqueKey, &row.UniqueStates,
 	}
 }
 
@@ -481,6 +495,9 @@ func (w *conformanceWorker) Work(ctx context.Context, job *river.Job[conformance
 		<-ctx.Done()
 		panic("conformance panic after cancellation")
 	case "cooperative_cancel":
+		if ctx.Err() != nil && w.probe != nil {
+			w.probe.incrementCancelledAtStart()
+		}
 		<-ctx.Done()
 		return ctx.Err()
 	case "discard":
@@ -596,6 +613,7 @@ func (p startTuningParams) reject() error {
 }
 
 type runtimeProbe struct {
+	cancelledAtStart    int
 	errorHandlerCalls   int
 	events              []string
 	mu                  sync.Mutex
@@ -622,6 +640,12 @@ func (p *runtimeProbe) addTrace(entry string) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	p.trace = append(p.trace, entry)
+}
+
+func (p *runtimeProbe) incrementCancelledAtStart() {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.cancelledAtStart++
 }
 
 func (p *runtimeProbe) incrementPeriodicStarts() {
@@ -652,6 +676,7 @@ func (p *runtimeProbe) snapshot() map[string]any {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	return map[string]any{
+		"cancelled_at_start":    p.cancelledAtStart,
 		"error_handler_calls":   p.errorHandlerCalls,
 		"events":                valueOrEmpty(slices.Clone(p.events)),
 		"periodic_starts":       p.periodicStarts,
@@ -765,6 +790,23 @@ func (r *barrierRegistry) release(name string) error {
 	close(waiter)
 	delete(r.waiters, name)
 	return nil
+}
+
+func (r *barrierRegistry) exists(name string) bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	_, exists := r.waiters[name]
+	return exists
+}
+
+// releaseIfPresent releases a barrier that hasn't been released yet.
+func (r *barrierRegistry) releaseIfPresent(name string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if waiter, exists := r.waiters[name]; exists {
+		close(waiter)
+		delete(r.waiters, name)
+	}
 }
 
 func (r *barrierRegistry) wait(ctx context.Context, name string) error {
@@ -1007,6 +1049,7 @@ func handleQueueAdd(
 }
 
 type runningClient struct {
+	claimBarrier       string
 	client             *river.Client[pgx.Tx]
 	probe              *runtimeProbe
 	subscription       <-chan *river.Event
@@ -1040,6 +1083,7 @@ type sqliteAdapterState struct {
 }
 
 type sqliteRunningClient struct {
+	claimBarrier       string
 	client             *river.Client[*sql.Tx]
 	probe              *runtimeProbe
 	subscription       <-chan *river.Event
@@ -1815,7 +1859,8 @@ func (s *adapterState) handle(ctx context.Context, req *request) (any, error) {
 		var row rawJobRow
 		err = s.pool.QueryRow(ctx, `
 			SELECT args::text, attempted_at::text, attempted_by::text, created_at::text, errors::text,
-				finalized_at::text, metadata::text, scheduled_at::text, tags::text
+				finalized_at::text, metadata::text, scheduled_at::text, tags::text,
+				upper(encode(unique_key, 'hex')), unique_states::text
 			FROM river_job
 			WHERE id = $1`, id).Scan(row.scanTargets()...)
 		if errors.Is(err, pgx.ErrNoRows) {
@@ -1855,6 +1900,7 @@ func (s *adapterState) handle(ctx context.Context, req *request) (any, error) {
 			maintenanceParams
 			startTuningParams
 
+			ClaimBarrier           string  `json:"claim_barrier"`
 			ClientID               string  `json:"client_id"`
 			ErrorHandlerCancel     bool    `json:"error_handler_cancel"`
 			FetchPollIntervalMS    *uint64 `json:"fetch_poll_interval_ms"`
@@ -1864,6 +1910,7 @@ func (s *adapterState) handle(ctx context.Context, req *request) (any, error) {
 			LeaderElectionDisabled bool    `json:"leader_election_disabled"`
 			MaxWorkers             int     `json:"max_workers"`
 			PeriodicRunOnStart     bool    `json:"periodic_run_on_start"`
+			PeriodicUnique         bool    `json:"periodic_unique"`
 			PollOnly               bool    `json:"poll_only"`
 			Queue                  string  `json:"queue"`
 			RescueAfterMS          *uint64 `json:"rescue_after_ms"`
@@ -1876,6 +1923,9 @@ func (s *adapterState) handle(ctx context.Context, req *request) (any, error) {
 		if err := params.reject(); err != nil {
 			return nil, err
 		}
+		if params.ClaimBarrier != "" && !s.barriers.exists(params.ClaimBarrier) {
+			return nil, invalidParams(fmt.Errorf("claim_barrier %q does not exist", params.ClaimBarrier))
+		}
 		if params.MaxWorkers == 0 {
 			params.MaxWorkers = 4
 		}
@@ -1884,6 +1934,7 @@ func (s *adapterState) handle(ctx context.Context, req *request) (any, error) {
 		}
 		probe := &runtimeProbe{}
 		client, err := newWorkerClient(s.pool, s.barriers, workerClientConfig{
+			claimBarrier:           params.ClaimBarrier,
 			errorHandlerCancel:     params.ErrorHandlerCancel,
 			fetchPollIntervalMS:    params.FetchPollIntervalMS,
 			id:                     params.ClientID,
@@ -1894,6 +1945,7 @@ func (s *adapterState) handle(ctx context.Context, req *request) (any, error) {
 			maintenance:            params.maintenanceParams,
 			maxWorkers:             params.MaxWorkers,
 			periodicRunOnStart:     params.PeriodicRunOnStart,
+			periodicUnique:         params.PeriodicUnique,
 			pollOnly:               params.PollOnly,
 			probe:                  probe,
 			queue:                  params.Queue,
@@ -1918,6 +1970,7 @@ func (s *adapterState) handle(ctx context.Context, req *request) (any, error) {
 			return nil, err
 		}
 		s.running = &runningClient{
+			claimBarrier:       params.ClaimBarrier,
 			client:             client,
 			probe:              probe,
 			subscription:       subscription,
@@ -1934,6 +1987,10 @@ func (s *adapterState) handle(ctx context.Context, req *request) (any, error) {
 		}
 		if err := decodeParams(req.Params, &params); err != nil {
 			return nil, err
+		}
+		// A claim held on the barrier would keep the client from stopping.
+		if s.running.claimBarrier != "" {
+			s.barriers.releaseIfPresent(s.running.claimBarrier)
 		}
 		stopCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
 		defer cancel()
@@ -2665,7 +2722,8 @@ func (s *sqliteAdapterState) handle(ctx context.Context, req *request) (any, err
 		var row rawJobRow
 		err = s.pool.QueryRowContext(ctx, `
 			SELECT json(args), CAST(attempted_at AS TEXT), json(attempted_by), CAST(created_at AS TEXT),
-				json(errors), CAST(finalized_at AS TEXT), json(metadata), CAST(scheduled_at AS TEXT), json(tags)
+				json(errors), CAST(finalized_at AS TEXT), json(metadata), CAST(scheduled_at AS TEXT), json(tags),
+				CASE WHEN unique_key IS NULL THEN NULL ELSE hex(unique_key) END, CAST(unique_states AS TEXT)
 			FROM river_job
 			WHERE id = ?`, id).Scan(row.scanTargets()...)
 		if errors.Is(err, sql.ErrNoRows) {
@@ -2682,6 +2740,15 @@ func (s *sqliteAdapterState) handle(ctx context.Context, req *request) (any, err
 				hex(metadata), hex(tags)
 			FROM river_job
 			WHERE id = ?`, id).Scan(&row.JSONB.Args, &row.JSONB.AttemptedBy, &row.JSONB.Errors, &row.JSONB.Metadata, &row.JSONB.Tags)
+		if err != nil {
+			return nil, err
+		}
+		err = s.pool.QueryRowContext(ctx, `
+			SELECT
+				CASE WHEN unique_key IS NULL THEN NULL ELSE typeof(unique_key) END,
+				CASE WHEN unique_states IS NULL THEN NULL ELSE typeof(unique_states) END
+			FROM river_job
+			WHERE id = ?`, id).Scan(&row.UniqueKeyType, &row.UniqueStatesType)
 		return row, err
 
 	case "raw_notifications":
@@ -2868,6 +2935,7 @@ func (s *sqliteAdapterState) handle(ctx context.Context, req *request) (any, err
 			maintenanceParams
 			startTuningParams
 
+			ClaimBarrier           string  `json:"claim_barrier"`
 			ClientID               string  `json:"client_id"`
 			ErrorHandlerCancel     bool    `json:"error_handler_cancel"`
 			FetchPollIntervalMS    *uint64 `json:"fetch_poll_interval_ms"`
@@ -2877,6 +2945,7 @@ func (s *sqliteAdapterState) handle(ctx context.Context, req *request) (any, err
 			LeaderElectionDisabled bool    `json:"leader_election_disabled"`
 			MaxWorkers             int     `json:"max_workers"`
 			PeriodicRunOnStart     bool    `json:"periodic_run_on_start"`
+			PeriodicUnique         bool    `json:"periodic_unique"`
 			PollOnly               bool    `json:"poll_only"`
 			Queue                  string  `json:"queue"`
 			RescueAfterMS          *uint64 `json:"rescue_after_ms"`
@@ -2889,6 +2958,9 @@ func (s *sqliteAdapterState) handle(ctx context.Context, req *request) (any, err
 		if err := params.reject(); err != nil {
 			return nil, err
 		}
+		if params.ClaimBarrier != "" && !s.barriers.exists(params.ClaimBarrier) {
+			return nil, invalidParams(fmt.Errorf("claim_barrier %q does not exist", params.ClaimBarrier))
+		}
 		if params.Schema != "" {
 			return nil, unsupported(errors.New("SQLite conformance does not support custom schemas"))
 		}
@@ -2900,12 +2972,13 @@ func (s *sqliteAdapterState) handle(ctx context.Context, req *request) (any, err
 		}
 		probe := &runtimeProbe{}
 		client, err := newSQLiteWorkerClient(s.pool, s.barriers, workerClientConfig{
+			claimBarrier:       params.ClaimBarrier,
 			errorHandlerCancel: params.ErrorHandlerCancel, fetchPollIntervalMS: params.FetchPollIntervalMS,
 			id: params.ClientID, instrumented: params.Instrumented,
 			jobStuckThresholdMS: params.JobStuckThresholdMS, jobTimeoutMS: params.JobTimeoutMS,
 			leaderElectionDisabled: params.LeaderElectionDisabled, maintenance: params.maintenanceParams,
 			maxWorkers: params.MaxWorkers, periodicRunOnStart: params.PeriodicRunOnStart,
-			pollOnly: params.PollOnly, probe: probe, queue: params.Queue, rescueAfterMS: params.RescueAfterMS,
+			periodicUnique: params.PeriodicUnique, pollOnly: params.PollOnly, probe: probe, queue: params.Queue, rescueAfterMS: params.RescueAfterMS,
 			retryDelayMS: params.RetryDelayMS,
 		})
 		if err != nil {
@@ -2920,7 +2993,10 @@ func (s *sqliteAdapterState) handle(ctx context.Context, req *request) (any, err
 			subscriptionCancel()
 			return nil, err
 		}
-		s.running = &sqliteRunningClient{client: client, probe: probe, subscription: subscription, subscriptionCancel: subscriptionCancel}
+		s.running = &sqliteRunningClient{
+			claimBarrier: params.ClaimBarrier, client: client, probe: probe,
+			subscription: subscription, subscriptionCancel: subscriptionCancel,
+		}
 		return map[string]any{}, nil
 
 	case "stop":
@@ -2932,6 +3008,10 @@ func (s *sqliteAdapterState) handle(ctx context.Context, req *request) (any, err
 		}
 		if err := decodeParams(req.Params, &params); err != nil {
 			return nil, err
+		}
+		// A claim held on the barrier would keep the client from stopping.
+		if s.running.claimBarrier != "" {
+			s.barriers.releaseIfPresent(s.running.claimBarrier)
 		}
 		stopCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
 		defer cancel()
@@ -3291,6 +3371,7 @@ func (s *adapterState) clientForSchema(schema string) (*river.Client[pgx.Tx], er
 }
 
 type workerClientConfig struct {
+	claimBarrier           string
 	errorHandlerCancel     bool
 	fetchPollIntervalMS    *uint64
 	id                     string
@@ -3301,6 +3382,7 @@ type workerClientConfig struct {
 	maintenance            maintenanceParams
 	maxWorkers             int
 	periodicRunOnStart     bool
+	periodicUnique         bool
 	pollOnly               bool
 	probe                  *runtimeProbe
 	queue                  string
@@ -3404,7 +3486,7 @@ func newWorkerClient(pool *pgxpool.Pool, barriers *barrierRegistry, config worke
 	if err != nil {
 		return nil, err
 	}
-	return river.NewClient(riverpgxv5.New(pool), riverConfig)
+	return river.NewClient(withClaimBarrier[pgx.Tx](riverpgxv5.New(pool), barriers, config.claimBarrier), riverConfig)
 }
 
 func newSQLiteWorkerClient(pool *sql.DB, barriers *barrierRegistry, config workerClientConfig) (*river.Client[*sql.Tx], error) {
@@ -3412,7 +3494,51 @@ func newSQLiteWorkerClient(pool *sql.DB, barriers *barrierRegistry, config worke
 	if err != nil {
 		return nil, err
 	}
-	return river.NewClient(riversqlite.New(pool), riverConfig)
+	return river.NewClient(withClaimBarrier[*sql.Tx](riversqlite.New(pool), barriers, config.claimBarrier), riverConfig)
+}
+
+// claimBarrierDriver installs a claimBarrierPilot through the driver plugin
+// hook River's client checks for when it's built.
+type claimBarrierDriver[TTx any] struct {
+	riverdriver.Driver[TTx]
+
+	pilot *claimBarrierPilot
+}
+
+func (d *claimBarrierDriver[TTx]) PluginInit(*baseservice.Archetype) {}
+
+func (d *claimBarrierDriver[TTx]) PluginPilot() riverpilot.Pilot { return d.pilot }
+
+// claimBarrierPilot is River's standard pilot, except that its first claim
+// returning jobs holds them until the named barrier is released. The claim
+// has already committed, so the jobs are running without an executor while
+// the producer keeps handling notifications, such as a cancellation.
+type claimBarrierPilot struct {
+	riverpilot.StandardPilot
+
+	barriers *barrierRegistry
+	name     string
+	waited   atomic.Bool
+}
+
+func (p *claimBarrierPilot) JobGetAvailable(ctx context.Context, exec riverdriver.Executor, state riverpilot.ProducerState, params *riverdriver.JobGetAvailableParams) (*riverdriver.JobGetAvailableResult, error) {
+	res, err := p.StandardPilot.JobGetAvailable(ctx, exec, state, params)
+	if err != nil || len(res.Jobs) == 0 || p.waited.Swap(true) {
+		return res, err
+	}
+	// The jobs are claimed either way, so they're returned however the wait
+	// ends. Stopping the client releases the barrier.
+	_ = p.barriers.wait(ctx, p.name)
+	return res, nil
+}
+
+// withClaimBarrier returns driver unchanged without a barrier name, and
+// otherwise wraps it to install a claimBarrierPilot.
+func withClaimBarrier[TTx any](driver riverdriver.Driver[TTx], barriers *barrierRegistry, name string) riverdriver.Driver[TTx] {
+	if name == "" {
+		return driver
+	}
+	return &claimBarrierDriver[TTx]{Driver: driver, pilot: &claimBarrierPilot{barriers: barriers, name: name}}
 }
 
 func newWorkerConfig(pool *pgxpool.Pool, barriers *barrierRegistry, config workerClientConfig) (*river.Config, error) {
@@ -3476,16 +3602,37 @@ func newWorkerConfig(pool *pgxpool.Pool, barriers *barrierRegistry, config worke
 	if err := config.maintenance.apply(riverConfig); err != nil {
 		return nil, err
 	}
+	if config.periodicUnique && !config.periodicRunOnStart {
+		return nil, invalidParams(errors.New("periodic_unique requires periodic_run_on_start"))
+	}
 	if config.periodicRunOnStart {
+		var uniqueOpts river.UniqueOpts
+		if config.periodicUnique {
+			uniqueOpts = river.UniqueOpts{ByArgs: true, ByQueue: true}
+		}
 		riverConfig.PeriodicJobs = []*river.PeriodicJob{river.NewPeriodicJob(
 			river.PeriodicInterval(time.Hour),
 			func() (river.JobArgs, *river.InsertOpts) {
 				return conformanceArgs{Message: "periodic run on start"}, &river.InsertOpts{
-					Metadata: []byte(`{"periodic":true}`),
+					Metadata:   []byte(`{"periodic":true}`),
+					UniqueOpts: uniqueOpts,
 				}
 			},
 			&river.PeriodicJobOpts{ID: "conformance-periodic", RunOnStart: true},
 		)}
+		if config.periodicUnique {
+			// Added after the unique job, so its insertion shows the unique
+			// job's insertion was attempted.
+			riverConfig.PeriodicJobs = append(riverConfig.PeriodicJobs, river.NewPeriodicJob(
+				river.PeriodicInterval(time.Hour),
+				func() (river.JobArgs, *river.InsertOpts) {
+					return conformanceArgs{Message: "periodic marker"}, &river.InsertOpts{
+						Metadata: []byte(`{"periodic":true}`),
+					}
+				},
+				&river.PeriodicJobOpts{ID: "conformance-periodic-marker", RunOnStart: true},
+			))
+		}
 	}
 	if config.retryDelayMS != nil {
 		duration, err := durationFromMilliseconds(*config.retryDelayMS)

@@ -65,6 +65,11 @@ func TestMixedSQLiteConformance(t *testing.T) {
 
 		verifySQLiteJobRowBytes(t, goAdapter, candidateAdapter)
 	})
+	t.Run("sqlite_unique_column_bytes", func(t *testing.T) {
+		defer scenarios.record(t)
+
+		verifyUniqueColumnBytes(t, goAdapter, candidateAdapter)
+	})
 	t.Run("sqlite_job_crud", func(t *testing.T) {
 		defer scenarios.record(t)
 
@@ -162,6 +167,22 @@ func TestMixedSQLiteRuntimeConformance(t *testing.T) {
 		})
 		verifySQLiteCancelNotificationBytes(t, goAdapter, candidateAdapter)
 	})
+	t.Run("sqlite_runtime_claim_time_cancellation", func(t *testing.T) {
+		defer scenarios.record(t)
+
+		pair.eachDirection(func(canceller, claimer *adapter) { verifyClaimTimeCancellation(t, canceller, claimer, false) })
+	})
+	t.Run("sqlite_runtime_notification_payload_bytes", func(t *testing.T) {
+		defer scenarios.record(t)
+
+		verifyNotificationPayloadBytes(t, goAdapter, candidateAdapter, func(actor *adapter) notificationCapture {
+			observer := goAdapter
+			if actor == goAdapter {
+				observer = candidateAdapter
+			}
+			return newSQLiteNotificationCapture(t, observer)
+		})
+	})
 	t.Run("sqlite_runtime_remote_queue_subscription_events", func(t *testing.T) {
 		defer scenarios.record(t)
 
@@ -176,6 +197,7 @@ func TestMixedSQLiteRuntimeConformance(t *testing.T) {
 		defer scenarios.record(t)
 
 		verifySQLiteWorkedJobRowBytes(t, goAdapter, candidateAdapter)
+		verifySQLiteRuntimeJobRowBytes(t, repositoryRoot, databaseURL, profileName, goAdapter, candidateAdapter)
 	})
 	t.Run("sqlite_runtime_job_list_cursor_interchange", func(t *testing.T) {
 		defer scenarios.record(t)
@@ -196,6 +218,11 @@ func TestMixedSQLiteRuntimeConformance(t *testing.T) {
 		defer scenarios.record(t)
 
 		verifySQLitePeriodicScheduler(t, goAdapter, candidateAdapter)
+	})
+	t.Run("sqlite_runtime_periodic_unique", func(t *testing.T) {
+		defer scenarios.record(t)
+
+		verifyUniquePeriodicJob(t, goAdapter, candidateAdapter)
 	})
 	t.Run("sqlite_runtime_extensions_resumable_subscriptions", func(t *testing.T) {
 		defer scenarios.record(t)
@@ -675,13 +702,17 @@ func verifySQLiteCrossLanguageInsertion(t *testing.T, goAdapter, candidateAdapte
 		require.NotNil(t, observed.Errors)
 		require.Equal(t, inserted, observed)
 
-		uniqueParams := map[string]any{
-			"message": "SQLite unique from " + pair.writer.name,
-			"opts":    map[string]any{"unique": map[string]any{"by_args": true}},
+		// Each unique option must produce the same key and states in both
+		// implementations, so the observer's insertion is a duplicate.
+		for _, testCase := range uniqueColumnCases() {
+			uniqueParams := map[string]any{
+				"message": "SQLite unique " + testCase.name + " from " + pair.writer.name,
+				"opts":    testCase.opts,
+			}
+			pair.writer.call(t, "insert", uniqueParams, &inserted)
+			pair.observer.call(t, "insert", uniqueParams, &observed)
+			require.Equal(t, inserted, observed, "%s: %s inserted a duplicate of %s's job", testCase.name, pair.observer.name, pair.writer.name)
 		}
-		pair.writer.call(t, "insert", uniqueParams, &inserted)
-		pair.observer.call(t, "insert", uniqueParams, &observed)
-		require.Equal(t, inserted, observed)
 	}
 }
 

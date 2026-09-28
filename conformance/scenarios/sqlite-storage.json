@@ -11,6 +11,7 @@
     { "evidence": [{ "path": "conformance/harness/sqlite_test.go", "symbol": "verifyProfileHandshakes" }], "name": "sqlite_profile_handshake", "tier": "codec" },
     { "evidence": [{ "path": "conformance/harness/sqlite_test.go", "symbol": "verifySQLiteTimestampEncoding" }], "name": "sqlite_timestamp_rounding_ordering", "tier": "codec" },
     { "evidence": [{ "path": "conformance/harness/sqlite_test.go", "symbol": "verifySQLiteTransactions" }], "name": "sqlite_transactions", "tier": "storage" },
+    { "evidence": [{ "path": "conformance/harness/interop_scenarios_test.go", "symbol": "verifyUniqueColumnBytes" }], "name": "sqlite_unique_column_bytes", "tier": "codec" },
     { "evidence": [{ "path": "conformance/harness/storage_scenarios_test.go", "symbol": "verifyUnsafeInt64JobIDs" }], "name": "sqlite_unsafe_int64_job_ids_rpc_list_cursors", "tier": "codec" }
   ]
 }

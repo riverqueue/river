@@ -96,6 +96,11 @@ func TestMixedConformance(t *testing.T) {
 
 		verifyConcurrentUniqueConflicts(t, observer, goAdapter, candidateAdapter)
 	})
+	t.Run("unique_column_bytes", func(t *testing.T) {
+		defer scenarios.record(t)
+
+		verifyUniqueColumnBytes(t, goAdapter, candidateAdapter)
+	})
 	t.Run("typed_batch_insertion", func(t *testing.T) {
 		defer scenarios.record(t)
 
@@ -231,6 +236,11 @@ func TestMixedConformance(t *testing.T) {
 
 		pair.eachAdapter(func(current *adapter) { verifyPeriodicRunOnStart(t, current) })
 	})
+	t.Run("periodic_unique_cross_engine", func(t *testing.T) {
+		defer scenarios.record(t)
+
+		verifyUniquePeriodicJob(t, goAdapter, candidateAdapter)
+	})
 	t.Run("error_handler_cancel_override", func(t *testing.T) {
 		defer scenarios.record(t)
 
@@ -265,6 +275,18 @@ func TestMixedConformance(t *testing.T) {
 		defer scenarios.record(t)
 
 		pair.eachDirection(func(controller, worker *adapter) { verifyCooperativeRemoteCancellation(t, controller, worker) })
+	})
+	t.Run("claim_time_cancellation", func(t *testing.T) {
+		defer scenarios.record(t)
+
+		pair.eachDirection(func(canceller, claimer *adapter) { verifyClaimTimeCancellation(t, canceller, claimer, true) })
+	})
+	t.Run("notification_payload_bytes", func(t *testing.T) {
+		defer scenarios.record(t)
+
+		verifyNotificationPayloadBytes(t, goAdapter, candidateAdapter, func(*adapter) notificationCapture {
+			return newPostgresNotificationCapture(t, observer)
+		})
 	})
 	t.Run("remote_queue_subscription_events", func(t *testing.T) {
 		defer scenarios.record(t)
