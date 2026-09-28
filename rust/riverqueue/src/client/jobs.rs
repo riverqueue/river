@@ -242,7 +242,15 @@ impl JobCancelRequest<'_> {
         let inner = &self.client.inner;
         let own_transaction = !self.target.is_transaction();
         let mut session = self.target.session(inner, Access::Transaction).await?;
-        let row = session.storage(inner).job_cancel(self.id).await?;
+        let scope = session
+            .begin_scope(
+                inner,
+                inner.pilot.intercepts_job_cancel_retry(),
+                "river_cancel",
+            )
+            .await?;
+        let result = session.storage(inner).job_cancel(self.id).await;
+        let row = session.finish_scope(scope, result).await?;
         session.commit().await?;
         // Without a listener (no backend listener, or a poll-only client),
         // wake this client's running attempt directly, like Go's
@@ -334,7 +342,15 @@ impl JobRetryRequest<'_> {
     async fn run(self) -> Result<JobRow, Error> {
         let inner = &self.client.inner;
         let mut session = self.target.session(inner, Access::Transaction).await?;
-        let row = session.storage(inner).job_retry(self.id).await?;
+        let scope = session
+            .begin_scope(
+                inner,
+                inner.pilot.intercepts_job_cancel_retry(),
+                "river_retry",
+            )
+            .await?;
+        let result = session.storage(inner).job_retry(self.id).await;
+        let row = session.finish_scope(scope, result).await?;
         session.commit().await?;
         Ok(row)
     }
@@ -421,9 +437,13 @@ impl<'a> IntoFuture for JobCompleteTxRequest<'a> {
     fn into_future(self) -> Self::IntoFuture {
         Box::pin(async move {
             let connection = self.connection?;
-            crate::storage::Storage::new(&self.client.inner, connection)
-                .job_complete(self.id, &Map::new())
-                .await
+            crate::storage::complete_in_caller_transaction(
+                &self.client.inner,
+                connection,
+                self.id,
+                &Map::new(),
+            )
+            .await
         })
     }
 }

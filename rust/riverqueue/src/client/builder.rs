@@ -695,7 +695,7 @@ impl ClientBuilder {
                 schema,
                 allow_legacy_job_kinds: self.allow_legacy_job_kinds,
                 allow_unregistered_job_kinds: self.allow_unregistered_job_kinds,
-                insert_savepoint_sequence: AtomicU64::new(0),
+                savepoint_sequence: AtomicU64::new(0),
                 soft_stop_timeout: self.soft_stop_timeout,
                 started: AtomicBool::new(false),
                 workers: self.workers,

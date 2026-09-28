@@ -554,6 +554,37 @@ impl<'a> Session<'a> {
         Ok(Self { connection })
     }
 
+    /// Opens an [`OperationScope`] when this session runs on a caller's
+    /// transaction and `intercepted` is set. River's own transactions need
+    /// none: they roll back entirely on failure.
+    pub(crate) async fn begin_scope(
+        &mut self,
+        inner: &ClientInner,
+        intercepted: bool,
+        prefix: &str,
+    ) -> Result<Option<OperationScope>, Error> {
+        match &mut self.connection {
+            SessionConnection::Caller(connection) if intercepted => Ok(Some(
+                OperationScope::begin(inner, connection.reborrow(), prefix).await?,
+            )),
+            _ => Ok(None),
+        }
+    }
+
+    /// Finishes a scope from [`Session::begin_scope`], returning `result`.
+    pub(crate) async fn finish_scope<T>(
+        &mut self,
+        scope: Option<OperationScope>,
+        result: Result<T, Error>,
+    ) -> Result<T, Error> {
+        match (scope, &mut self.connection) {
+            (Some(scope), SessionConnection::Caller(connection)) => {
+                scope.finish(connection.reborrow(), result).await
+            }
+            _ => result,
+        }
+    }
+
     /// Returns storage operations bound to this session's connection.
     pub(crate) fn storage<'s>(&'s mut self, inner: &'s ClientInner) -> Storage<'s> {
         let connection = match &mut self.connection {
@@ -598,6 +629,67 @@ impl<'a> Session<'a> {
     }
 }
 
+/// A savepoint that makes one intercepted operation atomic inside a
+/// caller-managed transaction.
+///
+/// An extension's step can fail after River's own statement succeeded, and
+/// without a savepoint the caller could catch that error and commit the
+/// standard change without the extension's. Rolling back to the savepoint
+/// removes both, leaving the caller's transaction usable.
+pub(crate) struct OperationScope {
+    name: String,
+}
+
+impl OperationScope {
+    /// Opens a savepoint named after the client's next scope number.
+    pub(crate) async fn begin(
+        inner: &ClientInner,
+        connection: DatabaseConnection<'_>,
+        prefix: &str,
+    ) -> Result<Self, Error> {
+        let name = format!("{prefix}_{}", inner.next_savepoint_number());
+        execute_savepoint_statement(connection, &format!("SAVEPOINT {name}")).await?;
+        Ok(Self { name })
+    }
+
+    /// Releases the savepoint, first rolling back to it when `result` is an
+    /// error, and returns `result`.
+    pub(crate) async fn finish<T>(
+        self,
+        mut connection: DatabaseConnection<'_>,
+        result: Result<T, Error>,
+    ) -> Result<T, Error> {
+        if result.is_err() {
+            execute_savepoint_statement(
+                connection.reborrow(),
+                &format!("ROLLBACK TO SAVEPOINT {}", self.name),
+            )
+            .await?;
+        }
+        execute_savepoint_statement(connection, &format!("RELEASE SAVEPOINT {}", self.name))
+            .await?;
+        result
+    }
+}
+
+async fn execute_savepoint_statement(
+    connection: DatabaseConnection<'_>,
+    statement: &str,
+) -> Result<(), Error> {
+    let statement = sqlx::AssertSqlSafe(statement.to_owned());
+    match connection {
+        #[cfg(feature = "postgres")]
+        DatabaseConnection::Postgres(connection) => {
+            sqlx::query(statement).execute(connection).await?;
+        }
+        #[cfg(feature = "sqlite")]
+        DatabaseConnection::Sqlite(connection) => {
+            sqlx::query(statement).execute(connection).await?;
+        }
+    }
+    Ok(())
+}
+
 /// Creates the client's queue record or refreshes its `updated_at`.
 pub(crate) async fn touch_queue(inner: &ClientInner, name: &str) -> Result<Queue, Error> {
     let mut session = Session::begin(&inner.database, Access::Autocommit).await?;
@@ -625,9 +717,7 @@ impl crate::Client {
         E: crate::database::DatabaseTransactionExecutor<'executor>,
     {
         let connection = self.inner.transaction_connection(executor)?;
-        Storage::new(&self.inner, connection)
-            .job_complete(id, &metadata_updates)
-            .await
+        complete_in_caller_transaction(&self.inner, connection, id, &metadata_updates).await
     }
 
     /// Updates a job in a caller-managed transaction.
@@ -645,4 +735,28 @@ impl crate::Client {
             .job_update(id, params)
             .await
     }
+}
+
+/// Completes a running job in a caller-managed transaction. When an
+/// extension observes completions, the update and its step share one
+/// [`OperationScope`].
+pub(crate) async fn complete_in_caller_transaction(
+    inner: &ClientInner,
+    connection: DatabaseConnection<'_>,
+    id: i64,
+    metadata_updates: &Map<String, Value>,
+) -> Result<JobRow, Error> {
+    let mut session = Session::caller(connection);
+    let scope = session
+        .begin_scope(
+            inner,
+            inner.pilot.intercepts_job_set_state(),
+            "river_complete",
+        )
+        .await?;
+    let result = session
+        .storage(inner)
+        .job_complete(id, metadata_updates)
+        .await;
+    session.finish_scope(scope, result).await
 }

@@ -67,7 +67,7 @@ use sqlx::AssertSqlSafe;
 use sqlx::SqlitePool;
 #[cfg(feature = "postgres")]
 use sqlx::{
-    Executor, PgConnection, PgPool, Postgres,
+    Executor, PgPool, Postgres,
     postgres::{PgListener, PgRow},
     types::Json,
 };
@@ -151,8 +151,8 @@ pub(crate) struct ClientInner {
     pub(crate) schema: SchemaName,
     allow_legacy_job_kinds: bool,
     allow_unregistered_job_kinds: bool,
-    /// Numbers the savepoints of batch insertions in caller transactions.
-    insert_savepoint_sequence: AtomicU64,
+    /// Numbers the savepoints River opens in caller transactions.
+    savepoint_sequence: AtomicU64,
     soft_stop_timeout: Option<Duration>,
     started: AtomicBool,
     pub(crate) workers: WorkerRegistry,
@@ -164,60 +164,12 @@ fn sqlite_backend_error(error: crate::database::sqlite::BackendError) -> Error {
     Error::Database(error.into())
 }
 
-#[cfg(feature = "postgres")]
-async fn begin_postgres_savepoint(connection: &mut PgConnection, name: &str) -> Result<(), Error> {
-    sqlx::query(AssertSqlSafe(format!("SAVEPOINT {name}")))
-        .execute(connection)
-        .await?;
-    Ok(())
-}
-
-#[cfg(feature = "sqlite")]
-async fn begin_sqlite_savepoint(
-    connection: &mut sqlx::SqliteConnection,
-    name: &str,
-) -> Result<(), Error> {
-    sqlx::query(AssertSqlSafe(format!("SAVEPOINT {name}")))
-        .execute(connection)
-        .await?;
-    Ok(())
-}
-
-#[cfg(feature = "postgres")]
-async fn finish_postgres_savepoint<T>(
-    connection: &mut PgConnection,
-    name: &str,
-    result: Result<T, Error>,
-) -> Result<T, Error> {
-    if result.is_err() {
-        sqlx::query(AssertSqlSafe(format!("ROLLBACK TO SAVEPOINT {name}")))
-            .execute(&mut *connection)
-            .await?;
-    }
-    sqlx::query(AssertSqlSafe(format!("RELEASE SAVEPOINT {name}")))
-        .execute(connection)
-        .await?;
-    result
-}
-
-#[cfg(feature = "sqlite")]
-async fn finish_sqlite_savepoint<T>(
-    connection: &mut sqlx::SqliteConnection,
-    name: &str,
-    result: Result<T, Error>,
-) -> Result<T, Error> {
-    if result.is_err() {
-        sqlx::query(AssertSqlSafe(format!("ROLLBACK TO SAVEPOINT {name}")))
-            .execute(&mut *connection)
-            .await?;
-    }
-    sqlx::query(AssertSqlSafe(format!("RELEASE SAVEPOINT {name}")))
-        .execute(connection)
-        .await?;
-    result
-}
-
 impl ClientInner {
+    /// Returns a number for a new savepoint name, unique within this client.
+    pub(crate) fn next_savepoint_number(&self) -> u64 {
+        self.savepoint_sequence.fetch_add(1, Ordering::Relaxed)
+    }
+
     /// Borrows a caller-managed transaction's connection, rejecting a
     /// transaction from another backend.
     pub(crate) fn transaction_connection<'executor, E>(
@@ -498,15 +450,6 @@ impl Client {
 impl Client {
     pub(crate) fn default_max_attempts(&self) -> i16 {
         self.inner.default_max_attempts
-    }
-
-    fn signal_insert(&self, row: &JobRow, unique_skipped_as_duplicate: bool) {
-        if row.state == JobState::Available && !unique_skipped_as_duplicate {
-            let _ = self
-                .inner
-                .queue_notifications
-                .send(RuntimeNotification::Insert(row.queue.clone()));
-        }
     }
 
     pub(crate) fn signal_queue_control(&self, queue: &str) {

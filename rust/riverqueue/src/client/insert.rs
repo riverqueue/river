@@ -77,7 +77,10 @@ impl<'a, A: JobArgs> InsertRequest<'a, A> {
     ///
     /// The job becomes visible to workers only when the transaction commits
     /// and is discarded if it rolls back. `executor` must be a SQLx
-    /// transaction for the client's database backend.
+    /// transaction for the client's database backend. River inserts under a
+    /// savepoint and rolls back to it on any failure, including one after
+    /// the write, so committing the transaction afterwards never keeps a job
+    /// whose insertion returned an error.
     pub fn tx<'t, E>(self, executor: E) -> InsertRequest<'t, A>
     where
         'a: 't,
@@ -114,17 +117,18 @@ impl<'a, A: JobArgs> IntoFuture for InsertRequest<'a, A> {
                 target,
             } = self;
             let job = client.prepare_typed(&args, opts, Utc::now())?;
-            let rows = client
-                .run_insert(target.into_executor()?, vec![job])
-                .await?;
-            let row = rows.into_iter().next().ok_or_else(|| {
-                Error::runtime_context("job insertion", "insertion returned no row")
-            })?;
-            let args = row.job.decode_args()?;
-            Ok(InsertResult {
-                job: Job { args, row: row.job },
-                unique_skipped_as_duplicate: row.unique_skipped_as_duplicate,
-            })
+            client
+                .run_insert(target.into_executor()?, vec![job], |rows| {
+                    let row = rows.into_iter().next().ok_or_else(|| {
+                        Error::runtime_context("job insertion", "insertion returned no row")
+                    })?;
+                    let args = row.job.decode_args()?;
+                    Ok(InsertResult {
+                        job: Job { args, row: row.job },
+                        unique_skipped_as_duplicate: row.unique_skipped_as_duplicate,
+                    })
+                })
+                .await
         })
     }
 }
@@ -143,8 +147,9 @@ impl<'a, A: JobArgs> InsertManyRequest<'a, A> {
     /// Inserts the jobs in a caller-managed transaction.
     ///
     /// The jobs become visible to workers only when the transaction commits.
-    /// If the batch fails, River rolls back to a savepoint so the transaction
-    /// remains usable.
+    /// If the batch fails, including after the write, River rolls back to a
+    /// savepoint so the transaction remains usable and keeps none of the
+    /// jobs.
     pub fn tx<'t, E>(self, executor: E) -> InsertManyRequest<'t, A>
     where
         'a: 't,
@@ -186,16 +191,19 @@ impl<'a, A: JobArgs> IntoFuture for InsertManyRequest<'a, A> {
                 target,
             } = self;
             let jobs = Self::prepare(client, jobs)?;
-            let rows = client.run_insert(target.into_executor()?, jobs).await?;
-            rows.into_iter()
-                .map(|row| {
-                    let args = row.job.decode_args()?;
-                    Ok(InsertResult {
-                        job: Job { args, row: row.job },
-                        unique_skipped_as_duplicate: row.unique_skipped_as_duplicate,
-                    })
+            client
+                .run_insert(target.into_executor()?, jobs, |rows| {
+                    rows.into_iter()
+                        .map(|row| {
+                            let args = row.job.decode_args()?;
+                            Ok(InsertResult {
+                                job: Job { args, row: row.job },
+                                unique_skipped_as_duplicate: row.unique_skipped_as_duplicate,
+                            })
+                        })
+                        .collect()
                 })
-                .collect()
+                .await
         })
     }
 }
@@ -262,14 +270,17 @@ impl<'a> IntoFuture for InsertBatchRequest<'a> {
                     now,
                 )?);
             }
-            let rows = client.run_insert(target.into_executor()?, jobs).await?;
-            Ok(rows
-                .into_iter()
-                .map(|row| InsertBatchResult {
-                    job: row.job,
-                    unique_skipped_as_duplicate: row.unique_skipped_as_duplicate,
+            client
+                .run_insert(target.into_executor()?, jobs, |rows| {
+                    Ok(rows
+                        .into_iter()
+                        .map(|row| InsertBatchResult {
+                            job: row.job,
+                            unique_skipped_as_duplicate: row.unique_skipped_as_duplicate,
+                        })
+                        .collect())
                 })
-                .collect())
+                .await
         })
     }
 }
@@ -425,10 +436,12 @@ impl Client {
             target,
             Utc::now(),
         )?;
-        let rows = self.run_insert(None, vec![job]).await?;
-        rows.into_iter().next().map(|row| row.job).ok_or_else(|| {
-            Error::runtime_context("periodic job insertion", "insertion returned no row")
+        self.run_insert(None, vec![job], |rows| {
+            rows.into_iter().next().map(|row| row.job).ok_or_else(|| {
+                Error::runtime_context("periodic job insertion", "insertion returned no row")
+            })
         })
+        .await
     }
 
     /// Resolves, validates, and computes the uniqueness of a typed job.
@@ -514,47 +527,35 @@ impl Client {
         })
     }
 
-    /// Runs the insertion pipeline and decodes the returned rows with decode
-    /// hooks.
-    pub(super) async fn run_insert(
-        &self,
-        executor: Option<PilotDatabaseConnection<'_>>,
-        jobs: Vec<InsertContext>,
-    ) -> Result<Vec<InsertedJob>, Error> {
-        let InsertedJobs::Rows(mut rows) = self.run_insert_inserted(executor, jobs).await?;
-        for row in &mut rows {
-            for hook in self.inner.hooks.iter().rev() {
-                hook.decode_insert_result(&mut row.job).await?;
-            }
-        }
-        Ok(rows)
-    }
-
-    /// Runs the insertion pipeline, returning what middleware returned.
+    /// Runs the insertion pipeline, decodes the returned rows with decode
+    /// hooks, and converts them with `finish`.
     ///
     /// Without a caller transaction, validation has already run, and
-    /// middleware, begin hooks, extension interception, the write, and the
-    /// insert notification all run in one transaction, like River Go's
-    /// `Insert` and `InsertMany`: an error anywhere, including in middleware
-    /// after the write, rolls the whole insertion back.
-    async fn run_insert_inserted(
+    /// middleware, begin hooks, extension interception, the write, the insert
+    /// notification, decode hooks, and `finish` all run in one transaction,
+    /// like River Go's `Insert` and `InsertMany`: an error anywhere, including
+    /// after the write, rolls the whole insertion back. In a caller's
+    /// transaction a savepoint covers the same steps, so an error always
+    /// means nothing was written, and the transaction stays usable.
+    pub(super) async fn run_insert<T>(
         &self,
         executor: Option<PilotDatabaseConnection<'_>>,
         jobs: Vec<InsertContext>,
-    ) -> Result<InsertedJobs, Error> {
+        finish: impl FnOnce(Vec<InsertedJob>) -> Result<T, Error> + Send,
+    ) -> Result<T, Error> {
         if jobs.is_empty() {
             return Err(Error::invalid_job("no jobs to insert".to_owned()));
         }
-        let atomic = jobs.len() > 1;
-        let Some(executor) = executor else {
-            let inserted = match self.inner.database.pool() {
+        let Some(mut connection) = executor else {
+            let (inserted, signals) = match self.inner.database.pool() {
                 #[cfg(feature = "postgres")]
                 DatabasePool::Postgres(pool) => {
                     let mut transaction = crate::database::begin_postgres(pool).await?;
                     let inserted = self
-                        .insert_on_connection(
+                        .insert_and_finish(
                             PilotDatabaseConnection::Postgres(&mut transaction),
                             jobs,
+                            finish,
                         )
                         .await?;
                     transaction.commit().await?;
@@ -564,64 +565,59 @@ impl Client {
                 DatabasePool::Sqlite(pool) => {
                     let mut transaction = crate::database::begin_sqlite_write(pool).await?;
                     let inserted = self
-                        .insert_on_connection(
+                        .insert_and_finish(
                             PilotDatabaseConnection::Sqlite(&mut transaction),
                             jobs,
+                            finish,
                         )
                         .await?;
                     transaction.commit().await?;
                     inserted
                 }
             };
-            self.signal_inserted(&inserted);
+            // Wake local producers for jobs this client committed itself.
+            for queue in signals {
+                let _ = self
+                    .inner
+                    .queue_notifications
+                    .send(RuntimeNotification::Insert(queue));
+            }
             return Ok(inserted);
         };
-        match executor {
-            #[cfg(feature = "postgres")]
-            PilotDatabaseConnection::Postgres(connection) => {
-                if !atomic {
-                    return self
-                        .insert_on_connection(PilotDatabaseConnection::Postgres(connection), jobs)
-                        .await;
-                }
-                let savepoint = self.batch_savepoint();
-                begin_postgres_savepoint(connection, &savepoint).await?;
-                let result = self
-                    .insert_on_connection(PilotDatabaseConnection::Postgres(&mut *connection), jobs)
-                    .await;
-                finish_postgres_savepoint(connection, &savepoint, result).await
-            }
-            #[cfg(feature = "sqlite")]
-            PilotDatabaseConnection::Sqlite(connection) => {
-                if !atomic {
-                    return self
-                        .insert_on_connection(PilotDatabaseConnection::Sqlite(connection), jobs)
-                        .await;
-                }
-                let savepoint = self.batch_savepoint();
-                begin_sqlite_savepoint(connection, &savepoint).await?;
-                let result = self
-                    .insert_on_connection(PilotDatabaseConnection::Sqlite(&mut *connection), jobs)
-                    .await;
-                finish_sqlite_savepoint(connection, &savepoint, result).await
-            }
-        }
+        let scope = crate::storage::OperationScope::begin(
+            &self.inner,
+            connection.reborrow(),
+            "river_insert",
+        )
+        .await?;
+        let result = self
+            .insert_and_finish(connection.reborrow(), jobs, finish)
+            .await
+            .map(|(inserted, _)| inserted);
+        scope.finish(connection, result).await
     }
 
-    fn batch_savepoint(&self) -> String {
-        let sequence = self
-            .inner
-            .insert_savepoint_sequence
-            .fetch_add(1, Ordering::Relaxed);
-        format!("river_insert_{sequence}")
-    }
-
-    /// Wakes local producers for jobs this client committed itself.
-    fn signal_inserted(&self, inserted: &InsertedJobs) {
-        let InsertedJobs::Rows(rows) = inserted;
-        for row in rows {
-            self.signal_insert(&row.job, row.unique_skipped_as_duplicate);
+    /// Runs middleware and persistence on `connection`, then decode hooks
+    /// and `finish`, returning `finish`'s result and the queues of newly
+    /// available jobs.
+    async fn insert_and_finish<T>(
+        &self,
+        connection: PilotDatabaseConnection<'_>,
+        jobs: Vec<InsertContext>,
+        finish: impl FnOnce(Vec<InsertedJob>) -> Result<T, Error> + Send,
+    ) -> Result<(T, Vec<String>), Error> {
+        let InsertedJobs::Rows(mut rows) = self.insert_on_connection(connection, jobs).await?;
+        for row in &mut rows {
+            for hook in self.inner.hooks.iter().rev() {
+                hook.decode_insert_result(&mut row.job).await?;
+            }
         }
+        let signals = rows
+            .iter()
+            .filter(|row| row.job.state == JobState::Available && !row.unique_skipped_as_duplicate)
+            .map(|row| row.job.queue.clone())
+            .collect();
+        Ok((finish(rows)?, signals))
     }
 
     /// Runs insertion middleware around persistence of `jobs`.

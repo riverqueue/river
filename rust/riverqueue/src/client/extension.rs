@@ -431,13 +431,16 @@ impl ExtensionClient<'_> {
         executor: Option<PilotDatabaseConnection<'_>>,
         job: InsertContext,
     ) -> Result<RawInsertResult, Error> {
-        let rows = self.client.run_insert(executor, vec![job]).await?;
-        let row = rows.into_iter().next().ok_or_else(|| {
-            Error::runtime_context("exact-version insertion", "insertion returned no row")
-        })?;
-        Ok(RawInsertResult {
-            job: row.job,
-            unique_skipped_as_duplicate: row.unique_skipped_as_duplicate,
-        })
+        self.client
+            .run_insert(executor, vec![job], |rows| {
+                let row = rows.into_iter().next().ok_or_else(|| {
+                    Error::runtime_context("exact-version insertion", "insertion returned no row")
+                })?;
+                Ok(RawInsertResult {
+                    job: row.job,
+                    unique_skipped_as_duplicate: row.unique_skipped_as_duplicate,
+                })
+            })
+            .await
     }
 }

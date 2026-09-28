@@ -788,9 +788,11 @@ pub trait Pilot: Send + Sync + 'static {
     /// connection. Called for each job by the default
     /// [`Pilot::before_jobs_insert`].
     ///
-    /// River invokes ordinary begin hooks first, then this method, then insert
-    /// middleware. The insert and its backend notification remain in the same
-    /// transaction.
+    /// Insert middleware wraps the whole step: River runs middleware, then
+    /// ordinary begin hooks, then this method, then the write. The insert and
+    /// its backend notification remain in the same transaction, and in a
+    /// caller's transaction a savepoint covers the middleware, this method,
+    /// the write, and [`Pilot::after_jobs_inserted`].
     async fn before_job_insert(
         &self,
         _connection: DatabaseConnection<'_>,
