@@ -120,8 +120,6 @@ pub enum ExtensionPhase {
     AddOnRuntimeService,
     /// An add-on crate claiming jobs for a fetch.
     AddOnFetchClaim,
-    /// An add-on crate selecting jobs for River to claim in a fetch.
-    AddOnFetchSelection,
     /// An add-on crate's insertion step.
     AddOnInsertion,
     /// An add-on crate's step after a job is cancelled.
@@ -130,6 +128,8 @@ pub enum ExtensionPhase {
     AddOnJobRetry,
     /// An add-on crate's step after job state changes are persisted.
     AddOnJobSetState,
+    /// An add-on crate's session for a queue producer.
+    AddOnProducer,
     /// An add-on crate's rescue of stuck jobs.
     AddOnRescue,
     /// An add-on crate selecting stuck jobs to rescue.
@@ -159,11 +159,11 @@ impl fmt::Display for ExtensionPhase {
         formatter.write_str(match self {
             Self::AddOnRuntimeService => "add-on runtime service",
             Self::AddOnFetchClaim => "add-on fetch claim",
-            Self::AddOnFetchSelection => "add-on fetch selection",
             Self::AddOnInsertion => "add-on job insertion",
             Self::AddOnJobCancel => "add-on job cancel",
             Self::AddOnJobRetry => "add-on job retry",
             Self::AddOnJobSetState => "add-on job set state",
+            Self::AddOnProducer => "add-on producer",
             Self::AddOnRescue => "add-on rescue",
             Self::AddOnRescueSelection => "add-on rescue selection",
             Self::ErrorHandler => "error handler",

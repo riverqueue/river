@@ -12,11 +12,12 @@ use std::{
 };
 
 use async_trait::async_trait;
-use riverqueue::__private::{ClientBuilderExt, ExtensionClaimParams, ExtensionClient};
 use riverqueue::__private::{
-    DatabaseConfig, DatabaseConnection, DatabasePool, FetchParams, JobSetStateParams,
-    MaintenanceService, Pilot, PilotError, RuntimeService,
+    ClaimedJob, DatabaseConfig, DatabaseConnection, DatabasePool, JobSetStateParams,
+    MaintenanceService, Pilot, PilotError, PilotProducer, ProducerClaimContext, ProducerClaimNext,
+    ProducerStartContext, RuntimeService,
 };
+use riverqueue::__private::{ClientBuilderExt, ExtensionClaimParams, ExtensionClient};
 use riverqueue::{
     BoxError, Client, EventKind, InsertBatch, InsertOpts, IntervalSchedule, Job, JobArgs,
     JobListOrderBy, JobListParams, JobRow, JobState, JobUpdateParams, MaintenanceConfig,
@@ -372,37 +373,17 @@ impl RetryPolicy for LongRetryPolicy {
 
 #[async_trait]
 impl Pilot for TestPilot {
-    fn intercepts_fetch(&self) -> bool {
-        true
-    }
-
     fn intercepts_job_set_state(&self) -> bool {
         true
     }
 
-    async fn select_job_ids(
+    async fn start_producer(
         &self,
-        connection: DatabaseConnection<'_>,
-        params: &FetchParams,
-    ) -> Result<Option<Vec<i64>>, PilotError> {
-        self.fetches.fetch_add(1, Ordering::SeqCst);
-        let schema = params.database.postgres_schema().unwrap();
-        let table = schema.qualify("river_job");
-        let queue_table = schema.qualify("river_queue");
-        let sql = format!(
-            "SELECT id FROM {table} WHERE state = 'available' AND queue = $1 \
-             AND scheduled_at <= now() AND kind = ANY($2::text[]) \
-             AND NOT EXISTS (SELECT 1 FROM {queue_table} WHERE name = $1 AND paused_at IS NOT NULL) \
-             ORDER BY priority, scheduled_at, id LIMIT $3 FOR UPDATE SKIP LOCKED"
-        );
-        Ok(Some(
-            sqlx::query_scalar(AssertSqlSafe(sql))
-                .bind(&params.queue)
-                .bind(&params.kinds)
-                .bind(params.maximum)
-                .fetch_all(connection.into_postgres().unwrap())
-                .await?,
-        ))
+        _context: ProducerStartContext,
+    ) -> Result<Option<Box<dyn PilotProducer>>, PilotError> {
+        Ok(Some(Box::new(CountingProducer {
+            fetches: Arc::clone(&self.fetches),
+        })))
     }
 
     async fn after_jobs_set_state(
@@ -446,6 +427,31 @@ impl Pilot for TestPilot {
             starts: Arc::clone(&self.runtime_starts),
             stops: Arc::clone(&self.runtime_stops),
         })]
+    }
+}
+
+/// Claims with River's standard claim in its own transaction and counts
+/// claims.
+struct CountingProducer {
+    fetches: Arc<AtomicUsize>,
+}
+
+#[async_trait]
+impl PilotProducer for CountingProducer {
+    fn intercepts_claim(&self) -> bool {
+        true
+    }
+
+    async fn claim(
+        &self,
+        context: ProducerClaimContext<'_>,
+        next: ProducerClaimNext<'_>,
+    ) -> Result<Vec<ClaimedJob>, PilotError> {
+        self.fetches.fetch_add(1, Ordering::SeqCst);
+        let mut transaction = context.database.begin().await?;
+        let jobs = next.claim(transaction.connection()).await?;
+        transaction.commit().await?;
+        Ok(jobs)
     }
 }
 

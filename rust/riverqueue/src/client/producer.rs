@@ -2,7 +2,7 @@
 
 use std::collections::HashSet;
 
-use crate::__private::ClaimedJob;
+use crate::pilot::SharedProducer;
 
 #[allow(clippy::wildcard_imports)]
 use super::*;
@@ -32,6 +32,7 @@ pub(super) async fn run_dynamic_queues(
         active: HashMap::new(),
         completion_sender,
         draining: HashMap::new(),
+        fatal: None,
         fetch_cancel: fetch_cancel.clone(),
         inner,
         next_generation: 0,
@@ -50,6 +51,9 @@ pub(super) async fn run_dynamic_queues(
     producers.report_startup(&mut startup);
 
     loop {
+        if producers.fatal.is_some() {
+            break;
+        }
         tokio::select! {
             () = fetch_cancel.cancelled() => break,
             change_result = changes.changed() => {
@@ -76,10 +80,13 @@ pub(super) async fn run_dynamic_queues(
     for (_, queue_cancel, _) in producers.active.values() {
         queue_cancel.cancel();
     }
+    if producers.fatal.is_some() {
+        producers.work_cancel.cancel();
+    }
     while let Some(joined) = producers.tasks.join_next_with_id().await {
         producers.finish(joined);
     }
-    Ok(())
+    producers.fatal.map_or(Ok(()), Err)
 }
 
 type ProducerOutcome = (String, u64, CancellationToken, Result<(), Error>);
@@ -89,6 +96,8 @@ struct Producers {
     completion_sender: mpsc::Sender<CompletionUpdate>,
     /// Producers stopped by reconfiguration whose jobs are still finishing.
     draining: HashMap<String, u64>,
+    /// The first producer failure that stops the client.
+    fatal: Option<Error>,
     fetch_cancel: CancellationToken,
     inner: Arc<ClientInner>,
     next_generation: u64,
@@ -109,7 +118,12 @@ impl Producers {
         let (task_id, name, generation, failure) = match joined {
             Ok((task_id, (name, generation, queue_cancel, result))) => {
                 let failure = match result {
-                    Err(queue_error) => Some(crate::error::Chain(&queue_error).to_string()),
+                    // A producer returns an error only for a failure that
+                    // stops the client, such as a broken claim protocol.
+                    Err(queue_error) => {
+                        self.fatal.get_or_insert(queue_error);
+                        None
+                    }
                     Ok(()) if !queue_cancel.is_cancelled() => {
                         Some("producer exited unexpectedly".to_owned())
                     }
@@ -246,6 +260,83 @@ impl Producers {
     }
 }
 
+/// A queue producer's started generation: its persisted record and the
+/// extension's session, if any.
+struct Generation {
+    queue: crate::Queue,
+    session: Option<SharedProducer>,
+}
+
+/// Creates or refreshes the queue's record and starts the extension's
+/// session for this generation.
+async fn start_generation(
+    inner: &ClientInner,
+    queue: &str,
+    config: &QueueConfig,
+) -> Result<Generation, Error> {
+    let queue_row = crate::storage::touch_queue(inner, queue).await?;
+    let session = inner
+        .pilot
+        .start_producer(crate::__private::ProducerStartContext {
+            client_id: inner.id.clone(),
+            configuration: crate::__private::ProducerConfiguration {
+                max_workers: config.max_workers,
+                queue: queue_row.clone(),
+            },
+            database: inner.pilot_database(),
+        })
+        .await
+        .map_err(|source| Error::Extension {
+            phase: crate::ExtensionPhase::AddOnProducer,
+            source,
+        })?;
+    Ok(Generation {
+        queue: queue_row,
+        session: session.map(SharedProducer::from),
+    })
+}
+
+/// The attempts a producer has running, and the claimed rows it reports to
+/// the extension's session as each attempt exits.
+struct Attempts {
+    rows: HashMap<tokio::task::Id, JobRow>,
+    session: Option<SharedProducer>,
+    tasks: JoinSet<()>,
+}
+
+impl Attempts {
+    fn len(&self) -> usize {
+        self.tasks.len()
+    }
+
+    /// Records that an attempt's task ended, however it ended.
+    fn exited(&mut self, joined: Result<tokio::task::Id, tokio::task::JoinError>, stopping: bool) {
+        let task_id = match joined {
+            Ok(task_id) => task_id,
+            Err(join_error) => {
+                if stopping {
+                    error!(error = %join_error, "River queue task failed during shutdown");
+                } else {
+                    error!(error = %join_error, "River queue task failed");
+                }
+                join_error.id()
+            }
+        };
+        if let Some(row) = self.rows.remove(&task_id)
+            && let Some(session) = &self.session
+        {
+            session.job_finished(&row);
+        }
+    }
+
+    fn spawn(&mut self, row: &JobRow, task: impl Future<Output = ()> + Send + 'static) {
+        let handle = self.tasks.spawn(task);
+        if self.session.is_some() {
+            self.rows.insert(handle.id(), row.clone());
+        }
+    }
+}
+
 #[allow(clippy::too_many_arguments, clippy::too_many_lines)]
 pub(super) async fn run_queue(
     inner: Arc<ClientInner>,
@@ -265,14 +356,17 @@ pub(super) async fn run_queue(
 
     let start_time = tokio::time::Instant::now();
     let mut start_attempt = 0;
-    let initial_queue = loop {
-        let Some(touched) =
-            unless_cancelled(&fetch_cancel, crate::storage::touch_queue(&inner, &queue)).await
+    let Generation {
+        queue: mut queue_row,
+        session,
+    } = loop {
+        let Some(started) =
+            unless_cancelled(&fetch_cancel, start_generation(&inner, &queue, &config)).await
         else {
             return Ok(());
         };
-        match touched {
-            Ok(queue_row) => break queue_row,
+        match started {
+            Ok(generation) => break generation,
             Err(queue_error) => {
                 let sleep = if start_time.elapsed() < START_FAST_RETRY_WINDOW {
                     debug!(error = %crate::error::Chain(&queue_error), "River queue startup failed; retrying");
@@ -296,11 +390,15 @@ pub(super) async fn run_queue(
         }
     };
     let _ = registered.send(queue.clone());
-    let mut paused = initial_queue.paused_at.is_some();
-    let mut metadata = initial_queue.metadata.clone();
-    notify_queue_metadata(&inner, &queue, &metadata).await;
-    let permits = Arc::new(Semaphore::new(config.max_workers));
-    let mut jobs = JoinSet::new();
+    let mut paused = queue_row.paused_at.is_some();
+    let claims_through_session = session
+        .as_ref()
+        .is_some_and(|session| session.intercepts_claim());
+    let mut attempts = Attempts {
+        rows: HashMap::new(),
+        session: session.clone(),
+        tasks: JoinSet::new(),
+    };
     // `None` until the first fetch, which needs no cooldown. Subtracting the
     // cooldown from now instead would panic for a cooldown longer than the
     // monotonic clock's age, as on a freshly booted macOS host.
@@ -312,12 +410,12 @@ pub(super) async fn run_queue(
     poll.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     queue_config_poll.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
 
-    loop {
+    let outcome = loop {
         let (mut should_fetch, refresh_queue_state) = tokio::select! {
-            () = fetch_cancel.cancelled() => break,
+            () = fetch_cancel.cancelled() => break Ok(()),
             _ = heartbeat.tick() => {
                 match unless_cancelled(&fetch_cancel, crate::storage::touch_queue(&inner, &queue)).await {
-                    None => break,
+                    None => break Ok(()),
                     Some(Err(queue_error)) => {
                         error!(error = %crate::error::Chain(&queue_error), "River queue heartbeat failed; retrying");
                     }
@@ -327,10 +425,8 @@ pub(super) async fn run_queue(
             },
             _ = queue_config_poll.tick() => (false, true),
             _ = poll.tick() => (true, false),
-            result = jobs.join_next(), if !jobs.is_empty() => {
-                if let Some(Err(join_error)) = result {
-                    error!(error = %join_error, "River queue task failed");
-                }
+            Some(joined) = attempts.tasks.join_next_with_id(), if !attempts.tasks.is_empty() => {
+                attempts.exited(joined.map(|(task_id, ())| task_id), false);
                 (true, false)
             },
             notification = notifications.recv() => match notification {
@@ -351,13 +447,18 @@ pub(super) async fn run_queue(
             let Some(loaded) =
                 unless_cancelled(&fetch_cancel, crate::storage::load_queue(&inner, &queue)).await
             else {
-                break;
+                break Ok(());
             };
             match loaded {
-                Ok(Some(queue_row)) => {
-                    if queue_row.metadata != metadata {
-                        metadata.clone_from(&queue_row.metadata);
-                        notify_queue_metadata(&inner, &queue, &metadata).await;
+                Ok(Some(loaded)) => {
+                    let changed = loaded.metadata != queue_row.metadata
+                        || loaded.paused_at.is_some() != queue_row.paused_at.is_some();
+                    queue_row = loaded;
+                    if changed && let Some(session) = &session {
+                        session.configuration_changed(&crate::__private::ProducerConfiguration {
+                            max_workers: config.max_workers,
+                            queue: queue_row.clone(),
+                        });
                     }
                     let next_paused = queue_row.paused_at.is_some();
                     if next_paused != paused {
@@ -367,7 +468,9 @@ pub(super) async fn run_queue(
                         } else {
                             QueueEventKind::Resumed
                         };
-                        let _ = inner.events.send(Event::queue(event_kind, queue_row));
+                        let _ = inner
+                            .events
+                            .send(Event::queue(event_kind, queue_row.clone()));
                         should_fetch |= !paused;
                     }
                 }
@@ -386,7 +489,7 @@ pub(super) async fn run_queue(
             .and_then(|last_fetch| config.fetch_cooldown.checked_sub(last_fetch.elapsed()))
         {
             tokio::select! {
-                () = fetch_cancel.cancelled() => break,
+                () = fetch_cancel.cancelled() => break Ok(()),
                 () = tokio::time::sleep(remaining) => {}
             }
         }
@@ -394,63 +497,40 @@ pub(super) async fn run_queue(
         // during the cooldown. Go's fetch query fails once its context is
         // cancelled, so no jobs are claimed after a stop; match that.
         if fetch_cancel.is_cancelled() {
-            break;
+            break Ok(());
         }
-        let available = permits.available_permits();
+        let available = config.max_workers.saturating_sub(attempts.len());
         if available == 0 {
             continue;
         }
         let registration_guard = FetchRegistrationGuard::new(&inner);
-        let use_parallel_fetch = match inner.database.kind() {
-            #[cfg(feature = "postgres")]
-            DatabaseKind::Postgres => true,
-            #[cfg(feature = "sqlite")]
-            DatabaseKind::Sqlite => false,
-        };
-        let rows = if use_parallel_fetch
-            && available >= PARALLEL_FETCH_MINIMUM
-            && !inner.pilot.intercepts_fetch()
-        {
-            let first_maximum = available / 2;
-            let second_maximum = available - first_maximum;
-            let (first, second) = tokio::join!(
-                fetch_jobs(&inner, &queue, first_maximum, &fetch_cancel),
-                fetch_jobs(&inner, &queue, second_maximum, &fetch_cancel),
-            );
-            match (first, second) {
-                (Ok(mut first), Ok(second)) => {
-                    first.extend(second);
-                    first
-                }
-                (Ok(rows), Err(fetch_error)) | (Err(fetch_error), Ok(rows)) => {
-                    error!(
-                        error = %crate::error::Chain(&fetch_error),
-                        "one parallel River job fetch failed; working the successfully fetched jobs"
-                    );
-                    rows
-                }
-                (Err(fetch_error), Err(second_fetch_error)) => {
-                    last_fetch = Some(tokio::time::Instant::now());
-                    error!(
-                        error = %crate::error::Chain(&fetch_error),
-                        secondary_error = %crate::error::Chain(&second_fetch_error),
-                        "River job fetch failed; retrying"
-                    );
-                    continue;
+        let fetched = match (&session, claims_through_session) {
+            (Some(session), true) => {
+                match claim_through_session(
+                    &inner,
+                    session.as_ref(),
+                    &queue,
+                    available,
+                    &fetch_cancel,
+                )
+                .await
+                {
+                    Ok(fetched) => Ok(fetched),
+                    Err(SessionClaimError::Claim(claim_error)) => Err(claim_error),
+                    Err(SessionClaimError::Protocol(protocol_error)) => break Err(protocol_error),
                 }
             }
-        } else {
-            match fetch_jobs(&inner, &queue, available, &fetch_cancel).await {
-                Ok(rows) => rows,
-                Err(fetch_error) => {
-                    last_fetch = Some(tokio::time::Instant::now());
-                    error!(error = %crate::error::Chain(&fetch_error), "River job fetch failed; retrying");
-                    continue;
-                }
-            }
+            // Boxed: two concurrent PostgreSQL claims make a large future.
+            _ => Box::pin(fetch_available(&inner, &queue, available, &fetch_cancel)).await,
         };
         last_fetch = Some(tokio::time::Instant::now());
-        let FetchedJobs { rows, undecodable } = rows;
+        let FetchedJobs { rows, undecodable } = match fetched {
+            Ok(fetched) => fetched,
+            Err(fetch_error) => {
+                error!(error = %crate::error::Chain(&fetch_error), "River job fetch failed; retrying");
+                continue;
+            }
+        };
         // Like River Go, a claimed job whose row couldn't be fully decoded
         // gets an executor that fails its attempt with the decode error
         // instead of working it, so it's retried or discarded rather than
@@ -467,10 +547,6 @@ pub(super) async fn run_queue(
                 }),
         );
         for (row, decode_error) in claimed {
-            let permit = Arc::clone(&permits)
-                .acquire_owned()
-                .await
-                .map_err(|_| Error::runtime_context("producer", "queue worker semaphore closed"))?;
             let hard_cancel = work_cancel.child_token();
             let cancellation = hard_cancel.child_token();
             register_running_attempt(
@@ -479,68 +555,130 @@ pub(super) async fn run_queue(
                 row.id,
                 &cancellation,
             );
-            let inner = Arc::clone(&inner);
+            let task_inner = Arc::clone(&inner);
             let completion_sender = completion_sender.clone();
-            jobs.spawn(async move {
+            let task_row = row.clone();
+            attempts.spawn(&row, async move {
                 execute_job(
-                    inner,
-                    row,
+                    task_inner,
+                    task_row,
                     decode_error,
                     hard_cancel,
                     cancellation,
                     completion_sender,
-                    permit,
                 )
                 .await;
             });
         }
         drop(registration_guard);
-        while let Some(result) = jobs.try_join_next() {
-            if let Err(join_error) = result {
-                error!(error = %join_error, "River queue task failed");
-            }
+        while let Some(joined) = attempts.tasks.try_join_next_with_id() {
+            attempts.exited(joined.map(|(task_id, ())| task_id), false);
         }
-    }
-
-    while let Some(result) = jobs.join_next().await {
-        if let Err(join_error) = result {
-            error!(error = %join_error, "River queue task failed during shutdown");
-        }
-    }
-    Ok(())
-}
-
-#[allow(
-    clippy::too_many_lines,
-    reason = "keeps hooks and metrics identical across backend fetch paths"
-)]
-/// Tells an extension about a queue's metadata, like River Go's producer does
-/// when it starts and when it's notified of a change.
-async fn notify_queue_metadata(inner: &ClientInner, queue: &str, metadata: &Map<String, Value>) {
-    let params = crate::__private::QueueMetadataChangedParams {
-        database: inner.pilot_database_config(),
-        metadata: metadata.clone(),
-        pool: inner.pilot_database_pool(),
-        queue: queue.to_owned(),
     };
-    if let Err(hook_error) = inner.pilot.queue_metadata_changed(&params).await {
-        error!(queue = %queue, error = %crate::error::Chain(&*hook_error), "River extension queue metadata hook failed");
+
+    if outcome.is_err() {
+        // A protocol failure stops the client: cancel this queue's attempts
+        // like a hard stop, then wait for them.
+        work_cancel.cancel();
     }
+    while let Some(joined) = attempts.tasks.join_next_with_id().await {
+        attempts.exited(joined.map(|(task_id, ())| task_id), true);
+    }
+    outcome
 }
 
-/// Parameters passed to fetch extension hooks.
-fn extension_fetch_params(inner: &ClientInner, queue: &str, maximum: i32) -> FetchParams {
-    FetchParams {
-        client_id: inner.id.clone(),
-        database: inner.pilot_database_config(),
-        kinds: inner
-            .workers
-            .kinds()
-            .into_iter()
-            .map(str::to_owned)
-            .collect(),
-        maximum,
-        queue: queue.to_owned(),
+/// Why a claim through an extension's session produced no jobs.
+enum SessionClaimError {
+    /// The session reported an error; River tries again later.
+    Claim(Error),
+    /// The session returned committed rows River can't accept.
+    Protocol(Error),
+}
+
+/// Claims through an extension's session and checks what it returned.
+async fn claim_through_session(
+    inner: &ClientInner,
+    session: &dyn crate::__private::PilotProducer,
+    queue: &str,
+    limit: usize,
+    claim_stop: &CancellationToken,
+) -> Result<FetchedJobs, SessionClaimError> {
+    let fetch_started = (!inner.hooks.is_empty()).then(std::time::Instant::now);
+    let database = inner.pilot_database();
+    let claimed = session
+        .claim(
+            crate::__private::ProducerClaimContext {
+                client_id: &inner.id,
+                claim_stop,
+                database: &database,
+                limit,
+                queue,
+            },
+            crate::__private::ProducerClaimNext::new(inner, queue, limit),
+        )
+        .await
+        .map_err(|source| {
+            SessionClaimError::Claim(Error::Extension {
+                phase: crate::ExtensionPhase::AddOnFetchClaim,
+                source,
+            })
+        })?;
+    if let Err(violation) = crate::pilot::validate_claimed(&claimed, &inner.id, queue, limit) {
+        error!(queue = %queue, error = %violation, "River extension claim broke the claim protocol; stopping the client");
+        return Err(SessionClaimError::Protocol(Error::Extension {
+            phase: crate::ExtensionPhase::AddOnFetchClaim,
+            source: violation.into(),
+        }));
+    }
+    let rows = claimed
+        .into_iter()
+        .map(crate::__private::ClaimedJob::into_decoded)
+        .collect();
+    Ok(finish_fetch(inner, fetch_started, rows).await)
+}
+
+/// Claims available jobs with River's own statements, splitting a large
+/// PostgreSQL claim in two.
+async fn fetch_available(
+    inner: &ClientInner,
+    queue: &str,
+    available: usize,
+    cancel: &CancellationToken,
+) -> Result<FetchedJobs, Error> {
+    let use_parallel_fetch = match inner.database.kind() {
+        #[cfg(feature = "postgres")]
+        DatabaseKind::Postgres => true,
+        #[cfg(feature = "sqlite")]
+        DatabaseKind::Sqlite => false,
+    };
+    if !use_parallel_fetch || available < PARALLEL_FETCH_MINIMUM {
+        return fetch_jobs(inner, queue, available, cancel).await;
+    }
+    let first_maximum = available / 2;
+    let second_maximum = available - first_maximum;
+    let (first, second) = tokio::join!(
+        fetch_jobs(inner, queue, first_maximum, cancel),
+        fetch_jobs(inner, queue, second_maximum, cancel),
+    );
+    match (first, second) {
+        (Ok(mut first), Ok(second)) => {
+            first.extend(second);
+            Ok(first)
+        }
+        (Ok(rows), Err(fetch_error)) | (Err(fetch_error), Ok(rows)) => {
+            error!(
+                error = %crate::error::Chain(&fetch_error),
+                "one parallel River job fetch failed; working the successfully fetched jobs"
+            );
+            Ok(rows)
+        }
+        (Err(fetch_error), Err(second_fetch_error)) => {
+            error!(
+                secondary_error = %crate::error::Chain(&second_fetch_error),
+                "the other parallel River job fetch failed too"
+            );
+            Err(fetch_error)
+        }
     }
 }
 
@@ -584,104 +722,52 @@ async fn unless_cancelled<T>(
     }
 }
 
-/// Claims up to `maximum` jobs from `queue`. Returns no jobs when `cancel`
-/// fires before a connection is available.
-#[allow(
-    clippy::too_many_lines,
-    reason = "each backend's claim and extension interception stay together until the backend rework"
-)]
-pub(super) async fn fetch_jobs(
+/// Runs River's standard claim of up to `limit` available jobs from `queue`
+/// on `connection`, the claim a fetch makes without an extension.
+pub(crate) async fn standard_claim(
     inner: &ClientInner,
+    connection: PilotDatabaseConnection<'_>,
     queue: &str,
-    maximum: usize,
-    cancel: &CancellationToken,
-) -> Result<FetchedJobs, Error> {
-    let fetch_started = (!inner.hooks.is_empty()).then(std::time::Instant::now);
-    let maximum = i32::try_from(maximum)
+    limit: usize,
+) -> Result<Vec<DecodedJob>, Error> {
+    let limit = i32::try_from(limit)
         .map_err(|_| Error::runtime_context("job fetch", "fetch maximum exceeds i32"))?;
-    #[cfg(feature = "sqlite")]
-    if let Some(pool) = inner.sqlite_pool() {
-        let params = crate::database::sqlite::ClaimJobs {
-            client_id: &inner.id,
-            limit: maximum,
-            max_attempted_by: ATTEMPTED_BY_MAX,
-            now: Utc::now(),
+    match connection {
+        #[cfg(feature = "postgres")]
+        PilotDatabaseConnection::Postgres(connection) => Ok(fetch_oss_records(
+            connection,
+            standard_claim_sql(inner),
             queue,
-        };
-        let rows = if inner.pilot.intercepts_fetch() {
-            let Some(transaction) =
-                unless_cancelled(cancel, crate::database::begin_sqlite_write(pool)).await
-            else {
-                return Ok(FetchedJobs::default());
+            limit,
+            &inner.id,
+        )
+        .await?
+        .iter()
+        .map(decode_job_row)
+        .collect()),
+        #[cfg(feature = "sqlite")]
+        PilotDatabaseConnection::Sqlite(connection) => {
+            let params = crate::database::sqlite::ClaimJobs {
+                client_id: &inner.id,
+                limit,
+                max_attempted_by: ATTEMPTED_BY_MAX,
+                now: Utc::now(),
+                queue,
             };
-            let mut transaction = transaction?;
-            let fetch_params = extension_fetch_params(inner, queue, maximum);
-            let claimed = inner
-                .pilot
-                .claim_jobs(
-                    PilotDatabaseConnection::Sqlite(&mut transaction),
-                    &fetch_params,
-                )
+            crate::database::sqlite::claim(connection, &params)
                 .await
-                .map_err(|source| Error::Extension {
-                    phase: crate::ExtensionPhase::AddOnFetchClaim,
-                    source,
-                })?;
-            let (rows, claims) = if let Some(claimed) = claimed {
-                let ids = claimed.iter().filter_map(ClaimedJob::id).collect();
-                let claims = ExtensionClaims::new(inner, &fetch_params, ids);
-                let rows = claimed
-                    .into_iter()
-                    .map(ClaimedJob::into_decoded)
-                    .collect::<Vec<_>>();
-                (rows, Some(claims))
-            } else {
-                let selected_ids = inner
-                    .pilot
-                    .select_job_ids(
-                        PilotDatabaseConnection::Sqlite(&mut transaction),
-                        &fetch_params,
-                    )
-                    .await
-                    .map_err(|source| Error::Extension {
-                        phase: crate::ExtensionPhase::AddOnFetchSelection,
-                        source,
-                    })?;
-                let claims = selected_ids
-                    .clone()
-                    .map(|ids| ExtensionClaims::new(inner, &fetch_params, ids));
-                let rows = match &selected_ids {
-                    Some(ids) => {
-                        crate::database::sqlite::claim_selected(&mut transaction, &params, ids)
-                            .await
-                    }
-                    None => crate::database::sqlite::claim(&mut transaction, &params).await,
-                }
-                .map_err(sqlite_backend_error)?;
-                (rows, claims)
-            };
-            transaction.commit().await?;
-            if let Some(claims) = claims {
-                claims.committed(&rows);
-            }
-            rows
-        } else {
-            let Some(connection) = unless_cancelled(cancel, pool.acquire()).await else {
-                return Ok(FetchedJobs::default());
-            };
-            let mut connection = connection?;
-            crate::database::sqlite::claim(&mut connection, &params)
-                .await
-                .map_err(sqlite_backend_error)?
-        };
-        return Ok(finish_fetch(inner, fetch_started, rows).await);
+                .map_err(sqlite_backend_error)
+        }
     }
-    #[cfg(feature = "postgres")]
-    {
-        let table = inner.schema.qualify("river_job");
-        let queue_table = inner.schema.qualify("river_queue");
-        let oss_sql = format!(
-            "WITH locked AS (\
+}
+
+/// River's PostgreSQL claim statement for this client's schema.
+#[cfg(feature = "postgres")]
+fn standard_claim_sql(inner: &ClientInner) -> String {
+    let table = inner.schema.qualify("river_job");
+    let queue_table = inner.schema.qualify("river_queue");
+    format!(
+        "WITH locked AS (\
             SELECT id FROM {table} WHERE state = 'available' AND queue = $1 AND scheduled_at <= now() \
                 AND NOT EXISTS (SELECT 1 FROM {queue_table} WHERE name = $1 AND paused_at IS NOT NULL) \
             ORDER BY priority, scheduled_at, id LIMIT $2 FOR UPDATE SKIP LOCKED\
@@ -693,166 +779,51 @@ pub(super) async fn fetch_jobs(
                          ELSE job.attempted_by END, $3) \
             FROM locked WHERE job.id = locked.id \
             RETURNING {}, false AS unique_skipped_as_duplicate",
-            job_projection("job")
-        );
-        let rows = if inner.pilot.intercepts_fetch() {
-            let Some(transaction) = unless_cancelled(
-                cancel,
-                crate::database::begin_postgres(
-                    inner
-                        .postgres_pool()
-                        .expect("PostgreSQL fetch extension requires a PostgreSQL pool"),
-                ),
-            )
-            .await
-            else {
-                return Ok(FetchedJobs::default());
-            };
-            let mut transaction = transaction?;
-            let fetch_params = extension_fetch_params(inner, queue, maximum);
-            let claimed = inner
-                .pilot
-                .claim_jobs(
-                    PilotDatabaseConnection::Postgres(&mut transaction),
-                    &fetch_params,
-                )
-                .await
-                .map_err(|source| Error::Extension {
-                    phase: crate::ExtensionPhase::AddOnFetchClaim,
-                    source,
-                })?;
-            let (rows, claims) = if let Some(claimed) = claimed {
-                let ids = claimed.iter().filter_map(ClaimedJob::id).collect();
-                let claims = ExtensionClaims::new(inner, &fetch_params, ids);
-                let rows = claimed
-                    .into_iter()
-                    .map(ClaimedJob::into_decoded)
-                    .collect::<Vec<_>>();
-                (rows, Some(claims))
-            } else {
-                let selected_ids = inner
-                    .pilot
-                    .select_job_ids(
-                        PilotDatabaseConnection::Postgres(&mut transaction),
-                        &fetch_params,
-                    )
-                    .await
-                    .map_err(|source| Error::Extension {
-                        phase: crate::ExtensionPhase::AddOnFetchSelection,
-                        source,
-                    })?;
-                let claims = selected_ids
-                    .clone()
-                    .map(|ids| ExtensionClaims::new(inner, &fetch_params, ids));
-                let records = if let Some(selected_ids) = &selected_ids {
-                    let sql = format!(
-                        "UPDATE {table} AS job SET state = 'running', attempt = job.attempt + 1, \
-                        attempted_at = now(), attempted_by = array_append(\
-                            CASE WHEN array_length(job.attempted_by, 1) >= $3 \
-                                 THEN job.attempted_by[array_length(job.attempted_by, 1) + 2 - $3:] \
-                                 ELSE job.attempted_by END, $2) \
-                    WHERE id = ANY($1::bigint[]) AND state = 'available' \
-                    RETURNING {}, false AS unique_skipped_as_duplicate",
-                        job_projection("job")
-                    );
-                    sqlx::query(AssertSqlSafe(sql))
-                        .bind(selected_ids)
-                        .bind(&inner.id)
-                        .bind(ATTEMPTED_BY_MAX)
-                        .fetch_all(&mut *transaction)
-                        .await
-                } else {
-                    fetch_oss_records(&mut *transaction, oss_sql, queue, maximum, &inner.id).await
-                }
-                .map_err(Error::from)?;
-                (
-                    records.iter().map(decode_job_row).collect::<Vec<_>>(),
-                    claims,
-                )
-            };
-            transaction.commit().await?;
-            if let Some(claims) = claims {
-                claims.committed(&rows);
-            }
-            rows
-        } else {
-            let pool = inner
-                .postgres_pool()
-                .expect("PostgreSQL fetch path requires a PostgreSQL pool");
+        job_projection("job")
+    )
+}
+
+/// Claims up to `maximum` jobs from `queue` with River's own statement on a
+/// pooled connection. Returns no jobs when `cancel` fires before a
+/// connection is available.
+pub(super) async fn fetch_jobs(
+    inner: &ClientInner,
+    queue: &str,
+    maximum: usize,
+    cancel: &CancellationToken,
+) -> Result<FetchedJobs, Error> {
+    let fetch_started = (!inner.hooks.is_empty()).then(std::time::Instant::now);
+    let rows = match inner.database.pool() {
+        #[cfg(feature = "postgres")]
+        DatabasePool::Postgres(pool) => {
             let Some(connection) = unless_cancelled(cancel, pool.acquire()).await else {
                 return Ok(FetchedJobs::default());
             };
-            fetch_oss_records(&mut *connection?, oss_sql, queue, maximum, &inner.id)
-                .await?
-                .iter()
-                .map(decode_job_row)
-                .collect()
-        };
-        return Ok(finish_fetch(inner, fetch_started, rows).await);
-    }
-    #[allow(unreachable_code)]
-    Err(Error::runtime_context(
-        "job fetch",
-        "database dispatch selected no supported backend",
-    ))
-}
-
-/// Jobs an extension claimed or selected in a fetch that hasn't committed
-/// yet.
-///
-/// [`committed`](Self::committed) reports which of them River claimed.
-/// Dropped before that, because the claim or commit failed or the fetch
-/// future was dropped, it reports them all as rolled back.
-struct ExtensionClaims<'a> {
-    inner: &'a ClientInner,
-    /// IDs still pending commit; empty once reported.
-    job_ids: Vec<i64>,
-    params: &'a FetchParams,
-}
-
-impl<'a> ExtensionClaims<'a> {
-    const fn new(inner: &'a ClientInner, params: &'a FetchParams, job_ids: Vec<i64>) -> Self {
-        Self {
-            inner,
-            job_ids,
-            params,
+            let mut connection = connection?;
+            standard_claim(
+                inner,
+                PilotDatabaseConnection::Postgres(&mut connection),
+                queue,
+                maximum,
+            )
+            .await?
         }
-    }
-
-    /// Reports the pending IDs among the committed `rows` as committed and
-    /// the rest, which River's claim skipped, as rolled back.
-    fn committed(mut self, rows: &[DecodedJob]) {
-        let claimed = rows
-            .iter()
-            .filter_map(|row| match row {
-                Ok(row) => Some(row.id),
-                Err(undecodable) => undecodable.row.as_ref().map(|row| row.id),
-            })
-            .collect::<std::collections::HashSet<_>>();
-        let (committed, skipped): (Vec<_>, Vec<_>) = std::mem::take(&mut self.job_ids)
-            .into_iter()
-            .partition(|id| claimed.contains(id));
-        if !committed.is_empty() {
-            self.inner
-                .pilot
-                .claim_jobs_committed(self.params, &committed);
+        #[cfg(feature = "sqlite")]
+        DatabasePool::Sqlite(pool) => {
+            let Some(connection) = unless_cancelled(cancel, pool.acquire()).await else {
+                return Ok(FetchedJobs::default());
+            };
+            let mut connection = connection?;
+            standard_claim(
+                inner,
+                PilotDatabaseConnection::Sqlite(&mut connection),
+                queue,
+                maximum,
+            )
+            .await?
         }
-        if !skipped.is_empty() {
-            self.inner
-                .pilot
-                .claim_jobs_rolled_back(self.params, &skipped);
-        }
-    }
-}
-
-impl Drop for ExtensionClaims<'_> {
-    fn drop(&mut self) {
-        if !self.job_ids.is_empty() {
-            self.inner
-                .pilot
-                .claim_jobs_rolled_back(self.params, &self.job_ids);
-        }
-    }
+    };
+    Ok(finish_fetch(inner, fetch_started, rows).await)
 }
 
 #[cfg(feature = "postgres")]

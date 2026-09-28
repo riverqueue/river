@@ -46,7 +46,7 @@ use self::{
 };
 pub(crate) use self::{
     completer::after_jobs_set_state, executor::default_retry_delay, notifier::RuntimeNotification,
-    validate::validate_queue,
+    producer::standard_claim, validate::validate_queue,
 };
 
 use std::{
@@ -62,6 +62,7 @@ use chrono::{DateTime, Utc};
 use serde::Deserialize;
 use serde_json::{Map, Value, value::RawValue};
 use sha2::{Digest, Sha256};
+#[cfg(feature = "postgres")]
 use sqlx::AssertSqlSafe;
 #[cfg(feature = "sqlite")]
 use sqlx::SqlitePool;
@@ -72,7 +73,7 @@ use sqlx::{
     types::Json,
 };
 use tokio::{
-    sync::{OwnedSemaphorePermit, Semaphore, broadcast, mpsc, oneshot, watch},
+    sync::{broadcast, mpsc, oneshot, watch},
     task::JoinSet,
 };
 use tokio_util::sync::CancellationToken;
@@ -82,8 +83,8 @@ use crate::__private::{
     DatabaseConfig as PilotDatabaseConfig, DatabasePool as PilotDatabasePool, NoopPilot, Pilot,
 };
 use crate::__private::{
-    DatabaseConnection as PilotDatabaseConnection, FetchParams,
-    JobInsertParams as PilotJobInsertParams, JobSetStateParams,
+    DatabaseConnection as PilotDatabaseConnection, JobInsertParams as PilotJobInsertParams,
+    JobSetStateParams,
 };
 
 use crate::extension::{WorkEndpoint, WorkNext};
@@ -237,6 +238,14 @@ impl ClientInner {
             #[cfg(feature = "sqlite")]
             DatabasePool::Sqlite(_) => PilotDatabaseConfig::Sqlite,
         }
+    }
+
+    /// The client's database as an extension sees it.
+    pub(crate) fn pilot_database(&self) -> crate::__private::PilotDatabase {
+        crate::__private::PilotDatabase::new(
+            self.pilot_database_pool(),
+            self.pilot_database_config(),
+        )
     }
 
     pub(crate) fn pilot_database_pool(&self) -> PilotDatabasePool {

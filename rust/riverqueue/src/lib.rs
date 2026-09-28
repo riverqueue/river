@@ -19,6 +19,7 @@ pub mod guide;
 pub mod job;
 mod maintenance;
 pub mod periodic;
+mod pilot;
 pub mod protocol;
 pub mod query;
 pub mod queue;

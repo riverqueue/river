@@ -21,7 +21,6 @@ pub(super) async fn execute_job(
     hard_cancel: CancellationToken,
     cancellation: CancellationToken,
     completion_sender: mpsc::Sender<CompletionUpdate>,
-    worker_permit: OwnedSemaphorePermit,
 ) {
     let span = info_span!("river_job", job_id = row.id, job_kind = %row.kind, queue = %row.queue);
     async move {
@@ -70,7 +69,6 @@ pub(super) async fn execute_job(
             // The task outlived its abort during shutdown and may still be
             // running. Leave the row `running` for the rescuer rather than
             // making it available to run concurrently with the original.
-            drop(worker_permit);
             remove_running_attempt(&inner.running, row.id, &cancellation);
             return;
         };
@@ -157,7 +155,6 @@ pub(super) async fn execute_job(
             &completion_sender,
         )
         .await;
-        drop(worker_permit);
         // Once enqueued, the completer owns the running attempt until the
         // result is written.
         if let Err(operation_error) = persisted {

@@ -9,13 +9,13 @@ use std::{
 
 use async_trait::async_trait;
 use riverqueue::__private::{
+    ClaimedJob, DatabaseConnection, JobInsertParams, JobSetStateParams, Pilot, PilotError,
+    PilotProducer, ProducerClaimContext, ProducerClaimNext, ProducerStartContext, RescueParams,
+};
+use riverqueue::__private::{
     ClientBuilderExt, ExtensionClaimParams, ExtensionClient, ExtensionInsertParams,
 };
 use riverqueue::__private::{DatabaseConfig, DatabasePool, MaintenanceService};
-use riverqueue::__private::{
-    DatabaseConnection, FetchParams, JobInsertParams, JobSetStateParams, Pilot, PilotError,
-    RescueParams,
-};
 use riverqueue::{
     BoxError, Client, ErrorHandler, ErrorHandlerDecision, EventKind, Hook, InsertBatch, InsertOpts,
     Job, JobArgs, JobRow, JobState, MaintenanceConfig, QueueConfig, UniqueOpts, WorkContext,
@@ -175,10 +175,6 @@ impl SqlitePilot {
 
 #[async_trait]
 impl Pilot for SqlitePilot {
-    fn intercepts_fetch(&self) -> bool {
-        self.fetch.is_some()
-    }
-
     fn intercepts_insert(&self) -> bool {
         self.insert.is_some()
     }
@@ -263,35 +259,13 @@ impl Pilot for SqlitePilot {
         Ok(())
     }
 
-    async fn select_job_ids(
+    async fn start_producer(
         &self,
-        connection: DatabaseConnection<'_>,
-        params: &FetchParams,
-    ) -> Result<Option<Vec<i64>>, PilotError> {
-        self.fetch_calls.fetch_add(1, Ordering::SeqCst);
-        let connection = connection
-            .into_sqlite()
-            .ok_or_else(|| std::io::Error::other("expected SQLite fetch connection"))?;
-        sqlx::query("INSERT INTO pilot_effect (operation, job_id) VALUES ('fetch', 0)")
-            .execute(&mut *connection)
-            .await?;
-        if matches!(self.fetch, Some(SelectionBehavior::Fail))
-            || matches!(self.fetch, Some(SelectionBehavior::FailFirst))
-                && self.fetch_calls.load(Ordering::SeqCst) == 1
-        {
-            return Err(std::io::Error::other("fetch interception failed").into());
-        }
-        let ids = sqlx::query_scalar(
-            "SELECT id FROM river_job WHERE state = 'available' AND queue = ? \
-             AND kind IN (SELECT value FROM json_each(?)) \
-             ORDER BY priority, scheduled_at, id LIMIT ?",
-        )
-        .bind(&params.queue)
-        .bind(serde_json::to_string(&params.kinds)?)
-        .bind(params.maximum)
-        .fetch_all(&mut *connection)
-        .await?;
-        Ok(Some(ids))
+        _context: ProducerStartContext,
+    ) -> Result<Option<Box<dyn PilotProducer>>, PilotError> {
+        Ok(self
+            .fetch
+            .map(|_| Box::new(SqliteFetchSession(self.clone())) as Box<dyn PilotProducer>))
     }
 
     async fn select_rescue_job_ids(
@@ -329,6 +303,43 @@ struct LeadershipServiceState {
 }
 
 struct LeadershipService(Arc<LeadershipServiceState>);
+
+/// Claims for [`SqlitePilot`]: records a side effect in each claim's
+/// transaction, fails as configured, and otherwise runs River's claim.
+struct SqliteFetchSession(SqlitePilot);
+
+#[async_trait]
+impl PilotProducer for SqliteFetchSession {
+    fn intercepts_claim(&self) -> bool {
+        true
+    }
+
+    async fn claim(
+        &self,
+        context: ProducerClaimContext<'_>,
+        next: ProducerClaimNext<'_>,
+    ) -> Result<Vec<ClaimedJob>, PilotError> {
+        let pilot = &self.0;
+        pilot.fetch_calls.fetch_add(1, Ordering::SeqCst);
+        let mut transaction = context.database.begin().await?;
+        let connection = transaction
+            .connection()
+            .into_sqlite()
+            .ok_or_else(|| std::io::Error::other("expected SQLite fetch connection"))?;
+        sqlx::query("INSERT INTO pilot_effect (operation, job_id) VALUES ('fetch', 0)")
+            .execute(&mut *connection)
+            .await?;
+        if matches!(pilot.fetch, Some(SelectionBehavior::Fail))
+            || matches!(pilot.fetch, Some(SelectionBehavior::FailFirst))
+                && pilot.fetch_calls.load(Ordering::SeqCst) == 1
+        {
+            return Err(std::io::Error::other("fetch interception failed").into());
+        }
+        let jobs = next.claim(transaction.connection()).await?;
+        transaction.commit().await?;
+        Ok(jobs)
+    }
+}
 
 #[async_trait]
 impl MaintenanceService for LeadershipService {
@@ -1916,65 +1927,25 @@ async fn sqlite_fetches_and_discards_unregistered_kinds() {
 }
 
 /// An extension that claims every available job itself and records the jobs
-/// its set-state hook sees.
+/// its set-state hook sees and the attempts that finished.
 #[derive(Clone, Default)]
 struct ClaimingPilot {
+    finished: Arc<Mutex<Vec<i64>>>,
     set_state_ids: Arc<Mutex<Vec<i64>>>,
     set_state_rows: Arc<Mutex<Vec<i64>>>,
 }
 
 #[async_trait]
 impl Pilot for ClaimingPilot {
-    fn intercepts_fetch(&self) -> bool {
-        true
-    }
-
     fn intercepts_job_set_state(&self) -> bool {
         true
     }
 
-    async fn claim_jobs(
+    async fn start_producer(
         &self,
-        connection: DatabaseConnection<'_>,
-        params: &FetchParams,
-    ) -> Result<Option<Vec<riverqueue::__private::ClaimedJob>>, PilotError> {
-        use sqlx::Row as _;
-
-        let connection = connection
-            .into_sqlite()
-            .ok_or_else(|| std::io::Error::other("expected a SQLite connection"))?;
-        let ids: Vec<i64> = sqlx::query_scalar(
-            "SELECT id FROM river_job WHERE state = 'available' AND queue = ? \
-             ORDER BY priority, scheduled_at, id LIMIT ?",
-        )
-        .bind(&params.queue)
-        .bind(params.maximum)
-        .fetch_all(&mut *connection)
-        .await?;
-        let mut claimed = Vec::new();
-        for id in ids {
-            sqlx::query(
-                "UPDATE river_job SET state = 'running', attempt = attempt + 1, \
-                 attempted_at = ?, \
-                 attempted_by = jsonb_insert(coalesce(attempted_by, jsonb('[]')), '$[#]', ?) \
-                 WHERE id = ?",
-            )
-            .bind(riverqueue::__private::sqlite_timestamp(chrono::Utc::now()))
-            .bind(&params.client_id)
-            .bind(id)
-            .execute(&mut *connection)
-            .await?;
-            let row = sqlx::query(sqlx::AssertSqlSafe(format!(
-                "SELECT {} FROM river_job WHERE id = ?",
-                riverqueue::__private::SQLITE_JOB_COLUMNS
-            )))
-            .bind(id)
-            .fetch_one(&mut *connection)
-            .await?;
-            assert_eq!(row.get::<i64, _>("id"), id);
-            claimed.push(riverqueue::__private::claimed_sqlite_job(&row));
-        }
-        Ok(Some(claimed))
+        _context: ProducerStartContext,
+    ) -> Result<Option<Box<dyn PilotProducer>>, PilotError> {
+        Ok(Some(Box::new(self.clone())))
     }
 
     async fn after_jobs_set_state(
@@ -1991,6 +1962,64 @@ impl Pilot for ClaimingPilot {
             .unwrap()
             .extend(params.jobs.iter().map(|job| job.id));
         Ok(())
+    }
+}
+
+#[async_trait]
+impl PilotProducer for ClaimingPilot {
+    fn intercepts_claim(&self) -> bool {
+        true
+    }
+
+    async fn claim(
+        &self,
+        context: ProducerClaimContext<'_>,
+        _next: ProducerClaimNext<'_>,
+    ) -> Result<Vec<ClaimedJob>, PilotError> {
+        use sqlx::Row as _;
+
+        let mut transaction = context.database.begin().await?;
+        let connection = transaction
+            .connection()
+            .into_sqlite()
+            .ok_or_else(|| std::io::Error::other("expected a SQLite connection"))?;
+        let ids: Vec<i64> = sqlx::query_scalar(
+            "SELECT id FROM river_job WHERE state = 'available' AND queue = ? \
+             ORDER BY priority, scheduled_at, id LIMIT ?",
+        )
+        .bind(context.queue)
+        .bind(i64::try_from(context.limit)?)
+        .fetch_all(&mut *connection)
+        .await?;
+        let mut claimed = Vec::new();
+        for id in ids {
+            sqlx::query(
+                "UPDATE river_job SET state = 'running', attempt = attempt + 1, \
+                 attempted_at = ?, \
+                 attempted_by = jsonb_insert(coalesce(attempted_by, jsonb('[]')), '$[#]', ?) \
+                 WHERE id = ?",
+            )
+            .bind(riverqueue::__private::sqlite_timestamp(chrono::Utc::now()))
+            .bind(context.client_id)
+            .bind(id)
+            .execute(&mut *connection)
+            .await?;
+            let row = sqlx::query(sqlx::AssertSqlSafe(format!(
+                "SELECT {} FROM river_job WHERE id = ?",
+                riverqueue::__private::SQLITE_JOB_COLUMNS
+            )))
+            .bind(id)
+            .fetch_one(&mut *connection)
+            .await?;
+            assert_eq!(row.get::<i64, _>("id"), id);
+            claimed.push(riverqueue::__private::claimed_sqlite_job(&row));
+        }
+        transaction.commit().await?;
+        Ok(claimed)
+    }
+
+    fn job_finished(&self, job: &JobRow) {
+        self.finished.lock().unwrap().push(job.id);
     }
 }
 
@@ -2061,6 +2090,12 @@ async fn extension_claimed_rows_fail_undecodable_attempts_like_river_claims() {
     .await
     .expect("decodable claimed job did not complete");
     run.shutdown().await.unwrap();
+    // Both attempts, including the undecodable row's, finished once.
+    let mut finished = pilot.finished.lock().unwrap().clone();
+    finished.sort_unstable();
+    let mut expected = vec![good.id(), bad.id()];
+    expected.sort_unstable();
+    assert_eq!(finished, expected);
     pool.close().await;
     remove_sqlite_files(&database_path);
 }

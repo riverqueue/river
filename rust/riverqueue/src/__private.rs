@@ -23,6 +23,10 @@ use tokio_util::sync::CancellationToken;
 
 pub use crate::client::{ExtensionClient, WeakClient};
 pub use crate::database::erased::{Database, ErasedExecutor, ErasedTransaction};
+pub use crate::pilot::{
+    PilotDatabase, PilotProducer, PilotTransaction, ProducerClaimContext, ProducerClaimNext,
+    ProducerConfiguration, ProducerStartContext,
+};
 
 /// Insertion options reserved for River's own companion crates.
 ///
@@ -516,21 +520,6 @@ impl fmt::Debug for DatabasePool {
     }
 }
 
-/// Inputs available while selecting jobs under a fetch transaction.
-#[derive(Clone, Debug)]
-pub struct FetchParams {
-    /// Stable client identifier.
-    pub client_id: String,
-    /// Registered job kinds, including aliases.
-    pub kinds: Vec<String>,
-    /// Maximum rows to lock.
-    pub maximum: i32,
-    /// Queue being fetched.
-    pub queue: String,
-    /// Selected database backend configuration.
-    pub database: DatabaseConfig,
-}
-
 /// Inputs available while selecting stuck jobs under a rescue transaction.
 ///
 /// Mirrors Go's `JobGetStuckParams`: selections page by ID after `after_id`
@@ -607,9 +596,9 @@ pub struct JobSetStateParams<'a> {
     /// Selected database backend configuration.
     pub database: DatabaseConfig,
     /// The ID of every job in the batch, including jobs deleted while their
-    /// workers ran, which have no row in `jobs`. Like River Go's pilot
-    /// `JobFinish`, this lets an extension release per-job resources for
-    /// every attempt that ended.
+    /// workers ran, which have no row in `jobs`. Per-attempt resources, such
+    /// as running counts, are released by [`PilotProducer::job_finished`]
+    /// instead, which doesn't wait for persistence.
     pub job_ids: &'a [i64],
     /// Every job in the batch that still exists, as returned by the update,
     /// including jobs that were no longer running and so kept their state.
@@ -624,19 +613,6 @@ pub struct JobsInsertedParams<'a> {
     /// Jobs the insertion wrote, excluding unique insertions skipped as
     /// duplicates, in input order.
     pub jobs: &'a [JobRow],
-}
-
-/// Queue metadata passed to [`Pilot::queue_metadata_changed`].
-#[derive(Clone, Debug)]
-pub struct QueueMetadataChangedParams {
-    /// Selected database backend configuration.
-    pub database: DatabaseConfig,
-    /// The queue's current metadata.
-    pub metadata: Map<String, Value>,
-    /// Caller-owned pool.
-    pub pool: DatabasePool,
-    /// Queue name.
-    pub queue: String,
 }
 
 /// Mutable job insertion fields exposed to an exact-version extension.
@@ -722,13 +698,6 @@ pub trait Pilot: Send + Sync + 'static {
         false
     }
 
-    /// Whether fetches must enter the exact-version interception transaction.
-    /// Returning `false` lets OSS claim jobs with one PostgreSQL statement;
-    /// implementations that override `select_job_ids` return `true`.
-    fn intercepts_fetch(&self) -> bool {
-        false
-    }
-
     /// Whether stuck-job candidate selection must enter the exact-version
     /// interception transaction.
     fn intercepts_rescue(&self) -> bool {
@@ -799,65 +768,6 @@ pub trait Pilot: Send + Sync + 'static {
         _params: &mut JobInsertParams<'_>,
     ) -> Result<(), PilotError> {
         Ok(())
-    }
-
-    /// Optionally claims jobs itself, like River Go's `Pilot.JobGetAvailable`.
-    ///
-    /// Called in the fetch transaction when [`Pilot::intercepts_fetch`]
-    /// returns `true`, before [`Pilot::select_job_ids`]. Returning jobs skips
-    /// River's claim: the extension must have moved them to `running` with
-    /// the attempt incremented, `attempted_at` set, and this client appended
-    /// to `attempted_by`, exactly as River's claim does. Build each entry
-    /// from a row selected with [`postgres_job_projection`] using
-    /// [`claimed_postgres_job`] (or their SQLite equivalents), so a row that
-    /// can't be fully decoded fails its attempt exactly as it would through
-    /// River's own claim. `None` continues with [`Pilot::select_job_ids`] and
-    /// River's claim.
-    async fn claim_jobs(
-        &self,
-        _connection: DatabaseConnection<'_>,
-        _params: &FetchParams,
-    ) -> Result<Option<Vec<ClaimedJob>>, PilotError> {
-        Ok(None)
-    }
-
-    /// Called once the fetch transaction commits with jobs this extension
-    /// claimed or selected.
-    ///
-    /// `job_ids` are the IDs of the jobs [`Pilot::claim_jobs`] returned (a
-    /// claimed row that couldn't be identified is left out), or the
-    /// [`Pilot::select_job_ids`] IDs that River's claim moved to `running`.
-    /// Selected IDs River didn't claim, for example because another client
-    /// claimed them first, are passed to [`Pilot::claim_jobs_rolled_back`]
-    /// instead. Together with that method, this lets an add-on crate track
-    /// which reservations are still pending commit and roll back only those.
-    fn claim_jobs_committed(&self, _params: &FetchParams, _job_ids: &[i64]) {}
-
-    /// Called when jobs this extension claimed or selected won't start from
-    /// this fetch.
-    ///
-    /// River calls it after [`Pilot::claim_jobs`] returned jobs, or
-    /// [`Pilot::select_job_ids`] returned IDs, when River's claim or the
-    /// fetch transaction's `COMMIT` fails, or when the fetch future is
-    /// dropped before its commit completes. A commit whose outcome is unknown
-    /// counts as rolled back; a job it did claim is rescued later.
-    /// After a successful commit, it's also called with the selected IDs
-    /// River's claim skipped. `job_ids` are identified as for
-    /// [`Pilot::claim_jobs_committed`]. The rows stay as they were before the
-    /// fetch, so an add-on crate releases anything it provisionally reserved
-    /// for them, such as running counts. Each ID reaches exactly one of the
-    /// two methods once per fetch.
-    fn claim_jobs_rolled_back(&self, _params: &FetchParams, _job_ids: &[i64]) {}
-
-    /// Optionally selects and locks fetch candidates using the provided
-    /// transaction connection. Returned IDs are claimed by the OSS runtime in
-    /// the same transaction. `None` delegates selection to River OSS.
-    async fn select_job_ids(
-        &self,
-        _connection: DatabaseConnection<'_>,
-        _params: &FetchParams,
-    ) -> Result<Option<Vec<i64>>, PilotError> {
-        Ok(None)
     }
 
     /// Optionally selects stuck-job candidates, honoring the params' cursor
@@ -942,14 +852,25 @@ pub trait Pilot: Send + Sync + 'static {
         Ok(())
     }
 
-    /// Observes a queue's metadata when a producer starts and whenever it's
-    /// changed at runtime, like River Go's `Pilot.QueueMetadataChanged`.
-    /// Errors are logged.
-    async fn queue_metadata_changed(
+    /// Starts the extension's session for a new generation of a queue's
+    /// producer, like River Go's pilot `ProducerInit`, or returns `None` when
+    /// the extension doesn't take part in this queue's claims.
+    ///
+    /// River calls it once the queue's record exists and before the
+    /// producer's first claim. When it fails, River logs the error and
+    /// retries the producer's start with backoff.
+    ///
+    /// When the producer stops while this call is still running, River drops
+    /// its future. An extension that already created shared state by then,
+    /// such as a producer row, gets no session and so no
+    /// [`PilotProducer::shutdown`] for it; the same race exists between River
+    /// Go's `ProducerInit` and a stop. Peers must treat such state like that
+    /// of a client that exited, for example by letting it go stale.
+    async fn start_producer(
         &self,
-        _params: &QueueMetadataChangedParams,
-    ) -> Result<(), PilotError> {
-        Ok(())
+        _context: ProducerStartContext,
+    ) -> Result<Option<Box<dyn PilotProducer>>, PilotError> {
+        Ok(None)
     }
 
     /// Leader-owned services contributed by the extension. River runs them
@@ -992,7 +913,7 @@ pub fn decode_postgres_job_row(row: &sqlx::postgres::PgRow) -> Result<JobRow, Pi
 }
 
 /// Decodes a claimed row selected with [`postgres_job_projection`] as far
-/// as River can, for [`Pilot::claim_jobs`].
+/// as River can, for [`PilotProducer::claim`].
 #[cfg(feature = "postgres")]
 #[must_use]
 pub fn claimed_postgres_job(row: &sqlx::postgres::PgRow) -> ClaimedJob {
@@ -1016,14 +937,14 @@ pub fn decode_sqlite_job_row(row: &sqlx::sqlite::SqliteRow) -> Result<JobRow, Pi
 }
 
 /// Decodes a claimed row selected with [`SQLITE_JOB_COLUMNS`] as far as
-/// River can, for [`Pilot::claim_jobs`].
+/// River can, for [`PilotProducer::claim`].
 #[cfg(feature = "sqlite")]
 #[must_use]
 pub fn claimed_sqlite_job(row: &sqlx::sqlite::SqliteRow) -> ClaimedJob {
     ClaimedJob::from_decoded(crate::database::sqlite::decode_job_row(row))
 }
 
-/// A job claimed by [`Pilot::claim_jobs`].
+/// A job claimed by [`PilotProducer::claim`].
 ///
 /// River works a decoded job normally. Like a row River claims itself, an
 /// undecodable one isn't worked: its attempt fails with an error describing
@@ -1033,7 +954,7 @@ pub fn claimed_sqlite_job(row: &sqlx::sqlite::SqliteRow) -> ClaimedJob {
 pub struct ClaimedJob(crate::client::DecodedJob);
 
 impl ClaimedJob {
-    fn from_decoded(decoded: crate::client::DecodedJob) -> Self {
+    pub(crate) const fn from_decoded(decoded: crate::client::DecodedJob) -> Self {
         Self(decoded)
     }
 
@@ -1053,11 +974,12 @@ impl ClaimedJob {
             .map(|undecodable| undecodable.error.as_str())
     }
 
-    /// Returns the claimed job's ID, unless the row couldn't be identified.
-    pub(crate) fn id(&self) -> Option<i64> {
+    /// Returns the claimed row, with any field that couldn't be decoded left
+    /// empty, unless not even the row's identity could be decoded.
+    pub(crate) fn row(&self) -> Option<&JobRow> {
         match &self.0 {
-            Ok(job) => Some(job.id),
-            Err(undecodable) => undecodable.row.as_ref().map(|row| row.id),
+            Ok(job) => Some(job),
+            Err(undecodable) => undecodable.row.as_deref(),
         }
     }
 
