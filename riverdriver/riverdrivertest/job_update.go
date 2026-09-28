@@ -795,7 +795,7 @@ func exerciseJobUpdate[TTx any](ctx context.Context, t *testing.T, executorWithT
 		// SQLite only: jobs with JSON columns that hold invalid JSON are
 		// scheduled (or discarded for a unique conflict) without failing the
 		// rest of the batch, and the invalid values are left in place.
-		t.Run("InvalidJSONJobsScheduled", func(t *testing.T) {
+		t.Run("InvalidJSONJobsScheduledOrDiscarded", func(t *testing.T) {
 			t.Parallel()
 
 			exec, bundle := setup(ctx, t)
@@ -819,12 +819,14 @@ func exerciseJobUpdate[TTx any](ctx context.Context, t *testing.T, executorWithT
 			}
 			sqliteSetJobColumnMalformed(ctx, t, exec, conflictingJob.ID, "metadata")
 
-			// Conflicts with conflictingJob, which is discarded instead of scheduled.
-			_ = testfactory.Job(ctx, t, exec, &testfactory.JobOpts{
+			// The existing job has malformed metadata too, exercising the
+			// collision lookup as well as the discard update.
+			blockingJob := testfactory.Job(ctx, t, exec, &testfactory.JobOpts{
 				State:        new(rivertype.JobStateRunning),
 				UniqueKey:    []byte("unique-key"),
 				UniqueStates: uniqueStates,
 			})
+			sqliteSetJobColumnMalformed(ctx, t, exec, blockingJob.ID, "metadata")
 
 			result, err := exec.JobSchedule(ctx, &riverdriver.JobScheduleParams{
 				Max: 100,
@@ -842,6 +844,7 @@ func exerciseJobUpdate[TTx any](ctx context.Context, t *testing.T, executorWithT
 				require.Equal(t, sqliteMalformedValue, sqliteJobColumnText(ctx, t, exec, invalidJob.ID, column))
 			}
 			require.Equal(t, sqliteMalformedValue, sqliteJobColumnText(ctx, t, exec, conflictingJob.ID, "metadata"))
+			require.Equal(t, sqliteMalformedValue, sqliteJobColumnText(ctx, t, exec, blockingJob.ID, "metadata"))
 		})
 
 		// SQLite only: jobs whose rows can't be decoded are scheduled (or

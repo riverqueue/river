@@ -1828,6 +1828,8 @@ func ExerciseClient[TTx any](ctx context.Context, t *testing.T,
 		client, err := river.NewClient(bundle.driver, config)
 		require.NoError(t, err)
 
+		// Put healthy jobs on both sides of the corrupt rows so the test
+		// shows that fetching continues through the whole queue.
 		goodJob1 := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{Kind: new(noOpArgs{}.Kind()), Schema: bundle.schema})
 
 		invalidJobIDs := make(map[string]int64, len(sqliteJobJSONColumns))
@@ -1848,9 +1850,13 @@ func ExerciseClient[TTx any](ctx context.Context, t *testing.T,
 		eventsByJobID := make(map[int64]*river.Event)
 		for range len(sqliteJobJSONColumns) + 3 {
 			event := riversharedtest.WaitOrTimeout(t, subscribeChan)
+			require.NotContains(t, eventsByJobID, event.Job.ID, "duplicate event for job %d", event.Job.ID)
 			eventsByJobID[event.Job.ID] = event
 		}
 
+		require.Contains(t, eventsByJobID, goodJob1.ID)
+		require.Contains(t, eventsByJobID, goodJob2.ID)
+		require.Contains(t, eventsByJobID, discardedJob.ID)
 		require.Equal(t, river.EventKindJobCompleted, eventsByJobID[goodJob1.ID].Kind)
 		require.Equal(t, river.EventKindJobCompleted, eventsByJobID[goodJob2.ID].Kind)
 
@@ -1868,6 +1874,7 @@ func ExerciseClient[TTx any](ctx context.Context, t *testing.T,
 
 		for _, column := range sqliteJobJSONColumns {
 			jobID := invalidJobIDs[column]
+			require.Contains(t, eventsByJobID, jobID, "missing event for job with invalid %s", column)
 			require.Equal(t, river.EventKindJobFailed, eventsByJobID[jobID].Kind, "expected job with invalid %s to fail", column)
 			require.Equal(t, rivertype.JobStateRetryable, eventsByJobID[jobID].Job.State)
 

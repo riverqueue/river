@@ -785,6 +785,31 @@ func exerciseJobRead[TTx any](ctx context.Context, t *testing.T, executorWithTx 
 			require.NoError(t, err)
 			require.Empty(t, ids)
 		})
+
+		// A malformed metadata value on one running job must not prevent
+		// cancellation requests for other jobs from being found.
+		t.Run("InvalidJSONMetadataIgnored", func(t *testing.T) {
+			t.Parallel()
+
+			exec, bundle := setup(ctx, t)
+			if bundle.driver.DatabaseName() != riverdriver.DatabaseNameSQLite {
+				t.Skip("only SQLite's JSON columns can hold invalid JSON")
+			}
+
+			cancelRequestedJob := testfactory.Job(ctx, t, exec, &testfactory.JobOpts{
+				Metadata: []byte(`{"cancel_attempted_at":"2026-09-28T00:00:00Z"}`),
+				State:    new(rivertype.JobStateRunning),
+			})
+			invalidJob := testfactory.Job(ctx, t, exec, &testfactory.JobOpts{State: new(rivertype.JobStateRunning)})
+			sqliteSetJobColumnMalformed(ctx, t, exec, invalidJob.ID, "metadata")
+
+			ids, err := exec.JobGetCancelRequested(ctx, &riverdriver.JobGetCancelRequestedParams{
+				ID: []int64{cancelRequestedJob.ID, invalidJob.ID},
+			})
+			require.NoError(t, err)
+			require.Equal(t, []int64{cancelRequestedJob.ID}, ids)
+			require.Equal(t, sqliteMalformedValue, sqliteJobColumnText(ctx, t, exec, invalidJob.ID, "metadata"))
+		})
 	})
 
 	t.Run("JobGetStuck", func(t *testing.T) {
