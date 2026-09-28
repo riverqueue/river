@@ -41,23 +41,59 @@ impl RequireInsertedOpts {
         Self::default()
     }
 
+    /// Returns the expected maximum number of attempts.
+    #[must_use]
+    pub const fn max_attempts(&self) -> Option<i16> {
+        self.max_attempts
+    }
+
+    /// Returns the expected priority.
+    #[must_use]
+    pub const fn priority(&self) -> Option<i16> {
+        self.priority
+    }
+
+    /// Returns the expected queue.
+    #[must_use]
+    pub fn queue(&self) -> Option<&str> {
+        self.queue.as_deref()
+    }
+
+    /// Returns the expected scheduled time.
+    #[must_use]
+    pub const fn scheduled_at(&self) -> Option<DateTime<Utc>> {
+        self.scheduled_at
+    }
+
+    /// Returns the expected state.
+    #[must_use]
+    pub const fn state(&self) -> Option<JobState> {
+        self.state
+    }
+
+    /// Returns the expected tags.
+    #[must_use]
+    pub fn tags(&self) -> Option<&[String]> {
+        self.tags.as_deref()
+    }
+
     /// Expects this maximum number of attempts.
     #[must_use]
-    pub const fn max_attempts(mut self, max_attempts: i16) -> Self {
+    pub const fn with_max_attempts(mut self, max_attempts: i16) -> Self {
         self.max_attempts = Some(max_attempts);
         self
     }
 
     /// Expects this priority.
     #[must_use]
-    pub const fn priority(mut self, priority: i16) -> Self {
+    pub const fn with_priority(mut self, priority: i16) -> Self {
         self.priority = Some(priority);
         self
     }
 
     /// Expects this queue.
     #[must_use]
-    pub fn queue(mut self, queue: impl Into<String>) -> Self {
+    pub fn with_queue(mut self, queue: impl Into<String>) -> Self {
         self.queue = Some(queue.into());
         self
     }
@@ -65,21 +101,21 @@ impl RequireInsertedOpts {
     /// Expects this scheduled time, compared at microsecond precision like
     /// the database stores it.
     #[must_use]
-    pub const fn scheduled_at(mut self, scheduled_at: DateTime<Utc>) -> Self {
+    pub const fn with_scheduled_at(mut self, scheduled_at: DateTime<Utc>) -> Self {
         self.scheduled_at = Some(scheduled_at);
         self
     }
 
     /// Expects this state.
     #[must_use]
-    pub const fn state(mut self, state: JobState) -> Self {
+    pub const fn with_state(mut self, state: JobState) -> Self {
         self.state = Some(state);
         self
     }
 
     /// Expects exactly these tags, in order.
     #[must_use]
-    pub fn tags(mut self, tags: impl IntoIterator<Item = impl Into<String>>) -> Self {
+    pub fn with_tags(mut self, tags: impl IntoIterator<Item = impl Into<String>>) -> Self {
         self.tags = Some(tags.into_iter().map(Into::into).collect());
         self
     }
@@ -296,13 +332,23 @@ fn check_many_inserted(expected: &[ExpectedJob], jobs: Vec<JobRow>) -> Vec<JobRo
 /// # Panics
 ///
 /// Panics, failing the calling test, when there is no such job, when there
-/// is more than one, when a property in `opts` doesn't match, or when the
-/// jobs can't be listed or decoded.
-pub async fn require_inserted<A: JobArgs>(
+/// is more than one, or when the jobs can't be listed or decoded.
+pub async fn require_inserted<A: JobArgs>(client: &Client) -> Job<A> {
+    check_inserted(list(client, params([A::KIND])).await, None)
+}
+
+/// Like [`require_inserted`], but also requires the job to match every
+/// property set in `opts`.
+///
+/// # Panics
+///
+/// Panics under the same conditions as [`require_inserted`], and when a
+/// property in `opts` doesn't match.
+pub async fn require_inserted_with<A: JobArgs>(
     client: &Client,
-    opts: Option<&RequireInsertedOpts>,
+    opts: &RequireInsertedOpts,
 ) -> Job<A> {
-    check_inserted(list(client, params([A::KIND])).await, opts)
+    check_inserted(list(client, params([A::KIND])).await, Some(opts))
 }
 
 /// Like [`require_inserted`], but reads through `executor`'s open
@@ -311,16 +357,33 @@ pub async fn require_inserted<A: JobArgs>(
 /// # Panics
 ///
 /// Panics under the same conditions as [`require_inserted`].
-pub async fn require_inserted_tx<'t, A, E>(
+pub async fn require_inserted_tx<'t, A, E>(client: &'t Client, executor: E) -> Job<A>
+where
+    A: JobArgs,
+    E: DatabaseTransactionExecutor<'t>,
+{
+    check_inserted(list_tx(client, executor, params([A::KIND])).await, None)
+}
+
+/// Like [`require_inserted_with`], but reads through `executor`'s open
+/// transaction.
+///
+/// # Panics
+///
+/// Panics under the same conditions as [`require_inserted_with`].
+pub async fn require_inserted_tx_with<'t, A, E>(
     client: &'t Client,
     executor: E,
-    opts: Option<&RequireInsertedOpts>,
+    opts: &RequireInsertedOpts,
 ) -> Job<A>
 where
     A: JobArgs,
     E: DatabaseTransactionExecutor<'t>,
 {
-    check_inserted(list_tx(client, executor, params([A::KIND])).await, opts)
+    check_inserted(
+        list_tx(client, executor, params([A::KIND])).await,
+        Some(opts),
+    )
 }
 
 /// Asserts that jobs of exactly the expected kinds were inserted, in this
@@ -362,16 +425,26 @@ where
     check_many_inserted(expected, jobs)
 }
 
-/// Asserts that no job of `A`'s kind was inserted or, with `opts`, that no
-/// job of the kind matches every property set in them.
+/// Asserts that no job of `A`'s kind was inserted.
+///
+/// # Panics
+///
+/// Panics, failing the calling test, when such a job exists or the jobs
+/// can't be listed.
+pub async fn require_not_inserted<A: JobArgs>(client: &Client) {
+    let jobs = list(client, params([A::KIND])).await;
+    check_not_inserted(A::KIND, &jobs, None);
+}
+
+/// Asserts that no job of `A`'s kind matches every property set in `opts`.
 ///
 /// # Panics
 ///
 /// Panics, failing the calling test, when a matching job exists or the jobs
 /// can't be listed.
-pub async fn require_not_inserted<A: JobArgs>(client: &Client, opts: Option<&RequireInsertedOpts>) {
+pub async fn require_not_inserted_with<A: JobArgs>(client: &Client, opts: &RequireInsertedOpts) {
     let jobs = list(client, params([A::KIND])).await;
-    check_not_inserted(A::KIND, &jobs, opts);
+    check_not_inserted(A::KIND, &jobs, Some(opts));
 }
 
 /// Like [`require_not_inserted`], but reads through `executor`'s open
@@ -380,16 +453,31 @@ pub async fn require_not_inserted<A: JobArgs>(client: &Client, opts: Option<&Req
 /// # Panics
 ///
 /// Panics under the same conditions as [`require_not_inserted`].
-pub async fn require_not_inserted_tx<'t, A, E>(
+pub async fn require_not_inserted_tx<'t, A, E>(client: &'t Client, executor: E)
+where
+    A: JobArgs,
+    E: DatabaseTransactionExecutor<'t>,
+{
+    let jobs = list_tx(client, executor, params([A::KIND])).await;
+    check_not_inserted(A::KIND, &jobs, None);
+}
+
+/// Like [`require_not_inserted_with`], but reads through `executor`'s open
+/// transaction.
+///
+/// # Panics
+///
+/// Panics under the same conditions as [`require_not_inserted_with`].
+pub async fn require_not_inserted_tx_with<'t, A, E>(
     client: &'t Client,
     executor: E,
-    opts: Option<&RequireInsertedOpts>,
+    opts: &RequireInsertedOpts,
 ) where
     A: JobArgs,
     E: DatabaseTransactionExecutor<'t>,
 {
     let jobs = list_tx(client, executor, params([A::KIND])).await;
-    check_not_inserted(A::KIND, &jobs, opts);
+    check_not_inserted(A::KIND, &jobs, Some(opts));
 }
 
 #[cfg(all(test, feature = "sqlite"))]
@@ -445,14 +533,12 @@ mod tests {
             .await
             .unwrap();
 
-        let job = require_inserted::<FirstArgs>(
+        let job = require_inserted_with::<FirstArgs>(
             &bundle.client,
-            Some(
-                &RequireInsertedOpts::new()
-                    .queue("custom")
-                    .priority(2)
-                    .state(JobState::Available),
-            ),
+            &RequireInsertedOpts::new()
+                .with_queue("custom")
+                .with_priority(2)
+                .with_state(JobState::Available),
         )
         .await;
         assert_eq!(job.args, FirstArgs { value: 7 });
@@ -462,7 +548,7 @@ mod tests {
     #[should_panic(expected = "No jobs found with kind: require_first")]
     async fn require_inserted_fails_without_a_job() {
         let bundle = setup().await;
-        require_inserted::<FirstArgs>(&bundle.client, None).await;
+        require_inserted::<FirstArgs>(&bundle.client).await;
     }
 
     #[tokio::test]
@@ -472,7 +558,7 @@ mod tests {
         for value in [1, 2] {
             bundle.client.insert(FirstArgs { value }).await.unwrap();
         }
-        require_inserted::<FirstArgs>(&bundle.client, None).await;
+        require_inserted::<FirstArgs>(&bundle.client).await;
     }
 
     #[tokio::test]
@@ -482,9 +568,11 @@ mod tests {
     async fn require_inserted_reports_every_mismatch() {
         let bundle = setup().await;
         bundle.client.insert(FirstArgs { value: 1 }).await.unwrap();
-        require_inserted::<FirstArgs>(
+        require_inserted_with::<FirstArgs>(
             &bundle.client,
-            Some(&RequireInsertedOpts::new().queue("other").priority(3)),
+            &RequireInsertedOpts::new()
+                .with_queue("other")
+                .with_priority(3),
         )
         .await;
     }
@@ -500,10 +588,10 @@ mod tests {
             .await
             .unwrap();
 
-        require_inserted_tx::<FirstArgs, _>(&bundle.client, &mut transaction, None).await;
-        require_not_inserted_tx::<SecondArgs, _>(&bundle.client, &mut transaction, None).await;
+        require_inserted_tx::<FirstArgs, _>(&bundle.client, &mut transaction).await;
+        require_not_inserted_tx::<SecondArgs, _>(&bundle.client, &mut transaction).await;
         transaction.rollback().await.unwrap();
-        require_not_inserted::<FirstArgs>(&bundle.client, None).await;
+        require_not_inserted::<FirstArgs>(&bundle.client).await;
     }
 
     #[tokio::test]
@@ -517,7 +605,8 @@ mod tests {
             &bundle.client,
             &[
                 ExpectedJob::of::<FirstArgs>(),
-                ExpectedJob::of::<SecondArgs>().opts(RequireInsertedOpts::new().queue("default")),
+                ExpectedJob::of::<SecondArgs>()
+                    .opts(RequireInsertedOpts::new().with_queue("default")),
                 ExpectedJob::of::<FirstArgs>(),
             ],
         )
@@ -549,10 +638,12 @@ mod tests {
         let bundle = setup().await;
         bundle.client.insert(FirstArgs { value: 1 }).await.unwrap();
 
-        require_not_inserted::<SecondArgs>(&bundle.client, None).await;
-        require_not_inserted::<FirstArgs>(
+        require_not_inserted::<SecondArgs>(&bundle.client).await;
+        require_not_inserted_with::<FirstArgs>(
             &bundle.client,
-            Some(&RequireInsertedOpts::new().queue("default").priority(4)),
+            &RequireInsertedOpts::new()
+                .with_queue("default")
+                .with_priority(4),
         )
         .await;
     }
@@ -563,9 +654,9 @@ mod tests {
         let bundle = setup().await;
         bundle.client.insert(FirstArgs { value: 1 }).await.unwrap();
 
-        require_not_inserted::<FirstArgs>(
+        require_not_inserted_with::<FirstArgs>(
             &bundle.client,
-            Some(&RequireInsertedOpts::new().queue("default")),
+            &RequireInsertedOpts::new().with_queue("default"),
         )
         .await;
     }

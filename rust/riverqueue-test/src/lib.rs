@@ -13,12 +13,11 @@ use serde_json::{Map, Value};
 mod require;
 
 pub use require::{
-    ExpectedJob, RequireInsertedOpts, require_inserted, require_inserted_tx, require_many_inserted,
+    ExpectedJob, RequireInsertedOpts, require_inserted, require_inserted_tx,
+    require_inserted_tx_with, require_inserted_with, require_many_inserted,
     require_many_inserted_tx, require_not_inserted, require_not_inserted_tx,
+    require_not_inserted_tx_with, require_not_inserted_with,
 };
-
-/// Protocol revision understood by the Rust test helpers.
-pub const PROTOCOL_REVISION: u32 = 1;
 
 /// Builder for a realistic persisted job value usable in worker unit tests.
 #[derive(Debug)]
@@ -183,6 +182,12 @@ where
 /// River doesn't record the worker's result: the job stays `running` unless
 /// the worker completed it transactionally. Returns the job as claimed, and
 /// the worker's result as [`work_once`] reports it.
+///
+/// # Cancel safety
+///
+/// Dropping the returned future after the job is claimed, for example when
+/// a test times out, drops the worker's future too and leaves the job
+/// `running` in the database with this client's attempt.
 ///
 /// # Errors
 ///

@@ -9,13 +9,14 @@ inserted jobs, and ways to run a worker once, with or without a database.
 the jobs a test's code inserted, like River Go's `rivertest` helpers. Each
 lists jobs of the expected kinds in insertion order and panics with a
 descriptive message when the expectation isn't met, failing the test.
-`RequireInsertedOpts` adds expected properties such as the queue, priority,
-state, or tags. The `_tx` variants read through an open transaction, to test
-code that enqueues jobs transactionally before it commits.
+The `_with` variants take `RequireInsertedOpts`, which adds expected
+properties such as the queue, priority, state, or tags. The `_tx` variants
+read through an open transaction, to test code that enqueues jobs
+transactionally before it commits.
 
 ```rust,no_run
 use riverqueue::{Client, JobArgs, JobState};
-use riverqueue_test::{RequireInsertedOpts, require_inserted, require_not_inserted};
+use riverqueue_test::{RequireInsertedOpts, require_inserted_with};
 use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Debug, Deserialize, JobArgs, Serialize)]
@@ -28,9 +29,9 @@ struct SendWelcomeEmail {
 # async fn example(client: Client) {
 sign_up(&client, 42).await;
 
-let job = require_inserted::<SendWelcomeEmail>(
+let job = require_inserted_with::<SendWelcomeEmail>(
     &client,
-    Some(&RequireInsertedOpts::new().state(JobState::Available)),
+    &RequireInsertedOpts::new().with_state(JobState::Available),
 )
 .await;
 assert_eq!(job.args.user_id, 42);
@@ -89,8 +90,7 @@ worker catches. Its result distinguishes `TestWorkError::Worker` from
 `metadata_updates` into the next job's metadata to test a resumed attempt.
 
 The helper does not run client hooks, middleware, database transactions,
-retries, or completion persistence. Use River's integration and shared
-conformance suites when those boundaries are under test.
+retries, or completion persistence.
 
 ## Running a worker with a client
 
@@ -101,4 +101,5 @@ worker that inserts follow-up jobs through `context.client()` or completes
 its job in its own transaction with `context.job_complete_tx` runs as it
 would in production. The client doesn't need to be started. River doesn't
 record the worker's result, so the job stays running unless the worker
-completed it itself.
+completed it itself, and it also stays running if the test drops the
+future partway, for example on a timeout.
