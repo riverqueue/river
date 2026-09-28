@@ -154,9 +154,10 @@ impl Formatter for GoFormatter {
         writer.write_all(&fragment.as_bytes()[start..])
     }
 
-    /// Embeds raw JSON (a [`RawValue`], such as job metadata) the way Go
+    /// Embeds raw JSON (a [`RawValue`] nested in job arguments) the way Go
     /// embeds a `json.RawMessage`: compacted, with the same HTML-safe string
-    /// escaping, and every other token byte for byte.
+    /// escaping, and every other token byte for byte, because unique keys
+    /// hash these bytes.
     fn write_raw_fragment<W>(&mut self, writer: &mut W, fragment: &str) -> io::Result<()>
     where
         W: ?Sized + io::Write,
@@ -340,8 +341,9 @@ fn control_escape(byte: u8) -> [u8; 6] {
 /// Compacts valid JSON like Go's `json.Compact` after `json.HTMLEscape`:
 /// whitespace between tokens is removed, and inside strings `<`, `>`, `&`,
 /// U+2028, and U+2029 are escaped. Numbers, key order, and existing escapes
-/// are kept byte for byte.
-pub(crate) fn go_compact(json: &str) -> String {
+/// are kept byte for byte. Only raw JSON embedded in job arguments goes
+/// through it, since unique keys hash the argument bytes.
+fn go_compact(json: &str) -> String {
     let mut output = String::with_capacity(json.len());
     let mut in_string = false;
     let mut escaped = false;
@@ -384,6 +386,8 @@ pub(crate) fn go_compact(json: &str) -> String {
 
 /// Serializes `value` to JSON text with Go's `encoding/json` output rules,
 /// as [`encode_args`] does, including its rejection of non-finite floats.
+/// Other stored JSON only needs to decode to the same value, so it uses plain
+/// [`serde_json`].
 pub(crate) fn to_go_string<T: Serialize + ?Sized>(value: &T) -> Result<String, serde_json::Error> {
     check_finite(value)?;
     let mut buffer = Vec::with_capacity(128);

@@ -44,29 +44,6 @@ async fn batch_encoding_errors_surface_at_insert_without_inserting() {
     pool.close().await;
 }
 
-// Like River Go, which binds the time as SQL text, cancellation stores
-// `cancel_attempted_at` as a raw JSONB string (type 0xA) rather than one parsed
-// from JSON text. The JSON text is the same either way.
-#[tokio::test]
-async fn cancel_stores_attempted_at_as_raw_jsonb_text() {
-    let (client, pool) = setup().await;
-    let id = insert_job(&pool, JobSeed::default()).await;
-
-    client.jobs().cancel(id).await.unwrap();
-
-    let metadata: String = sqlx::query_scalar("SELECT hex(metadata) FROM river_job WHERE id = ?")
-        .bind(id)
-        .fetch_one(&pool)
-        .await
-        .unwrap();
-    // Both the key and the time are raw text with a one-byte size (0xC); the
-    // key is the 0x13 bytes of `cancel_attempted_at`.
-    assert!(
-        metadata.contains("CA1363616E63656C5F617474656D707465645F6174CA"),
-        "unexpected JSONB: {metadata}"
-    );
-}
-
 #[tokio::test]
 async fn control_and_resign_notifications_carry_their_fields() {
     let (client, pool) = setup().await;

@@ -372,13 +372,6 @@ fn decode_unique_states(bits: i64) -> Result<Vec<JobState>, String> {
         .collect())
 }
 
-/// Encodes JSON column values with Go's `encoding/json` rules, because SQLite
-/// JSONB keeps each string's escapes as written and rows must be byte-for-byte
-/// identical to the ones Go writes.
-fn json_text(value: &(impl serde::Serialize + ?Sized)) -> Result<String, serde_json::Error> {
-    crate::encoding::to_go_string(value)
-}
-
 pub(crate) fn sqlite_time(time: DateTime<Utc>) -> String {
     time.round_subsecs(3)
         .format("%Y-%m-%d %H:%M:%S%.3f")
@@ -401,11 +394,11 @@ pub(crate) async fn insert(
     if let Some(nonce) = params.unique_nonce {
         metadata.insert(METADATA_KEY_UNIQUE_NONCE, Value::String(nonce.to_owned()))?;
     }
-    let attempted_by = json_text(params.attempted_by)?;
-    let encoded_args = json_text(params.encoded_args)?;
-    let errors = json_text(params.errors)?;
-    let metadata = json_text(&metadata)?;
-    let tags = json_text(params.tags)?;
+    let attempted_by = serde_json::to_string(params.attempted_by)?;
+    let encoded_args = params.encoded_args.get();
+    let errors = serde_json::to_string(params.errors)?;
+    let metadata = serde_json::to_string(&metadata)?;
+    let tags = serde_json::to_string(params.tags)?;
     let sql = format!(
         r#"
         INSERT INTO river_job (
@@ -808,8 +801,6 @@ pub(crate) async fn cancel(
     id: i64,
     now: DateTime<Utc>,
 ) -> Result<Option<JobRow>, BackendError> {
-    // Like River Go, bind the time as SQL text, which SQLite stores as a raw
-    // JSONB string rather than one parsed from JSON text.
     let cancel_attempted_at = go_time_json(now);
     let sql = format!(
         r#"
@@ -817,7 +808,7 @@ pub(crate) async fn cancel(
         SET
             state = CASE WHEN state = 'running' THEN state ELSE 'cancelled' END,
             finalized_at = CASE WHEN state = 'running' THEN finalized_at ELSE ? END,
-            metadata = jsonb_set(metadata, '$.cancel_attempted_at', cast(? AS text))
+            metadata = jsonb_set(metadata, '$.cancel_attempted_at', ?)
         WHERE id = ?
           AND state NOT IN ('cancelled', 'completed', 'discarded')
           AND finalized_at IS NULL
@@ -904,12 +895,12 @@ pub(crate) async fn complete_decoded(
 ) -> Result<Option<DecodedJob>, BackendError> {
     let error = params
         .error
-        .map(json_text)
+        .map(serde_json::to_string)
         .transpose()?
         .unwrap_or_else(|| "{}".to_owned());
     let metadata = params
         .metadata_updates
-        .map(json_text)
+        .map(serde_json::to_string)
         .transpose()?
         .unwrap_or_else(|| "{}".to_owned());
     // Like River Go, a `cancel_attempted_at` key cancels the job even when its
@@ -988,7 +979,7 @@ pub(crate) async fn merge_metadata_if_not_running(
     id: i64,
     metadata_updates: &Map<String, Value>,
 ) -> Result<Option<DecodedJob>, BackendError> {
-    let metadata = json_text(metadata_updates)?;
+    let metadata = serde_json::to_string(metadata_updates)?;
     let sql = format!(
         r#"
         UPDATE river_job
@@ -1010,7 +1001,7 @@ pub(crate) async fn update(
     id: i64,
     metadata_updates: &Map<String, Value>,
 ) -> Result<Option<JobRow>, BackendError> {
-    let metadata = json_text(metadata_updates)?;
+    let metadata = serde_json::to_string(metadata_updates)?;
     let sql = format!(
         r#"
         UPDATE river_job
@@ -1035,7 +1026,7 @@ pub(crate) async fn queue_upsert(
     paused_at: Option<DateTime<Utc>>,
     now: DateTime<Utc>,
 ) -> Result<Queue, BackendError> {
-    let metadata = json_text(metadata)?;
+    let metadata = serde_json::to_string(metadata)?;
     let sql = format!(
         r#"
         INSERT INTO river_queue (created_at, metadata, name, paused_at, updated_at)
@@ -1139,7 +1130,7 @@ pub(crate) async fn queue_update(
     metadata: Option<&Map<String, Value>>,
     now: DateTime<Utc>,
 ) -> Result<Option<Queue>, BackendError> {
-    let metadata = metadata.map(json_text).transpose()?;
+    let metadata = metadata.map(serde_json::to_string).transpose()?;
     // Like Go, a queue update without metadata leaves it alone.
     let sql = format!(
         r#"
@@ -1526,7 +1517,7 @@ pub(crate) async fn rescue(
     connection: &mut SqliteConnection,
     params: &RescueJob<'_>,
 ) -> Result<Option<JobRow>, BackendError> {
-    let error = json_text(params.error)?;
+    let error = serde_json::to_string(params.error)?;
     let sql = format!(
         r#"
         UPDATE river_job
