@@ -469,6 +469,13 @@ impl<'executor> DatabaseTransactionExecutor<'executor>
     for &'executor mut sqlx::Transaction<'_, sqlx::Sqlite>
 {
 }
+/// A transaction a companion crate erased, so it can pass its caller's
+/// transaction on to River's requests.
+#[doc(hidden)]
+impl<'executor> DatabaseTransactionExecutor<'executor>
+    for &'executor mut crate::__private::ErasedTransaction<'_>
+{
+}
 
 /// Converts a public sealed database source into River's internal erased form.
 pub(crate) fn into_database<D: IntoDatabase>(database: D) -> Database {

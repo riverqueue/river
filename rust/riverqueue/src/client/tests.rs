@@ -247,6 +247,39 @@ async fn worker_failures_record_the_error_chain_and_panic_value() {
     assert_eq!(panic.to_string(), "worker panicked: boom");
 }
 
+#[cfg(feature = "sqlite")]
+#[tokio::test]
+async fn erased_transactions_run_requests_in_the_callers_transaction() {
+    #[derive(Deserialize, serde::Serialize)]
+    struct ErasedArgs {}
+
+    impl JobArgs for ErasedArgs {
+        const KIND: &'static str = "erased";
+    }
+
+    let pool = sqlx::sqlite::SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect("sqlite::memory:")
+        .await
+        .unwrap();
+    riverqueue_migrate::SqliteMigrator::new(pool.clone())
+        .migrate_up()
+        .await
+        .unwrap();
+    let client = Client::builder(pool.clone()).build().unwrap();
+    let id = client.insert(ErasedArgs {}).await.unwrap().id();
+
+    let mut transaction = crate::database::begin_sqlite_write(&pool).await.unwrap();
+    let mut erased = client.inner.database.transaction(&mut transaction).unwrap();
+    let cancelled = client.jobs().cancel(id).tx(&mut erased).await.unwrap();
+    assert_eq!(cancelled.state, JobState::Cancelled);
+    transaction.rollback().await.unwrap();
+    assert_eq!(
+        client.jobs().get(id).await.unwrap().state,
+        JobState::Available
+    );
+}
+
 #[tokio::test]
 async fn completion_retries_recover_from_a_transient_error() {
     let attempts = AtomicU64::new(0);
