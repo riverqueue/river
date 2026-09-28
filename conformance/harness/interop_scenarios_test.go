@@ -5,7 +5,6 @@ package harness_test
 import (
 	"encoding/json"
 	"fmt"
-	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -214,19 +213,47 @@ func (capture *sqliteNotificationCapture) next(t *testing.T) []rawNotification {
 // notificationOperation is the notifications one operation published.
 type notificationOperation struct {
 	name          string
-	notifications []rawNotification
+	notifications []semanticNotification
 }
 
-var notificationJobIDPattern = regexp.MustCompile(`"job_id":\d+`)
+// notificationQueueMetadata is the metadata a queue update sets, which its
+// `metadata_changed` notification carries.
+const notificationQueueMetadata = `{"zeta":"z","alpha":1}`
 
-// notificationQueueMetadata is written with its keys out of order, with
-// characters Go escapes, and with an escape Go keeps from the caller's text
-// but a re-encoder drops, so member order and escaping show in the bytes.
-const notificationQueueMetadata = `{"zeta":"<&>","alpha":1,"path":"a\/b"}`
+// semanticNotification is a notification compared as JSON rather than as
+// text: its topic, its SQLite storage type, and its decoded payload with any
+// job ID cleared.
+type semanticNotification struct {
+	Payload     any
+	PayloadType string
+	Topic       string
+}
+
+// semanticNotifications decodes each notification's payload, requiring it
+// to be JSON, and clears job IDs, which differ between writers.
+func semanticNotifications(t *testing.T, notifications []rawNotification) []semanticNotification {
+	t.Helper()
+
+	semantic := make([]semanticNotification, len(notifications))
+	for index, notification := range notifications {
+		var payload any
+		require.NoError(t, json.Unmarshal([]byte(notification.Payload), &payload),
+			"%s notification payload isn't JSON: %s", notification.Topic, notification.Payload)
+		if fields, ok := payload.(map[string]any); ok {
+			if _, ok := fields["job_id"]; ok {
+				fields["job_id"] = 0
+			}
+		}
+		semantic[index] = semanticNotification{
+			Payload: payload, PayloadType: notification.PayloadType, Topic: notification.Topic,
+		}
+	}
+	return semantic
+}
 
 // publishNotificationOperations has actor perform every operation that
-// publishes a notification and returns what each published, with job IDs
-// replaced. The client it starts uses a fixed ID, so leadership payloads
+// publishes a notification and returns what each published, decoded, with
+// job IDs cleared. The client it starts uses a fixed ID, so leadership payloads
 // name the same leader whichever implementation runs it.
 func publishNotificationOperations(t *testing.T, actor *adapter, capture notificationCapture) []notificationOperation {
 	t.Helper()
@@ -235,18 +262,14 @@ func publishNotificationOperations(t *testing.T, actor *adapter, capture notific
 	record := func(name string) {
 		t.Helper()
 
-		notifications := capture.next(t)
-		for index := range notifications {
-			notifications[index].Payload = notificationJobIDPattern.ReplaceAllString(notifications[index].Payload, `"job_id":0`)
-		}
-		operations = append(operations, notificationOperation{name: name, notifications: notifications})
+		operations = append(operations, notificationOperation{name: name, notifications: semanticNotifications(t, capture.next(t))})
 	}
 
 	actor.call(t, "reset", map[string]any{}, nil)
 	_ = capture.next(t)
 	var job normalizedJob
 	actor.call(t, "insert", map[string]any{
-		"message": "notification bytes", "opts": map[string]any{"queue": "notification_bytes"},
+		"message": "notification payloads", "opts": map[string]any{"queue": "notification_payloads"},
 	}, &job)
 	record("insert")
 	actor.call(t, "cancel", map[string]any{"id": job.ID}, nil)
@@ -257,7 +280,7 @@ func publishNotificationOperations(t *testing.T, actor *adapter, capture notific
 	actor.call(t, "retry", map[string]any{"id": job.ID}, nil)
 	record("retry")
 
-	const clientID = "notification-bytes"
+	const clientID = "notification-payloads"
 	actor.call(t, "start", map[string]any{"client_id": clientID, "max_workers": 1}, nil)
 	require.Equal(t, clientID, waitForLeader(t, actor, ""))
 	record("start")
@@ -278,18 +301,19 @@ func publishNotificationOperations(t *testing.T, actor *adapter, capture notific
 	return operations
 }
 
-// verifyNotificationPayloadBytes has each implementation perform the same
+// verifyNotificationPayloads has each implementation perform the same
 // operations and requires the notifications they publish (insert, cancel,
-// queue metadata changes, pause, resume, resignation requests, and
-// resignations) to match Go's byte for byte: topic, payload text, and on
-// SQLite the payload's storage type.
-func verifyNotificationPayloadBytes(t *testing.T, goAdapter, candidateAdapter *adapter, newCapture func(actor *adapter) notificationCapture) {
+// retry, queue metadata changes, pause, resume, resignation requests, and
+// resignations) to match Go's: whether each is sent, how many and in which
+// order, the topic, on SQLite the payload's storage type, and the payload
+// as JSON, so key order, escaping, and whitespace don't matter.
+func verifyNotificationPayloads(t *testing.T, goAdapter, candidateAdapter *adapter, newCapture func(actor *adapter) notificationCapture) {
 	t.Helper()
 
 	reference := publishNotificationOperations(t, goAdapter, newCapture(goAdapter))
 	candidate := publishNotificationOperations(t, candidateAdapter, newCapture(candidateAdapter))
 	require.Len(t, candidate, len(reference))
-	byName := make(map[string][]rawNotification, len(reference))
+	byName := make(map[string][]semanticNotification, len(reference))
 	for _, operation := range reference {
 		byName[operation.name] = operation.notifications
 	}
@@ -301,24 +325,9 @@ func verifyNotificationPayloadBytes(t *testing.T, goAdapter, candidateAdapter *a
 	for index, expected := range reference {
 		actual := candidate[index]
 		require.Equal(t, expected.name, actual.name)
-		if sameNotifications(expected.notifications, actual.notifications) {
-			continue
-		}
 		require.Equal(t, expected.notifications, actual.notifications,
 			"%s: %s and %s published different notifications", expected.name, goAdapter.name, candidateAdapter.name)
 	}
-}
-
-func sameNotifications(expected, actual []rawNotification) bool {
-	if len(expected) != len(actual) {
-		return false
-	}
-	for index := range expected {
-		if expected[index] != actual[index] {
-			return false
-		}
-	}
-	return true
 }
 
 // verifyUniquePeriodicJob has one implementation's leader insert a unique

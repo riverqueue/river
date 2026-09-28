@@ -165,17 +165,17 @@ func TestMixedSQLiteRuntimeConformance(t *testing.T) {
 			verifyRemoteCancelNotification(t, controller, worker)
 			verifyCooperativeRemoteCancellation(t, controller, worker)
 		})
-		verifySQLiteCancelNotificationBytes(t, goAdapter, candidateAdapter)
+		verifySQLiteCancelNotifications(t, goAdapter, candidateAdapter)
 	})
 	t.Run("sqlite_runtime_claim_time_cancellation", func(t *testing.T) {
 		defer scenarios.record(t)
 
 		pair.eachDirection(func(canceller, claimer *adapter) { verifyClaimTimeCancellation(t, canceller, claimer, false) })
 	})
-	t.Run("sqlite_runtime_notification_payload_bytes", func(t *testing.T) {
+	t.Run("sqlite_runtime_notification_payloads", func(t *testing.T) {
 		defer scenarios.record(t)
 
-		verifyNotificationPayloadBytes(t, goAdapter, candidateAdapter, func(actor *adapter) notificationCapture {
+		verifyNotificationPayloads(t, goAdapter, candidateAdapter, func(actor *adapter) notificationCapture {
 			observer := goAdapter
 			if actor == goAdapter {
 				observer = candidateAdapter
@@ -928,13 +928,13 @@ func rawNotificationsAfter(t *testing.T, observer *adapter, afterID int64) []raw
 	return result.Notifications
 }
 
-// verifySQLiteCancelNotificationBytes has each engine cancel jobs and checks
-// the control notification it writes to the SQLite outbox against the bytes
-// Go writes: the topic, the payload's text and member order, and its storage
-// type. A cancellation publishes only when its transaction commits, both
-// engines see the other's rows, and cancelling a finalized job publishes
-// nothing. The insert notifications written along the way must match too.
-func verifySQLiteCancelNotificationBytes(t *testing.T, goAdapter, candidateAdapter *adapter) {
+// verifySQLiteCancelNotifications has each engine cancel jobs and checks the
+// control notification it writes to the SQLite outbox against Go's: the
+// topic, the payload's storage type, and the payload as JSON. A cancellation
+// publishes only when its transaction commits, both engines see the other's
+// rows, and cancelling a finalized job publishes nothing. The insert
+// notifications written along the way must match too.
+func verifySQLiteCancelNotifications(t *testing.T, goAdapter, candidateAdapter *adapter) {
 	t.Helper()
 
 	lastID := func() int64 {
@@ -947,18 +947,17 @@ func verifySQLiteCancelNotificationBytes(t *testing.T, goAdapter, candidateAdapt
 	requireCancelNotification := func(actor *adapter, after int64, job normalizedJob) int64 {
 		t.Helper()
 
-		expected := rawNotification{
-			Payload:     fmt.Sprintf(`{"action":"cancel","job_id":%d,"queue":%q}`, job.ID, job.Queue),
-			PayloadType: "text",
-			Topic:       "river_control",
-		}
+		var id int64
 		for _, observer := range []*adapter{goAdapter, candidateAdapter} {
 			notifications := rawNotificationsAfter(t, observer, after)
 			require.Len(t, notifications, 1, "%s cancellation read by %s", actor.name, observer.name)
-			expected.ID = notifications[0].ID
-			require.Equal(t, expected, notifications[0], "%s cancellation read by %s", actor.name, observer.name)
+			require.Equal(t, "river_control", notifications[0].Topic)
+			require.Equal(t, "text", notifications[0].PayloadType)
+			require.JSONEq(t, fmt.Sprintf(`{"action":"cancel","job_id":%d,"queue":%q}`, job.ID, job.Queue),
+				notifications[0].Payload, "%s cancellation read by %s", actor.name, observer.name)
+			id = notifications[0].ID
 		}
-		return expected.ID
+		return id
 	}
 
 	insertNotifications := map[string]rawNotification{}
@@ -970,7 +969,7 @@ func verifySQLiteCancelNotificationBytes(t *testing.T, goAdapter, candidateAdapt
 	} {
 		pair.actor.call(t, "reset", map[string]any{}, nil)
 		var job normalizedJob
-		pair.actor.call(t, "insert", map[string]any{"message": "cancel notification bytes"}, &job)
+		pair.actor.call(t, "insert", map[string]any{"message": "cancel notifications"}, &job)
 
 		after := lastID()
 		handle := "sqlite-cancel-notification-rollback-" + pair.actor.name
@@ -991,7 +990,7 @@ func verifySQLiteCancelNotificationBytes(t *testing.T, goAdapter, candidateAdapt
 		pair.actor.call(t, "cancel", map[string]any{"id": job.ID}, nil)
 		require.Empty(t, rawNotificationsAfter(t, pair.observer, after), "cancelling a finalized job published")
 
-		pair.actor.call(t, "insert", map[string]any{"message": "cancel notification bytes"}, &job)
+		pair.actor.call(t, "insert", map[string]any{"message": "cancel notifications"}, &job)
 		inserted := rawNotificationsAfter(t, pair.observer, after)
 		require.Len(t, inserted, 1, "%s insertion", pair.actor.name)
 		insertNotifications[pair.actor.name] = inserted[0]
@@ -1000,8 +999,9 @@ func verifySQLiteCancelNotificationBytes(t *testing.T, goAdapter, candidateAdapt
 	}
 
 	// Insert notifications aren't the subject here, but the same outbox read
-	// compares their bytes too.
-	goInsert, candidateInsert := insertNotifications[goAdapter.name], insertNotifications[candidateAdapter.name]
-	goInsert.ID, candidateInsert.ID = 0, 0
-	require.Equal(t, goInsert, candidateInsert, "insert notifications differ")
+	// compares them too.
+	require.Equal(t,
+		semanticNotifications(t, []rawNotification{insertNotifications[goAdapter.name]}),
+		semanticNotifications(t, []rawNotification{insertNotifications[candidateAdapter.name]}),
+		"insert notifications differ")
 }

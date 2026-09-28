@@ -281,10 +281,10 @@ func TestMixedConformance(t *testing.T) {
 
 		pair.eachDirection(func(canceller, claimer *adapter) { verifyClaimTimeCancellation(t, canceller, claimer, true) })
 	})
-	t.Run("notification_payload_bytes", func(t *testing.T) {
+	t.Run("notification_payloads", func(t *testing.T) {
 		defer scenarios.record(t)
 
-		verifyNotificationPayloadBytes(t, goAdapter, candidateAdapter, func(*adapter) notificationCapture {
+		verifyNotificationPayloads(t, goAdapter, candidateAdapter, func(*adapter) notificationCapture {
 			return newPostgresNotificationCapture(t, observer)
 		})
 	})
