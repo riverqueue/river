@@ -659,7 +659,7 @@ trait ErasedWorker: Send + Sync {
     async fn work(
         &self,
         context: WorkContext,
-        row: &JobRow,
+        row: JobRow,
         timeout: oneshot::Sender<WorkerTimeout>,
     ) -> Result<Result<WorkOutcome, WorkError>, WorkError>;
 }
@@ -723,12 +723,12 @@ where
     async fn work(
         &self,
         context: WorkContext,
-        row: &JobRow,
+        row: JobRow,
         timeout: oneshot::Sender<WorkerTimeout>,
     ) -> Result<Result<WorkOutcome, WorkError>, WorkError> {
         let job = Job {
             args: row.decode_args().map_err(WorkError::new)?,
-            row: row.clone(),
+            row,
         };
         // The supervisor may have stopped waiting for a timeout; that is not
         // an error for the attempt.
@@ -885,10 +885,10 @@ impl WorkerRegistry {
     pub(crate) async fn work(
         &self,
         context: WorkContext,
-        row: &JobRow,
+        row: JobRow,
         timeout: oneshot::Sender<WorkerTimeout>,
     ) -> Result<Result<WorkOutcome, WorkError>, WorkError> {
-        let worker = self.worker_for(row).map_err(WorkError::new)?;
+        let worker = self.worker_for(&row).map_err(WorkError::new)?;
         worker.work(context, row, timeout).await
     }
 
@@ -1112,7 +1112,7 @@ mod tests {
         let outcome = workers
             .work(
                 WorkContext::new(CancellationToken::new()),
-                &job_row(FunctionJobArgs::KIND, false),
+                job_row(FunctionJobArgs::KIND, false),
                 timeout_sender,
             )
             .await
@@ -1137,7 +1137,7 @@ mod tests {
         let error = workers
             .work(
                 WorkContext::new(CancellationToken::new()),
-                &job_row("function_worker_v1", true),
+                job_row("function_worker_v1", true),
                 timeout_sender,
             )
             .await
@@ -1201,7 +1201,7 @@ mod tests {
         let outcome = workers
             .work(
                 WorkContext::new(CancellationToken::new()),
-                &row,
+                row.clone(),
                 timeout_sender,
             )
             .await
@@ -1227,7 +1227,7 @@ mod tests {
         let error = workers
             .work(
                 WorkContext::new(CancellationToken::new()),
-                &row,
+                row.clone(),
                 timeout_sender,
             )
             .await
@@ -1242,7 +1242,7 @@ mod tests {
         workers
             .work(
                 WorkContext::new(CancellationToken::new()),
-                row,
+                row.clone(),
                 timeout_sender,
             )
             .await

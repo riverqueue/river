@@ -212,9 +212,17 @@ async fn run_worker(
                             .await
                             .map_err(WorkError::new)?;
                     }
+                    // The worker consumes the row, so it's copied only when
+                    // work-end hooks need it afterward.
+                    if hooks_inner.hooks.is_empty() {
+                        return hooks_inner
+                            .workers
+                            .work(hooks_context.clone(), job, timeout_sender)
+                            .await?;
+                    }
                     let mut result = hooks_inner
                         .workers
-                        .work(hooks_context.clone(), &job, timeout_sender)
+                        .work(hooks_context.clone(), job.clone(), timeout_sender)
                         .await?;
                     for hook in &hooks_inner.hooks {
                         result = hook.work_end(&hooks_context, &job, result).await;

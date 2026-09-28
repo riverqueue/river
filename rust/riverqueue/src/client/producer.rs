@@ -405,10 +405,16 @@ impl Attempts {
         }
     }
 
-    fn spawn(&mut self, row: &JobRow, task: impl Future<Output = ()> + Send + 'static) {
+    /// Spawns an attempt's task. `session_row` is the attempt's row when a
+    /// session must hear when it finishes.
+    fn spawn(
+        &mut self,
+        session_row: Option<JobRow>,
+        task: impl Future<Output = ()> + Send + 'static,
+    ) {
         let handle = self.tasks.spawn(task);
-        if self.session.is_some() {
-            self.rows.insert(handle.id(), row.clone());
+        if let Some(row) = session_row {
+            self.rows.insert(handle.id(), row);
         }
     }
 }
@@ -770,12 +776,12 @@ pub(super) async fn run_queue(
             );
             let task_inner = Arc::clone(&inner);
             let completion_sender = completion_sender.clone();
-            let task_row = row.clone();
             let claim_stop = fetch_cancel.clone();
-            attempts.spawn(&row, async move {
+            let session_row = attempts.session.is_some().then(|| row.clone());
+            attempts.spawn(session_row, async move {
                 execute_job(
                     task_inner,
-                    task_row,
+                    row,
                     decode_error,
                     hard_cancel,
                     cancellation,
