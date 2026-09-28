@@ -147,6 +147,12 @@ impl fmt::Debug for PilotTransaction {
 pub struct ProducerConfiguration {
     /// Most jobs this client runs from the queue at once.
     pub max_workers: usize,
+    /// The text of the queue's persisted metadata as the database renders
+    /// it: PostgreSQL's `metadata::text` or SQLite's `json(metadata)`. Unlike
+    /// the parsed `queue.metadata`, it keeps key order, duplicate keys, and
+    /// number literals, for decoding the metadata exactly like River Go's
+    /// `encoding/json`.
+    pub metadata_text: String,
     /// The queue's persisted record, including its metadata and pause state.
     pub queue: Queue,
     /// The extension's settings for this queue, as configured with
@@ -333,7 +339,8 @@ pub trait PilotProducer: Send + Sync + 'static {
     /// Replaces the session's configuration, between claims.
     ///
     /// River calls it when the queue's persisted record changes, such as its
-    /// metadata or pause state, and when this client's configuration of the
+    /// metadata, including a change only to the metadata's stored text, or
+    /// its pause state, and when this client's configuration of the
     /// queue changes through
     /// [`LocalQueues::update`](crate::LocalQueues::update). It must not block
     /// or perform I/O.

@@ -319,6 +319,7 @@ impl QueueRecord {
         Ok(Queue {
             created_at: self.created_at,
             metadata,
+            metadata_text: self.metadata,
             name: self.name,
             paused_at: self.paused_at,
             updated_at: self.updated_at,

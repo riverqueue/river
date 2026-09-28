@@ -260,7 +260,7 @@ impl Backend for PostgresBackend<'_> {
     async fn queue_get(&mut self, name: &str) -> Result<Option<Queue>, Error> {
         let table = self.schema.qualify("river_queue");
         sqlx::query_as::<_, QueueRecord>(AssertSqlSafe(format!(
-            "SELECT * FROM {table} WHERE name = $1"
+            "SELECT {QUEUE_COLUMNS} FROM {table} WHERE name = $1"
         )))
         .bind(name)
         .fetch_optional(&mut *self.connection)
@@ -272,7 +272,7 @@ impl Backend for PostgresBackend<'_> {
     async fn queue_list(&mut self, limit: u32) -> Result<Vec<Queue>, Error> {
         let table = self.schema.qualify("river_queue");
         sqlx::query_as::<_, QueueRecord>(AssertSqlSafe(format!(
-            "SELECT * FROM {table} ORDER BY name LIMIT $1"
+            "SELECT {QUEUE_COLUMNS} FROM {table} ORDER BY name LIMIT $1"
         )))
         .bind(i64::from(limit))
         .fetch_all(&mut *self.connection)
@@ -307,7 +307,7 @@ impl Backend for PostgresBackend<'_> {
         let table = self.schema.qualify("river_queue");
         let sql = format!(
             "INSERT INTO {table} (name, metadata, updated_at) VALUES ($1, '{{}}'::jsonb, now()) \
-             ON CONFLICT (name) DO UPDATE SET updated_at = excluded.updated_at RETURNING *"
+             ON CONFLICT (name) DO UPDATE SET updated_at = excluded.updated_at RETURNING {QUEUE_COLUMNS}"
         );
         sqlx::query_as::<_, QueueRecord>(AssertSqlSafe(sql))
             .bind(name)
@@ -324,7 +324,7 @@ impl Backend for PostgresBackend<'_> {
         let table = self.schema.qualify("river_queue");
         let sql = format!(
             "UPDATE {table} SET metadata = CASE WHEN $2::boolean THEN $3::jsonb ELSE metadata END, \
-             updated_at = now() WHERE name = $1 RETURNING *"
+             updated_at = now() WHERE name = $1 RETURNING {QUEUE_COLUMNS}"
         );
         sqlx::query_as::<_, QueueRecord>(AssertSqlSafe(sql))
             .bind(name)
@@ -337,10 +337,15 @@ impl Backend for PostgresBackend<'_> {
     }
 }
 
+/// The columns of a queue row, with its metadata's stored text.
+const QUEUE_COLUMNS: &str =
+    "created_at, metadata, metadata::text AS metadata_text, name, paused_at, updated_at";
+
 #[derive(FromRow)]
 struct QueueRecord {
     created_at: DateTime<Utc>,
     metadata: Json<Value>,
+    metadata_text: String,
     name: String,
     paused_at: Option<DateTime<Utc>>,
     updated_at: DateTime<Utc>,
@@ -356,6 +361,7 @@ impl QueueRecord {
                     format!("queue {:?} metadata is not an object", self.name),
                 )
             })?,
+            metadata_text: self.metadata_text,
             name: self.name,
             paused_at: self.paused_at,
             updated_at: self.updated_at,

@@ -629,6 +629,51 @@ async fn assert_cancellation_during_claim_reaches_the_attempt(builder: riverqueu
     );
 }
 
+/// The session gets the queue metadata's stored text, as the database
+/// renders it, at start and whenever it changes, including a change the
+/// parsed metadata can't show. `store` writes the stored metadata from JSON
+/// text; `first` and `second` parse to the same map but render differently.
+async fn assert_sessions_see_metadata_text<F, Fut>(
+    builder: riverqueue::ClientBuilder,
+    store: F,
+    first: &str,
+    second: &str,
+) where
+    F: Fn(&'static str) -> Fut,
+    Fut: std::future::Future<Output = ()>,
+{
+    let pilot = SessionPilot::new(Claim::Standard);
+    let client = builder
+        .pilot(pilot.clone())
+        .queue("texted", fast_queue(1))
+        .workers(workers())
+        .build()
+        .unwrap();
+    store("first").await;
+    let mut run = client.start().unwrap();
+    run.wait_ready().await.unwrap();
+    let started = pilot.configurations.snapshot();
+    assert_eq!(started[0].metadata_text, first);
+
+    store("second").await;
+    // The queue's record is read again every two seconds.
+    pilot
+        .configurations
+        .wait_until("the new metadata text", |configurations| {
+            configurations
+                .last()
+                .is_some_and(|configuration| configuration.metadata_text == second)
+        })
+        .await;
+    let configurations = pilot.configurations.snapshot();
+    assert_eq!(
+        configurations.first().unwrap().queue.metadata,
+        configurations.last().unwrap().queue.metadata,
+        "only the text changed"
+    );
+    run.shutdown().await.unwrap();
+}
+
 #[cfg(feature = "postgres-tests")]
 mod postgres {
     use riverqueue::database::PostgresDatabase;
@@ -700,6 +745,39 @@ mod postgres {
         assert_queue_changes_reach_the_session(|| builder(&schema), true).await;
         schema.cleanup().await;
     }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn sessions_see_metadata_text() {
+        let schema = PostgresSchema::new("session_metadata_text").await;
+        let table = schema.table("river_queue");
+        let pool = schema.pool.clone();
+        assert_sessions_see_metadata_text(
+            builder(&schema),
+            |which| {
+                let (table, pool) = (table.clone(), pool.clone());
+                async move {
+                    let metadata = if which == "first" {
+                        r#"{"n": 1.0}"#
+                    } else {
+                        r#"{"n": 1.00}"#
+                    };
+                    sqlx::query(sqlx::AssertSqlSafe(format!(
+                        "INSERT INTO {table} (name, created_at, metadata, updated_at) \
+                         VALUES ('texted', now(), $1::jsonb, now()) \
+                         ON CONFLICT (name) DO UPDATE SET metadata = excluded.metadata"
+                    )))
+                    .bind(metadata)
+                    .execute(&pool)
+                    .await
+                    .unwrap();
+                }
+            },
+            r#"{"n": 1.0}"#,
+            r#"{"n": 1.00}"#,
+        )
+        .await;
+        schema.cleanup().await;
+    }
 }
 
 #[cfg(feature = "sqlite")]
@@ -764,6 +842,37 @@ mod sqlite {
         let (pool, path) = sqlite_file_pool(4).await;
         assert_queue_changes_reach_the_session(|| Client::builder(pool.clone()), false).await;
         assert_queue_changes_reach_the_session(|| Client::builder(pool.clone()), true).await;
+        sqlite_cleanup(pool, path).await;
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn sessions_see_metadata_text() {
+        let (pool, path) = sqlite_file_pool(4).await;
+        let store_pool = pool.clone();
+        assert_sessions_see_metadata_text(
+            Client::builder(pool.clone()),
+            |which| {
+                let pool = store_pool.clone();
+                async move {
+                    let metadata = if which == "first" {
+                        r#"{"b":1,"a":2}"#
+                    } else {
+                        r#"{"a":2,"b":1}"#
+                    };
+                    sqlx::query(
+                        "INSERT INTO river_queue (name, metadata) VALUES ('texted', jsonb(?)) \
+                         ON CONFLICT (name) DO UPDATE SET metadata = excluded.metadata",
+                    )
+                    .bind(metadata)
+                    .execute(&pool)
+                    .await
+                    .unwrap();
+                }
+            },
+            r#"{"b":1,"a":2}"#,
+            r#"{"a":2,"b":1}"#,
+        )
+        .await;
         sqlite_cleanup(pool, path).await;
     }
 }

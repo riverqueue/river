@@ -319,6 +319,7 @@ struct Generation {
 fn producer_configuration(config: &QueueConfig, queue: &crate::Queue) -> ProducerConfiguration {
     ProducerConfiguration {
         max_workers: config.max_workers,
+        metadata_text: queue.metadata_text.clone(),
         queue: queue.clone(),
         settings: config.extension_settings.clone(),
     }
@@ -656,7 +657,10 @@ pub(super) async fn run_queue(
             };
             match loaded {
                 Ok(Some(loaded)) => {
-                    let changed = loaded.metadata != queue_row.metadata
+                    // The stored text covers changes the parsed metadata
+                    // hides, such as key order or a number's spelling.
+                    let changed = loaded.metadata_text != queue_row.metadata_text
+                        || loaded.metadata != queue_row.metadata
                         || loaded.paused_at.is_some() != queue_row.paused_at.is_some();
                     queue_row = loaded;
                     if changed && let Some(session) = &session {

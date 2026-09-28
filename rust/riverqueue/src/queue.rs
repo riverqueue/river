@@ -12,6 +12,10 @@ pub struct Queue {
     pub created_at: DateTime<Utc>,
     /// Reserved queue metadata.
     pub metadata: Map<String, Value>,
+    /// The metadata's text as the database renders it, keeping the key
+    /// order, duplicate keys, and number literals the parsed map loses.
+    #[serde(skip)]
+    pub(crate) metadata_text: String,
     /// Stable queue name.
     pub name: String,
     /// Time at which the queue was paused.
