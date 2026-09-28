@@ -278,6 +278,11 @@ func publishNotificationOperations(t *testing.T, actor *adapter, capture notific
 	return operations
 }
 
+// metadataTextPending lists implementations whose queue updates don't yet
+// keep the caller's metadata text, so their `metadata_changed` payloads are
+// reported rather than failed until they do.
+var metadataTextPending = map[string]bool{"javascript": true} //nolint:gochecknoglobals // fixed lookup table
+
 // goSortedJSON re-encodes a JSON document the way Go encodes a map: keys
 // sorted at every level, with Go's escaping.
 func goSortedJSON(t *testing.T, document string) string {
@@ -296,13 +301,10 @@ func goSortedJSON(t *testing.T, document string) string {
 // resignations) to match Go's byte for byte: topic, payload text, and on
 // SQLite the payload's storage type.
 //
-// Some differences are known and reported rather than failed until they're
-// decided: a candidate that re-encodes `metadata_changed` metadata from its
+// One difference is reported rather than failed for the implementations in
+// metadataTextPending: re-encoding `metadata_changed` metadata from its
 // parsed value (sorted keys and canonical escapes) instead of keeping the
-// caller's text, or whose retry publishes an insert
-// notification, which Go's doesn't, and a candidate that writes a
-// SQLite outbox row when its leader resigns, which Go's SQLite driver
-// doesn't.
+// caller's text.
 func verifyNotificationPayloadBytes(t *testing.T, goAdapter, candidateAdapter *adapter, newCapture func(actor *adapter) notificationCapture) {
 	t.Helper()
 
@@ -325,24 +327,13 @@ func verifyNotificationPayloadBytes(t *testing.T, goAdapter, candidateAdapter *a
 			continue
 		}
 		switch {
-		case expected.name == "queue_update" && len(expected.notifications) == 1 && len(actual.notifications) == 1 &&
+		case metadataTextPending[candidateAdapter.spec.Implementation] &&
+			expected.name == "queue_update" && len(expected.notifications) == 1 && len(actual.notifications) == 1 &&
 			actual.notifications[0].Topic == expected.notifications[0].Topic &&
 			actual.notifications[0].PayloadType == expected.notifications[0].PayloadType &&
 			actual.notifications[0].Payload == goSortedJSON(t, expected.notifications[0].Payload):
 			t.Logf("KNOWN DIVERGENCE: %s re-encodes metadata_changed metadata from its parsed value (sorted keys, canonical escapes); Go keeps the caller's text:\n  go:        %s\n  %s: %s",
 				candidateAdapter.name, expected.notifications[0].Payload, candidateAdapter.name, actual.notifications[0].Payload)
-		case (expected.name == "request_resign" || expected.name == "stop") &&
-			len(actual.notifications) == len(expected.notifications)+1 &&
-			sameNotifications(expected.notifications, actual.notifications[:len(expected.notifications)]) &&
-			actual.notifications[len(expected.notifications)].PayloadType != "" &&
-			actual.notifications[len(expected.notifications)].Topic == "river_leadership" &&
-			actual.notifications[len(expected.notifications)].Payload == `{"action":"resigned","leader_id":"notification-bytes"}`:
-			t.Logf("KNOWN DIVERGENCE: %s writes a SQLite outbox row when its leader resigns (%s); Go's SQLite driver writes none: %s",
-				candidateAdapter.name, expected.name, actual.notifications[len(expected.notifications)].Payload)
-		case expected.name == "retry" && len(expected.notifications) == 0 &&
-			sameNotifications(byName["insert"], actual.notifications):
-			t.Logf("KNOWN DIVERGENCE: %s publishes an insert notification when it retries a job; Go publishes none: %s",
-				candidateAdapter.name, actual.notifications[0].Payload)
 		default:
 			require.Equal(t, expected.notifications, actual.notifications,
 				"%s: %s and %s published different notifications", expected.name, goAdapter.name, candidateAdapter.name)

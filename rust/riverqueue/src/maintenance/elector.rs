@@ -524,24 +524,8 @@ impl LeaderStore for DatabaseLeaderStore {
                 let resigned = sqlite::leader_resign(&mut transaction, &self.inner.id, elected_at)
                     .await
                     .map_err(sqlite_error)?;
-                if resigned {
-                    // Go's SQLite driver does not announce resignations, but a
-                    // durable outbox row lets polling peers bid promptly.
-                    let payload = serde_json::json!({
-                        "action": "resigned",
-                        "leader_id": self.inner.id,
-                    })
-                    .to_string();
-                    sqlite::notification_insert(
-                        &mut transaction,
-                        &[sqlite::NotificationInput {
-                            payload: &payload,
-                            topic: crate::NOTIFICATION_TOPIC_LEADERSHIP,
-                        }],
-                    )
-                    .await
-                    .map_err(sqlite_error)?;
-                }
+                // Like Go's SQLite driver, a resignation writes no outbox
+                // row; other clients bid at their next election attempt.
                 transaction.commit().await?;
                 Ok(resigned)
             }

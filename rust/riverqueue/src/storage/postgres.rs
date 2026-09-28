@@ -207,19 +207,17 @@ impl Backend for PostgresBackend<'_> {
                  max_attempts = CASE WHEN attempt = max_attempts THEN max_attempts + 1 ELSE max_attempts END, \
                  finalized_at = NULL, scheduled_at = now() \
                  FROM locked WHERE job.id = locked.id AND job.state != 'running' \
-                   AND NOT (job.state = 'available' AND job.scheduled_at < now()) RETURNING job.*), \
-             notified AS (SELECT pg_notify(concat(coalesce($2::text, current_schema()), '.', $3::text), \
-                 concat('{{\"queue\": ', to_json(queue)::text, '}}')) FROM updated WHERE state = 'available') \
-             SELECT {}, false AS unique_skipped_as_duplicate FROM updated AS job LEFT JOIN notified ON true \
+                   AND NOT (job.state = 'available' AND job.scheduled_at < now()) RETURNING job.*) \
+             SELECT {}, false AS unique_skipped_as_duplicate FROM updated AS job \
              UNION ALL SELECT {}, false AS unique_skipped_as_duplicate FROM {table} AS job \
                  WHERE id = $1 AND NOT EXISTS (SELECT 1 FROM updated) LIMIT 1",
             job_projection("job"),
             job_projection("job")
         );
+        // Like Go's `JobRetry`, a retry sends no insert notification;
+        // producers find the job on their next poll.
         sqlx::query_as::<_, JobRecord>(AssertSqlSafe(sql))
             .bind(id)
-            .bind(self.schema.as_deref())
-            .bind(crate::NOTIFICATION_TOPIC_INSERT)
             .fetch_optional(&mut *self.connection)
             .await?
             .map(JobRecord::into_job_row)

@@ -189,9 +189,8 @@ impl Backend for SqliteBackend<'_> {
             // Running and already-available jobs are returned unchanged.
             return self.job_get(id).await;
         };
-        let payload = crate::protocol::insert_notification_payload(&row.queue);
-        self.notify(crate::NOTIFICATION_TOPIC_INSERT, &payload)
-            .await?;
+        // Like Go's `JobRetry`, a retry sends no insert notification;
+        // producers find the job on their next poll.
         Ok(Some(row))
     }
 

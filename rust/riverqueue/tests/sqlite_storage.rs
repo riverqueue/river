@@ -377,16 +377,13 @@ async fn job_crud_preserves_sqlite_semantics() {
     let retried = client.jobs().retry(retry_id).await.unwrap();
     assert_eq!(retried.state, JobState::Available);
     assert_eq!(retried.max_attempts, 4);
-    let insert_notification: String = sqlx::query_scalar(
-        "SELECT payload FROM river_notification WHERE topic = 'river_insert' ORDER BY id DESC LIMIT 1",
-    )
-    .fetch_one(&pool)
-    .await
-    .unwrap();
-    assert_eq!(
-        serde_json::from_str::<Value>(&insert_notification).unwrap(),
-        json!({"queue": "default"})
-    );
+    // Like Go, a retry sends no insert notification.
+    let insert_notifications: i64 =
+        sqlx::query_scalar("SELECT count(*) FROM river_notification WHERE topic = 'river_insert'")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(insert_notifications, 0);
 
     let deleted = client.jobs().delete(delete_id).await.unwrap();
     assert_eq!(deleted.id, delete_id);
