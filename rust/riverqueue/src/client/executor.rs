@@ -228,7 +228,10 @@ async fn run_worker(
             Ok(WorkerTimeout::Disabled) | Err(_) => None,
         };
         match timeout {
-            Some(timeout) => tokio::time::sleep(timeout).await,
+            Some(timeout) => {
+                tokio::time::sleep(timeout).await;
+                timeout
+            }
             None => std::future::pending().await,
         }
     };
@@ -240,12 +243,12 @@ async fn run_worker(
             } else {
                 CancellationCause::Remote
             });
-            finish_cancelled_task(inner, row, &mut worker_task.0, hard_cancel).await
+            finish_cancelled_task(inner, row, &mut worker_task.0, hard_cancel, None).await
         }
-        () = timeout_elapsed => {
+        timeout = timeout_elapsed => {
             *cancellation_cause = Some(CancellationCause::Timeout);
             cancellation.cancel();
-            finish_cancelled_task(inner, row, &mut worker_task.0, hard_cancel).await
+            finish_cancelled_task(inner, row, &mut worker_task.0, hard_cancel, Some(timeout)).await
         }
     }
 }
@@ -291,6 +294,9 @@ const ABORT_GRACE_DURING_SHUTDOWN: Duration = Duration::from_millis(100);
 
 /// Waits for a cancelled job to return, then treats it as stuck.
 ///
+/// `timeout` is the timeout that cancelled the job, if one did: the worker's
+/// own timeout when it sets one, otherwise the client's.
+///
 /// After `job_stuck_threshold`, the stuck handler runs and the task is
 /// aborted. Tokio abort only takes effect at the task's next `.await`, so a
 /// task blocked in synchronous code keeps its worker slot until it actually
@@ -303,12 +309,18 @@ pub(super) async fn finish_cancelled_task(
     row: &JobRow,
     worker_task: &mut tokio::task::JoinHandle<Result<WorkOutcome, WorkError>>,
     hard_cancel: &CancellationToken,
+    timeout: Option<Duration>,
 ) -> Option<WorkerResult> {
     let stuck_threshold = inner.job_stuck_threshold;
     if let Ok(result) = tokio::time::timeout(stuck_threshold, &mut *worker_task).await {
         return Some(worker_join_result(result));
     }
+    // Like Go's stuck job log line, report the timeout that applied to this
+    // job, which is the worker's own when it sets one.
     warn!(
+        job_id = row.id,
+        kind = %row.kind,
+        ?timeout,
         ?stuck_threshold,
         "River job remained active after cancellation; treating it as stuck and aborting its task"
     );
