@@ -116,7 +116,7 @@ async fn assert_stored_jobs_insert_like_ordinary_jobs(
                 )
                 .with_scheduled_at(scheduled_at)
                 .with_tags(["prepared"])
-                .with_unique(UniqueOpts::new().by_args()),
+                .with_unique(UniqueOpts::new().with_by_args(true)),
         )
         .await
         .unwrap()
@@ -219,7 +219,7 @@ mod postgres {
         assert_stored_jobs_insert_like_ordinary_jobs(
             || {
                 Client::builder(
-                    PostgresDatabase::new(schema.pool.clone()).schema(schema.schema.clone()),
+                    PostgresDatabase::new(schema.pool.clone()).with_schema(schema.schema.clone()),
                 )
             },
             async |id| {
@@ -252,7 +252,7 @@ mod postgres {
     async fn prepared_insertions_notify_on_commit_only() {
         let schema = PostgresSchema::new("prepared_notify").await;
         let client = Client::builder(
-            PostgresDatabase::new(schema.pool.clone()).schema(schema.schema.clone()),
+            PostgresDatabase::new(schema.pool.clone()).with_schema(schema.schema.clone()),
         )
         .build()
         .unwrap();

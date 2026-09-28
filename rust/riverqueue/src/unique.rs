@@ -1040,7 +1040,7 @@ mod tests {
 
     #[test]
     fn hashes_raw_bytes_without_reinterpreting_values() {
-        let opts = UniqueOpts::new().by_args();
+        let opts = UniqueOpts::new().with_by_args(true);
         let raw = |json: &str| RawValue::from_string(json.to_owned()).unwrap();
         let key = |json: &str| key_for("raw", &[], &raw(json), &opts).unwrap();
         let expected =
@@ -1096,7 +1096,7 @@ mod tests {
 
     #[test]
     fn hashes_literal_top_level_names() {
-        let opts = UniqueOpts::new().by_args();
+        let opts = UniqueOpts::new().with_by_args(true);
         for json in [r#"{"a.b":1}"#, r#"{"@this":1}"#, r#"{"":1}"#] {
             let raw = RawValue::from_string(json.to_owned()).unwrap();
             assert!(key_for("raw", &[], &raw, &opts).is_ok(), "{json}");
@@ -1111,7 +1111,7 @@ mod tests {
 
     #[test]
     fn empty_array_all_args_hash_an_empty_object() {
-        let opts = UniqueOpts::new().by_args();
+        let opts = UniqueOpts::new().with_by_args(true);
         let expected: [u8; 32] = Sha256::digest(b"&kind=raw&args={}").into();
         for json in ["[]", " [ \n] "] {
             let raw = RawValue::from_string(json.to_owned()).unwrap();
@@ -1125,7 +1125,7 @@ mod tests {
 
     #[test]
     fn non_object_all_args_are_rejected() {
-        let opts = UniqueOpts::new().by_args();
+        let opts = UniqueOpts::new().with_by_args(true);
         for json in ["[1]", "[[]]", "[{}]", "1", "true", "null", r#""text""#] {
             let raw = RawValue::from_string(json.to_owned()).unwrap();
             let error = key_for("raw", &[], &raw, &opts).unwrap_err();

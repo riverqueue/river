@@ -170,9 +170,10 @@ impl PostgresDatabase {
         &self.pool
     }
 
-    /// Configures PostgreSQL's periodic concurrent index rebuilding.
+    /// Returns the database with PostgreSQL's periodic concurrent index
+    /// rebuilding configured.
     #[must_use]
-    pub fn reindex(mut self, reindex: PostgresReindexConfig) -> Self {
+    pub fn with_reindex(mut self, reindex: PostgresReindexConfig) -> Self {
         self.reindex = reindex;
         self
     }
@@ -186,21 +187,21 @@ impl PostgresDatabase {
 
     /// Returns PostgreSQL reindexer configuration.
     #[must_use]
-    pub const fn reindex_config(&self) -> &PostgresReindexConfig {
+    pub const fn reindex(&self) -> &PostgresReindexConfig {
         &self.reindex
     }
 
-    /// Uses an explicit PostgreSQL schema for River objects and notification
-    /// channels.
+    /// Returns the database with an explicit PostgreSQL schema for River
+    /// objects and notification channels.
     #[must_use]
-    pub fn schema(mut self, schema: SchemaName) -> Self {
+    pub fn with_schema(mut self, schema: SchemaName) -> Self {
         self.schema = schema;
         self
     }
 
     /// Returns the configured PostgreSQL schema.
     #[must_use]
-    pub const fn schema_name(&self) -> &SchemaName {
+    pub const fn schema(&self) -> &SchemaName {
         &self.schema
     }
 }

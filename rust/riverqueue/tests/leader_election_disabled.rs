@@ -54,7 +54,7 @@ fn run_on_start_job() -> PeriodicJob {
     PeriodicJob::with_options(
         NeverSchedule,
         || NoopArgs {},
-        PeriodicJobOpts::new().with_run_on_start(),
+        PeriodicJobOpts::new().with_run_on_start(true),
     )
 }
 
@@ -133,7 +133,7 @@ impl Backend {
             #[cfg(feature = "postgres-tests")]
             Self::Postgres(schema) => Database::from_source(
                 riverqueue::database::PostgresDatabase::new(schema.pool.clone())
-                    .schema(schema.schema.clone()),
+                    .with_schema(schema.schema.clone()),
             ),
             #[cfg(feature = "sqlite")]
             Self::Sqlite(pool, _) => Database::from_source(pool.clone()),

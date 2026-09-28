@@ -753,72 +753,77 @@ impl UniqueOpts {
         }
     }
 
-    /// Includes encoded arguments in the unique key.
+    /// Returns whether encoded arguments are included in the unique key.
+    #[must_use]
+    pub const fn by_args(&self) -> bool {
+        self.by_args
+    }
+
+    /// Returns the period whose lower bound is included in the unique key.
+    #[must_use]
+    pub const fn by_period(&self) -> Option<Duration> {
+        self.by_period
+    }
+
+    /// Returns whether the queue is included in the unique key.
+    #[must_use]
+    pub const fn by_queue(&self) -> bool {
+        self.by_queue
+    }
+
+    /// Returns the custom set of states in which the key is unique.
+    #[must_use]
+    pub fn by_state(&self) -> Option<&[JobState]> {
+        self.by_state.as_deref()
+    }
+
+    /// Returns whether the job kind is excluded from the unique key.
+    #[must_use]
+    pub const fn exclude_kind(&self) -> bool {
+        self.exclude_kind
+    }
+
+    /// Returns the options with encoded arguments included in the unique
+    /// key, or not.
     ///
     /// The arguments must encode to a JSON object. As in River Go, an empty
     /// array is treated as `{}` and inserting any other non-object arguments
     /// fails.
     #[must_use]
-    pub const fn by_args(mut self) -> Self {
-        self.by_args = true;
+    pub const fn with_by_args(mut self, by_args: bool) -> Self {
+        self.by_args = by_args;
         self
     }
 
-    /// Includes the lower bound of a period in the unique key.
+    /// Returns the options with the lower bound of `period` included in the
+    /// unique key.
     #[must_use]
-    pub const fn by_period(mut self, period: Duration) -> Self {
+    pub const fn with_by_period(mut self, period: Duration) -> Self {
         self.by_period = Some(period);
         self
     }
 
-    /// Includes the queue in the unique key.
+    /// Returns the options with the queue included in the unique key, or
+    /// not.
     #[must_use]
-    pub const fn by_queue(mut self) -> Self {
-        self.by_queue = true;
+    pub const fn with_by_queue(mut self, by_queue: bool) -> Self {
+        self.by_queue = by_queue;
         self
     }
 
-    /// Uses a custom set of states in which the key is unique.
+    /// Returns the options with a custom set of states in which the key is
+    /// unique.
     #[must_use]
-    pub fn by_states(mut self, states: impl IntoIterator<Item = JobState>) -> Self {
+    pub fn with_by_state(mut self, states: impl IntoIterator<Item = JobState>) -> Self {
         self.by_state = Some(states.into_iter().collect());
         self
     }
 
-    /// Returns the configured period component.
+    /// Returns the options with the job kind excluded from the unique key,
+    /// or not.
     #[must_use]
-    pub const fn period(&self) -> Option<Duration> {
-        self.by_period
-    }
-
-    /// Returns the configured custom state set.
-    #[must_use]
-    pub fn states(&self) -> Option<&[JobState]> {
-        self.by_state.as_deref()
-    }
-
-    /// Returns whether encoded arguments are included.
-    #[must_use]
-    pub const fn uses_args(&self) -> bool {
-        self.by_args
-    }
-
-    /// Returns whether the job kind is excluded.
-    #[must_use]
-    pub const fn excludes_kind(&self) -> bool {
-        self.exclude_kind
-    }
-
-    /// Returns whether the queue is included.
-    #[must_use]
-    pub const fn uses_queue(&self) -> bool {
-        self.by_queue
-    }
-
-    /// Excludes the job kind from the unique key.
-    #[must_use]
-    pub const fn without_kind(mut self) -> Self {
-        self.exclude_kind = true;
+    pub const fn with_exclude_kind(mut self, exclude_kind: bool) -> Self {
+        self.exclude_kind = exclude_kind;
         self
     }
 
@@ -879,24 +884,24 @@ mod tests {
     #[test]
     fn unique_states_must_include_the_required_states() {
         let error = UniqueOpts::new()
-            .by_states([JobState::Available, JobState::Completed])
+            .with_by_state([JobState::Available, JobState::Completed])
             .validate()
             .unwrap_err();
         assert_eq!(
             error,
             "unique states must contain required states: pending, running, scheduled"
         );
-        let required = UniqueOpts::new().by_states(JobState::UNIQUE_REQUIRED.iter().copied());
+        let required = UniqueOpts::new().with_by_state(JobState::UNIQUE_REQUIRED.iter().copied());
         assert!(required.validate().is_ok());
 
         // As in Go, where a non-nil empty `ByState` enables uniqueness with
         // the default states.
-        let empty = UniqueOpts::new().by_states([]);
+        let empty = UniqueOpts::new().with_by_state([]);
         assert!(!empty.is_empty());
         assert!(empty.validate().is_ok());
         assert_eq!(
             empty.state_bitmask(),
-            UniqueOpts::new().by_args().state_bitmask()
+            UniqueOpts::new().with_by_args(true).state_bitmask()
         );
     }
 
@@ -967,7 +972,7 @@ mod tests {
             InsertOpts::default()
                 .with_priority(2)
                 .with_tags(Vec::<String>::new())
-                .with_unique(UniqueOpts::new().by_queue())
+                .with_unique(UniqueOpts::new().with_by_queue(true))
                 .without_schedule(),
         );
         assert_eq!(overlaid.max_attempts(), Some(9));
@@ -975,7 +980,7 @@ mod tests {
         assert_eq!(overlaid.queue(), Some("base_queue"));
         assert_eq!(overlaid.scheduled_at(), ScheduleOverride::Immediate);
         assert_eq!(overlaid.tags(), Some(&[][..]));
-        assert!(overlaid.unique().is_some_and(UniqueOpts::uses_queue));
+        assert!(overlaid.unique().is_some_and(UniqueOpts::by_queue));
     }
 
     #[test]

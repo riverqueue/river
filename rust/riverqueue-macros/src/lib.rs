@@ -494,11 +494,11 @@ fn expand_job_args(input: &DeriveInput) -> syn::Result<proc_macro2::TokenStream>
 }
 
 fn expand_unique_opts(krate: &syn::Path, unique: &UniqueAttribute) -> proc_macro2::TokenStream {
-    let by_args = unique.by_args.then(|| quote!(.by_args()));
-    let by_period = unique
-        .by_period
-        .map(|(seconds, nanos)| quote!(.by_period(::core::time::Duration::new(#seconds, #nanos))));
-    let by_queue = unique.by_queue.then(|| quote!(.by_queue()));
+    let by_args = unique.by_args.then(|| quote!(.with_by_args(true)));
+    let by_period = unique.by_period.map(
+        |(seconds, nanos)| quote!(.with_by_period(::core::time::Duration::new(#seconds, #nanos))),
+    );
+    let by_queue = unique.by_queue.then(|| quote!(.with_by_queue(true)));
     let by_state = unique.by_state.as_ref().map(|states| {
         let variants = states.iter().map(|state| {
             let variant = JOB_STATES
@@ -508,9 +508,11 @@ fn expand_unique_opts(krate: &syn::Path, unique: &UniqueAttribute) -> proc_macro
             let variant = Ident::new(variant, state.span());
             quote!(#krate::JobState::#variant)
         });
-        quote!(.by_states([#(#variants),*]))
+        quote!(.with_by_state([#(#variants),*]))
     });
-    let exclude_kind = unique.exclude_kind.then(|| quote!(.without_kind()));
+    let exclude_kind = unique
+        .exclude_kind
+        .then(|| quote!(.with_exclude_kind(true)));
     quote! {
         .with_unique(
             #krate::UniqueOpts::new()
@@ -840,11 +842,11 @@ mod tests {
         assert!(expanded.contains("\"email.send\""));
         assert!(expanded.contains("\"email_send_v1\""));
         assert!(expanded.contains(".with_tags([\"email\",\"outbound-mail\"])"));
-        assert!(expanded.contains(".by_args()"));
-        assert!(expanded.contains(".by_period(::core::time::Duration::new(5400u64,0u32))"));
-        assert!(expanded.contains(".by_queue()"));
+        assert!(expanded.contains(".with_by_args(true)"));
+        assert!(expanded.contains(".with_by_period(::core::time::Duration::new(5400u64,0u32))"));
+        assert!(expanded.contains(".with_by_queue(true)"));
         assert!(expanded.contains("::riverqueue::JobState::Retryable"));
-        assert!(expanded.contains(".without_kind()"));
+        assert!(expanded.contains(".with_exclude_kind(true)"));
         assert!(expanded.contains(
             ".overlay({letoverrides:::riverqueue::InsertOpts=email_insert_opts();overrides})"
         ));

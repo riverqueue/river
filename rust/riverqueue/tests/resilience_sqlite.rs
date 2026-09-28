@@ -699,7 +699,7 @@ async fn unique_duplicates_are_detected_across_clients_with_the_same_id() {
         .id("sqlite-resilience-same-id")
         .build()
         .unwrap();
-    let opts = InsertOpts::default().with_unique(UniqueOpts::new().by_args());
+    let opts = InsertOpts::default().with_unique(UniqueOpts::new().with_by_args(true));
 
     let inserted = first
         .insert(ResilienceArgs {})

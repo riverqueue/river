@@ -96,15 +96,15 @@ impl PeriodicJobOpts {
 
     /// Returns whether an occurrence is inserted whenever leadership begins.
     #[must_use]
-    pub const fn runs_on_start(&self) -> bool {
+    pub const fn run_on_start(&self) -> bool {
         self.run_on_start
     }
 
-    /// Returns the options with an occurrence inserted whenever this client
-    /// becomes leader.
+    /// Returns the options with an occurrence inserted, or not, whenever
+    /// this client becomes leader.
     #[must_use]
-    pub const fn with_run_on_start(mut self) -> Self {
-        self.run_on_start = true;
+    pub const fn with_run_on_start(mut self, run_on_start: bool) -> Self {
+        self.run_on_start = run_on_start;
         self
     }
 

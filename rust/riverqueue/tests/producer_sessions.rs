@@ -682,7 +682,9 @@ mod postgres {
     use crate::support::PostgresSchema;
 
     fn builder(schema: &PostgresSchema) -> riverqueue::ClientBuilder {
-        Client::builder(PostgresDatabase::new(schema.pool.clone()).schema(schema.schema.clone()))
+        Client::builder(
+            PostgresDatabase::new(schema.pool.clone()).with_schema(schema.schema.clone()),
+        )
     }
 
     #[tokio::test(flavor = "multi_thread")]

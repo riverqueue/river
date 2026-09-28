@@ -62,11 +62,11 @@ struct Customer {
 fn declares_job_type_uniqueness() {
     let opts = UniqueArgs::default_insert_opts();
     let unique = opts.unique().expect("unique options");
-    assert!(unique.uses_args());
-    assert_eq!(unique.period(), Some(Duration::from_mins(90)));
-    assert!(unique.uses_queue());
+    assert!(unique.by_args());
+    assert_eq!(unique.by_period(), Some(Duration::from_mins(90)));
+    assert!(unique.by_queue());
     assert_eq!(
-        unique.states(),
+        unique.by_state(),
         Some(
             &[
                 JobState::Available,
@@ -77,7 +77,7 @@ fn declares_job_type_uniqueness() {
             ][..]
         )
     );
-    assert!(unique.excludes_kind());
+    assert!(unique.exclude_kind());
     assert_eq!(
         UniqueArgs::unique_fields(),
         [&["invoiceNumber"][..], &["customer", "id"][..]]
@@ -124,14 +124,14 @@ struct AllArgsUnique {
 #[test]
 fn by_args_without_fields_hashes_every_argument() {
     let opts = AllArgsUnique::default_insert_opts();
-    assert!(opts.unique().is_some_and(UniqueOpts::uses_args));
+    assert!(opts.unique().is_some_and(UniqueOpts::by_args));
     assert!(AllArgsUnique::unique_fields().is_empty());
 }
 
 fn overlaid_insert_opts() -> InsertOpts {
     InsertOpts::default()
         .with_priority(2)
-        .with_unique(UniqueOpts::new().by_queue())
+        .with_unique(UniqueOpts::new().with_by_queue(true))
 }
 
 #[derive(Deserialize, JobArgs, Serialize)]
@@ -152,8 +152,8 @@ fn insert_opts_function_overlays_attribute_defaults() {
     assert_eq!(opts.queue(), Some("attribute_queue"));
     assert_eq!(opts.scheduled_at(), ScheduleOverride::Inherit);
     let unique = opts.unique().expect("unique options");
-    assert!(unique.uses_queue());
-    assert!(!unique.uses_args());
+    assert!(unique.by_queue());
+    assert!(!unique.by_args());
 }
 
 mod reexport {
@@ -174,7 +174,7 @@ fn crate_attribute_selects_the_riverqueue_path() {
     assert_eq!(
         RenamedCrateArgs::default_insert_opts()
             .unique()
-            .and_then(UniqueOpts::states)
+            .and_then(UniqueOpts::by_state)
             .map(<[JobState]>::len),
         Some(4)
     );

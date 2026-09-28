@@ -107,7 +107,7 @@ impl PostgresSchema {
         let schema = SchemaName::new(name.clone()).expect("valid test schema name");
         if migrate {
             PostgresMigrator::new(pool.clone())
-                .schema(schema.clone())
+                .with_schema(schema.clone())
                 .migrate_up()
                 .await
                 .expect("migrate test schema");

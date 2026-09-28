@@ -262,7 +262,7 @@ async fn setup_runtime() -> (Client, Arc<RuntimeCounts>, support::PostgresSchema
     let mut workers = WorkerRegistry::new();
     workers.register::<RuntimeArgs, _>(RuntimeWorker).unwrap();
     let counts = Arc::new(RuntimeCounts::default());
-    let client = Client::builder(PostgresDatabase::new(pool).schema(schema))
+    let client = Client::builder(PostgresDatabase::new(pool).with_schema(schema))
         .default_max_attempts(7)
         .plugin(RuntimePlugin {
             counts: Arc::clone(&counts),
@@ -291,7 +291,7 @@ async fn completion_burst_does_not_lag_large_subscription() {
 
     let mut workers = WorkerRegistry::new();
     workers.register::<BurstArgs, _>(BurstWorker).unwrap();
-    let client = Client::builder(PostgresDatabase::new(pool.clone()).schema(schema.clone()))
+    let client = Client::builder(PostgresDatabase::new(pool.clone()).with_schema(schema.clone()))
         .id("rust-runtime-burst-test")
         .without_notifications()
         .workers(workers)
@@ -375,7 +375,7 @@ async fn external_terminal_state_wins_worker_completion_race() {
             started: Arc::clone(&started),
         })
         .unwrap();
-    let client = Client::builder(PostgresDatabase::new(pool.clone()).schema(schema.clone()))
+    let client = Client::builder(PostgresDatabase::new(pool.clone()).with_schema(schema.clone()))
         .id("rust-runtime-terminal-race-test")
         .without_notifications()
         .workers(workers)
@@ -465,7 +465,7 @@ async fn remote_cancellation_overrides_worker_snooze() {
             started: Arc::clone(&started),
         })
         .unwrap();
-    let client = Client::builder(PostgresDatabase::new(pool.clone()).schema(schema.clone()))
+    let client = Client::builder(PostgresDatabase::new(pool.clone()).with_schema(schema.clone()))
         .id("rust-runtime-cancel-snooze-test")
         .workers(workers)
         .queue(
@@ -517,7 +517,7 @@ async fn shutdown_waits_for_active_work_and_soft_stop_escalates() {
         })
         .unwrap();
     let graceful_client =
-        Client::builder(PostgresDatabase::new(pool.clone()).schema(schema.clone()))
+        Client::builder(PostgresDatabase::new(pool.clone()).with_schema(schema.clone()))
             .id("rust-runtime-graceful-shutdown-test")
             .without_notifications()
             .workers(graceful_workers)
@@ -592,7 +592,7 @@ async fn shutdown_waits_for_active_work_and_soft_stop_escalates() {
         })
         .unwrap();
     let escalation_client =
-        Client::builder(PostgresDatabase::new(pool.clone()).schema(schema.clone()))
+        Client::builder(PostgresDatabase::new(pool.clone()).with_schema(schema.clone()))
             .id("rust-runtime-soft-stop-escalation-test")
             .job_stuck_threshold(Duration::from_millis(10))
             .without_notifications()
@@ -752,7 +752,7 @@ fn start_without_runtime_returns_error_and_is_restartable() {
     let mut workers = WorkerRegistry::new();
     workers.register::<BurstArgs, _>(BurstWorker).unwrap();
     let client = Client::builder(
-        PostgresDatabase::new(database.pool.clone()).schema(database.schema.clone()),
+        PostgresDatabase::new(database.pool.clone()).with_schema(database.schema.clone()),
     )
     .queue("default", QueueConfig::new(1))
     .workers(workers)

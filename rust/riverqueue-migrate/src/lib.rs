@@ -216,11 +216,18 @@ impl PostgresMigrator {
         }
     }
 
-    /// Migrates `schema` instead of the connection's current schema.
+    /// Returns the migrator with `schema` migrated instead of the
+    /// connection's current schema.
     #[must_use]
-    pub fn schema(mut self, schema: SchemaName) -> Self {
+    pub fn with_schema(mut self, schema: SchemaName) -> Self {
         self.schema = schema;
         self
+    }
+
+    /// Returns the schema this migrator migrates.
+    #[must_use]
+    pub const fn schema(&self) -> &SchemaName {
+        &self.schema
     }
 
     /// Returns applied main-line versions in ascending order.

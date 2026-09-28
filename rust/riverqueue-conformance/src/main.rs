@@ -1233,7 +1233,7 @@ fn periodic_run_on_start_jobs(params: &Value) -> Result<Vec<PeriodicJob>, BoxErr
                     opts.clone(),
                 ))
             },
-            PeriodicJobOpts::new().with_id(id).with_run_on_start(),
+            PeriodicJobOpts::new().with_id(id).with_run_on_start(true),
         ))
     };
     if !unique {
@@ -1247,7 +1247,8 @@ fn periodic_run_on_start_jobs(params: &Value) -> Result<Vec<PeriodicJob>, BoxErr
         job(
             "conformance-periodic",
             "periodic run on start",
-            InsertOpts::default().with_unique(UniqueOpts::new().by_args().by_queue()),
+            InsertOpts::default()
+                .with_unique(UniqueOpts::new().with_by_args(true).with_by_queue(true)),
         )?,
         job(
             "conformance-periodic-marker",
@@ -1412,19 +1413,19 @@ fn build_unique_opts(
 ) -> UniqueOpts {
     let mut opts = UniqueOpts::new();
     if by_args {
-        opts = opts.by_args();
+        opts = opts.with_by_args(true);
     }
     if let Some(period) = by_period {
-        opts = opts.by_period(period);
+        opts = opts.with_by_period(period);
     }
     if by_queue {
-        opts = opts.by_queue();
+        opts = opts.with_by_queue(true);
     }
     if let Some(states) = by_state {
-        opts = opts.by_states(states);
+        opts = opts.with_by_state(states);
     }
     if exclude_kind {
-        opts = opts.without_kind();
+        opts = opts.with_exclude_kind(true);
     }
     opts
 }
@@ -1654,7 +1655,7 @@ impl Adapter {
                     .execute(&self.pool)
                     .await?;
                 }
-                let migrator = PostgresMigrator::new(self.pool.clone()).schema(schema);
+                let migrator = PostgresMigrator::new(self.pool.clone()).with_schema(schema);
                 let direction = match params
                     .get("direction")
                     .and_then(Value::as_str)
@@ -2145,8 +2146,8 @@ impl Adapter {
                 let maintenance = maintenance_config(&params)?;
                 let mut builder = Client::builder(
                     PostgresDatabase::new(self.pool.clone())
-                        .schema(schema)
-                        .reindex(reindex_config(&params)?),
+                        .with_schema(schema)
+                        .with_reindex(reindex_config(&params)?),
                 )
                 .id(client_id)
                 .job_stuck_threshold(Duration::from_millis(100))
@@ -2279,7 +2280,7 @@ impl Adapter {
                 })?;
                 let client = Client::builder(
                     PostgresDatabase::new(self.pool.clone())
-                        .schema(schema_name(params.get("schema").and_then(Value::as_str))?),
+                        .with_schema(schema_name(params.get("schema").and_then(Value::as_str))?),
                 )
                 .id(params
                     .get("client_id")
@@ -2533,7 +2534,7 @@ impl Adapter {
             }
             return Ok(running.client.clone());
         }
-        Client::builder(PostgresDatabase::new(self.pool.clone()).schema(schema))
+        Client::builder(PostgresDatabase::new(self.pool.clone()).with_schema(schema))
             .build()
             .map_err(|error| AdapterError::rejected(error.to_string()))
     }
@@ -3554,9 +3555,9 @@ async fn wait_for_state(
 }
 
 fn job_update_params(metadata: Map<String, Value>, output: Option<Value>) -> JobUpdateParams {
-    let params = JobUpdateParams::default().with_metadata(metadata);
+    let params = JobUpdateParams::default().metadata(metadata);
     match output {
-        Some(output) => params.with_output(output),
+        Some(output) => params.output(output),
         None => params,
     }
 }

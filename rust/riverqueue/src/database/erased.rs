@@ -75,7 +75,7 @@ impl Database {
     pub fn postgres_schema(&self) -> Option<&SchemaName> {
         match &self.inner {
             #[cfg(feature = "postgres")]
-            DatabaseInner::Postgres(source) => Some(source.schema_name()),
+            DatabaseInner::Postgres(source) => Some(source.schema()),
             #[cfg(feature = "sqlite")]
             DatabaseInner::Sqlite(_) => None,
         }
@@ -91,7 +91,7 @@ impl Database {
     )]
     pub(crate) fn postgres_reindex(&self) -> Option<&PostgresReindexConfig> {
         match &self.inner {
-            DatabaseInner::Postgres(source) => Some(source.reindex_config()),
+            DatabaseInner::Postgres(source) => Some(source.reindex()),
             #[cfg(feature = "sqlite")]
             DatabaseInner::Sqlite(_) => None,
         }
@@ -279,7 +279,7 @@ mod tests {
                 .with_schedule(PostgresReindexSchedule::Interval(Duration::from_hours(1))),
         ] {
             let database = database_with_default_postgres_reindex_names(
-                Database::from_source(PostgresDatabase::new(pool.clone()).reindex(config)),
+                Database::from_source(PostgresDatabase::new(pool.clone()).with_reindex(config)),
                 ["add_on_hot_index"],
             );
             let names = database.postgres_reindex().unwrap().index_names();
@@ -309,7 +309,7 @@ mod tests {
     async fn add_on_reindex_names_leave_explicit_index_names_unchanged() {
         let pool = lazy_pool();
         for explicit in [vec!["custom_index"], vec![]] {
-            let configured = PostgresDatabase::new(pool.clone()).reindex(
+            let configured = PostgresDatabase::new(pool.clone()).with_reindex(
                 PostgresReindexConfig::default()
                     .with_timeout(Duration::from_secs(5))
                     .with_index_names(explicit.clone()),

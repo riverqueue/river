@@ -196,7 +196,7 @@ impl TestSchema {
             .unwrap();
         let schema = SchemaName::new(name.clone()).unwrap();
         PostgresMigrator::new(pool.clone())
-            .schema(schema.clone())
+            .with_schema(schema.clone())
             .migrate_up()
             .await
             .unwrap();
@@ -204,7 +204,7 @@ impl TestSchema {
     }
 
     fn database(&self) -> PostgresDatabase {
-        PostgresDatabase::new(self.pool.clone()).schema(self.schema.clone())
+        PostgresDatabase::new(self.pool.clone()).with_schema(self.schema.clone())
     }
 
     fn table(&self) -> String {
@@ -1028,7 +1028,7 @@ async fn client_survives_database_outage_and_catches_up() {
     let proxy = FaultProxy::start().await;
     let gate = Gate::default();
     let client =
-        Client::builder(PostgresDatabase::new(proxy.pool(4)).schema(schema.schema.clone()))
+        Client::builder(PostgresDatabase::new(proxy.pool(4)).with_schema(schema.schema.clone()))
             .id("postgres-resilience-outage")
             .workers(gated_workers(&gate))
             // Notifications, not polling, must deliver work inserted during the
@@ -1091,7 +1091,7 @@ async fn client_started_during_an_outage_becomes_ready_after_recovery() {
     let proxy = FaultProxy::start().await;
     proxy.take_down();
     let client =
-        Client::builder(PostgresDatabase::new(proxy.pool(2)).schema(schema.schema.clone()))
+        Client::builder(PostgresDatabase::new(proxy.pool(2)).with_schema(schema.schema.clone()))
             .id("postgres-resilience-start-outage")
             .workers(completing_workers())
             .queue("default", fast_queue())
@@ -1131,12 +1131,13 @@ async fn listener_does_not_occupy_a_pool_connection() {
         .connect(&database_url())
         .await
         .unwrap();
-    let client = Client::builder(PostgresDatabase::new(pool.clone()).schema(schema.schema.clone()))
-        .id("postgres-resilience-listener-pool")
-        .workers(completing_workers())
-        .queue("default", fast_queue())
-        .build()
-        .unwrap();
+    let client =
+        Client::builder(PostgresDatabase::new(pool.clone()).with_schema(schema.schema.clone()))
+            .id("postgres-resilience-listener-pool")
+            .workers(completing_workers())
+            .queue("default", fast_queue())
+            .build()
+            .unwrap();
 
     let mut run = client.start().unwrap();
     run.wait_ready().await.unwrap();

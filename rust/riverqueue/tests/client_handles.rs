@@ -195,7 +195,7 @@ macro_rules! scenarios {
             let client = fixture.builder().build().unwrap();
 
             let missing = InsertOpts::default().with_unique(
-                UniqueOpts::new().by_states([JobState::Available, JobState::Completed]),
+                UniqueOpts::new().with_by_state([JobState::Available, JobState::Completed]),
             );
             let error = client
                 .insert(args("missing_states"))
@@ -209,7 +209,7 @@ macro_rules! scenarios {
             );
             assert_eq!(fixture.job_count().await, 0);
 
-            let empty = InsertOpts::default().with_unique(UniqueOpts::new().by_states([]));
+            let empty = InsertOpts::default().with_unique(UniqueOpts::new().with_by_state([]));
             let first = client
                 .insert(args("empty_states"))
                 .opts(empty.clone())
@@ -433,7 +433,7 @@ macro_rules! scenarios {
             let row = jobs
                 .update(
                     updated,
-                    JobUpdateParams::default().with_output(serde_json::json!("rolled back")),
+                    JobUpdateParams::default().output(serde_json::json!("rolled back")),
                 )
                 .tx(&mut tx)
                 .await
@@ -928,7 +928,7 @@ mod postgres {
     fn builder(schema: &PostgresSchema) -> riverqueue::ClientBuilder {
         Client::builder(
             riverqueue::database::PostgresDatabase::new(schema.pool.clone())
-                .schema(schema.schema.clone()),
+                .with_schema(schema.schema.clone()),
         )
     }
 

@@ -256,7 +256,7 @@ mod postgres {
             let schema = PostgresSchema::new("river_job_list").await;
             let client = Client::builder(
                 riverqueue::database::PostgresDatabase::new(schema.pool.clone())
-                    .schema(schema.schema.clone()),
+                    .with_schema(schema.schema.clone()),
             )
             .build()
             .unwrap();

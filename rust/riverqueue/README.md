@@ -316,12 +316,14 @@ let client = Client::builder(pool).build()?;
   tools that interoperate with River's tables directly.
 
 Setters follow two conventions. Builders and request parameters, which
-exist only to be passed on (`ClientBuilder`, `PostgresDatabase`,
-`JobListParams`, the migrators), take plain setter names such as
-`queue(..)` and `limit(..)`. Configuration values that also expose each
-setting through a same-named getter (`InsertOpts`, `QueueConfig`,
-`MaintenanceConfig`, `SubscribeConfig`) use `with_*` methods that return
-the value with one setting changed, like `PathBuf::with_extension`.
+exist only to be passed on (`ClientBuilder`, `JobListParams`,
+`JobUpdateParams`), take plain setter names such as `queue(..)` and
+`limit(..)`. Configuration values that also expose each setting through a
+same-named getter (`InsertOpts`, `UniqueOpts`, `PeriodicJobOpts`,
+`QueueConfig`, `MaintenanceConfig`, `SubscribeConfig`, `PostgresDatabase`,
+`PostgresMigrator`) use `with_*` methods that return the value with one
+setting changed, like `PathBuf::with_extension`, so `UniqueOpts::by_args`
+reads what `UniqueOpts::with_by_args` sets.
 Constructors with a required extra argument are also named `with_*`, like
 `Vec::with_capacity`. Durations that can be disabled are explicit, as in
 `ClientBuilder::without_job_timeout` and `Retention::Keep`, rather than

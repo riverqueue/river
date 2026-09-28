@@ -917,14 +917,14 @@ pub struct JobUpdateParams {
 impl JobUpdateParams {
     /// Merges metadata keys into the existing object.
     #[must_use]
-    pub fn with_metadata(mut self, metadata: Map<String, Value>) -> Self {
+    pub fn metadata(mut self, metadata: Map<String, Value>) -> Self {
         self.metadata = metadata;
         self
     }
 
     /// Sets or replaces the reserved output value.
     #[must_use]
-    pub fn with_output(mut self, output: Value) -> Self {
+    pub fn output(mut self, output: Value) -> Self {
         self.output = Some(output);
         self
     }

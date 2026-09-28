@@ -56,8 +56,8 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let opts = || {
         InsertOpts::default().with_unique(
             UniqueOpts::new()
-                .by_args()
-                .by_period(Duration::from_hours(24)),
+                .with_by_args(true)
+                .with_by_period(Duration::from_hours(24)),
         )
     };
     let digest = client

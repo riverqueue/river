@@ -266,8 +266,8 @@ async fn job_crud_preserves_sqlite_semantics() {
         .update(
             delete_id,
             JobUpdateParams::default()
-                .with_metadata(Map::from_iter([("added".to_owned(), json!(42))]))
-                .with_output(json!({"ok": true})),
+                .metadata(Map::from_iter([("added".to_owned(), json!(42))]))
+                .output(json!({"ok": true})),
         )
         .await
         .unwrap();
@@ -287,7 +287,7 @@ async fn job_crud_preserves_sqlite_semantics() {
         .update(
             delete_id,
             JobUpdateParams::default()
-                .with_metadata(Map::from_iter([("rolled_back".to_owned(), json!(true))])),
+                .metadata(Map::from_iter([("rolled_back".to_owned(), json!(true))])),
         )
         .tx(&mut transaction)
         .await

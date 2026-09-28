@@ -121,7 +121,7 @@ impl TestDatabase {
             .unwrap();
         let schema = SchemaName::new(name.clone()).unwrap();
         PostgresMigrator::new(pool.clone())
-            .schema(schema.clone())
+            .with_schema(schema.clone())
             .migrate_up()
             .await
             .unwrap();
@@ -135,8 +135,8 @@ impl TestDatabase {
     fn client(&self) -> crate::ClientBuilder {
         Client::builder(
             PostgresDatabase::new(self.pool.clone())
-                .schema(self.schema.clone())
-                .reindex(PostgresReindexConfig::default().with_index_names([] as [&str; 0])),
+                .with_schema(self.schema.clone())
+                .with_reindex(PostgresReindexConfig::default().with_index_names([] as [&str; 0])),
         )
         .workers(workers())
     }
@@ -785,7 +785,7 @@ async fn periodic_jobs_use_expected_run_time_and_uniqueness() {
             || {
                 Some((
                     NoTimeoutArgs {},
-                    InsertOpts::default().with_unique(UniqueOpts::new().by_args()),
+                    InsertOpts::default().with_unique(UniqueOpts::new().with_by_args(true)),
                 ))
             },
         ))
@@ -968,7 +968,9 @@ async fn periodic_start_hooks_and_run_on_start_follow_each_leadership_gain() {
         .periodic_job(PeriodicJob::with_options(
             IntervalSchedule::new(Duration::from_hours(1)).unwrap(),
             || NoTimeoutArgs {},
-            PeriodicJobOpts::new().with_id("gain").with_run_on_start(),
+            PeriodicJobOpts::new()
+                .with_id("gain")
+                .with_run_on_start(true),
         ))
         .queue("default", QueueConfig::new(1))
         .build()

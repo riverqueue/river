@@ -81,7 +81,7 @@ async fn pool_sources_preserve_backend_options() {
     let schema = SchemaName::new("river_other").unwrap();
 
     #[cfg(feature = "postgres")]
-    let postgres = require_source(PostgresDatabase::new(postgres_pool.clone()).schema(schema));
+    let postgres = require_source(PostgresDatabase::new(postgres_pool.clone()).with_schema(schema));
     #[cfg(feature = "postgres")]
     assert_eq!(postgres.kind(), DatabaseKind::Postgres);
     #[cfg(feature = "postgres")]

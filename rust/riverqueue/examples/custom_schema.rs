@@ -22,11 +22,11 @@ async fn main() -> Result<(), Box<dyn Error>> {
         .execute(&pool)
         .await?;
     PostgresMigrator::new(pool.clone())
-        .schema(schema.clone())
+        .with_schema(schema.clone())
         .migrate_up()
         .await?;
 
-    let client = Client::builder(PostgresDatabase::new(pool).schema(schema)).build()?;
+    let client = Client::builder(PostgresDatabase::new(pool).with_schema(schema)).build()?;
     println!(
         "River schema: {}",
         client

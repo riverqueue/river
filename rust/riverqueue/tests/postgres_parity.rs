@@ -16,9 +16,11 @@ use serde::{Deserialize, Serialize};
 use support::PostgresSchema;
 
 fn insert_only_client(database: &PostgresSchema) -> Client {
-    Client::builder(PostgresDatabase::new(database.pool.clone()).schema(database.schema.clone()))
-        .build()
-        .unwrap()
+    Client::builder(
+        PostgresDatabase::new(database.pool.clone()).with_schema(database.schema.clone()),
+    )
+    .build()
+    .unwrap()
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -249,7 +251,7 @@ async fn schema_names_are_quoted_like_go() {
     let database = PostgresSchema::new("Rpp-Mixed-Schema").await;
     assert!(database.schema.as_deref().unwrap().contains('-'));
     let client = Client::builder(
-        PostgresDatabase::new(database.pool.clone()).schema(database.schema.clone()),
+        PostgresDatabase::new(database.pool.clone()).with_schema(database.schema.clone()),
     )
     .queue(
         "default",
@@ -370,7 +372,7 @@ async fn leader_renews_while_maintenance_is_blocked() {
     .unwrap();
 
     let client = Client::builder(
-        PostgresDatabase::new(database.pool.clone()).schema(database.schema.clone()),
+        PostgresDatabase::new(database.pool.clone()).with_schema(database.schema.clone()),
     )
     .maintenance(
         MaintenanceConfig::default()

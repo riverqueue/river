@@ -723,7 +723,7 @@ async fn concurrent_unique_inserts_return_the_conflicting_job() {
     let database = support::PostgresSchema::new("rs_unique_conc").await;
     let pool = database.pool.clone();
     let schema = database.schema.clone();
-    let client = Client::builder(PostgresDatabase::new(pool.clone()).schema(schema))
+    let client = Client::builder(PostgresDatabase::new(pool.clone()).with_schema(schema))
         .build()
         .unwrap();
 
@@ -741,17 +741,21 @@ async fn concurrent_unique_inserts_return_the_conflicting_job() {
     let cases = [
         (
             "by_args",
-            InsertOpts::default().with_unique(UniqueOpts::new().by_args()),
+            InsertOpts::default().with_unique(UniqueOpts::new().with_by_args(true)),
         ),
         (
             "by_args_and_queue",
             InsertOpts::default()
                 .with_queue("unique_queue")
-                .with_unique(UniqueOpts::new().by_args().by_queue()),
+                .with_unique(UniqueOpts::new().with_by_args(true).with_by_queue(true)),
         ),
         (
             "by_args_and_states",
-            InsertOpts::default().with_unique(UniqueOpts::new().by_args().by_states(all_states)),
+            InsertOpts::default().with_unique(
+                UniqueOpts::new()
+                    .with_by_args(true)
+                    .with_by_state(all_states),
+            ),
         ),
         (
             "by_args_and_period",
@@ -759,8 +763,8 @@ async fn concurrent_unique_inserts_return_the_conflicting_job() {
                 .with_scheduled_at(fixed_scheduled_at)
                 .with_unique(
                     UniqueOpts::new()
-                        .by_args()
-                        .by_period(Duration::from_mins(1)),
+                        .with_by_args(true)
+                        .with_by_period(Duration::from_mins(1)),
                 ),
         ),
     ];
@@ -812,7 +816,7 @@ async fn insert_many_variants_preserve_order_and_transactionality() {
     let database = support::PostgresSchema::new("rs_insert_many").await;
     let pool = database.pool.clone();
     let schema = database.schema.clone();
-    let client = Client::builder(PostgresDatabase::new(pool.clone()).schema(schema.clone()))
+    let client = Client::builder(PostgresDatabase::new(pool.clone()).with_schema(schema.clone()))
         .build()
         .unwrap();
     let table = schema.qualify("river_job");
@@ -935,7 +939,7 @@ async fn insert_many_variants_preserve_order_and_transactionality() {
         Err(riverqueue::Error::InvalidJob(_))
     ));
 
-    let unique_opts = InsertOpts::default().with_unique(UniqueOpts::new().by_args());
+    let unique_opts = InsertOpts::default().with_unique(UniqueOpts::new().with_by_args(true));
     let unique = client
         .insert_many([
             (
@@ -1078,7 +1082,7 @@ async fn insert_unique_by_args_returns_the_existing_job() {
     let database = support::PostgresSchema::current("rs_unique_insert").await;
     let client = worker_client(&database.pool, ResumableWorker::default());
 
-    let unique_options = InsertOpts::default().with_unique(UniqueOpts::new().by_args());
+    let unique_options = InsertOpts::default().with_unique(UniqueOpts::new().with_by_args(true));
     let unique_first = client
         .insert(EchoArgs {
             message: "unique".to_owned(),
@@ -1131,7 +1135,7 @@ async fn job_admin_lists_updates_retries_and_deletes() {
         .jobs()
         .update(
             inserted.job.row.id,
-            JobUpdateParams::default().with_output(serde_json::json!({"ok": true})),
+            JobUpdateParams::default().output(serde_json::json!({"ok": true})),
         )
         .await
         .unwrap();
@@ -1228,7 +1232,7 @@ async fn maintenance_cleans_old_jobs_and_queues_and_reindexes() {
     let mut cleanup_workers = WorkerRegistry::new();
     cleanup_workers.register::<EchoArgs, _>(EchoWorker).unwrap();
     let cleanup_client = Client::builder(
-        PostgresDatabase::new(pool.clone()).reindex(
+        PostgresDatabase::new(pool.clone()).with_reindex(
             PostgresReindexConfig::default()
                 .with_index_names(["rust_maintenance_reindex_idx"])
                 .with_schedule(PostgresReindexSchedule::Interval(Duration::from_millis(50))),
@@ -1439,7 +1443,7 @@ async fn migrator_steps_a_custom_schema_up_and_down() {
     let database = support::PostgresSchema::unmigrated("rs_migrate_custom").await;
 
     let custom_migrator =
-        PostgresMigrator::new(database.pool.clone()).schema(database.schema.clone());
+        PostgresMigrator::new(database.pool.clone()).with_schema(database.schema.clone());
     let first_up = custom_migrator
         .migrate(Direction::Up, MigrateOpts::new().with_target_version(4))
         .await
@@ -1596,8 +1600,8 @@ async fn rescuer_honors_worker_timeout_and_retry_overrides() {
         .unwrap();
     let client = Client::builder(
         PostgresDatabase::new(pool.clone())
-            .schema(schema)
-            .reindex(PostgresReindexConfig::default().with_index_names([] as [&str; 0])),
+            .with_schema(schema)
+            .with_reindex(PostgresReindexConfig::default().with_index_names([] as [&str; 0])),
     )
     .id("rust-rescuer-timeout-client")
     .job_timeout(Duration::from_millis(100))
@@ -1680,8 +1684,8 @@ async fn resumable_cursor_and_transactional_checkpoints() {
         .unwrap();
     let client = Client::builder(
         PostgresDatabase::new(pool.clone())
-            .schema(schema)
-            .reindex(PostgresReindexConfig::default().with_index_names([] as [&str; 0])),
+            .with_schema(schema)
+            .with_reindex(PostgresReindexConfig::default().with_index_names([] as [&str; 0])),
     )
     .id("rust-resumable-checkpoint-test")
     .maintenance(
@@ -1855,7 +1859,7 @@ async fn transactional_get_and_update_roll_back() {
         .jobs()
         .update(
             tx_row.id,
-            JobUpdateParams::default().with_output(serde_json::json!("transactional")),
+            JobUpdateParams::default().output(serde_json::json!("transactional")),
         )
         .tx(&mut transaction)
         .await
@@ -1966,7 +1970,7 @@ fn maintenance_client(pool: &PgPool, pilot: TestPilot) -> Client {
             },
             PeriodicJobOpts::new()
                 .with_id("rust-periodic")
-                .with_run_on_start(),
+                .with_run_on_start(true),
         ))
         .pilot(pilot)
         .workers(maintenance_workers)

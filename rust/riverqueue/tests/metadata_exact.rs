@@ -64,10 +64,11 @@ async fn postgres_reads_metadata_with_large_numbers() {
     .fetch_one(&schema.pool)
     .await
     .unwrap();
-    let client =
-        Client::builder(PostgresDatabase::new(schema.pool.clone()).schema(schema.schema.clone()))
-            .build()
-            .unwrap();
+    let client = Client::builder(
+        PostgresDatabase::new(schema.pool.clone()).with_schema(schema.schema.clone()),
+    )
+    .build()
+    .unwrap();
 
     let original = client.jobs().get(id).await.unwrap();
     let big = raw_field(&original.metadata, "big_integer").to_owned();
@@ -77,7 +78,7 @@ async fn postgres_reads_metadata_with_large_numbers() {
 
     let updated = client
         .jobs()
-        .update(id, JobUpdateParams::default().with_output("done".into()))
+        .update(id, JobUpdateParams::default().output("done".into()))
         .await
         .unwrap();
     assert_eq!(raw_field(&updated.metadata, "big_integer"), big);
@@ -140,10 +141,11 @@ async fn postgres_insert_opts_keep_metadata_number_tokens() {
     use riverqueue::database::PostgresDatabase;
 
     let schema = support::PostgresSchema::new("meta_exact_insert").await;
-    let client =
-        Client::builder(PostgresDatabase::new(schema.pool.clone()).schema(schema.schema.clone()))
-            .build()
-            .unwrap();
+    let client = Client::builder(
+        PostgresDatabase::new(schema.pool.clone()).with_schema(schema.schema.clone()),
+    )
+    .build()
+    .unwrap();
 
     for row in insert_with_exact_metadata(&client).await {
         assert_eq!(
@@ -207,7 +209,7 @@ async fn sqlite_reads_metadata_with_large_numbers() {
 
     let updated = client
         .jobs()
-        .update(id, JobUpdateParams::default().with_output("done".into()))
+        .update(id, JobUpdateParams::default().output("done".into()))
         .await
         .unwrap();
     assert_eq!(

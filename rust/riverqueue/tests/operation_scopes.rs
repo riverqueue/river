@@ -348,7 +348,8 @@ mod postgres {
 
         fn builder(&self) -> riverqueue::ClientBuilder {
             Client::builder(
-                PostgresDatabase::new(self.schema.pool.clone()).schema(self.schema.schema.clone()),
+                PostgresDatabase::new(self.schema.pool.clone())
+                    .with_schema(self.schema.schema.clone()),
             )
         }
 
