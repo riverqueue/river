@@ -56,16 +56,23 @@ func (m UniqueInsertMode) SQL() string {
 // from a proposed insert, indicating that an existing row was returned
 // instead.
 func UniqueInsertMetadataIsDuplicate(metadata []byte, nonce string) bool {
+	metadataNonce, ok := UniqueInsertMetadataNonce(metadata)
+	return !ok || metadataNonce != nonce
+}
+
+// UniqueInsertMetadataNonce returns the nonce in metadata, or false if the
+// metadata has no valid nonce.
+func UniqueInsertMetadataNonce(metadata []byte) (string, bool) {
 	var metadataMap map[string]json.RawMessage
 	if err := json.Unmarshal(metadata, &metadataMap); err != nil {
-		return true
+		return "", false
 	}
 
 	var metadataNonce string
 	if err := json.Unmarshal(metadataMap[UniqueInsertMetadataKey], &metadataNonce); err != nil {
-		return true
+		return "", false
 	}
-	return metadataNonce != nonce
+	return metadataNonce, true
 }
 
 // UniqueInsertMetadataWithNonce returns metadata with nonce set under

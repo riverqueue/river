@@ -413,6 +413,57 @@ func ExerciseClient[TTx any](ctx context.Context, t *testing.T,
 		})
 	}
 
+	t.Run("InsertManyDuplicateUniqueKeysInBatch", func(t *testing.T) {
+		t.Parallel()
+
+		client, bundle := setup(t)
+
+		params := []river.InsertManyParams{
+			{Args: noOpArgs{Name: "same"}, InsertOpts: &river.InsertOpts{UniqueOpts: river.UniqueOpts{ByArgs: true}}},
+			{Args: noOpArgs{Name: "same"}, InsertOpts: &river.InsertOpts{UniqueOpts: river.UniqueOpts{ByArgs: true}}},
+		}
+
+		results, err := client.InsertMany(ctx, params)
+		jobs, getErr := bundle.exec.JobGetByKindMany(ctx, &riverdriver.JobGetByKindManyParams{
+			Kind:   []string{(noOpArgs{}).Kind()},
+			Schema: bundle.schema,
+		})
+		require.NoError(t, getErr)
+		if bundle.driver.DatabaseName() == riverdriver.DatabaseNameSQLite {
+			require.ErrorContains(t, err, "unique key appears more than once in batch")
+		} else {
+			require.ErrorContains(t, err, "ON CONFLICT DO UPDATE command cannot affect row a second time")
+		}
+		require.Empty(t, results)
+		require.Empty(t, jobs)
+	})
+
+	t.Run("InsertManyTxDuplicateUniqueKeysInBatch", func(t *testing.T) {
+		t.Parallel()
+
+		client, bundle := setup(t)
+		tx, execTx := beginTx(ctx, t, bundle)
+
+		results, err := client.InsertManyTx(ctx, tx, []river.InsertManyParams{
+			{Args: noOpArgs{Name: "same"}, InsertOpts: &river.InsertOpts{UniqueOpts: river.UniqueOpts{ByArgs: true}}},
+			{Args: noOpArgs{Name: "same"}, InsertOpts: &river.InsertOpts{UniqueOpts: river.UniqueOpts{ByArgs: true}}},
+		})
+		if bundle.driver.DatabaseName() == riverdriver.DatabaseNameSQLite {
+			require.ErrorContains(t, err, "unique key appears more than once in batch")
+		} else {
+			require.ErrorContains(t, err, "ON CONFLICT DO UPDATE command cannot affect row a second time")
+		}
+		require.Empty(t, results)
+		require.NoError(t, execTx.Rollback(ctx))
+
+		jobs, err := bundle.exec.JobGetByKindMany(ctx, &riverdriver.JobGetByKindManyParams{
+			Kind:   []string{(noOpArgs{}).Kind()},
+			Schema: bundle.schema,
+		})
+		require.NoError(t, err)
+		require.Empty(t, jobs)
+	})
+
 	// Keys containing gjson/sjson path syntax (and the empty key) are distinct
 	// keys when unique by all args, so args differing in their values aren't
 	// duplicates.

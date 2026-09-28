@@ -34,6 +34,34 @@ func TestUniqueInsertMetadataIsDuplicate(t *testing.T) {
 	})
 }
 
+func TestUniqueInsertMetadataNonce(t *testing.T) {
+	t.Parallel()
+
+	t.Run("InvalidMetadata", func(t *testing.T) {
+		t.Parallel()
+
+		nonce, ok := UniqueInsertMetadataNonce([]byte(`{`))
+		require.False(t, ok)
+		require.Empty(t, nonce)
+	})
+
+	t.Run("MatchingNonce", func(t *testing.T) {
+		t.Parallel()
+
+		nonce, ok := UniqueInsertMetadataNonce([]byte(`{"river:unique_nonce":"nonce"}`))
+		require.True(t, ok)
+		require.Equal(t, "nonce", nonce)
+	})
+
+	t.Run("MissingNonce", func(t *testing.T) {
+		t.Parallel()
+
+		nonce, ok := UniqueInsertMetadataNonce([]byte(`{"existing":123}`))
+		require.False(t, ok)
+		require.Empty(t, nonce)
+	})
+}
+
 func TestUniqueInsertMetadataWithNonce(t *testing.T) {
 	t.Parallel()
 

@@ -81,9 +81,17 @@ func exerciseJobInsert[TTx any](ctx context.Context, t *testing.T,
 			require.NoError(t, err)
 			require.Len(t, resultRows, len(insertParams))
 
+			uniqueNonces := make(map[string]bool, len(resultRows))
 			for i, result := range resultRows {
 				require.False(t, result.UniqueSkippedAsDuplicate)
 				job := result.Job
+				if bundle.driver.DatabaseName() == riverdriver.DatabaseNameSQLite {
+					nonce, ok := riverdriver.UniqueInsertMetadataNonce(job.Metadata)
+					require.True(t, ok)
+					require.Regexp(t, `^[0-9a-f]{16}$`, nonce)
+					require.False(t, uniqueNonces[nonce])
+					uniqueNonces[nonce] = true
+				}
 
 				// SQLite needs to set a special metadata key to be able to
 				// check for duplicates. Remove this for purposes of comparing
@@ -226,6 +234,79 @@ func exerciseJobInsert[TTx any](ctx context.Context, t *testing.T,
 			require.True(t, results2[0].UniqueSkippedAsDuplicate)
 
 			require.Equal(t, results1[0].Job.ID, results2[0].Job.ID)
+		})
+
+		t.Run("UniqueConflictWithinBatch", func(t *testing.T) {
+			t.Parallel()
+
+			driver, schema := driverWithSchema(ctx, t, nil)
+			exec := driver.GetExecutor()
+			job := &riverdriver.JobInsertFastParams{
+				EncodedArgs:  []byte(`{"encoded": "args"}`),
+				Kind:         "test_kind",
+				MaxAttempts:  rivercommon.MaxAttemptsDefault,
+				Priority:     rivercommon.PriorityDefault,
+				Queue:        rivercommon.QueueDefault,
+				State:        rivertype.JobStateAvailable,
+				Tags:         []string{},
+				UniqueKey:    []byte("unique-key-within-batch"),
+				UniqueStates: 0xff,
+			}
+
+			results, err := exec.JobInsertFastMany(ctx, &riverdriver.JobInsertFastManyParams{
+				Jobs:   []*riverdriver.JobInsertFastParams{job, job},
+				Schema: schema,
+			})
+			if driver.DatabaseName() == riverdriver.DatabaseNameSQLite {
+				require.ErrorContains(t, err, "unique key appears more than once in batch")
+			} else {
+				require.ErrorContains(t, err, "ON CONFLICT DO UPDATE command cannot affect row a second time")
+			}
+			require.Empty(t, results)
+
+			jobs, err := exec.JobGetByKindMany(ctx, &riverdriver.JobGetByKindManyParams{
+				Kind:   []string{job.Kind},
+				Schema: schema,
+			})
+			require.NoError(t, err)
+			require.Empty(t, jobs)
+		})
+
+		t.Run("UniqueKeyOutsideEnforcedState", func(t *testing.T) {
+			t.Parallel()
+
+			exec, _ := setup(ctx, t)
+			jobs := []*riverdriver.JobInsertFastParams{
+				{
+					EncodedArgs:  []byte(`{"encoded": "args"}`),
+					Kind:         "test_kind",
+					MaxAttempts:  rivercommon.MaxAttemptsDefault,
+					Priority:     rivercommon.PriorityDefault,
+					Queue:        rivercommon.QueueDefault,
+					State:        rivertype.JobStateAvailable,
+					Tags:         []string{},
+					UniqueKey:    []byte("unique-key-outside-state"),
+					UniqueStates: 0x01,
+				},
+				{
+					EncodedArgs:  []byte(`{"encoded": "args"}`),
+					Kind:         "test_kind",
+					MaxAttempts:  rivercommon.MaxAttemptsDefault,
+					Priority:     rivercommon.PriorityDefault,
+					Queue:        rivercommon.QueueDefault,
+					State:        rivertype.JobStateScheduled,
+					Tags:         []string{},
+					UniqueKey:    []byte("unique-key-outside-state"),
+					UniqueStates: 0x01,
+				},
+			}
+
+			results, err := exec.JobInsertFastMany(ctx, &riverdriver.JobInsertFastManyParams{Jobs: jobs})
+			require.NoError(t, err)
+			require.Len(t, results, 2)
+			require.False(t, results[0].UniqueSkippedAsDuplicate)
+			require.False(t, results[1].UniqueSkippedAsDuplicate)
+			require.NotEqual(t, results[0].Job.ID, results[1].Job.ID)
 		})
 
 		t.Run("BinaryNonUTF8UniqueKey", func(t *testing.T) {
