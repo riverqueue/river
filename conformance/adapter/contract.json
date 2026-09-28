@@ -233,7 +233,7 @@
       "type": "string"
     }
   },
-  "adapter_version": 16,
+  "adapter_version": 17,
   "errors": [
     {
       "code": -32700,
@@ -1445,6 +1445,61 @@
         "required": [
           "created_at",
           "scheduled_at"
+        ]
+      }
+    },
+    {
+      "capability": "notifications",
+      "description": "Read SQLite notification outbox rows with an ID greater than `after_id`, in ID order, exactly as stored: the `topic` text, the `payload` text, and SQLite's `typeof(payload)`. This compares the notification bytes implementations write, such as a cancellation's control payload. Only SQLite has an outbox; PostgreSQL adapters validate the params and report `unsupported`.",
+      "name": "raw_notifications",
+      "params": {
+        "additionalProperties": false,
+        "properties": {
+          "after_id": {
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "type": "object",
+        "required": [
+          "after_id"
+        ]
+      },
+      "result": {
+        "additionalProperties": false,
+        "properties": {
+          "notifications": {
+            "items": {
+              "additionalProperties": false,
+              "properties": {
+                "id": {
+                  "minimum": 1,
+                  "type": "integer"
+                },
+                "payload": {
+                  "type": "string"
+                },
+                "payload_type": {
+                  "type": "string"
+                },
+                "topic": {
+                  "type": "string"
+                }
+              },
+              "type": "object",
+              "required": [
+                "id",
+                "payload",
+                "payload_type",
+                "topic"
+              ]
+            },
+            "type": "array"
+          }
+        },
+        "type": "object",
+        "required": [
+          "notifications"
         ]
       }
     },

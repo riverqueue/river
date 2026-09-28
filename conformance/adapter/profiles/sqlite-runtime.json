@@ -55,6 +55,7 @@
     "raw_job_exact_json",
     "raw_job_row",
     "raw_job_timestamps",
+    "raw_notifications",
     "request_resign",
     "reset",
     "retry",

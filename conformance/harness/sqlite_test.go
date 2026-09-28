@@ -160,6 +160,7 @@ func TestMixedSQLiteRuntimeConformance(t *testing.T) {
 			verifyRemoteCancelNotification(t, controller, worker)
 			verifyCooperativeRemoteCancellation(t, controller, worker)
 		})
+		verifySQLiteCancelNotificationBytes(t, goAdapter, candidateAdapter)
 	})
 	t.Run("sqlite_runtime_remote_queue_subscription_events", func(t *testing.T) {
 		defer scenarios.record(t)
@@ -874,4 +875,102 @@ func verifySQLiteTransactions(t *testing.T, goAdapter, candidateAdapter *adapter
 		pair.observer.call(t, "list", map[string]any{"tags_all": []string{tag}}, &listed)
 		require.Empty(t, listed.Jobs)
 	}
+}
+
+// rawNotification is one SQLite outbox row as `raw_notifications` returns it.
+type rawNotification struct {
+	ID          int64  `json:"id"`
+	Payload     string `json:"payload"`
+	PayloadType string `json:"payload_type"`
+	Topic       string `json:"topic"`
+}
+
+// rawNotificationsAfter returns the outbox rows after afterID, read by
+// observer.
+func rawNotificationsAfter(t *testing.T, observer *adapter, afterID int64) []rawNotification {
+	t.Helper()
+
+	var result struct {
+		Notifications []rawNotification `json:"notifications"`
+	}
+	observer.call(t, "raw_notifications", map[string]any{"after_id": afterID}, &result)
+	return result.Notifications
+}
+
+// verifySQLiteCancelNotificationBytes has each engine cancel jobs and checks
+// the control notification it writes to the SQLite outbox against the bytes
+// Go writes: the topic, the payload's text and member order, and its storage
+// type. A cancellation publishes only when its transaction commits, both
+// engines see the other's rows, and cancelling a finalized job publishes
+// nothing. The insert notifications written along the way must match too.
+func verifySQLiteCancelNotificationBytes(t *testing.T, goAdapter, candidateAdapter *adapter) {
+	t.Helper()
+
+	lastID := func() int64 {
+		notifications := rawNotificationsAfter(t, goAdapter, 0)
+		if len(notifications) == 0 {
+			return 0
+		}
+		return notifications[len(notifications)-1].ID
+	}
+	requireCancelNotification := func(actor *adapter, after int64, job normalizedJob) int64 {
+		t.Helper()
+
+		expected := rawNotification{
+			Payload:     fmt.Sprintf(`{"action":"cancel","job_id":%d,"queue":%q}`, job.ID, job.Queue),
+			PayloadType: "text",
+			Topic:       "river_control",
+		}
+		for _, observer := range []*adapter{goAdapter, candidateAdapter} {
+			notifications := rawNotificationsAfter(t, observer, after)
+			require.Len(t, notifications, 1, "%s cancellation read by %s", actor.name, observer.name)
+			expected.ID = notifications[0].ID
+			require.Equal(t, expected, notifications[0], "%s cancellation read by %s", actor.name, observer.name)
+		}
+		return expected.ID
+	}
+
+	insertNotifications := map[string]rawNotification{}
+	for _, pair := range []struct {
+		actor, observer *adapter
+	}{
+		{actor: goAdapter, observer: candidateAdapter},
+		{actor: candidateAdapter, observer: goAdapter},
+	} {
+		pair.actor.call(t, "reset", map[string]any{}, nil)
+		var job normalizedJob
+		pair.actor.call(t, "insert", map[string]any{"message": "cancel notification bytes"}, &job)
+
+		after := lastID()
+		handle := "sqlite-cancel-notification-rollback-" + pair.actor.name
+		pair.actor.call(t, "tx_begin", map[string]any{"handle": handle}, nil)
+		pair.actor.call(t, "tx_cancel", map[string]any{"handle": handle, "id": job.ID}, nil)
+		require.Empty(t, rawNotificationsAfter(t, pair.observer, after), "uncommitted cancellation published")
+		pair.actor.call(t, "tx_rollback", map[string]any{"handle": handle}, nil)
+		require.Empty(t, rawNotificationsAfter(t, pair.observer, after), "rolled-back cancellation published")
+
+		handle = "sqlite-cancel-notification-commit-" + pair.actor.name
+		pair.actor.call(t, "tx_begin", map[string]any{"handle": handle}, nil)
+		pair.actor.call(t, "tx_cancel", map[string]any{"handle": handle, "id": job.ID}, nil)
+		pair.actor.call(t, "tx_commit", map[string]any{"handle": handle}, nil)
+		after = requireCancelNotification(pair.actor, after, job)
+
+		// The job is finalized now, so cancelling it again changes nothing
+		// and publishes nothing.
+		pair.actor.call(t, "cancel", map[string]any{"id": job.ID}, nil)
+		require.Empty(t, rawNotificationsAfter(t, pair.observer, after), "cancelling a finalized job published")
+
+		pair.actor.call(t, "insert", map[string]any{"message": "cancel notification bytes"}, &job)
+		inserted := rawNotificationsAfter(t, pair.observer, after)
+		require.Len(t, inserted, 1, "%s insertion", pair.actor.name)
+		insertNotifications[pair.actor.name] = inserted[0]
+		pair.actor.call(t, "cancel", map[string]any{"id": job.ID}, nil)
+		requireCancelNotification(pair.actor, inserted[0].ID, job)
+	}
+
+	// Insert notifications aren't the subject here, but the same outbox read
+	// compares their bytes too.
+	goInsert, candidateInsert := insertNotifications[goAdapter.name], insertNotifications[candidateAdapter.name]
+	goInsert.ID, candidateInsert.ID = 0, 0
+	require.Equal(t, goInsert, candidateInsert, "insert notifications differ")
 }

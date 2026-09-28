@@ -35,7 +35,7 @@ import (
 )
 
 const (
-	adapterVersion        = 16
+	adapterVersion        = 17
 	implementationVersion = "0.47.0"
 	protocolRevision      = 1
 )
@@ -75,6 +75,7 @@ var adapterMethods = []string{ //nolint:gochecknoglobals
 	"raw_job_exact_json",
 	"raw_job_row",
 	"raw_job_timestamps",
+	"raw_notifications",
 	"request_resign",
 	"reset",
 	"retry",
@@ -196,7 +197,7 @@ var sqliteRuntimeMethods = []string{ //nolint:gochecknoglobals
 	"barrier_create", "barrier_release", "cancel", "clock_set", "cron_next", "delete", "delete_many", "get",
 	"handshake", "insert", "insert_many", "leader", "list", "migrate",
 	"queue_add", "queue_get", "queue_list", "queue_pause", "queue_remove", "queue_resume",
-	"queue_update", "raw_finalize", "raw_insert_exact_json", "raw_insert_no_notify", "raw_job_exact_json", "raw_job_row", "raw_job_timestamps", "request_resign", "reset", "retry", "retry_delay",
+	"queue_update", "raw_finalize", "raw_insert_exact_json", "raw_insert_no_notify", "raw_job_exact_json", "raw_job_row", "raw_job_timestamps", "raw_notifications", "request_resign", "reset", "retry", "retry_delay",
 	"rng_seed", "runtime_stats", "start", "stop", "tx_begin", "tx_cancel", "tx_commit",
 	"tx_delete", "tx_delete_many", "tx_get", "tx_insert", "tx_insert_many",
 	"tx_list", "tx_queue_get", "tx_queue_list", "tx_queue_pause", "tx_queue_resume",
@@ -1822,6 +1823,18 @@ func (s *adapterState) handle(ctx context.Context, req *request) (any, error) {
 		}
 		return row, err
 
+	case "raw_notifications":
+		var params struct {
+			AfterID *int64 `json:"after_id"`
+		}
+		if err := decodeParams(req.Params, &params); err != nil {
+			return nil, err
+		}
+		if params.AfterID == nil || *params.AfterID < 0 {
+			return nil, invalidParams(errors.New("after_id must be a non-negative integer"))
+		}
+		return nil, unsupported(errors.New("PostgreSQL has no notification outbox"))
+
 	case "raw_job_timestamps":
 		id, err := requestID(req.Params)
 		if err != nil {
@@ -2670,6 +2683,43 @@ func (s *sqliteAdapterState) handle(ctx context.Context, req *request) (any, err
 			FROM river_job
 			WHERE id = ?`, id).Scan(&row.JSONB.Args, &row.JSONB.AttemptedBy, &row.JSONB.Errors, &row.JSONB.Metadata, &row.JSONB.Tags)
 		return row, err
+
+	case "raw_notifications":
+		var params struct {
+			AfterID *int64 `json:"after_id"`
+		}
+		if err := decodeParams(req.Params, &params); err != nil {
+			return nil, err
+		}
+		if params.AfterID == nil || *params.AfterID < 0 {
+			return nil, invalidParams(errors.New("after_id must be a non-negative integer"))
+		}
+		rows, err := s.pool.QueryContext(ctx, `
+			SELECT id, payload, typeof(payload), topic
+			FROM river_notification
+			WHERE id > ?
+			ORDER BY id`, *params.AfterID)
+		if err != nil {
+			return nil, err
+		}
+		defer rows.Close()
+		notifications := []map[string]any{}
+		for rows.Next() {
+			var (
+				id                          int64
+				payload, payloadType, topic string
+			)
+			if err := rows.Scan(&id, &payload, &payloadType, &topic); err != nil {
+				return nil, err
+			}
+			notifications = append(notifications, map[string]any{
+				"id": id, "payload": payload, "payload_type": payloadType, "topic": topic,
+			})
+		}
+		if err := rows.Err(); err != nil {
+			return nil, err
+		}
+		return map[string]any{"notifications": notifications}, nil
 
 	case "raw_job_timestamps":
 		id, err := requestID(req.Params)

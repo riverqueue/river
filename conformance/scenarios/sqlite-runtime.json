@@ -20,7 +20,7 @@
     { "evidence": [{ "path": "conformance/harness/sqlite_test.go", "symbol": "verifySQLitePollOnly" }], "name": "sqlite_runtime_poll_only_recovery", "tier": "runtime" },
     { "evidence": [{ "path": "conformance/harness/sqlite_test.go", "symbol": "verifyProfileHandshakes" }], "name": "sqlite_runtime_profile_handshake", "tier": "codec" },
     { "evidence": [{ "path": "conformance/harness/sqlite_test.go", "symbol": "verifySQLiteQueues" }], "name": "sqlite_runtime_queue_crud_reconfigure_pause", "tier": "mixed" },
-    { "evidence": [{ "path": "conformance/harness/coordination_scenarios_test.go", "symbol": "verifyRemoteCancelNotification" }], "name": "sqlite_runtime_remote_cancellation", "tier": "mixed" },
+    { "evidence": [{ "path": "conformance/harness/coordination_scenarios_test.go", "symbol": "verifyRemoteCancelNotification" }, { "path": "conformance/harness/sqlite_test.go", "symbol": "verifySQLiteCancelNotificationBytes" }], "name": "sqlite_runtime_remote_cancellation", "tier": "mixed" },
     { "evidence": [{ "path": "conformance/harness/coordination_scenarios_test.go", "symbol": "verifyRemoteQueueSubscriptionEvents" }], "name": "sqlite_runtime_remote_queue_subscription_events", "tier": "mixed" },
     { "evidence": [{ "path": "conformance/harness/resumable_test.go", "symbol": "verifyResumableInteroperability" }], "name": "sqlite_runtime_resumable_cross_engine_cursor", "tier": "mixed" },
     { "evidence": [{ "path": "conformance/harness/resumable_test.go", "symbol": "verifyResumableValidation" }], "name": "sqlite_runtime_resumable_validation", "tier": "runtime" },

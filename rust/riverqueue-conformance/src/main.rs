@@ -38,7 +38,7 @@ use sqlx::{
 };
 use tokio::sync::watch;
 
-const ADAPTER_VERSION: u32 = 16;
+const ADAPTER_VERSION: u32 = 17;
 const PROTOCOL_REVISION: u32 = 1;
 
 const ADAPTER_METHODS: &[&str] = &[
@@ -76,6 +76,7 @@ const ADAPTER_METHODS: &[&str] = &[
     "raw_job_exact_json",
     "raw_job_row",
     "raw_job_timestamps",
+    "raw_notifications",
     "request_resign",
     "reset",
     "retry",
@@ -228,6 +229,7 @@ const SQLITE_RUNTIME_METHODS: &[&str] = &[
     "raw_job_exact_json",
     "raw_job_row",
     "raw_job_timestamps",
+    "raw_notifications",
     "request_resign",
     "reset",
     "retry",
@@ -1934,6 +1936,12 @@ impl Adapter {
                 .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "job not found"))?;
                 Ok(serde_json::to_value(row)?)
             }
+            "raw_notifications" => {
+                if required_i64(&params, "after_id")? < 0 {
+                    return Err("after_id must be a non-negative integer".into());
+                }
+                Err(AdapterError::unsupported("PostgreSQL has no notification outbox").into())
+            }
             "raw_job_timestamps" => {
                 let id = required_i64(&params, "id")?;
                 let (created_at, scheduled_at) = sqlx::query_as::<_, (String, String)>(
@@ -2712,6 +2720,30 @@ impl SqliteAdapter {
                 .fetch_one(&self.pool)
                 .await?;
                 Ok(json!({"created_at": created_at, "scheduled_at": scheduled_at}))
+            }
+            "raw_notifications" => {
+                let after_id = required_i64(&params, "after_id")?;
+                if after_id < 0 {
+                    return Err("after_id must be a non-negative integer".into());
+                }
+                let rows = sqlx::query_as::<_, (i64, String, String, String)>(
+                    "SELECT id, payload, typeof(payload), topic FROM river_notification \
+                     WHERE id > ? ORDER BY id",
+                )
+                .bind(after_id)
+                .fetch_all(&self.pool)
+                .await?;
+                Ok(json!({
+                    "notifications": rows
+                        .into_iter()
+                        .map(|(id, payload, payload_type, topic)| json!({
+                            "id": id,
+                            "payload": payload,
+                            "payload_type": payload_type,
+                            "topic": topic,
+                        }))
+                        .collect::<Vec<_>>(),
+                }))
             }
             "raw_job_exact_json" => {
                 let row = self
