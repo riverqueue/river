@@ -112,6 +112,15 @@ const PENDING_CANCELLATION_RETENTION: Duration = Duration::from_mins(1);
 const PARALLEL_FETCH_MINIMUM: usize = 1_000;
 const QUEUE_CONFIG_POLL_INTERVAL: Duration = Duration::from_secs(2);
 const QUEUE_HEARTBEAT_INTERVAL: Duration = Duration::from_secs(30);
+/// How often producers report to an extension's session, like Go's
+/// `ProducerReportInterval` default.
+const PRODUCER_REPORT_INTERVAL_DEFAULT: Duration = Duration::from_secs(30);
+/// How long a producer's report may run, like Go's
+/// `reportProducerStatusOnce` timeout.
+const PRODUCER_REPORT_TIMEOUT: Duration = Duration::from_secs(10);
+/// Peers that haven't reported for this long are stale, like Go's
+/// `StaleProducerRetentionPeriod`.
+const PRODUCER_STALE_RETENTION: Duration = Duration::from_mins(5);
 
 #[allow(
     clippy::struct_excessive_bools,
@@ -133,6 +142,9 @@ pub(crate) struct ClientInner {
     /// producer channel so that insert wakeups can't crowd out a resignation
     /// request.
     pub(crate) leadership_wakeups: broadcast::Sender<LeadershipWakeup>,
+    /// Queues whose producers are running or draining, which keep their
+    /// names reserved until they stop.
+    live_queues: watch::Sender<std::collections::HashSet<String>>,
     pub(crate) maintenance: MaintenanceConfig,
     /// Notification listener starts that panic before doing anything, so
     /// tests can exercise the supervisor's restart path.
@@ -143,6 +155,7 @@ pub(crate) struct ClientInner {
     pending_cancellations: Mutex<HashMap<i64, std::time::Instant>>,
     pub(crate) pilot: Arc<dyn Pilot>,
     poll_only: bool,
+    producer_report_interval: Duration,
     queue_changes: watch::Sender<u64>,
     queue_notifications: broadcast::Sender<RuntimeNotification>,
     queues: RwLock<HashMap<String, QueueConfig>>,
@@ -323,6 +336,7 @@ impl Client {
             periodic_jobs: Vec::new(),
             pilot: Arc::new(NoopPilot),
             poll_only: false,
+            producer_report_interval: PRODUCER_REPORT_INTERVAL_DEFAULT,
             queues: HashMap::new(),
             retry_policy: Arc::new(DefaultRetryPolicy::default()),
             allow_legacy_job_kinds: false,

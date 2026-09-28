@@ -3,9 +3,11 @@
 //! Everything here is re-exported from [`crate::__private`] and shares its
 //! stability rules: it changes without notice between any two versions.
 
-use std::{fmt, sync::Arc};
+use std::{fmt, sync::Arc, time::Duration};
 
 use async_trait::async_trait;
+use chrono::{DateTime, Utc};
+use serde_json::{Map, Value};
 #[cfg(feature = "postgres")]
 use sqlx::Postgres;
 #[cfg(feature = "sqlite")]
@@ -140,13 +142,18 @@ impl fmt::Debug for PilotTransaction {
 
 /// A queue producer's configuration, as an extension's
 /// [`PilotProducer`] sees it.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 #[non_exhaustive]
 pub struct ProducerConfiguration {
     /// Most jobs this client runs from the queue at once.
     pub max_workers: usize,
     /// The queue's persisted record, including its metadata and pause state.
     pub queue: Queue,
+    /// The extension's settings for this queue, as configured with
+    /// [`QueueConfigExt::with_extension_setting`](crate::__private::QueueConfigExt::with_extension_setting)
+    /// and accepted by
+    /// [`Pilot::validate_queue_settings`](crate::__private::Pilot::validate_queue_settings).
+    pub settings: Map<String, Value>,
 }
 
 /// Inputs to [`Pilot::start_producer`](crate::__private::Pilot::start_producer).
@@ -159,6 +166,26 @@ pub struct ProducerStartContext {
     pub configuration: ProducerConfiguration,
     /// The client's database.
     pub database: PilotDatabase,
+}
+
+/// Inputs to one [`PilotProducer::keep_alive`].
+#[derive(Clone, Debug)]
+#[non_exhaustive]
+pub struct ProducerKeepAliveContext {
+    /// Peers that haven't reported since this time are stale, like River
+    /// Go's `StaleUpdatedAtHorizon`.
+    pub stale_before: DateTime<Utc>,
+}
+
+/// Inputs to one [`PilotProducer::shutdown`] attempt.
+#[derive(Clone, Debug)]
+#[non_exhaustive]
+pub struct ProducerShutdownContext {
+    /// One-based attempt number, up to four.
+    pub attempt: u32,
+    /// How long River waits for this attempt before dropping it and trying
+    /// again with a longer deadline.
+    pub timeout: Duration,
 }
 
 /// Inputs to one [`PilotProducer::claim`].
@@ -243,6 +270,23 @@ impl fmt::Debug for ProducerClaimNext<'_> {
 /// - [`job_finished`](Self::job_finished) may run at any time, including while
 ///   a claim is in flight, and runs once for every row a claim returned that
 ///   River accepted.
+/// - [`keep_alive`](Self::keep_alive) runs at River's producer report
+///   interval, never overlapping another report, and may overlap a claim. It
+///   keeps running while the producer drains after it stops claiming.
+/// - [`shutdown`](Self::shutdown) runs once the last attempt has left the
+///   producer and reporting has stopped. No other call follows it.
+///
+/// A producer stops claiming when the client stops or the queue is removed.
+/// It then drains its running attempts and reports until they finish, so
+/// peers keep counting them, before it shuts the session down.
+///
+/// A panic in [`claim`](Self::claim),
+/// [`configuration_changed`](Self::configuration_changed), or
+/// [`job_finished`](Self::job_finished) stops the client like a broken claim:
+/// the producer cancels and drains its attempts, still calls `job_finished`
+/// for each, stops reporting, and shuts the session down. A panic in
+/// [`keep_alive`](Self::keep_alive) or [`shutdown`](Self::shutdown) is
+/// logged and handled like an error from it.
 #[async_trait]
 pub trait PilotProducer: Send + Sync + 'static {
     /// Whether River claims through [`PilotProducer::claim`]. When `false`,
@@ -289,7 +333,10 @@ pub trait PilotProducer: Send + Sync + 'static {
     /// Replaces the session's configuration, between claims.
     ///
     /// River calls it when the queue's persisted record changes, such as its
-    /// metadata or pause state. It must not block or perform I/O.
+    /// metadata or pause state, and when this client's configuration of the
+    /// queue changes through
+    /// [`LocalQueues::update`](crate::LocalQueues::update). It must not block
+    /// or perform I/O.
     fn configuration_changed(&self, _configuration: &ProducerConfiguration) {}
 
     /// Reports that a claimed job's attempt left the producer, like River Go's
@@ -302,6 +349,37 @@ pub trait PilotProducer: Send + Sync + 'static {
     /// handed off. It doesn't wait for the result to be persisted. It must not
     /// block or perform I/O.
     fn job_finished(&self, _job: &JobRow) {}
+
+    /// Reports that the producer is alive, like River Go's pilot
+    /// `ProducerKeepAlive`.
+    ///
+    /// River calls it after a random delay of up to a second, then at the
+    /// client's producer report interval, 30 seconds by default, including
+    /// while the producer drains. River drops a call that runs longer than
+    /// ten seconds.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the report failed. River logs it and reports
+    /// again at the next interval.
+    async fn keep_alive(&self, _context: ProducerKeepAliveContext) -> Result<(), PilotError> {
+        Ok(())
+    }
+
+    /// Releases the session's shared state once the producer has stopped,
+    /// like River Go's pilot `ProducerShutdown`.
+    ///
+    /// River makes up to four attempts, one at a time, with deadlines of
+    /// 100 milliseconds, 500 milliseconds, 2.5 seconds, and 12.5 seconds,
+    /// dropping an attempt when its deadline passes, and logs the failure
+    /// when every attempt fails.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when this attempt failed and another may succeed.
+    async fn shutdown(&self, _context: ProducerShutdownContext) -> Result<(), PilotError> {
+        Ok(())
+    }
 }
 
 /// Checks the rows a session claimed before River works them.

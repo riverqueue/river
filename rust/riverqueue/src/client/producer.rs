@@ -2,7 +2,9 @@
 
 use std::collections::HashSet;
 
-use crate::pilot::SharedProducer;
+use futures_util::FutureExt as _;
+
+use crate::pilot::{ProducerConfiguration, SharedProducer};
 
 #[allow(clippy::wildcard_imports)]
 use super::*;
@@ -10,10 +12,11 @@ use super::*;
 /// Runs one producer per configured queue and reconciles them with runtime
 /// queue changes.
 ///
-/// A reconfigured or removed queue stops fetching at once, but its
-/// replacement starts only after the old producer's jobs have finished, so a
-/// queue never runs more than `max_workers` jobs. A producer that stops
-/// unexpectedly (for example after a panic) is restarted with backoff.
+/// A producer applies a changed configuration while it runs. A removed
+/// queue stops claiming at once, drains its running jobs, and shuts down its
+/// extension session before its name can be added again, so a queue never
+/// runs under two producers. A producer that stops unexpectedly (for example
+/// after a panic) is restarted with backoff.
 ///
 /// `queues_ready` is sent once every queue configured at startup has created
 /// or refreshed its `river_queue` row, as Go's `Client.Start` does before
@@ -77,8 +80,8 @@ pub(super) async fn run_dynamic_queues(
         producers.report_startup(&mut startup);
     }
 
-    for (_, queue_cancel, _) in producers.active.values() {
-        queue_cancel.cancel();
+    for active in producers.active.values() {
+        active.cancel.cancel();
     }
     if producers.fatal.is_some() {
         producers.work_cancel.cancel();
@@ -86,15 +89,24 @@ pub(super) async fn run_dynamic_queues(
     while let Some(joined) = producers.tasks.join_next_with_id().await {
         producers.finish(joined);
     }
+    producers.inner.live_queues.send_replace(HashSet::new());
     producers.fatal.map_or(Ok(()), Err)
 }
 
 type ProducerOutcome = (String, u64, CancellationToken, Result<(), Error>);
 
+/// A queue's current producer generation.
+struct ActiveProducer {
+    cancel: CancellationToken,
+    /// The configuration the producer applies while it runs.
+    config: watch::Sender<QueueConfig>,
+    generation: u64,
+}
+
 struct Producers {
-    active: HashMap<String, (QueueConfig, CancellationToken, u64)>,
+    active: HashMap<String, ActiveProducer>,
     completion_sender: mpsc::Sender<CompletionUpdate>,
-    /// Producers stopped by reconfiguration whose jobs are still finishing.
+    /// Producers of removed queues whose jobs are still finishing.
     draining: HashMap<String, u64>,
     /// The first producer failure that stops the client.
     fatal: Option<Error>,
@@ -152,7 +164,7 @@ impl Producers {
         if self
             .active
             .get(&name)
-            .is_some_and(|(_, _, active_generation)| *active_generation == generation)
+            .is_some_and(|active| active.generation == generation)
         {
             self.active.remove(&name);
             if let Some(failure) = failure
@@ -168,6 +180,26 @@ impl Producers {
                 );
             }
         }
+        self.publish_live();
+    }
+
+    /// Publishes the queues whose producers are running or draining, which
+    /// [`LocalQueues`] uses to keep a removed queue's name reserved until its
+    /// producer stops.
+    fn publish_live(&self) {
+        let live = self
+            .active
+            .keys()
+            .chain(self.draining.keys())
+            .cloned()
+            .collect::<HashSet<_>>();
+        self.inner.live_queues.send_if_modified(|current| {
+            if *current == live {
+                return false;
+            }
+            *current = live;
+            true
+        });
     }
 
     fn reconcile(&mut self) {
@@ -180,22 +212,32 @@ impl Producers {
             .read()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .clone();
-        let stale = self
+        let removed = self
             .active
-            .iter()
-            .filter(|(name, (running_config, _, _))| configured.get(*name) != Some(running_config))
-            .map(|(name, _)| name.clone())
+            .keys()
+            .filter(|name| !configured.contains_key(*name))
+            .cloned()
             .collect::<Vec<_>>();
-        for name in stale {
-            if let Some((_, queue_cancel, generation)) = self.active.remove(&name) {
-                queue_cancel.cancel();
+        for name in removed {
+            if let Some(active) = self.active.remove(&name) {
+                active.cancel.cancel();
                 self.restarts.remove(&name);
-                self.draining.insert(name, generation);
+                self.draining.insert(name, active.generation);
             }
         }
 
         for (name, config) in configured {
-            if self.active.contains_key(&name) || self.draining.contains_key(&name) {
+            if let Some(active) = self.active.get(&name) {
+                active.config.send_if_modified(|running| {
+                    if *running == config {
+                        return false;
+                    }
+                    *running = config;
+                    true
+                });
+                continue;
+            }
+            if self.draining.contains_key(&name) {
                 continue;
             }
             let start_delay = self
@@ -205,9 +247,14 @@ impl Producers {
             let queue_cancel = self.fetch_cancel.child_token();
             self.next_generation = self.next_generation.wrapping_add(1);
             let generation = self.next_generation;
+            let (config_sender, config_receiver) = watch::channel(config);
             self.active.insert(
                 name.clone(),
-                (config.clone(), queue_cancel.clone(), generation),
+                ActiveProducer {
+                    cancel: queue_cancel.clone(),
+                    config: config_sender,
+                    generation,
+                },
             );
             let inner = Arc::clone(&self.inner);
             let completion_sender = self.completion_sender.clone();
@@ -231,7 +278,7 @@ impl Producers {
                     inner,
                     completion_sender,
                     task_name.clone(),
-                    config,
+                    config_receiver,
                     task_cancel.clone(),
                     work_cancel,
                     notifications,
@@ -242,6 +289,7 @@ impl Producers {
             });
             self.task_queues.insert(handle.id(), (name, generation));
         }
+        self.publish_live();
     }
 
     /// Reports startup readiness once every startup queue that is still
@@ -267,6 +315,15 @@ struct Generation {
     session: Option<SharedProducer>,
 }
 
+/// The configuration an extension's session sees.
+fn producer_configuration(config: &QueueConfig, queue: &crate::Queue) -> ProducerConfiguration {
+    ProducerConfiguration {
+        max_workers: config.max_workers,
+        queue: queue.clone(),
+        settings: config.extension_settings.clone(),
+    }
+}
+
 /// Creates or refreshes the queue's record and starts the extension's
 /// session for this generation.
 async fn start_generation(
@@ -279,10 +336,7 @@ async fn start_generation(
         .pilot
         .start_producer(crate::__private::ProducerStartContext {
             client_id: inner.id.clone(),
-            configuration: crate::__private::ProducerConfiguration {
-                max_workers: config.max_workers,
-                queue: queue_row.clone(),
-            },
+            configuration: producer_configuration(config, &queue_row),
             database: inner.pilot_database(),
         })
         .await
@@ -296,9 +350,28 @@ async fn start_generation(
     })
 }
 
+/// Runs one of an extension session's synchronous callbacks, turning a panic
+/// into the error that stops the client, so the producer still drains and
+/// shuts the session down in order.
+fn session_callback(callback_name: &str, callback: impl FnOnce()) -> Result<(), Error> {
+    std::panic::catch_unwind(std::panic::AssertUnwindSafe(callback)).map_err(|panic| {
+        Error::Extension {
+            phase: crate::ExtensionPhase::AddOnProducer,
+            source: format!(
+                "{callback_name} panicked: {}",
+                crate::error::panic_message(&panic)
+            )
+            .into(),
+        }
+    })
+}
+
 /// The attempts a producer has running, and the claimed rows it reports to
 /// the extension's session as each attempt exits.
 struct Attempts {
+    /// The first panic of the session's `job_finished`, which stops the
+    /// client.
+    failure: Option<Error>,
     rows: HashMap<tokio::task::Id, JobRow>,
     session: Option<SharedProducer>,
     tasks: JoinSet<()>,
@@ -324,8 +397,10 @@ impl Attempts {
         };
         if let Some(row) = self.rows.remove(&task_id)
             && let Some(session) = &self.session
+            && let Err(failure) = session_callback("job_finished", || session.job_finished(&row))
         {
-            session.job_finished(&row);
+            error!(error = %crate::error::Chain(&failure), "River extension producer callback panicked; stopping the client");
+            self.failure.get_or_insert(failure);
         }
     }
 
@@ -337,12 +412,120 @@ impl Attempts {
     }
 }
 
+/// Keeps a producer's queue record and extension session current until
+/// `stop`, which the producer cancels only after its last attempt exits, so
+/// reports continue while it drains.
+///
+/// Like Go's producer, the two reports run independently, so a slow one
+/// never delays the other: the queue record is refreshed after up to a
+/// second of jitter and then every [`QUEUE_HEARTBEAT_INTERVAL`], and the
+/// session reports after its own jitter and then every producer report
+/// interval. Each report runs one at a time and is dropped after
+/// [`PRODUCER_REPORT_TIMEOUT`].
+async fn run_reports(
+    inner: Arc<ClientInner>,
+    queue: String,
+    session: Option<SharedProducer>,
+    stop: CancellationToken,
+) {
+    let jitter = || crate::maintenance::random_duration(Duration::ZERO, Duration::from_secs(1));
+    let heartbeat = async {
+        let mut ticks = tokio::time::interval_at(
+            tokio::time::Instant::now() + jitter() + QUEUE_HEARTBEAT_INTERVAL,
+            QUEUE_HEARTBEAT_INTERVAL,
+        );
+        ticks.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+        loop {
+            ticks.tick().await;
+            let touched = tokio::time::timeout(
+                PRODUCER_REPORT_TIMEOUT,
+                crate::storage::touch_queue(&inner, &queue),
+            )
+            .await;
+            match touched {
+                Ok(Ok(_)) => {}
+                Ok(Err(queue_error)) => {
+                    error!(queue = %queue, error = %crate::error::Chain(&queue_error), "River queue heartbeat failed; retrying");
+                }
+                Err(_) => {
+                    error!(queue = %queue, timeout = ?PRODUCER_REPORT_TIMEOUT, "River queue heartbeat timed out; retrying");
+                }
+            }
+        }
+    };
+    let keep_alive = async {
+        let Some(session) = &session else {
+            return std::future::pending().await;
+        };
+        let mut ticks = tokio::time::interval_at(
+            tokio::time::Instant::now() + jitter(),
+            inner.producer_report_interval,
+        );
+        ticks.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+        loop {
+            ticks.tick().await;
+            let stale_before = Utc::now()
+                - chrono::Duration::from_std(PRODUCER_STALE_RETENTION)
+                    .unwrap_or(chrono::Duration::MAX);
+            let report = std::panic::AssertUnwindSafe(
+                session.keep_alive(crate::__private::ProducerKeepAliveContext { stale_before }),
+            )
+            .catch_unwind();
+            match tokio::time::timeout(PRODUCER_REPORT_TIMEOUT, report).await {
+                Ok(Ok(Ok(()))) => {}
+                Ok(Ok(Err(report_error))) => {
+                    error!(queue = %queue, error = %crate::error::Chain(&*report_error), "River extension producer report failed; retrying at the next interval");
+                }
+                Ok(Err(panic)) => {
+                    error!(queue = %queue, panic = crate::error::panic_message(&panic), "River extension producer report panicked; retrying at the next interval");
+                }
+                Err(_) => {
+                    error!(queue = %queue, timeout = ?PRODUCER_REPORT_TIMEOUT, "River extension producer report timed out; retrying at the next interval");
+                }
+            }
+        }
+    };
+    tokio::select! {
+        () = stop.cancelled() => {}
+        () = heartbeat => {}
+        () = keep_alive => {}
+    }
+}
+
+/// Shuts an extension's session down after its producer stopped, like Go's
+/// `finalizeShutdown`: up to four attempts, one at a time, with deadlines of
+/// 100 milliseconds growing fivefold.
+async fn shut_down_session(queue: &str, session: &dyn crate::__private::PilotProducer) {
+    const ATTEMPTS: u32 = 4;
+    const BASE_TIMEOUT: Duration = Duration::from_millis(100);
+
+    let mut timeout = BASE_TIMEOUT;
+    for attempt in 1..=ATTEMPTS {
+        let context = crate::__private::ProducerShutdownContext { attempt, timeout };
+        let shutdown = std::panic::AssertUnwindSafe(session.shutdown(context)).catch_unwind();
+        match tokio::time::timeout(timeout, shutdown).await {
+            Ok(Ok(Ok(()))) => return,
+            Ok(Ok(Err(shutdown_error))) => {
+                error!(queue = %queue, attempt, ?timeout, error = %crate::error::Chain(&*shutdown_error), "River extension producer shutdown failed");
+            }
+            Ok(Err(panic)) => {
+                error!(queue = %queue, attempt, ?timeout, panic = crate::error::panic_message(&panic), "River extension producer shutdown panicked");
+            }
+            Err(_) => {
+                error!(queue = %queue, attempt, ?timeout, "River extension producer shutdown timed out");
+            }
+        }
+        timeout *= 5;
+    }
+    warn!(queue = %queue, "River extension producer failed to shut down cleanly after all attempts");
+}
+
 #[allow(clippy::too_many_arguments, clippy::too_many_lines)]
 pub(super) async fn run_queue(
     inner: Arc<ClientInner>,
     completion_sender: mpsc::Sender<CompletionUpdate>,
     queue: String,
-    config: QueueConfig,
+    mut config_changes: watch::Receiver<QueueConfig>,
     fetch_cancel: CancellationToken,
     work_cancel: CancellationToken,
     mut notifications: broadcast::Receiver<RuntimeNotification>,
@@ -354,6 +537,7 @@ pub(super) async fn run_queue(
     const START_FAST_RETRY_INTERVAL: Duration = Duration::from_millis(10);
     const START_FAST_RETRY_WINDOW: Duration = Duration::from_secs(10);
 
+    let mut config = config_changes.borrow_and_update().clone();
     let start_time = tokio::time::Instant::now();
     let mut start_attempt = 0;
     let Generation {
@@ -390,11 +574,20 @@ pub(super) async fn run_queue(
         }
     };
     let _ = registered.send(queue.clone());
+    // Reports outlive claiming: they stop only once the last attempt exits.
+    let reports_stop = CancellationToken::new();
+    let reports = AbortOnDrop(tokio::spawn(run_reports(
+        Arc::clone(&inner),
+        queue.clone(),
+        session.clone(),
+        reports_stop.clone(),
+    )));
     let mut paused = queue_row.paused_at.is_some();
     let claims_through_session = session
         .as_ref()
         .is_some_and(|session| session.intercepts_claim());
     let mut attempts = Attempts {
+        failure: None,
         rows: HashMap::new(),
         session: session.clone(),
         tasks: JoinSet::new(),
@@ -403,25 +596,37 @@ pub(super) async fn run_queue(
     // cooldown from now instead would panic for a cooldown longer than the
     // monotonic clock's age, as on a freshly booted macOS host.
     let mut last_fetch: Option<tokio::time::Instant> = None;
-    let mut heartbeat = tokio::time::interval(QUEUE_HEARTBEAT_INTERVAL);
     let mut poll = tokio::time::interval(config.fetch_poll_interval);
     let mut queue_config_poll = tokio::time::interval(QUEUE_CONFIG_POLL_INTERVAL);
-    heartbeat.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     poll.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     queue_config_poll.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
 
     let outcome = loop {
+        if let Some(failure) = attempts.failure.take() {
+            break Err(failure);
+        }
         let (mut should_fetch, refresh_queue_state) = tokio::select! {
             () = fetch_cancel.cancelled() => break Ok(()),
-            _ = heartbeat.tick() => {
-                match unless_cancelled(&fetch_cancel, crate::storage::touch_queue(&inner, &queue)).await {
-                    None => break Ok(()),
-                    Some(Err(queue_error)) => {
-                        error!(error = %crate::error::Chain(&queue_error), "River queue heartbeat failed; retrying");
-                    }
-                    Some(Ok(_)) => {}
+            changed = config_changes.changed() => {
+                if changed.is_err() {
+                    break Ok(());
                 }
-                (false, false)
+                let updated = config_changes.borrow_and_update().clone();
+                if updated.fetch_poll_interval != config.fetch_poll_interval {
+                    poll = tokio::time::interval(updated.fetch_poll_interval);
+                    poll.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+                }
+                config = updated;
+                if let Some(session) = &session {
+                    let configuration = producer_configuration(&config, &queue_row);
+                    if let Err(failure) = session_callback("configuration_changed", || {
+                        session.configuration_changed(&configuration);
+                    }) {
+                        break Err(failure);
+                    }
+                }
+                // More capacity may allow a claim now.
+                (true, false)
             },
             _ = queue_config_poll.tick() => (false, true),
             _ = poll.tick() => (true, false),
@@ -455,10 +660,12 @@ pub(super) async fn run_queue(
                         || loaded.paused_at.is_some() != queue_row.paused_at.is_some();
                     queue_row = loaded;
                     if changed && let Some(session) = &session {
-                        session.configuration_changed(&crate::__private::ProducerConfiguration {
-                            max_workers: config.max_workers,
-                            queue: queue_row.clone(),
-                        });
+                        let configuration = producer_configuration(&config, &queue_row);
+                        if let Err(failure) = session_callback("configuration_changed", || {
+                            session.configuration_changed(&configuration);
+                        }) {
+                            break Err(failure);
+                        }
                     }
                     let next_paused = queue_row.paused_at.is_some();
                     if next_paused != paused {
@@ -499,6 +706,8 @@ pub(super) async fn run_queue(
         if fetch_cancel.is_cancelled() {
             break Ok(());
         }
+        // Lowering `max_workers` stops claims until enough running jobs
+        // finish; it never cancels them.
         let available = config.max_workers.saturating_sub(attempts.len());
         if available == 0 {
             continue;
@@ -584,6 +793,18 @@ pub(super) async fn run_queue(
     while let Some(joined) = attempts.tasks.join_next_with_id().await {
         attempts.exited(joined.map(|(task_id, ())| task_id), true);
     }
+    let outcome = match (outcome, attempts.failure.take()) {
+        (Ok(()), Some(failure)) => Err(failure),
+        (outcome, _) => outcome,
+    };
+    reports_stop.cancel();
+    let mut reports = reports;
+    if let Err(join_error) = (&mut reports.0).await {
+        error!(queue = %queue, error = %join_error, "River producer reports failed");
+    }
+    if let Some(session) = &session {
+        shut_down_session(&queue, session.as_ref()).await;
+    }
     outcome
 }
 
@@ -605,18 +826,25 @@ async fn claim_through_session(
 ) -> Result<FetchedJobs, SessionClaimError> {
     let fetch_started = (!inner.hooks.is_empty()).then(std::time::Instant::now);
     let database = inner.pilot_database();
-    let claimed = session
-        .claim(
-            crate::__private::ProducerClaimContext {
-                client_id: &inner.id,
-                claim_stop,
-                database: &database,
-                limit,
-                queue,
-            },
-            crate::__private::ProducerClaimNext::new(inner, queue, limit),
-        )
+    let claimed = session.claim(
+        crate::__private::ProducerClaimContext {
+            client_id: &inner.id,
+            claim_stop,
+            database: &database,
+            limit,
+            queue,
+        },
+        crate::__private::ProducerClaimNext::new(inner, queue, limit),
+    );
+    let claimed = std::panic::AssertUnwindSafe(claimed)
+        .catch_unwind()
         .await
+        .map_err(|panic| {
+            SessionClaimError::Protocol(Error::Extension {
+                phase: crate::ExtensionPhase::AddOnFetchClaim,
+                source: format!("claim panicked: {}", crate::error::panic_message(&panic)).into(),
+            })
+        })?
         .map_err(|source| {
             SessionClaimError::Claim(Error::Extension {
                 phase: crate::ExtensionPhase::AddOnFetchClaim,

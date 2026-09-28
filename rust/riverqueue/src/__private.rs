@@ -25,7 +25,7 @@ pub use crate::client::{ExtensionClient, WeakClient};
 pub use crate::database::erased::{Database, ErasedExecutor, ErasedTransaction};
 pub use crate::pilot::{
     PilotDatabase, PilotProducer, PilotTransaction, ProducerClaimContext, ProducerClaimNext,
-    ProducerConfiguration, ProducerStartContext,
+    ProducerConfiguration, ProducerKeepAliveContext, ProducerShutdownContext, ProducerStartContext,
 };
 
 /// Insertion options reserved for River's own companion crates.
@@ -58,6 +58,33 @@ impl InsertOptsExt for crate::InsertOpts {
     }
 }
 
+/// Queue configuration reserved for River's own companion crates.
+///
+/// Extension settings travel with a queue's configuration, through
+/// `ClientBuilder::queue` or [`LocalQueues`](crate::LocalQueues), to the
+/// extension's [`Pilot::validate_queue_settings`] and then its producer
+/// session as [`ProducerConfiguration::settings`]. River doesn't persist
+/// them.
+pub trait QueueConfigExt: Sized {
+    /// Returns the extension settings on this configuration.
+    fn extension_settings(&self) -> &Map<String, Value>;
+
+    /// Sets the extension setting `key`, replacing any earlier value.
+    #[must_use]
+    fn with_extension_setting(self, key: impl Into<String>, value: Value) -> Self;
+}
+
+impl QueueConfigExt for crate::QueueConfig {
+    fn extension_settings(&self) -> &Map<String, Value> {
+        &self.extension_settings
+    }
+
+    fn with_extension_setting(mut self, key: impl Into<String>, value: Value) -> Self {
+        self.extension_settings.insert(key.into(), value);
+        self
+    }
+}
+
 /// Builder operations reserved for River's own companion crates.
 pub trait ClientBuilderExt: Sized {
     /// Returns whether the client will stay out of leader election, as set
@@ -72,6 +99,12 @@ pub trait ClientBuilderExt: Sized {
     /// Installs a pilot from a companion crate.
     #[must_use]
     fn pilot<P: Pilot>(self, pilot: P) -> Self;
+
+    /// Sets how often producers call [`PilotProducer::keep_alive`], 30
+    /// seconds by default like River Go's `ProducerReportInterval`. It's a
+    /// control for tests, not a tuning option.
+    #[must_use]
+    fn producer_report_interval(self, interval: Duration) -> Self;
 }
 
 impl ClientBuilderExt for crate::ClientBuilder {
@@ -81,6 +114,11 @@ impl ClientBuilderExt for crate::ClientBuilder {
 
     fn pilot<P: Pilot>(self, pilot: P) -> Self {
         self.with_pilot(pilot)
+    }
+
+    fn producer_report_interval(mut self, interval: Duration) -> Self {
+        self.producer_report_interval = interval;
+        self
     }
 }
 
@@ -850,6 +888,28 @@ pub trait Pilot: Send + Sync + 'static {
         _params: &JobsInsertedParams<'_>,
     ) -> Result<(), PilotError> {
         Ok(())
+    }
+
+    /// Validates the extension settings of a queue's configuration, set with
+    /// [`QueueConfigExt::with_extension_setting`].
+    ///
+    /// River calls it when a client is built and when a queue is added or
+    /// updated through [`LocalQueues`](crate::LocalQueues), before the
+    /// configuration takes effect. The default accepts only a configuration
+    /// without extension settings.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error describing settings the extension doesn't accept.
+    fn validate_queue_settings(
+        &self,
+        queue: &str,
+        settings: &Map<String, Value>,
+    ) -> Result<(), PilotError> {
+        if settings.is_empty() {
+            return Ok(());
+        }
+        Err(format!("queue {queue:?} has extension settings, but no extension accepts them").into())
     }
 
     /// Starts the extension's session for a new generation of a queue's

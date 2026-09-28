@@ -1692,12 +1692,20 @@ impl Adapter {
                     .as_ref()
                     .ok_or("queue_add requires a running client")?;
                 let max_workers = optional_i64(&params, "max_workers").unwrap_or(1);
-                running.client.local_queues().add(
-                    required_string(&params, "name")?,
-                    QueueConfig::new(usize::try_from(max_workers)?)
-                        .with_fetch_cooldown(Duration::from_millis(1))
-                        .with_fetch_poll_interval(Duration::from_millis(10)),
-                )?;
+                let name = required_string(&params, "name")?;
+                let config = QueueConfig::new(usize::try_from(max_workers)?)
+                    .with_fetch_cooldown(Duration::from_millis(1))
+                    .with_fetch_poll_interval(Duration::from_millis(10));
+                // The contract adds or reconfigures a queue. Like Go's
+                // adapter, an added queue is removed and added again.
+                let local_queues = running.client.local_queues();
+                match local_queues.add(name.clone(), config.clone()) {
+                    Err(riverqueue::Error::QueueAlreadyAdded { .. }) => {
+                        local_queues.remove(&name).await?;
+                        local_queues.add(name, config)?;
+                    }
+                    added => added?,
+                }
                 Ok(json!({}))
             }
             "queue_get" => {
@@ -1735,9 +1743,7 @@ impl Adapter {
                     .as_ref()
                     .ok_or("queue_remove requires a running client")?;
                 let name = required_string(&params, "name")?;
-                if running.client.local_queues().remove(&name).is_none() {
-                    return Err(format!("queue {name:?} is not configured").into());
-                }
+                running.client.local_queues().remove(&name).await?;
                 Ok(json!({}))
             }
             "queue_update" => {
@@ -2759,12 +2765,20 @@ impl SqliteAdapter {
                     .as_ref()
                     .ok_or("queue_add requires a running client")?;
                 let max_workers = optional_i64(&params, "max_workers").unwrap_or(1);
-                running.client.local_queues().add(
-                    required_string(&params, "name")?,
-                    QueueConfig::new(usize::try_from(max_workers)?)
-                        .with_fetch_cooldown(Duration::from_millis(1))
-                        .with_fetch_poll_interval(Duration::from_millis(10)),
-                )?;
+                let name = required_string(&params, "name")?;
+                let config = QueueConfig::new(usize::try_from(max_workers)?)
+                    .with_fetch_cooldown(Duration::from_millis(1))
+                    .with_fetch_poll_interval(Duration::from_millis(10));
+                // The contract adds or reconfigures a queue. Like Go's
+                // adapter, an added queue is removed and added again.
+                let local_queues = running.client.local_queues();
+                match local_queues.add(name.clone(), config.clone()) {
+                    Err(riverqueue::Error::QueueAlreadyAdded { .. }) => {
+                        local_queues.remove(&name).await?;
+                        local_queues.add(name, config)?;
+                    }
+                    added => added?,
+                }
                 Ok(json!({}))
             }
             "queue_get" => {
@@ -2802,9 +2816,7 @@ impl SqliteAdapter {
                     .as_ref()
                     .ok_or("queue_remove requires a running client")?;
                 let name = required_string(&params, "name")?;
-                if running.client.local_queues().remove(&name).is_none() {
-                    return Err(format!("queue {name:?} is not configured").into());
-                }
+                running.client.local_queues().remove(&name).await?;
                 Ok(json!({}))
             }
             "queue_update" => {

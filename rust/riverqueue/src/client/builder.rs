@@ -209,6 +209,8 @@ impl Default for MaintenanceConfig {
 /// Queue-specific worker settings.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct QueueConfig {
+    /// Settings for an add-on crate, which River passes through unchanged.
+    pub(crate) extension_settings: Map<String, Value>,
     /// Minimum delay between fetches.
     pub(crate) fetch_cooldown: Duration,
     /// Fallback polling interval.
@@ -220,8 +222,9 @@ pub struct QueueConfig {
 impl QueueConfig {
     /// Creates queue configuration with River's timing defaults.
     #[must_use]
-    pub const fn new(max_workers: usize) -> Self {
+    pub fn new(max_workers: usize) -> Self {
         Self {
+            extension_settings: Map::new(),
             fetch_cooldown: FETCH_COOLDOWN_DEFAULT,
             fetch_poll_interval: FETCH_POLL_INTERVAL_DEFAULT,
             max_workers,
@@ -307,6 +310,7 @@ pub struct ClientBuilder {
     pub(super) periodic_jobs: Vec<PeriodicJob>,
     pub(super) pilot: Arc<dyn Pilot>,
     pub(super) poll_only: bool,
+    pub(crate) producer_report_interval: Duration,
     pub(super) queues: HashMap<String, QueueConfig>,
     pub(super) retry_policy: Arc<dyn RetryPolicy>,
     pub(super) allow_legacy_job_kinds: bool,
@@ -574,6 +578,12 @@ impl ClientBuilder {
         }
         for (name, config) in &self.queues {
             config.validate(name)?;
+            validate_queue_settings(self.pilot.as_ref(), name, config)?;
+        }
+        if self.producer_report_interval.is_zero() {
+            return Err(Error::configuration(
+                "producer report interval must be positive".to_owned(),
+            ));
         }
         for (name, interval) in [
             ("elect interval", self.maintenance.elect_interval),
@@ -678,6 +688,7 @@ impl ClientBuilder {
                 job_timeout: self.job_timeout,
                 leader_election_disabled: self.leader_election_disabled,
                 leadership_wakeups,
+                live_queues: watch::channel(std::collections::HashSet::new()).0,
                 maintenance,
                 #[cfg(test)]
                 notifier_start_panics: AtomicU64::new(0),
@@ -686,6 +697,7 @@ impl ClientBuilder {
                 pending_cancellations: Mutex::new(HashMap::new()),
                 pilot: self.pilot,
                 poll_only: self.poll_only,
+                producer_report_interval: self.producer_report_interval,
                 queue_changes,
                 queue_notifications,
                 queues: RwLock::new(self.queues),
@@ -703,4 +715,18 @@ impl ClientBuilder {
             }),
         })
     }
+}
+
+/// Checks a queue's extension settings with the client's pilot.
+pub(super) fn validate_queue_settings(
+    pilot: &dyn Pilot,
+    name: &str,
+    config: &QueueConfig,
+) -> Result<(), Error> {
+    pilot
+        .validate_queue_settings(name, &config.extension_settings)
+        .map_err(|source| Error::Extension {
+            phase: crate::ExtensionPhase::AddOnQueueSettings,
+            source,
+        })
 }

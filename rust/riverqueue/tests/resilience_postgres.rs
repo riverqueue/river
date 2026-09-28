@@ -1154,7 +1154,7 @@ async fn listener_does_not_occupy_a_pool_connection() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn queue_reconfiguration_waits_for_the_previous_producer() {
+async fn queue_update_keeps_the_producer_within_max_workers() {
     let schema = TestSchema::new("reconfig").await;
     let gate = Gate::default();
     let one_worker = |poll_interval_ms| {
@@ -1169,9 +1169,9 @@ async fn queue_reconfiguration_waits_for_the_previous_producer() {
         .queue("default", one_worker(20))
         .build()
         .unwrap();
-    // Both jobs exist before the client starts. The original producer has one
-    // worker slot, so it can't take the second job while the first runs, no
-    // matter when it observes the reconfiguration.
+    // Both jobs exist before the client starts. The producer has one worker
+    // slot, so it can't take the second job while the first runs, no matter
+    // when it applies the new configuration.
     let first = client.insert(GatedArgs {}).await.unwrap();
     let second = client.insert(GatedArgs {}).await.unwrap();
 
@@ -1179,10 +1179,10 @@ async fn queue_reconfiguration_waits_for_the_previous_producer() {
     gate.wait_started().await;
     client
         .local_queues()
-        .add("default", one_worker(10))
+        .update("default", one_worker(10))
         .unwrap();
-    // A replacement started before the original producer drained would take
-    // the second job while the first is still held.
+    // A second producer, or one that lost count of its running job, would
+    // take the second job while the first is still held.
     gate.assert_none_started(Duration::from_millis(500)).await;
     gate.release();
     gate.wait_started().await;

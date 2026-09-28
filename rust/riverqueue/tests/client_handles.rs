@@ -737,8 +737,16 @@ macro_rules! scenarios {
             );
 
             local.add("second", QueueConfig::new(2)).unwrap();
-            // Adding a configured queue reconfigures it.
-            local.add("default", QueueConfig::new(3)).unwrap();
+            // Like Go, adding a queue twice is an error; update reconfigures.
+            assert!(matches!(
+                local.add("default", QueueConfig::new(3)),
+                Err(Error::QueueAlreadyAdded { name }) if name == "default"
+            ));
+            local.update("default", QueueConfig::new(3)).unwrap();
+            assert!(matches!(
+                local.update("missing", QueueConfig::new(3)),
+                Err(Error::QueueNotAdded { name }) if name == "missing"
+            ));
             assert_eq!(
                 local.configs(),
                 [
@@ -755,8 +763,12 @@ macro_rules! scenarios {
                 local.add("third", QueueConfig::new(0)),
                 Err(Error::Configuration(_))
             ));
-            assert_eq!(local.remove("second"), Some(QueueConfig::new(2)));
-            assert_eq!(local.remove("second"), None);
+            // A client that isn't running has no producer to wait for.
+            assert_eq!(local.remove("second").await.unwrap(), QueueConfig::new(2));
+            assert!(matches!(
+                local.remove("second").await,
+                Err(Error::QueueNotAdded { .. })
+            ));
             assert_eq!(local.configs().len(), 1);
 
             // A client without workers can't run any queue.
@@ -789,7 +801,10 @@ macro_rules! scenarios {
                 .await
                 .unwrap();
             wait_for_completion(&client, job.id()).await;
-            assert_eq!(client.local_queues().remove("dynamic"), Some(fast_queue()));
+            assert_eq!(
+                client.local_queues().remove("dynamic").await.unwrap(),
+                fast_queue()
+            );
             assert!(!client.local_queues().configs().contains_key("dynamic"));
 
             run.shutdown().await.unwrap();

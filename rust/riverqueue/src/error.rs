@@ -130,6 +130,8 @@ pub enum ExtensionPhase {
     AddOnJobSetState,
     /// An add-on crate's session for a queue producer.
     AddOnProducer,
+    /// An add-on crate validating a queue's settings.
+    AddOnQueueSettings,
     /// An add-on crate's rescue of stuck jobs.
     AddOnRescue,
     /// An add-on crate selecting stuck jobs to rescue.
@@ -164,6 +166,7 @@ impl fmt::Display for ExtensionPhase {
             Self::AddOnJobRetry => "add-on job retry",
             Self::AddOnJobSetState => "add-on job set state",
             Self::AddOnProducer => "add-on producer",
+            Self::AddOnQueueSettings => "add-on queue settings",
             Self::AddOnRescue => "add-on rescue",
             Self::AddOnRescueSelection => "add-on rescue selection",
             Self::ErrorHandler => "error handler",
@@ -241,6 +244,23 @@ pub enum Error {
     /// The requested record does not exist.
     #[error("{0} not found")]
     NotFound(Record),
+
+    /// A queue is already added to this client, or its removal is still
+    /// waiting for its producer to stop, like River Go's
+    /// `QueueAlreadyAddedError`.
+    #[error("queue {name:?} is already added")]
+    QueueAlreadyAdded {
+        /// The queue's name.
+        name: String,
+    },
+
+    /// This client doesn't work the queue, like River Go's
+    /// `QueueNotFoundError`.
+    #[error("queue {name:?} is not added to this client")]
+    QueueNotAdded {
+        /// The queue's name.
+        name: String,
+    },
 
     /// A user-provided resumable step returned an error.
     #[error("resumable step {name:?} failed")]

@@ -1367,7 +1367,7 @@ async fn local_queue_added_at_runtime_works_jobs() {
         .await
         .unwrap();
     wait_for_state(&client, dynamic.job.row.id, JobState::Completed).await;
-    assert!(client.local_queues().remove("dynamic").is_some());
+    client.local_queues().remove("dynamic").await.unwrap();
     run_handle.shutdown().await.unwrap();
 
     // The removed queue's row stays behind alongside the configured one.
