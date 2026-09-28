@@ -1,0 +1,12 @@
+github.com/apple/foundationdb/bindings/go v0.0.0-20260416192139-3ea44ce1d900 h1:CNV2HQ5JfSweyw/IlJzi7s1Dx1SlK0rl93uw2cPQO+g=
+github.com/apple/foundationdb/bindings/go v0.0.0-20260416192139-3ea44ce1d900/go.mod h1:OMVSB21p9+xQUIqlGizHPZfjK+SHws1ht+ZytVDoz9U=
+github.com/riverqueue/river/riverdriver v0.47.0 h1:qU8VkjdMl9plqeRg57SxsDUM/i/eECaSYejZ7HynC60=
+github.com/riverqueue/river/riverdriver v0.47.0/go.mod h1:NOXl0fUiF1AT/TaQOjdx2A/c0Davn+SKbW8nAXWjfC4=
+github.com/riverqueue/river/rivershared v0.47.0 h1:jdtFsBexCvLqTXf8wnDnGXvB/eeOtPKQZAmThkjFpLs=
+github.com/riverqueue/river/rivershared v0.47.0/go.mod h1:w8Pi1T+6ypyko5/hs9Mv7IIIKo4fAL9eXYnkVV/Y418=
+github.com/riverqueue/river/rivertype v0.47.0 h1:SzNavtLGR4nMT1QkrEYQ7n96OMatYsn/z3aJWhewmv0=
+github.com/riverqueue/river/rivertype v0.47.0/go.mod h1:XKkcRQR6zm8RR/JQa1Q2ywpj8uXQu21quPa4Lpw1Xhw=
+github.com/stretchr/testify v1.12.1 h1:EuwCh5fleGS7H32xRwO3wRGT7DxrDhLAT6FF8MpWDWE=
+github.com/stretchr/testify v1.12.1/go.mod h1:MDEgiDPPsNp5cuIrHPPCyornHKgEVbtFUmoNlxoYthg=
+go.yaml.in/yaml/v3 v3.0.5 h1:N6y/pJk8buWs9NY5ERU2HSMfm+IuD/OtfdAnq6kESPw=
+go.yaml.in/yaml/v3 v3.0.5/go.mod h1:HVTZu1O7/Vkt2N+BFy8Zza+lnLsABggaTM2ZpNIGuKg=

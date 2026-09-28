@@ -25,8 +25,9 @@ import (
 const AllQueuesString = "*"
 
 const (
-	DatabaseNamePostgres = "postgres"
-	DatabaseNameSQLite   = "sqlite"
+	DatabaseNameFoundationDB = "foundationdb"
+	DatabaseNamePostgres     = "postgres"
+	DatabaseNameSQLite       = "sqlite"
 )
 
 const MigrationLineMain = "main"
@@ -297,9 +298,8 @@ type Executor interface {
 	// NotificationDeleteBefore deletes up to Max notifications before a certain
 	// time horizon, oldest first.
 	//
-	// A "notification" in this context refers to a row in `river_notification`
-	// which is a special table implemented in some databases (e.g. SQLite) that
-	// simulates Postgres' listen/notify when not available.
+	// A "notification" here is an entry in the stored notification log used
+	// by SQLite and FoundationDB to emulate Postgres' listen/notify.
 	NotificationDeleteBefore(ctx context.Context, params *NotificationDeleteBeforeParams) (int, error)
 
 	NotifyMany(ctx context.Context, params *NotifyManyParams) error

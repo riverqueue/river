@@ -16,17 +16,17 @@ import (
 	"github.com/riverqueue/river/rivershared/startstoptest"
 )
 
-type sqliteNotificationCleanerExecutor struct {
+type notificationCleanerExecutor struct {
 	riverdriver.Executor
 
 	notificationDeleteBeforeFunc func(context.Context, *riverdriver.NotificationDeleteBeforeParams) (int, error)
 }
 
-func (e *sqliteNotificationCleanerExecutor) NotificationDeleteBefore(ctx context.Context, params *riverdriver.NotificationDeleteBeforeParams) (int, error) {
+func (e *notificationCleanerExecutor) NotificationDeleteBefore(ctx context.Context, params *riverdriver.NotificationDeleteBeforeParams) (int, error) {
 	return e.notificationDeleteBeforeFunc(ctx, params)
 }
 
-func TestSQLiteNotificationCleaner(t *testing.T) {
+func TestNotificationCleaner(t *testing.T) {
 	t.Parallel()
 
 	ctx := context.Background()
@@ -36,7 +36,7 @@ func TestSQLiteNotificationCleaner(t *testing.T) {
 		schema string
 	}
 
-	setup := func(t *testing.T) (*SQLiteNotificationCleaner, *testBundle) {
+	setup := func(t *testing.T) (*NotificationCleaner, *testBundle) {
 		t.Helper()
 
 		driver := riverpgxv5.New(riversharedtest.DBPool(ctx, t))
@@ -47,9 +47,9 @@ func TestSQLiteNotificationCleaner(t *testing.T) {
 			schema: schema,
 		}
 
-		cleaner := NewSQLiteNotificationCleaner(
+		cleaner := NewNotificationCleaner(
 			riversharedtest.BaseServiceArchetype(t),
-			&SQLiteNotificationCleanerConfig{
+			&NotificationCleanerConfig{
 				Interval:        time.Hour,
 				RetentionPeriod: time.Hour,
 				Schema:          bundle.schema,
@@ -85,7 +85,7 @@ func TestSQLiteNotificationCleaner(t *testing.T) {
 
 		ctx, cancelFunc := context.WithCancel(ctx)
 		defer cancelFunc()
-		cleaner.exec = &sqliteNotificationCleanerExecutor{
+		cleaner.exec = &notificationCleanerExecutor{
 			Executor: bundle.exec,
 			notificationDeleteBeforeFunc: func(ctx context.Context, params *riverdriver.NotificationDeleteBeforeParams) (int, error) {
 				numDeleted, err := bundle.exec.NotificationDeleteBefore(ctx, params)
@@ -104,16 +104,16 @@ func TestSQLiteNotificationCleaner(t *testing.T) {
 	t.Run("Defaults", func(t *testing.T) {
 		t.Parallel()
 
-		cleaner := NewSQLiteNotificationCleaner(
+		cleaner := NewNotificationCleaner(
 			riversharedtest.BaseServiceArchetype(t),
-			&SQLiteNotificationCleanerConfig{},
+			&NotificationCleanerConfig{},
 			nil,
 		)
 
 		require.Equal(t, riversharedmaintenance.BatchSizeDefault, cleaner.Config.Default)
 		require.Equal(t, riversharedmaintenance.BatchSizeReduced, cleaner.Config.Reduced)
-		require.Equal(t, SQLiteNotificationCleanerIntervalDefault, cleaner.Config.Interval)
-		require.Equal(t, SQLiteNotificationCleanerRetentionPeriodDefault, cleaner.Config.RetentionPeriod)
+		require.Equal(t, NotificationCleanerIntervalDefault, cleaner.Config.Interval)
+		require.Equal(t, NotificationCleanerRetentionPeriodDefault, cleaner.Config.RetentionPeriod)
 	})
 
 	t.Run("DeletesExpiredNotifications", func(t *testing.T) {
@@ -169,7 +169,7 @@ func TestSQLiteNotificationCleaner(t *testing.T) {
 		cleaner, bundle := setup(t)
 
 		for _, queryErr := range []error{context.Canceled, errors.New("notification delete failed")} {
-			cleaner.exec = &sqliteNotificationCleanerExecutor{
+			cleaner.exec = &notificationCleanerExecutor{
 				Executor: bundle.exec,
 				notificationDeleteBeforeFunc: func(context.Context, *riverdriver.NotificationDeleteBeforeParams) (int, error) {
 					return 0, queryErr
@@ -189,7 +189,7 @@ func TestSQLiteNotificationCleaner(t *testing.T) {
 
 		cleaner, bundle := setup(t)
 		var queryErr error
-		cleaner.exec = &sqliteNotificationCleanerExecutor{
+		cleaner.exec = &notificationCleanerExecutor{
 			Executor: bundle.exec,
 			notificationDeleteBeforeFunc: func(_ context.Context, params *riverdriver.NotificationDeleteBeforeParams) (int, error) {
 				require.Equal(t, riversharedmaintenance.BatchSizeDefault, params.Max)
@@ -218,7 +218,7 @@ func TestSQLiteNotificationCleaner(t *testing.T) {
 		cleaner, bundle := setup(t)
 		expectedMax := riversharedmaintenance.BatchSizeDefault
 		queryErr := context.DeadlineExceeded
-		cleaner.exec = &sqliteNotificationCleanerExecutor{
+		cleaner.exec = &notificationCleanerExecutor{
 			Executor: bundle.exec,
 			notificationDeleteBeforeFunc: func(_ context.Context, params *riverdriver.NotificationDeleteBeforeParams) (int, error) {
 				require.Equal(t, expectedMax, params.Max)

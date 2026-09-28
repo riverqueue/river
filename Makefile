@@ -60,6 +60,11 @@ define test-target
 endef
 $(foreach mod,$(submodules),$(eval $(call test-target,$(mod))))
 
+.PHONY: test/foundationdb
+test/foundationdb: ## Run tests including FoundationDB (requires native client and FDB_CLUSTER_FILE)
+	@test -n "$(FDB_CLUSTER_FILE)" || (echo "Set FDB_CLUSTER_FILE to a FoundationDB cluster file"; exit 1)
+	GOFLAGS="$(GOFLAGS) -tags=foundationdb" $(MAKE) test
+
 .PHONY: test/race
 test/race:: ## Run test suite for all submodules with race detector
 define test-race-target
