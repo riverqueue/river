@@ -90,38 +90,11 @@ async fn join_term(handle: tokio::task::JoinHandle<()>) {
 /// Starts the term's services, retrying start failures and requesting
 /// resignation once retries are exhausted, then waits for every service.
 async fn run_term(inner: Arc<ClientInner>, breakers: Arc<Breakers>, term: Term) {
-    let cancel = term.token;
-    let mut started = false;
-    for attempt in 1..=START_ATTEMPTS {
-        match start(&inner, &cancel).await {
-            Ok(()) => {
-                started = true;
-                break;
-            }
-            Err(MaintenanceError::Cancelled) => return,
-            Err(start_error) => {
-                error!(error = %crate::error::Chain(&start_error), attempt, "River maintenance start failed");
-                if attempt < START_ATTEMPTS
-                    && !sleep_cancellable(&cancel, exponential_backoff(attempt, 7)).await
-                {
-                    return;
-                }
-            }
-        }
-    }
-    if !started {
-        if cancel.is_cancelled() {
-            return;
-        }
-        error!(
-            "River maintenance failed to start after all attempts; requesting leader resignation"
-        );
-        let client = Client {
-            inner: Arc::clone(&inner),
-        };
-        if let Err(resign_error) = client.request_resign().await {
-            error!(error = %crate::error::Chain(&resign_error), "River could not request leader resignation");
-        }
+    let Term {
+        elected_at,
+        token: cancel,
+    } = term;
+    if !start_or_resign(&inner, &cancel).await {
         return;
     }
 
@@ -171,15 +144,16 @@ async fn run_term(inner: Arc<ClientInner>, breakers: Arc<Breakers>, term: Term) 
     if inner.postgres_pool().is_some() {
         services.spawn(super::reindexer::run(Arc::clone(&context)));
     }
+    let term = crate::__private::LeaderTerm {
+        elected_at,
+        token: cancel.clone(),
+    };
     for service in inner.pilot.maintenance_services() {
-        let pool = inner.pilot_database_pool();
-        let database = inner.pilot_database_config();
-        let service_cancel = cancel.child_token();
-        services.spawn(async move {
-            if let Err(service_error) = service.run(pool, database, service_cancel).await {
-                error!(error = %crate::error::Chain(&*service_error), "River extension maintenance service failed");
-            }
-        });
+        services.spawn(supervise_extension_service(
+            service,
+            inner.pilot_database(),
+            term.clone(),
+        ));
     }
 
     while let Some(result) = services.join_next().await {
@@ -188,6 +162,84 @@ async fn run_term(inner: Arc<ClientInner>, breakers: Arc<Breakers>, term: Term) 
         }
     }
     debug!("River maintenance services stopped");
+}
+
+/// Starts the term's maintenance, retrying start failures and requesting
+/// resignation once retries are exhausted. Returns whether the term's
+/// services should run.
+async fn start_or_resign(inner: &Arc<ClientInner>, cancel: &CancellationToken) -> bool {
+    for attempt in 1..=START_ATTEMPTS {
+        match start(inner, cancel).await {
+            Ok(()) => return true,
+            Err(MaintenanceError::Cancelled) => return false,
+            Err(start_error) => {
+                error!(error = %crate::error::Chain(&start_error), attempt, "River maintenance start failed");
+                if attempt < START_ATTEMPTS
+                    && !sleep_cancellable(cancel, exponential_backoff(attempt, 7)).await
+                {
+                    return false;
+                }
+            }
+        }
+    }
+    if cancel.is_cancelled() {
+        return false;
+    }
+    error!("River maintenance failed to start after all attempts; requesting leader resignation");
+    let client = Client {
+        inner: Arc::clone(inner),
+    };
+    if let Err(resign_error) = client.request_resign().await {
+        error!(error = %crate::error::Chain(&resign_error), "River could not request leader resignation");
+    }
+    false
+}
+
+/// Runs an extension's maintenance service for the whole term, restarting it
+/// after River's service backoff when it fails, panics, or returns before the
+/// term ends. Each run settles before the next starts, and the backoff starts
+/// over after a long healthy run.
+async fn supervise_extension_service(
+    service: Arc<dyn crate::__private::MaintenanceService>,
+    database: crate::__private::PilotDatabase,
+    term: crate::__private::LeaderTerm,
+) {
+    let mut attempt = 0;
+    loop {
+        let started_at = tokio::time::Instant::now();
+        // A task of its own, so a panic ends only this run.
+        let mut run = JoinSet::new();
+        let context = crate::__private::MaintenanceServiceContext {
+            database: database.clone(),
+            term: term.clone(),
+        };
+        let task_service = Arc::clone(&service);
+        run.spawn(async move { task_service.run(context).await });
+        let outcome = run.join_next().await;
+        if term.token.is_cancelled() {
+            return;
+        }
+        if started_at.elapsed() >= crate::client::SERVICE_RESTART_RESET_AFTER {
+            attempt = 0;
+        }
+        attempt += 1;
+        let delay = exponential_backoff(attempt, 7);
+        let failure = match outcome {
+            Some(Ok(Ok(()))) | None => "returned before its leadership term ended".to_owned(),
+            Some(Ok(Err(service_error))) => crate::error::Chain(&*service_error).to_string(),
+            Some(Err(join_error)) => join_error.to_string(),
+        };
+        error!(
+            service = service.name(),
+            attempt,
+            error = %failure,
+            sleep_duration = ?delay,
+            "River extension maintenance service failed; restarting after backoff"
+        );
+        if !sleep_cancellable(&term.token, delay).await {
+            return;
+        }
+    }
 }
 
 /// Mirrors the only fallible part of Go's `QueueMaintainer.Start`: the

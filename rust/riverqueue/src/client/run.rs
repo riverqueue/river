@@ -108,6 +108,7 @@ impl Client {
             notifier_ready: Arc::new(Mutex::new(None)),
             restarts: RestartBackoff::default(),
             services: HashMap::new(),
+            stop: StopTokens::new(&stopper.fetch_cancel),
             tasks: JoinSet::new(),
             work_cancel: stopper.work_cancel.clone(),
         };
@@ -155,7 +156,7 @@ impl Service {
 /// How long a restarted service must run before a failure counts as a new
 /// outage whose backoff starts over, rather than as another failure in a row.
 /// It exceeds the longest restart backoff (about 70 seconds).
-const SERVICE_RESTART_RESET_AFTER: Duration = Duration::from_mins(2);
+pub(crate) const SERVICE_RESTART_RESET_AFTER: Duration = Duration::from_mins(2);
 
 /// Consecutive failures of each restartable service.
 #[derive(Debug, Default)]
@@ -178,6 +179,33 @@ impl RestartBackoff {
     }
 }
 
+/// When each part of a started client stops, matching River Go's order.
+///
+/// A stop request cancels the client's fetch token. Claims, leadership with
+/// its maintenance services, the notifier, and extension runtime services
+/// all stop then, like Go's services started on the fetch context. Running
+/// jobs keep going until they finish or `work_cancel` fires, and each
+/// producer keeps reporting to its extension session until its last attempt
+/// has left, from a token of its own that the stop request doesn't cancel.
+struct StopTokens {
+    /// New claims and queue changes.
+    claims: CancellationToken,
+    /// Leader election and leader-owned maintenance.
+    leadership: CancellationToken,
+    /// The notifier and extension runtime services.
+    services: CancellationToken,
+}
+
+impl StopTokens {
+    fn new(fetch_cancel: &CancellationToken) -> Self {
+        Self {
+            claims: fetch_cancel.child_token(),
+            leadership: fetch_cancel.child_token(),
+            services: fetch_cancel.child_token(),
+        }
+    }
+}
+
 /// Runs a started client's services and restarts the ones that fail.
 struct Supervisor {
     fetch_cancel: CancellationToken,
@@ -186,6 +214,7 @@ struct Supervisor {
     restarts: RestartBackoff,
     /// Each running service and when its current run started.
     services: HashMap<tokio::task::Id, (Service, tokio::time::Instant)>,
+    stop: StopTokens,
     tasks: JoinSet<Result<(), Error>>,
     work_cancel: CancellationToken,
 }
@@ -275,13 +304,18 @@ impl Supervisor {
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner) =
             Some(completion_sender.downgrade());
+        // Like the extension design, runtime services start before
+        // producers. This orders their start, not their readiness.
+        for index in 0..inner.pilot.runtime_services().len() {
+            self.spawn_service(Service::Extension(index), Duration::ZERO);
+        }
         let (queues_ready_sender, queues_ready) = oneshot::channel();
         self.spawn_task(
             Service::Queues,
             run_dynamic_queues(
                 Arc::clone(&inner),
                 completion_sender,
-                self.fetch_cancel.child_token(),
+                self.stop.claims.clone(),
                 self.work_cancel.child_token(),
                 inner.queue_notifications.clone(),
                 inner.queue_changes.subscribe(),
@@ -320,9 +354,6 @@ impl Supervisor {
         if !inner.leader_election_disabled {
             self.spawn_service(Service::Maintenance, Duration::ZERO);
         }
-        for index in 0..inner.pilot.runtime_services().len() {
-            self.spawn_service(Service::Extension(index), Duration::ZERO);
-        }
     }
 
     fn spawn_task<F>(&mut self, service: Service, task: F)
@@ -338,15 +369,19 @@ impl Supervisor {
     /// first.
     fn spawn_service(&mut self, service: Service, delay: Duration) {
         let inner = Arc::clone(&self.inner);
-        let cancel = self.fetch_cancel.child_token();
+        let cancel;
         let run: std::pin::Pin<Box<dyn std::future::Future<Output = Result<(), Error>> + Send>> =
             match service {
-                Service::Maintenance => Box::pin(crate::maintenance::run_maintenance(
-                    Arc::clone(&inner),
-                    cancel.clone(),
-                    inner.leadership_wakeups.subscribe(),
-                )),
+                Service::Maintenance => {
+                    cancel = self.stop.leadership.child_token();
+                    Box::pin(crate::maintenance::run_maintenance(
+                        Arc::clone(&inner),
+                        cancel.clone(),
+                        inner.leadership_wakeups.subscribe(),
+                    ))
+                }
                 Service::Notifier => {
+                    cancel = self.stop.services.child_token();
                     let ready = self.notifier_ready.clone();
                     #[cfg(test)]
                     if inner
@@ -380,22 +415,23 @@ impl Supervisor {
                     }
                 }
                 Service::Extension(index) => {
+                    cancel = self.stop.services.child_token();
                     let Some(runtime_service) =
                         inner.pilot.runtime_services().into_iter().nth(index)
                     else {
                         return;
                     };
-                    let pool = inner.pilot_database_pool();
-                    let database = inner.pilot_database_config();
-                    let service_cancel = cancel.clone();
+                    let context = crate::__private::RuntimeServiceContext {
+                        cancellation: cancel.clone(),
+                        database: inner.pilot_database(),
+                    };
                     Box::pin(async move {
-                        runtime_service
-                            .run(pool, database, service_cancel)
-                            .await
-                            .map_err(|service_error| Error::Extension {
+                        runtime_service.run(context).await.map_err(|service_error| {
+                            Error::Extension {
                                 phase: crate::ExtensionPhase::AddOnRuntimeService,
                                 source: service_error,
-                            })
+                            }
+                        })
                     })
                 }
                 Service::Completer | Service::Queues => {
@@ -492,8 +528,10 @@ impl Stopper {
     /// Requests a soft stop, like Go's `Client.Stop`.
     ///
     /// The client stops fetching new jobs and lets running jobs finish before
-    /// it stops. When the builder's `soft_stop_timeout` is set, jobs still
-    /// running after that timeout are cancelled as if by
+    /// it stops. As in Go, leader election, maintenance, and the notification
+    /// listener stop at once, while each queue's producer keeps reporting its
+    /// running jobs until they finish. When the builder's `soft_stop_timeout`
+    /// is set, jobs still running after that timeout are cancelled as if by
     /// [`Stopper::stop_now`].
     pub fn stop(&self) {
         self.fetch_cancel.cancel();

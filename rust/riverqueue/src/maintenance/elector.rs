@@ -44,10 +44,6 @@ const BACKOFF_RESET: u32 = 7;
 #[derive(Clone, Debug)]
 pub(crate) struct Term {
     /// Database `elected_at` identifying this term.
-    #[cfg_attr(
-        not(all(test, feature = "postgres-tests")),
-        expect(dead_code, reason = "observed by tests")
-    )]
     pub(crate) elected_at: DateTime<Utc>,
     /// Cancelled the moment this client stops trusting the term.
     pub(crate) token: CancellationToken,

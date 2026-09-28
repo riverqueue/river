@@ -19,8 +19,8 @@ use std::{
 use async_trait::async_trait;
 use riverqueue::{
     __private::{
-        ClientBuilderExt, Database, DatabaseConfig, DatabasePool, MaintenanceService, Pilot,
-        PilotError, RuntimeService,
+        ClientBuilderExt, Database, MaintenanceService, MaintenanceServiceContext, Pilot,
+        PilotError, RuntimeService, RuntimeServiceContext,
     },
     Client, ClientBuilder, EventKind, EventReceiver, Job, JobArgs, JobRow, JobState,
     MaintenanceConfig, NeverSchedule, PeriodicJob, PeriodicJobOpts, QueueConfig, WorkContext,
@@ -92,12 +92,8 @@ impl CountingService {
 
 #[async_trait]
 impl MaintenanceService for CountingService {
-    async fn run(
-        &self,
-        _pool: DatabasePool,
-        _database: DatabaseConfig,
-        cancellation: CancellationToken,
-    ) -> Result<(), PilotError> {
+    async fn run(&self, context: MaintenanceServiceContext) -> Result<(), PilotError> {
+        let cancellation = context.term.token;
         self.run_until_cancelled(cancellation).await;
         Ok(())
     }
@@ -105,12 +101,8 @@ impl MaintenanceService for CountingService {
 
 #[async_trait]
 impl RuntimeService for CountingService {
-    async fn run(
-        &self,
-        _pool: DatabasePool,
-        _database: DatabaseConfig,
-        cancellation: CancellationToken,
-    ) -> Result<(), PilotError> {
+    async fn run(&self, context: RuntimeServiceContext) -> Result<(), PilotError> {
+        let cancellation = context.cancellation;
         self.run_until_cancelled(cancellation).await;
         Ok(())
     }

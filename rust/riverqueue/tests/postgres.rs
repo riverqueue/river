@@ -13,9 +13,9 @@ use std::{
 
 use async_trait::async_trait;
 use riverqueue::__private::{
-    ClaimedJob, DatabaseConfig, DatabaseConnection, DatabasePool, JobSetStateParams,
-    MaintenanceService, Pilot, PilotError, PilotProducer, ProducerClaimContext, ProducerClaimNext,
-    ProducerStartContext, RuntimeService,
+    ClaimedJob, DatabaseConnection, JobSetStateParams, MaintenanceService,
+    MaintenanceServiceContext, Pilot, PilotError, PilotProducer, ProducerClaimContext,
+    ProducerClaimNext, ProducerStartContext, RuntimeService, RuntimeServiceContext,
 };
 use riverqueue::__private::{ClientBuilderExt, ExtensionClaimParams, ExtensionClient};
 use riverqueue::{
@@ -462,12 +462,8 @@ struct TestMaintenance {
 
 #[async_trait]
 impl MaintenanceService for TestMaintenance {
-    async fn run(
-        &self,
-        _pool: DatabasePool,
-        _database: DatabaseConfig,
-        cancellation: CancellationToken,
-    ) -> Result<(), PilotError> {
+    async fn run(&self, context: MaintenanceServiceContext) -> Result<(), PilotError> {
+        let cancellation = context.term.token;
         self.starts.fetch_add(1, Ordering::SeqCst);
         cancellation.cancelled().await;
         self.stops.fetch_add(1, Ordering::SeqCst);
@@ -482,12 +478,8 @@ struct TestRuntime {
 
 #[async_trait]
 impl RuntimeService for TestRuntime {
-    async fn run(
-        &self,
-        _pool: DatabasePool,
-        _database: DatabaseConfig,
-        cancellation: CancellationToken,
-    ) -> Result<(), PilotError> {
+    async fn run(&self, context: RuntimeServiceContext) -> Result<(), PilotError> {
+        let cancellation = context.cancellation;
         self.starts.fetch_add(1, Ordering::SeqCst);
         cancellation.cancelled().await;
         self.stops.fetch_add(1, Ordering::SeqCst);

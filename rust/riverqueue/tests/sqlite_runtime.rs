@@ -15,7 +15,7 @@ use riverqueue::__private::{
 use riverqueue::__private::{
     ClientBuilderExt, ExtensionClaimParams, ExtensionClient, ExtensionInsertParams,
 };
-use riverqueue::__private::{DatabaseConfig, DatabasePool, MaintenanceService};
+use riverqueue::__private::{MaintenanceService, MaintenanceServiceContext};
 use riverqueue::{
     BoxError, Client, ErrorHandler, ErrorHandlerDecision, EventKind, Hook, InsertBatch, InsertOpts,
     Job, JobArgs, JobRow, JobState, MaintenanceConfig, QueueConfig, UniqueOpts, WorkContext,
@@ -343,12 +343,8 @@ impl PilotProducer for SqliteFetchSession {
 
 #[async_trait]
 impl MaintenanceService for LeadershipService {
-    async fn run(
-        &self,
-        _pool: DatabasePool,
-        _database: DatabaseConfig,
-        cancellation: tokio_util::sync::CancellationToken,
-    ) -> Result<(), PilotError> {
+    async fn run(&self, context: MaintenanceServiceContext) -> Result<(), PilotError> {
+        let cancellation = context.term.token;
         self.0.starts.fetch_add(1, Ordering::SeqCst);
         cancellation.cancelled().await;
         self.0.stops.fetch_add(1, Ordering::SeqCst);

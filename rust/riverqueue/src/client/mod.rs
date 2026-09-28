@@ -38,6 +38,7 @@ pub(crate) use self::record::{DecodedJob, UndecodableJob, saturating_i16, tolera
 #[cfg(feature = "postgres")]
 pub(crate) use self::record::{JobRecord, decode_job_row, job_projection};
 pub use self::resign::ResignRequest;
+pub(crate) use self::run::SERVICE_RESTART_RESET_AFTER;
 pub use self::run::{RunHandle, Stopper};
 #[allow(clippy::wildcard_imports, unused_imports)]
 use self::{

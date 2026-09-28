@@ -688,31 +688,84 @@ impl fmt::Debug for JobInsertParams<'_> {
     }
 }
 
+/// A leadership term, handed to [`MaintenanceService::run`].
+///
+/// `token` is cancelled the moment this client stops trusting its
+/// leadership: when it resigns, when a renewal fails, or when the trust
+/// deadline passes without a renewal. Cancellation is local: it can't fence
+/// statements already sent to the database.
+#[derive(Clone, Debug)]
+#[non_exhaustive]
+pub struct LeaderTerm {
+    /// When the database recorded this client's election, which identifies
+    /// the term.
+    pub elected_at: DateTime<Utc>,
+    /// Cancelled when the term ends.
+    pub token: CancellationToken,
+}
+
+/// Inputs to [`MaintenanceService::run`].
+#[derive(Debug)]
+#[non_exhaustive]
+pub struct MaintenanceServiceContext {
+    /// The client's database.
+    pub database: PilotDatabase,
+    /// The leadership term the service runs in.
+    pub term: LeaderTerm,
+}
+
+/// Inputs to [`RuntimeService::run`].
+#[derive(Debug)]
+#[non_exhaustive]
+pub struct RuntimeServiceContext {
+    /// Cancelled when the service should stop, which happens as soon as the
+    /// client starts stopping.
+    pub cancellation: CancellationToken,
+    /// The client's database.
+    pub database: PilotDatabase,
+}
+
 /// A leader-owned service supplied by an exact-version extension.
+///
+/// River runs each service for every leadership term this client holds and
+/// supervises it within the term: a service that returns an error, panics,
+/// or returns before its term ends is logged and started again after River's
+/// service backoff, which starts over after two minutes of healthy running.
+/// A term's services all return before the next term's start.
 #[async_trait]
 pub trait MaintenanceService: Send + Sync + 'static {
-    /// Runs until cancellation and returns if the service fails.
-    async fn run(
-        &self,
-        pool: DatabasePool,
-        database: DatabaseConfig,
-        cancellation: CancellationToken,
-    ) -> Result<(), PilotError>;
+    /// A name for the service in River's logs.
+    fn name(&self) -> &'static str {
+        "extension maintenance service"
+    }
+
+    /// Runs until the term's token is cancelled.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the service failed; River restarts it.
+    async fn run(&self, context: MaintenanceServiceContext) -> Result<(), PilotError>;
 }
 
 /// Per-client service supplied by an exact-version extension.
 ///
 /// Unlike [`MaintenanceService`], a runtime service runs on every started
-/// client rather than only while that client holds River leadership.
+/// client rather than only while that client holds River leadership. River
+/// starts runtime services before the client's producers, and restarts one
+/// that fails, panics, or returns early after its service backoff.
 #[async_trait]
 pub trait RuntimeService: Send + Sync + 'static {
-    /// Runs until cancellation and returns if the service fails.
-    async fn run(
-        &self,
-        pool: DatabasePool,
-        database: DatabaseConfig,
-        cancellation: CancellationToken,
-    ) -> Result<(), PilotError>;
+    /// A name for the service in River's logs.
+    fn name(&self) -> &'static str {
+        "extension runtime service"
+    }
+
+    /// Runs until the context's cancellation.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the service failed; River restarts it.
+    async fn run(&self, context: RuntimeServiceContext) -> Result<(), PilotError>;
 }
 
 /// Exact-version extension seam for matched companion crates.
