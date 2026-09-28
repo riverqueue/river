@@ -365,6 +365,24 @@ impl EventReceiver {
     }
 }
 
+/// Yields what [`EventReceiver::recv`] returns, including
+/// [`EventRecvError::Lagged`], and ends once the client is gone instead of
+/// yielding [`EventRecvError::Closed`].
+impl futures_util::Stream for EventReceiver {
+    type Item = Result<Event, EventRecvError>;
+
+    fn poll_next(
+        mut self: std::pin::Pin<&mut Self>,
+        context: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<Option<Self::Item>> {
+        let dropped = self.dropped.swap(0, Ordering::AcqRel);
+        if dropped > 0 {
+            return std::task::Poll::Ready(Some(Err(EventRecvError::Lagged(dropped))));
+        }
+        self.receiver.poll_recv(context).map(|event| event.map(Ok))
+    }
+}
+
 pub(crate) fn validate_kinds(kinds: &[EventKind]) -> Result<HashSet<EventKind>, Error> {
     if kinds.is_empty() {
         return Err(Error::configuration_context(
@@ -391,6 +409,41 @@ mod tests {
             QueueEventKind::Resumed
         );
         assert!(QueueEventKind::try_from(EventKind::JobFailed).is_err());
+    }
+
+    #[tokio::test]
+    async fn receiver_streams_lags_events_and_ends_when_closed() {
+        use futures_util::StreamExt as _;
+
+        let dropped = Arc::new(AtomicU64::new(2));
+        let (sender, receiver) = mpsc::channel(1);
+        let mut events = EventReceiver::new(Arc::clone(&dropped), receiver);
+        let now = chrono::Utc::now();
+        sender
+            .send(Event::queue(
+                QueueEventKind::Paused,
+                Queue {
+                    created_at: now,
+                    metadata: serde_json::Map::new(),
+                    metadata_text: "{}".to_owned(),
+                    name: "default".to_owned(),
+                    paused_at: Some(now),
+                    updated_at: now,
+                },
+            ))
+            .await
+            .unwrap();
+        drop(sender);
+
+        assert!(matches!(
+            events.next().await,
+            Some(Err(EventRecvError::Lagged(2)))
+        ));
+        assert_eq!(
+            events.next().await.unwrap().unwrap().kind(),
+            EventKind::QueuePaused
+        );
+        assert!(events.next().await.is_none());
     }
 
     #[test]

@@ -345,7 +345,11 @@ impl PeriodicJobs {
     ///
     /// Returns the same errors as [`PeriodicJobs::add`]; no job is added
     /// when any is rejected.
-    pub fn add_many(&self, jobs: Vec<PeriodicJob>) -> Result<Vec<PeriodicJobHandle>, Error> {
+    pub fn add_many(
+        &self,
+        jobs: impl IntoIterator<Item = PeriodicJob>,
+    ) -> Result<Vec<PeriodicJobHandle>, Error> {
+        let jobs = jobs.into_iter().collect::<Vec<_>>();
         self.ensure_electable()?;
         let mut registry = self.lock();
         let ids = registry
@@ -569,11 +573,11 @@ mod tests {
     fn dynamic_registration_is_atomic_and_removable() {
         let jobs = PeriodicJobs::from_jobs(Vec::new(), false).unwrap();
         let first = jobs.add(job("first")).unwrap();
-        let added = jobs.add_many(vec![job("second"), job("third")]).unwrap();
+        let added = jobs.add_many([job("second"), job("third")]).unwrap();
         assert_eq!(added.len(), 2);
         assert_eq!(jobs.lock().entries.len(), 3);
 
-        assert!(jobs.add_many(vec![job("fourth"), job("second")]).is_err());
+        assert!(jobs.add_many([job("fourth"), job("second")]).is_err());
         assert_eq!(jobs.lock().entries.len(), 3);
 
         assert!(jobs.remove(first));

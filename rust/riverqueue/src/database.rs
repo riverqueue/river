@@ -386,7 +386,24 @@ impl DatabaseMismatch {
 /// [`SqliteDatabase`]; they do not implement a River driver trait.
 pub trait IntoDatabase: private::IntoDatabaseSealed {}
 
-impl<T> IntoDatabase for T where T: private::IntoDatabaseSealed {}
+#[doc(hidden)]
+impl IntoDatabase for Database {}
+#[cfg(feature = "postgres")]
+impl IntoDatabase for PgPool {}
+#[cfg(feature = "postgres")]
+impl IntoDatabase for &PgPool {}
+#[cfg(feature = "postgres")]
+impl IntoDatabase for PostgresDatabase {}
+#[cfg(feature = "postgres")]
+impl IntoDatabase for &PostgresDatabase {}
+#[cfg(feature = "sqlite")]
+impl IntoDatabase for SqlitePool {}
+#[cfg(feature = "sqlite")]
+impl IntoDatabase for &SqlitePool {}
+#[cfg(feature = "sqlite")]
+impl IntoDatabase for SqliteDatabase {}
+#[cfg(feature = "sqlite")]
+impl IntoDatabase for &SqliteDatabase {}
 
 /// A caller-owned SQLx transaction accepted by River's transactional
 /// operations.
@@ -442,8 +459,14 @@ pub trait DatabaseTransactionExecutor<'executor>:
 {
 }
 
-impl<'executor, T> DatabaseTransactionExecutor<'executor> for T where
-    T: private::DatabaseTransactionExecutorSealed<'executor>
+#[cfg(feature = "postgres")]
+impl<'executor> DatabaseTransactionExecutor<'executor>
+    for &'executor mut sqlx::Transaction<'_, sqlx::Postgres>
+{
+}
+#[cfg(feature = "sqlite")]
+impl<'executor> DatabaseTransactionExecutor<'executor>
+    for &'executor mut sqlx::Transaction<'_, sqlx::Sqlite>
 {
 }
 
