@@ -74,10 +74,7 @@ pub fn unique_states_bitmask(opts: &UniqueOpts) -> u8 {
     opts.state_bitmask()
 }
 
-/// An insert notification's payload, `{"queue": "<name>"}` with a space after
-/// the colon, exactly as River Go writes it, so SQLite outbox rows hold the
-/// same bytes whichever engine wrote them.
+/// An insert notification's payload, `{"queue":"<name>"}`.
 pub(crate) fn insert_notification_payload(queue: &str) -> String {
-    let queue = serde_json::to_string(queue).expect("a string always serializes");
-    format!("{{\"queue\": {queue}}}")
+    serde_json::json!({ "queue": queue }).to_string()
 }

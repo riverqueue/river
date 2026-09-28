@@ -1,7 +1,6 @@
 //! SQLite implementation of River's storage operations.
 
 use chrono::Utc;
-use serde_json::value::RawValue;
 use serde_json::{Map, Value};
 use sqlx::SqliteConnection;
 
@@ -246,7 +245,7 @@ impl Backend for SqliteBackend<'_> {
     async fn queue_update(
         &mut self,
         name: &str,
-        metadata: Option<&RawValue>,
+        metadata: Option<&Map<String, Value>>,
     ) -> Result<Option<Queue>, Error> {
         sqlite::queue_update(self.connection, name, metadata, Utc::now())
             .await

@@ -1,7 +1,6 @@
 //! PostgreSQL implementation of River's storage operations.
 
 use chrono::{DateTime, Utc};
-use serde_json::value::RawValue;
 use serde_json::{Map, Value};
 use sqlx::{AssertSqlSafe, FromRow, PgConnection, Postgres, types::Json};
 
@@ -318,17 +317,17 @@ impl Backend for PostgresBackend<'_> {
     async fn queue_update(
         &mut self,
         name: &str,
-        metadata: Option<&RawValue>,
+        metadata: Option<&Map<String, Value>>,
     ) -> Result<Option<Queue>, Error> {
         let table = self.schema.qualify("river_queue");
         let sql = format!(
-            "UPDATE {table} SET metadata = CASE WHEN $2::boolean THEN $3::text::jsonb ELSE metadata END, \
+            "UPDATE {table} SET metadata = CASE WHEN $2::boolean THEN $3::jsonb ELSE metadata END, \
              updated_at = now() WHERE name = $1 RETURNING {QUEUE_COLUMNS}"
         );
         sqlx::query_as::<_, QueueRecord>(AssertSqlSafe(sql))
             .bind(name)
             .bind(metadata.is_some())
-            .bind(metadata.map(RawValue::get))
+            .bind(metadata.map(Json))
             .fetch_optional(&mut *self.connection)
             .await?
             .map(QueueRecord::into_queue)

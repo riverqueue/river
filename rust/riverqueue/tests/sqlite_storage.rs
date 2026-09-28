@@ -68,7 +68,7 @@ async fn cancel_stores_attempted_at_as_raw_jsonb_text() {
 }
 
 #[tokio::test]
-async fn control_and_resign_payloads_use_go_bytes() {
+async fn control_and_resign_notifications_carry_their_fields() {
     let (client, pool) = setup().await;
     insert_queue(&pool, "alpha").await;
 
@@ -82,56 +82,30 @@ async fn control_and_resign_payloads_use_go_bytes() {
         .unwrap();
     client.queues().pause("alpha").await.unwrap();
     client.request_resign().await.unwrap();
-    // Metadata given as text keeps its key order and escapes.
-    client
-        .queues()
-        .update(
-            "alpha",
-            QueueUpdateParams::new().metadata_raw(
-                serde_json::value::RawValue::from_string(r#"{"z": 1, "a": "x\/y<"}"#.to_owned())
-                    .unwrap(),
-            ),
-        )
-        .await
-        .unwrap();
-    let error = client
-        .queues()
-        .update(
-            "alpha",
-            QueueUpdateParams::new()
-                .metadata_raw(serde_json::value::RawValue::from_string("[1]".to_owned()).unwrap()),
-        )
-        .await
-        .unwrap_err();
-    assert!(matches!(error, Error::Configuration(_)), "{error:?}");
 
-    let payloads: Vec<(String, String)> =
+    let notifications: Vec<(String, String)> =
         sqlx::query_as("SELECT topic, payload FROM river_notification ORDER BY id")
             .fetch_all(&pool)
             .await
             .unwrap();
-    // Go escapes `<`, `>`, and `&` in JSON strings, and its resignation
-    // request carries an empty `leader_id`.
+    let notifications = notifications
+        .into_iter()
+        .map(|(topic, payload)| (topic, serde_json::from_str::<Value>(&payload).unwrap()))
+        .collect::<Vec<_>>();
     assert_eq!(
-        payloads,
+        notifications,
         [
             (
                 "river_control".to_owned(),
-                r#"{"action":"metadata_changed","metadata":{"note":"\u003c\u0026\u003e"},"queue":"alpha"}"#
-                    .to_owned()
+                json!({"action": "metadata_changed", "metadata": {"note": "<&>"}, "queue": "alpha"}),
             ),
             (
                 "river_control".to_owned(),
-                r#"{"action":"pause","queue":"alpha"}"#.to_owned()
+                json!({"action": "pause", "queue": "alpha"}),
             ),
             (
                 "river_leadership".to_owned(),
-                r#"{"action":"request_resign","leader_id":""}"#.to_owned()
-            ),
-            (
-                "river_control".to_owned(),
-                r#"{"action":"metadata_changed","metadata":{"z":1,"a":"x\/y\u003c"},"queue":"alpha"}"#
-                    .to_owned()
+                json!({"action": "request_resign", "leader_id": ""}),
             ),
         ]
     );

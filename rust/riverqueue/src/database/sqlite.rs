@@ -20,7 +20,6 @@ use std::{
 };
 
 use chrono::{DateTime, SubsecRound, Utc};
-use serde_json::value::RawValue;
 use serde_json::{Map, Value};
 use sqlx::{AssertSqlSafe, FromRow, QueryBuilder, Sqlite, SqliteConnection};
 
@@ -1137,11 +1136,11 @@ async fn queue_set_paused(
 pub(crate) async fn queue_update(
     connection: &mut SqliteConnection,
     name: &str,
-    metadata: Option<&RawValue>,
+    metadata: Option<&Map<String, Value>>,
     now: DateTime<Utc>,
 ) -> Result<Option<Queue>, BackendError> {
-    // Like Go, the caller's JSON text is bound as bytes and converted by
-    // `jsonb()`, and unchanged metadata is left alone.
+    let metadata = metadata.map(json_text).transpose()?;
+    // Like Go, a queue update without metadata leaves it alone.
     let sql = format!(
         r#"
         UPDATE river_queue
@@ -1152,7 +1151,7 @@ pub(crate) async fn queue_update(
     );
     sqlx::query_as::<_, QueueRecord>(AssertSqlSafe(sql))
         .bind(metadata.is_some())
-        .bind(metadata.map(|metadata| metadata.get().as_bytes()))
+        .bind(metadata)
         .bind(sqlite_time(now))
         .bind(name)
         .fetch_optional(&mut *connection)

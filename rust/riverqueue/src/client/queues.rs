@@ -247,23 +247,11 @@ impl QueueUpdateRequest<'_> {
     async fn run(self) -> Result<Queue, Error> {
         let inner = &self.client.inner;
         let own_transaction = !self.target.is_transaction();
-        let metadata = self
-            .params
-            .metadata
-            .map(crate::queue::QueueMetadata::into_raw)
-            .transpose()?;
-        if let Some(metadata) = &metadata
-            && !metadata.get().trim_start().starts_with('{')
-        {
-            return Err(Error::configuration_context(
-                "queue update",
-                "queue metadata must be a JSON object".to_owned(),
-            ));
-        }
+        let metadata = self.params.metadata;
         let mut session = self.target.session(inner, Access::Transaction).await?;
         let queue = session
             .storage(inner)
-            .queue_update(&self.name, metadata.as_deref())
+            .queue_update(&self.name, metadata.as_ref())
             .await?;
         session.commit().await?;
         // Like a pause, a metadata change reaches this client's producers at

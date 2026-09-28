@@ -1106,7 +1106,7 @@
     },
     {
       "capability": "queues",
-      "description": "Update persisted queue metadata. The adapter passes the `metadata` param's JSON text to the client as written, keeping its key order and escapes; without `metadata` the queue's metadata is unchanged.",
+      "description": "Update persisted queue metadata. Without `metadata` the queue's metadata is unchanged.",
       "name": "queue_update",
       "params": {
         "additionalProperties": false,
@@ -2401,7 +2401,7 @@
     },
     {
       "capability": "transactions",
-      "description": "Update persisted queue metadata in a transaction. The adapter passes the `metadata` param's JSON text to the client as written, keeping its key order and escapes; without `metadata` the queue's metadata is unchanged.",
+      "description": "Update persisted queue metadata in a transaction. Without `metadata` the queue's metadata is unchanged.",
       "name": "tx_queue_update",
       "params": {
         "additionalProperties": false,

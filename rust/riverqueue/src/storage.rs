@@ -16,7 +16,6 @@ mod postgres;
 #[cfg(feature = "sqlite")]
 mod sqlite;
 
-use serde_json::value::RawValue;
 use serde_json::{Map, Value};
 #[cfg(feature = "postgres")]
 use sqlx::Postgres;
@@ -107,7 +106,7 @@ pub(crate) trait Backend {
     async fn queue_update(
         &mut self,
         name: &str,
-        metadata: Option<&RawValue>,
+        metadata: Option<&Map<String, Value>>,
     ) -> Result<Option<Queue>, Error>;
 }
 
@@ -208,7 +207,7 @@ impl Backend for AnyBackend<'_> {
     async fn queue_update(
         &mut self,
         name: &str,
-        metadata: Option<&RawValue>,
+        metadata: Option<&Map<String, Value>>,
     ) -> Result<Option<Queue>, Error> {
         dispatch!(self, backend => backend.queue_update(name, metadata).await)
     }
@@ -389,10 +388,7 @@ impl<'c> Storage<'c> {
             "queue": name,
         });
         self.backend
-            .notify(
-                crate::NOTIFICATION_TOPIC_CONTROL,
-                &crate::encoding::to_go_string(&payload)?,
-            )
+            .notify(crate::NOTIFICATION_TOPIC_CONTROL, &payload.to_string())
             .await
     }
 
@@ -405,7 +401,7 @@ impl<'c> Storage<'c> {
     pub(crate) async fn queue_update(
         &mut self,
         name: &str,
-        metadata: Option<&RawValue>,
+        metadata: Option<&Map<String, Value>>,
     ) -> Result<Queue, Error> {
         let queue = self
             .backend
@@ -414,15 +410,13 @@ impl<'c> Storage<'c> {
             .ok_or_else(|| Error::NotFound(crate::Record::Queue(name.to_owned())))?;
         // Like Go, only a metadata change notifies clients.
         if let Some(metadata) = metadata {
-            // The metadata's own text, compacted with Go's escaping, so the
-            // payload is the bytes River for Go sends for the same text.
-            let payload = format!(
-                r#"{{"action":"metadata_changed","metadata":{},"queue":{}}}"#,
-                crate::encoding::go_compact(metadata.get()),
-                crate::encoding::to_go_string(name)?,
-            );
+            let payload = serde_json::json!({
+                "action": "metadata_changed",
+                "metadata": metadata,
+                "queue": name,
+            });
             self.backend
-                .notify(crate::NOTIFICATION_TOPIC_CONTROL, &payload)
+                .notify(crate::NOTIFICATION_TOPIC_CONTROL, &payload.to_string())
                 .await?;
         }
         Ok(queue)

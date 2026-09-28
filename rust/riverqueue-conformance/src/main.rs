@@ -1437,9 +1437,6 @@ struct Adapter {
     clock: Option<DateTime<Utc>>,
     pool: PgPool,
     profile: String,
-    /// The current request's `metadata` param as written, for queue
-    /// updates that keep the caller's JSON text.
-    request_metadata: Option<Box<RawValue>>,
     rng_seed: u64,
     running: Option<RunningClient>,
     transactions: HashMap<String, Transaction<'static, Postgres>>,
@@ -1455,9 +1452,6 @@ struct SqliteAdapter {
     clock: Option<DateTime<Utc>>,
     pool: SqlitePool,
     profile: String,
-    /// The current request's `metadata` param as written, for queue
-    /// updates that keep the caller's JSON text.
-    request_metadata: Option<Box<RawValue>>,
     rng_seed: u64,
     running: Option<RunningClient>,
     transactions: HashMap<String, Transaction<'static, Sqlite>>,
@@ -1496,7 +1490,6 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
                 clock: None,
                 pool: PgPoolOptions::new().connect_with(options).await?,
                 profile,
-                request_metadata: None,
                 rng_seed: 0,
                 running: None,
                 transactions: HashMap::new(),
@@ -1525,7 +1518,6 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
                     .connect_with(options)
                     .await?,
                 profile,
-                request_metadata: None,
                 rng_seed: 0,
                 running: None,
                 transactions: HashMap::new(),
@@ -1623,7 +1615,6 @@ impl Adapter {
             // Hash the exact request bytes so numbers keep their encoding.
             return respond_unique_key(&request);
         }
-        self.request_metadata = raw_metadata_param(request.params.as_deref());
         let result = self.handle(&request.method, params).await;
         match result {
             Ok(result) => Response::success(request.id, result),
@@ -1910,14 +1901,13 @@ impl Adapter {
             }
             "queue_update" => {
                 let name = required_string(&params, "name")?;
-                // Keep the caller's metadata text, like Go's
-                // `json.RawMessage`; without metadata nothing changes.
-                let update = self
-                    .request_metadata
-                    .take()
-                    .map_or_else(QueueUpdateParams::new, |metadata| {
-                        QueueUpdateParams::new().metadata_raw(metadata)
-                    });
+                // Without metadata, nothing changes.
+                let update = match params.get("metadata") {
+                    Some(metadata) => {
+                        QueueUpdateParams::new().metadata(serde_json::from_value(metadata.clone())?)
+                    }
+                    None => QueueUpdateParams::new(),
+                };
                 let queue = self.client()?.queues().update(name, update).await?;
                 Ok(normalize_queue(&queue))
             }
@@ -2481,14 +2471,13 @@ impl Adapter {
             "tx_queue_update" => {
                 let handle = required_string(&params, "handle")?;
                 let name = required_string(&params, "name")?;
-                // Keep the caller's metadata text, like Go's
-                // `json.RawMessage`; without metadata nothing changes.
-                let update = self
-                    .request_metadata
-                    .take()
-                    .map_or_else(QueueUpdateParams::new, |metadata| {
-                        QueueUpdateParams::new().metadata_raw(metadata)
-                    });
+                // Without metadata, nothing changes.
+                let update = match params.get("metadata") {
+                    Some(metadata) => {
+                        QueueUpdateParams::new().metadata(serde_json::from_value(metadata.clone())?)
+                    }
+                    None => QueueUpdateParams::new(),
+                };
                 let client = self.client()?;
                 let transaction = self.transactions.get_mut(&handle).ok_or_else(|| {
                     AdapterError::not_found(format!("transaction {handle:?} not found"))
@@ -2572,7 +2561,6 @@ impl SqliteAdapter {
             // Hash the exact request bytes so numbers keep their encoding.
             return respond_unique_key(&request);
         }
-        self.request_metadata = raw_metadata_param(request.params.as_deref());
         let result = self.handle(&request.method, params).await;
         match result {
             Ok(result) => Response::success(request.id, result),
@@ -2992,14 +2980,13 @@ impl SqliteAdapter {
             }
             "queue_update" => {
                 let name = required_string(&params, "name")?;
-                // Keep the caller's metadata text, like Go's
-                // `json.RawMessage`; without metadata nothing changes.
-                let update = self
-                    .request_metadata
-                    .take()
-                    .map_or_else(QueueUpdateParams::new, |metadata| {
-                        QueueUpdateParams::new().metadata_raw(metadata)
-                    });
+                // Without metadata, nothing changes.
+                let update = match params.get("metadata") {
+                    Some(metadata) => {
+                        QueueUpdateParams::new().metadata(serde_json::from_value(metadata.clone())?)
+                    }
+                    None => QueueUpdateParams::new(),
+                };
                 let queue = self.client()?.queues().update(name, update).await?;
                 Ok(normalize_queue(&queue))
             }
@@ -3384,14 +3371,13 @@ impl SqliteAdapter {
             "tx_queue_update" => {
                 let handle = required_string(&params, "handle")?;
                 let name = required_string(&params, "name")?;
-                // Keep the caller's metadata text, like Go's
-                // `json.RawMessage`; without metadata nothing changes.
-                let update = self
-                    .request_metadata
-                    .take()
-                    .map_or_else(QueueUpdateParams::new, |metadata| {
-                        QueueUpdateParams::new().metadata_raw(metadata)
-                    });
+                // Without metadata, nothing changes.
+                let update = match params.get("metadata") {
+                    Some(metadata) => {
+                        QueueUpdateParams::new().metadata(serde_json::from_value(metadata.clone())?)
+                    }
+                    None => QueueUpdateParams::new(),
+                };
                 let client = self.client()?;
                 let transaction = self.transactions.get_mut(&handle).ok_or_else(|| {
                     AdapterError::not_found(format!("transaction {handle:?} not found"))
@@ -3422,12 +3408,6 @@ impl SqliteAdapter {
         }
         Client::builder(SqliteDatabase::new(self.pool.clone())).build()
     }
-}
-
-/// Returns a request's `metadata` param exactly as the harness wrote it.
-fn raw_metadata_param(raw: Option<&RawValue>) -> Option<Box<RawValue>> {
-    let mut params: HashMap<String, Box<RawValue>> = serde_json::from_str(raw?.get()).ok()?;
-    params.remove("metadata")
 }
 
 fn decode_request_params(raw: Option<&RawValue>) -> Result<Value, serde_json::Error> {

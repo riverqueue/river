@@ -296,7 +296,7 @@ mod postgres {
                 .len(),
             2
         );
-        assert_eq!(notified().await, [r#"{"queue": "prepared"}"#]);
+        assert_eq!(notified().await, [r#"{"queue":"prepared"}"#]);
 
         let mut transaction = schema.pool.begin().await.unwrap();
         extension
@@ -306,7 +306,7 @@ mod postgres {
             .unwrap();
         assert!(notified().await.is_empty(), "notified before commit");
         transaction.commit().await.unwrap();
-        assert_eq!(notified().await, [r#"{"queue": "prepared"}"#]);
+        assert_eq!(notified().await, [r#"{"queue":"prepared"}"#]);
         assert_eq!(count().await, 4);
 
         let mut transaction = schema.pool.begin().await.unwrap();
@@ -368,7 +368,7 @@ mod sqlite {
                 .unwrap();
             let notifications = sqlx::query_scalar(
                 "SELECT count(*) FROM river_notification WHERE topic = 'river_insert' \
-                 AND payload = '{\"queue\": \"prepared\"}'",
+                 AND json_extract(payload, '$.queue') = 'prepared'",
             )
             .fetch_one(&pool)
             .await
