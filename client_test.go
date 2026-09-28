@@ -6363,6 +6363,7 @@ func Test_Client_Maintenance(t *testing.T) {
 
 		// After all retries exhausted, the client should request resignation.
 		client.queueMaintainerLeader.TestSignals.StartRetriesExhausted.WaitOrTimeout()
+		client.queueMaintainerLeader.TestSignals.ElectedLeader.WaitOrTimeout()
 	})
 
 	t.Run("PeriodicJobEnqueuerWithInsertOpts", func(t *testing.T) {
@@ -8411,6 +8412,26 @@ func Test_Client_Start_Error(t *testing.T) {
 		require.Equal(t, pgerrcode.InvalidCatalogName, pgErr.Code)
 	})
 
+	t.Run("DatabaseErrorAfterSuccessfulStart", func(t *testing.T) {
+		t.Parallel()
+
+		dbPool := riversharedtest.DBPoolClone(ctx, t)
+		driver := NewDriverPollOnly(dbPool)
+		schema := riverdbtest.TestSchema(ctx, t, driver, nil)
+
+		client, err := NewClient(driver, newTestConfig(t, schema))
+		require.NoError(t, err)
+		t.Cleanup(func() { require.NoError(t, client.Stop(ctx)) })
+
+		require.NoError(t, client.Start(ctx))
+		require.NoError(t, client.Stop(ctx))
+
+		dbPool.Close()
+
+		err = client.Start(ctx)
+		require.ErrorIs(t, err, riverdriver.ErrClosedPool)
+	})
+
 	t.Run("CanRestartAfterFailure", func(t *testing.T) {
 		t.Parallel()
 
@@ -8435,6 +8456,94 @@ func Test_Client_Start_Error(t *testing.T) {
 		err = client.Start(ctx)
 		require.Error(t, err, "second Start() should return an error, not nil; client state should be reset after failed start")
 	})
+}
+
+func Test_Client_YugabyteQueueControl(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	for _, testCase := range []struct {
+		enabled *bool
+		name    string
+	}{
+		{enabled: new(false), name: "Disabled"},
+		{enabled: new(true), name: "Enabled"},
+		{name: "Unavailable"},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+
+			basePool := riversharedtest.DBPool(ctx, t)
+			schema := riverdbtest.TestSchema(ctx, t, riverpgxv5.New(basePool), nil)
+			pool := riversharedtest.DBPoolWithYugabyteVersion(ctx, t, schema, testCase.enabled)
+			config := newTestConfig(t, schema)
+			config.queuePollInterval = 20 * time.Millisecond
+			require.False(t, config.PollOnly)
+
+			client, err := NewClient(riverpgxv5.New(pool), config)
+			require.NoError(t, err)
+			require.NotNil(t, client.notifier, "server capability isn't known until Start")
+			client.testSignals.Init(t)
+
+			// A separate insert-only client prevents local control delivery
+			// from hiding a missing notification or queue poll.
+			controller, err := NewClient(riverpgxv5.New(pool), &Config{Schema: schema})
+			require.NoError(t, err)
+
+			for run := range 2 {
+				events := subscribe(t, client)
+				startClient(ctx, t, client)
+				client.queueMaintainerLeader.TestSignals.ElectedLeader.WaitOrTimeout()
+				if testCase.enabled == nil || !*testCase.enabled {
+					require.Nil(t, client.notifier)
+				} else {
+					require.NotNil(t, client.notifier)
+				}
+
+				if run == 0 {
+					require.NoError(t, client.Queues().Add("added_after_start", QueueConfig{MaxWorkers: 1}))
+				}
+				for _, queue := range []string{QueueDefault, "added_after_start"} {
+					producer := client.producersByQueueName[queue]
+					// Only initialize the signals we consume to avoid filling
+					// unrelated signal buffers while the client is running.
+					if run == 0 {
+						producer.testSignals.MetadataChanged.Init(t)
+					}
+
+					require.NoError(t, controller.QueuePause(ctx, queue, nil))
+					event := riversharedtest.WaitOrTimeout(t, events)
+					require.Equal(t, EventKindQueuePaused, event.Kind)
+					require.Equal(t, queue, event.Queue.Name)
+
+					inserted, err := controller.Insert(ctx, noOpArgs{}, &InsertOpts{Queue: queue})
+					require.NoError(t, err)
+					job, err := controller.JobGet(ctx, inserted.Job.ID)
+					require.NoError(t, err)
+					require.Equal(t, rivertype.JobStateAvailable, job.State)
+
+					tx, err := pool.Begin(ctx)
+					require.NoError(t, err)
+					t.Cleanup(func() { _ = tx.Rollback(ctx) })
+					_, err = controller.QueueUpdateTx(ctx, tx, queue, &QueueUpdateParams{
+						Metadata: []byte(fmt.Sprintf(`{"revision":%d}`, run+1)),
+					})
+					require.NoError(t, err)
+					require.NoError(t, tx.Commit(ctx))
+					producer.testSignals.MetadataChanged.WaitOrTimeout()
+
+					require.NoError(t, controller.QueueResume(ctx, queue, nil))
+					event = riversharedtest.WaitOrTimeout(t, events)
+					require.Equal(t, EventKindQueueResumed, event.Kind)
+					require.Equal(t, queue, event.Queue.Name)
+					event = riversharedtest.WaitOrTimeout(t, events)
+					require.Equal(t, EventKindJobCompleted, event.Kind)
+					require.Equal(t, inserted.Job.ID, event.Job.ID)
+				}
+				require.NoError(t, client.Stop(ctx))
+			}
+		})
+	}
 }
 
 func Test_Config_WithDefaults(t *testing.T) {

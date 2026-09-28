@@ -3,6 +3,7 @@ package riversqlite
 import (
 	"context"
 	"database/sql"
+	"database/sql/driver"
 	"errors"
 	"testing"
 	"time"
@@ -22,6 +23,75 @@ func TestDurationAsString(t *testing.T) {
 
 	require.Equal(t, "3.000 seconds", durationAsString(3*time.Second))
 	require.Equal(t, "3.255 seconds", durationAsString(3*time.Second+255*time.Millisecond))
+}
+
+func TestExecutorBegin(t *testing.T) {
+	t.Parallel()
+
+	t.Run("FailedBeginDiscardsConnection", func(t *testing.T) {
+		t.Parallel()
+
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+
+		var opened, closed int
+		dbPool := sql.OpenDB(&beginTestConnector{
+			connectFunc: func() (driver.Conn, error) {
+				opened++
+				return &beginTestConn{
+					beginFunc: func() (driver.Tx, error) {
+						// Simulate a driver that starts a transaction, but
+						// returns a cancellation error without rolling back.
+						cancel()
+						return nil, context.Canceled
+					},
+					closeFunc: func() { closed++ },
+				}, nil
+			},
+		})
+		t.Cleanup(func() { require.NoError(t, dbPool.Close()) })
+		dbPool.SetMaxOpenConns(1)
+		exec := New(dbPool).GetExecutor()
+
+		tx, err := exec.Begin(ctx)
+		require.ErrorIs(t, err, context.Canceled)
+		require.Nil(t, tx)
+		require.Equal(t, 1, opened)
+		require.Equal(t, 1, closed)
+
+		// The next checkout must open a new connection instead of reusing
+		// the one whose transaction state is unknown.
+		conn, err := dbPool.Conn(context.Background())
+		require.NoError(t, err)
+		require.NoError(t, conn.Close())
+		require.Equal(t, 2, opened)
+	})
+}
+
+type beginTestConn struct {
+	driver.Conn
+
+	beginFunc func() (driver.Tx, error)
+	closeFunc func()
+}
+
+func (c *beginTestConn) BeginTx(context.Context, driver.TxOptions) (driver.Tx, error) {
+	return c.beginFunc()
+}
+
+func (c *beginTestConn) Close() error {
+	c.closeFunc()
+	return nil
+}
+
+type beginTestConnector struct {
+	driver.Connector
+
+	connectFunc func() (driver.Conn, error)
+}
+
+func (c *beginTestConnector) Connect(context.Context) (driver.Conn, error) {
+	return c.connectFunc()
 }
 
 func TestInterpretError(t *testing.T) {

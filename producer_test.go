@@ -480,6 +480,74 @@ func testProducer(t *testing.T, makeProducer func(ctx context.Context, t *testin
 		}
 	})
 
+	t.Run("CancellationPolling", func(t *testing.T) {
+		t.Parallel()
+
+		for _, state := range []string{"Paused", "Running", "Stopping"} {
+			t.Run(state, func(t *testing.T) {
+				t.Parallel()
+
+				producer, bundle := setup(t)
+				if producer.config.Notifier != nil {
+					t.Skip("requires polling without a notifier")
+				}
+				producer.config.FetchPollInterval = time.Hour
+				producer.config.MaxWorkers = 1
+				producer.config.QueuePollInterval = 20 * time.Millisecond
+
+				var jobStarted testsignal.TestSignal[int64]
+				var workerErr testsignal.TestSignal[error]
+				jobStarted.Init(t)
+				workerErr.Init(t)
+
+				type JobArgs struct {
+					testutil.JobArgsReflectKind[JobArgs]
+				}
+				AddWorker(bundle.workers, WorkFunc(func(ctx context.Context, job *Job[JobArgs]) error {
+					jobStarted.Signal(job.ID)
+					<-ctx.Done()
+					workerErr.Signal(context.Cause(ctx))
+					return ctx.Err()
+				}))
+
+				fetchCtx, fetchCancel := context.WithCancel(ctx)
+				defer fetchCancel()
+				workCtx, workCancel := context.WithCancel(ctx)
+				defer workCancel()
+
+				mustInsert(ctx, t, producer, bundle, &JobArgs{})
+				startProducer(t, fetchCtx, workCtx, producer)
+				jobID := jobStarted.WaitOrTimeout()
+				require.Positive(t, jobID)
+
+				switch state {
+				case "Paused":
+					require.NoError(t, bundle.exec.QueuePause(ctx, &riverdriver.QueuePauseParams{
+						Name:   producer.config.Queue,
+						Schema: producer.config.Schema,
+					}))
+					producer.testSignals.Paused.WaitOrTimeout()
+				case "Stopping":
+					fetchCancel()
+					producer.testSignals.ExecutorShutdownStarted.WaitOrTimeout()
+				}
+
+				// Use the executor directly so no local client shortcut can cancel
+				// the worker. No more jobs can be fetched in any of these states.
+				_, err := bundle.exec.JobCancel(ctx, &riverdriver.JobCancelParams{
+					ID:                jobID,
+					CancelAttemptedAt: time.Now().UTC(),
+					ControlTopic:      string(notifier.NotificationTopicControl),
+					Schema:            producer.config.Schema,
+				})
+				require.NoError(t, err)
+				require.ErrorIs(t, workerErr.WaitOrTimeout(), rivertype.ErrJobCancelledRemotely)
+				update := riversharedtest.WaitOrTimeout(t, bundle.jobUpdates)
+				require.Equal(t, rivertype.JobStateCancelled, update.Job.State)
+			})
+		}
+	})
+
 	t.Run("CancelledWorkContextCancelsJob", func(t *testing.T) {
 		t.Parallel()
 

@@ -16,6 +16,7 @@ import (
 	"io/fs"
 	"math"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -28,6 +29,7 @@ import (
 	"github.com/riverqueue/river/rivershared/uniquestates"
 	"github.com/riverqueue/river/rivershared/util/dbutil"
 	"github.com/riverqueue/river/rivershared/util/ptrutil"
+	"github.com/riverqueue/river/rivershared/util/randutil"
 	"github.com/riverqueue/river/rivershared/util/savepointutil"
 	"github.com/riverqueue/river/rivershared/util/sliceutil"
 	"github.com/riverqueue/river/rivertype"
@@ -38,9 +40,10 @@ var migrationFS embed.FS
 
 // Driver is an implementation of riverdriver.Driver for database/sql.
 type Driver struct {
-	dbPool         *sql.DB
-	listenerDriver *riverpgxv5.Driver
-	replacer       sqlctemplate.Replacer
+	dbPool               *sql.DB
+	listenerDriver       *riverpgxv5.Driver
+	postgresCapabilities atomic.Pointer[riverdriver.PostgresCapabilities]
+	replacer             sqlctemplate.Replacer
 }
 
 // New returns a new database/sql River driver for use with River.
@@ -135,8 +138,12 @@ func (d *Driver) SQLFragmentColumnIn(column string, values any) (string, any, er
 	return fmt.Sprintf("%s = any(@%s)", column, column), pq.Array(values), nil
 }
 
-func (d *Driver) SupportsListener() bool       { return d.listenerDriver != nil }
-func (d *Driver) SupportsListenNotify() bool   { return true }
+func (d *Driver) SupportsListener() bool { return d.listenerDriver != nil && d.SupportsListenNotify() }
+
+func (d *Driver) SupportsListenNotify() bool {
+	capabilities := d.postgresCapabilities.Load()
+	return capabilities == nil || capabilities.SupportsListenNotify
+}
 func (d *Driver) TimePrecision() time.Duration { return time.Microsecond }
 
 func (d *Driver) UnwrapExecutor(tx *sql.Tx) riverdriver.ExecutorTx {
@@ -247,7 +254,17 @@ func (e *Executor) IndexesExist(ctx context.Context, params *riverdriver.Indexes
 	return exists, nil
 }
 
+func (e *Executor) InitDriver(ctx context.Context) error {
+	_, err := e.getPostgresCapabilities(ctx)
+	return err
+}
+
 func (e *Executor) JobCancel(ctx context.Context, params *riverdriver.JobCancelParams) (*rivertype.JobRow, error) {
+	capabilities, err := e.getPostgresCapabilities(ctx)
+	if err != nil {
+		return nil, err
+	}
+
 	cancelledAt, err := params.CancelAttemptedAt.MarshalJSON()
 	if err != nil {
 		return nil, err
@@ -257,6 +274,7 @@ func (e *Executor) JobCancel(ctx context.Context, params *riverdriver.JobCancelP
 		ID:                params.ID,
 		CancelAttemptedAt: string(cancelledAt),
 		ControlTopic:      params.ControlTopic,
+		Notify:            capabilities.SupportsListenNotify,
 		Now:               params.Now,
 		Schema:            sql.NullString{String: params.Schema, Valid: params.Schema != ""},
 	})
@@ -389,6 +407,11 @@ func (e *Executor) JobGetByKindMany(ctx context.Context, params *riverdriver.Job
 	return sliceutil.MapError(jobs, jobRowFromInternal)
 }
 
+func (e *Executor) JobGetCancelRequested(ctx context.Context, params *riverdriver.JobGetCancelRequestedParams) ([]int64, error) {
+	ids, err := dbsqlc.New().JobGetCancelRequested(schemaTemplateParam(ctx, params.Schema), e.dbtx, params.ID)
+	return ids, interpretError(err)
+}
+
 func (e *Executor) JobGetStuck(ctx context.Context, params *riverdriver.JobGetStuckParams) ([]*rivertype.JobRow, error) {
 	jobs, err := dbsqlc.New().JobGetStuck(schemaTemplateParam(ctx, params.Schema), e.dbtx, &dbsqlc.JobGetStuckParams{
 		AfterID:      params.AfterID,
@@ -402,6 +425,17 @@ func (e *Executor) JobGetStuck(ctx context.Context, params *riverdriver.JobGetSt
 }
 
 func (e *Executor) JobInsertFastMany(ctx context.Context, params *riverdriver.JobInsertFastManyParams) ([]*riverdriver.JobInsertFastResult, error) {
+	capabilities, err := e.getPostgresCapabilities(ctx)
+	if err != nil {
+		return nil, err
+	}
+	uniqueInsertMode := capabilities.UniqueInsertMode
+
+	var uniqueNonce string
+	if uniqueInsertMode == riverdriver.UniqueInsertModeMetadataNonce {
+		uniqueNonce = randutil.Hex(8)
+	}
+
 	insertJobsParams := &dbsqlc.JobInsertFastManyParams{
 		ID:           make([]int64, len(params.Jobs)),
 		Args:         make([]string, len(params.Jobs)),
@@ -442,7 +476,16 @@ func (e *Executor) JobInsertFastMany(ctx context.Context, params *riverdriver.Jo
 		insertJobsParams.CreatedAt[i] = createdAt
 		insertJobsParams.Kind[i] = params.Kind
 		insertJobsParams.MaxAttempts[i] = int16(min(params.MaxAttempts, math.MaxInt16)) //nolint:gosec
-		insertJobsParams.Metadata[i] = cmp.Or(string(params.Metadata), "{}")
+		metadata := []byte(cmp.Or(string(params.Metadata), "{}"))
+		if uniqueNonce != "" {
+			var err error
+			metadata, err = riverdriver.UniqueInsertMetadataWithNonce(metadata, uniqueNonce)
+			if err != nil {
+				return nil, err
+			}
+		}
+
+		insertJobsParams.Metadata[i] = string(metadata)
 		insertJobsParams.Priority[i] = int16(min(params.Priority, math.MaxInt16)) //nolint:gosec
 		insertJobsParams.Queue[i] = params.Queue
 		insertJobsParams.ScheduledAt[i] = scheduledAt
@@ -452,6 +495,9 @@ func (e *Executor) JobInsertFastMany(ctx context.Context, params *riverdriver.Jo
 		insertJobsParams.UniqueStates[i] = int32(params.UniqueStates)
 	}
 
+	ctx = sqlctemplate.WithReplacements(ctx, map[string]sqlctemplate.Replacement{
+		"unique_skipped_as_duplicate": {Value: uniqueInsertMode.SQL(), Stable: true},
+	}, nil)
 	items, err := dbsqlc.New().JobInsertFastMany(schemaTemplateParam(ctx, params.Schema), e.dbtx, insertJobsParams)
 	if err != nil {
 		return nil, interpretError(err)
@@ -462,7 +508,13 @@ func (e *Executor) JobInsertFastMany(ctx context.Context, params *riverdriver.Jo
 		if err != nil {
 			return nil, err
 		}
-		return &riverdriver.JobInsertFastResult{Job: job, UniqueSkippedAsDuplicate: row.UniqueSkippedAsDuplicate}, nil
+
+		uniqueSkippedAsDuplicate := row.UniqueSkippedAsDuplicate
+		if uniqueInsertMode == riverdriver.UniqueInsertModeMetadataNonce {
+			uniqueSkippedAsDuplicate = riverdriver.UniqueInsertMetadataIsDuplicate(job.Metadata, uniqueNonce)
+		}
+
+		return &riverdriver.JobInsertFastResult{Job: job, UniqueSkippedAsDuplicate: uniqueSkippedAsDuplicate}, nil
 	})
 }
 
@@ -833,10 +885,16 @@ func (e *Executor) LeaderInsert(ctx context.Context, params *riverdriver.LeaderI
 }
 
 func (e *Executor) LeaderResign(ctx context.Context, params *riverdriver.LeaderResignParams) (bool, error) {
+	capabilities, err := e.getPostgresCapabilities(ctx)
+	if err != nil {
+		return false, err
+	}
+
 	numResigned, err := dbsqlc.New().LeaderResign(schemaTemplateParam(ctx, params.Schema), e.dbtx, &dbsqlc.LeaderResignParams{
 		ElectedAt:       params.ElectedAt,
 		LeaderID:        params.LeaderID,
 		LeadershipTopic: params.LeadershipTopic,
+		Notify:          capabilities.SupportsListenNotify,
 		Schema:          sql.NullString{String: params.Schema, Valid: params.Schema != ""},
 	})
 	if err != nil {
@@ -929,11 +987,23 @@ func (e *Executor) NotificationDeleteBefore(ctx context.Context, params *riverdr
 }
 
 func (e *Executor) NotifyMany(ctx context.Context, params *riverdriver.NotifyManyParams) error {
+	capabilities, err := e.getPostgresCapabilities(ctx)
+	if err != nil {
+		return err
+	}
+	if !capabilities.SupportsListenNotify {
+		return nil
+	}
+
 	return dbsqlc.New().PGNotifyMany(ctx, e.dbtx, &dbsqlc.PGNotifyManyParams{
 		Payload: params.Payload,
 		Schema:  sql.NullString{String: params.Schema, Valid: params.Schema != ""},
 		Topic:   params.Topic,
 	})
+}
+
+func (e *Executor) Ping(ctx context.Context) error {
+	return e.Exec(ctx, "SELECT 1")
 }
 
 func (e *Executor) PGAdvisoryXactLock(ctx context.Context, key int64) (*struct{}, error) {
@@ -1092,6 +1162,29 @@ func (e *Executor) TableTruncate(ctx context.Context, params *riverdriver.TableT
 		),
 	)
 	return interpretError(err)
+}
+
+func (e *Executor) getPostgresCapabilities(ctx context.Context) (*riverdriver.PostgresCapabilities, error) {
+	if e.driver != nil {
+		if capabilities := e.driver.postgresCapabilities.Load(); capabilities != nil {
+			return capabilities, nil
+		}
+	}
+
+	productAndVersion, err := dbsqlc.New().PGGetProductAndVersion(ctx, e.dbtx)
+	if err != nil {
+		return nil, interpretError(err)
+	}
+
+	capabilities := riverdriver.NewPostgresCapabilities(productAndVersion.Product, productAndVersion.VersionNum, productAndVersion.YbListenNotifyEnabled)
+	if e.driver != nil {
+		// Concurrent callers may both detect, but the first successful result
+		// becomes the driver's cached capabilities. Don't hold a lock while
+		// querying: a caller may already hold the pool's only connection.
+		e.driver.postgresCapabilities.CompareAndSwap(nil, capabilities)
+		capabilities = e.driver.postgresCapabilities.Load()
+	}
+	return capabilities, nil
 }
 
 type ExecutorTx struct {

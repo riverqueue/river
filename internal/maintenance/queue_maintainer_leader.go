@@ -39,11 +39,6 @@ type QueueMaintainerLeaderConfig struct {
 	// QueueMaintainer is the underlying maintainer to start/stop on leadership
 	// changes.
 	QueueMaintainer *QueueMaintainer
-
-	// RequestResignFunc sends a notification requesting leader resignation.
-	// It's injected from the client because the notification mechanism depends
-	// on the driver, which the maintenance package doesn't know about.
-	RequestResignFunc func(ctx context.Context) error
 }
 
 // QueueMaintainerLeader listens for leadership changes and starts/stops the
@@ -122,7 +117,7 @@ func (s *QueueMaintainerLeader) Start(ctx context.Context) error {
 					s.mu.Unlock()
 
 					startWg.Go(func() {
-						s.tryStart(startCtx, epoch)
+						s.tryStart(startCtx, epoch, notification.Term)
 					})
 
 				default:
@@ -140,7 +135,7 @@ func (s *QueueMaintainerLeader) Start(ctx context.Context) error {
 	return nil
 }
 
-func (s *QueueMaintainerLeader) tryStart(ctx context.Context, epoch int64) {
+func (s *QueueMaintainerLeader) tryStart(ctx context.Context, epoch int64, term uint64) {
 	var lastErr error
 	for attempt := 1; attempt <= queueMaintainerMaxStartAttempts; attempt++ {
 		if ctx.Err() != nil {
@@ -183,7 +178,7 @@ func (s *QueueMaintainerLeader) tryStart(ctx context.Context, epoch int64) {
 
 	s.TestSignals.StartRetriesExhausted.Signal(struct{}{})
 
-	if err := s.config.RequestResignFunc(ctx); err != nil {
-		s.Logger.ErrorContext(ctx, s.Name+": Error requesting leader resignation", slog.String("err", err.Error()))
-	}
+	// Recovery must work without database notifications, including in poll-only
+	// mode. Target this term so a delayed failure cannot resign a newer one.
+	s.config.Elector.RequestResign(ctx, term)
 }

@@ -55,7 +55,7 @@ func exerciseJobRead[TTx any](ctx context.Context, t *testing.T, executorWithTx 
 
 			for _, state := range rivertype.JobStates() {
 				require.Contains(t, countsByState, state)
-				switch state { //nolint:exhaustive
+				switch state {
 				case rivertype.JobStateAvailable:
 					require.Equal(t, 2, countsByState[state])
 				case rivertype.JobStateCancelled:
@@ -64,8 +64,10 @@ func exerciseJobRead[TTx any](ctx context.Context, t *testing.T, executorWithTx 
 					require.Equal(t, 1, countsByState[state])
 				case rivertype.JobStateDiscarded:
 					require.Equal(t, 1, countsByState[state])
-				default:
+				case rivertype.JobStatePending, rivertype.JobStateRetryable, rivertype.JobStateRunning, rivertype.JobStateScheduled:
 					require.Equal(t, 0, countsByState[state])
+				default:
+					require.FailNow(t, "unknown job state", state)
 				}
 			}
 		})
@@ -533,6 +535,58 @@ func exerciseJobRead[TTx any](ctx context.Context, t *testing.T, executorWithTx 
 		require.NoError(t, err)
 		require.Equal(t, []int64{job1.ID, job2.ID},
 			sliceutil.Map(jobs, func(j *rivertype.JobRow) int64 { return j.ID }))
+	})
+
+	t.Run("JobGetCancelRequested", func(t *testing.T) {
+		t.Parallel()
+
+		t.Run("AlternateSchema", func(t *testing.T) {
+			t.Parallel()
+
+			exec, _ := setup(ctx, t)
+
+			_, err := exec.JobGetCancelRequested(ctx, &riverdriver.JobGetCancelRequestedParams{
+				ID:     []int64{1},
+				Schema: "custom_schema",
+			})
+			requireMissingRelation(t, err, "custom_schema", "river_job")
+		})
+
+		t.Run("FiltersRunningJobsAndRequestedIDs", func(t *testing.T) {
+			t.Parallel()
+
+			exec, _ := setup(ctx, t)
+
+			jobIDs := make([]int64, 0, len(rivertype.JobStates())+2)
+			var expectedIDs []int64
+			for _, state := range rivertype.JobStates() {
+				job := testfactory.Job(ctx, t, exec, &testfactory.JobOpts{
+					Metadata: []byte(`{"cancel_attempted_at":"2026-09-28T00:00:00Z"}`),
+					State:    new(state),
+				})
+				jobIDs = append(jobIDs, job.ID)
+				if state == rivertype.JobStateRunning {
+					expectedIDs = append(expectedIDs, job.ID)
+				}
+			}
+
+			// An active job without a cancellation and a cancelled active job
+			// outside the requested IDs must both be excluded.
+			job := testfactory.Job(ctx, t, exec, &testfactory.JobOpts{State: new(rivertype.JobStateRunning)})
+			jobIDs = append(jobIDs, job.ID, 0)
+			_ = testfactory.Job(ctx, t, exec, &testfactory.JobOpts{
+				Metadata: []byte(`{"cancel_attempted_at":"2026-09-28T00:00:00Z"}`),
+				State:    new(rivertype.JobStateRunning),
+			})
+
+			ids, err := exec.JobGetCancelRequested(ctx, &riverdriver.JobGetCancelRequestedParams{ID: jobIDs})
+			require.NoError(t, err)
+			require.Equal(t, expectedIDs, ids)
+
+			ids, err = exec.JobGetCancelRequested(ctx, &riverdriver.JobGetCancelRequestedParams{})
+			require.NoError(t, err)
+			require.Empty(t, ids)
+		})
 	})
 
 	t.Run("JobGetStuck", func(t *testing.T) {

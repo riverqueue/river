@@ -158,10 +158,10 @@ WITH currently_held_leaders AS (
     FOR UPDATE
 ),
 notified_resignations AS (
-    SELECT pg_notify(
-        concat(coalesce($3::text, current_schema()), '.', $4::text),
+    SELECT CASE WHEN $3::boolean THEN pg_notify(
+        concat(coalesce($4::text, current_schema()), '.', $5::text),
         json_build_object('leader_id', leader_id, 'action', 'resigned')::text
-    )
+    ) END
     FROM currently_held_leaders
 )
 DELETE FROM /* TEMPLATE: schema */river_leader USING notified_resignations
@@ -170,6 +170,7 @@ DELETE FROM /* TEMPLATE: schema */river_leader USING notified_resignations
 type LeaderResignParams struct {
 	ElectedAt       time.Time
 	LeaderID        string
+	Notify          bool
 	Schema          pgtype.Text
 	LeadershipTopic string
 }
@@ -178,6 +179,7 @@ func (q *Queries) LeaderResign(ctx context.Context, db DBTX, arg *LeaderResignPa
 	result, err := db.Exec(ctx, leaderResign,
 		arg.ElectedAt,
 		arg.LeaderID,
+		arg.Notify,
 		arg.Schema,
 		arg.LeadershipTopic,
 	)

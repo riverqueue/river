@@ -24,10 +24,10 @@ WITH locked_job AS (
 notification AS (
     SELECT
         id,
-        pg_notify(
-            concat(coalesce($2::text, current_schema()), '.', $3::text),
+        CASE WHEN $2::boolean THEN pg_notify(
+            concat(coalesce($3::text, current_schema()), '.', $4::text),
             json_build_object('action', 'cancel', 'job_id', id, 'queue', queue)::text
-        )
+        ) END
     FROM
         locked_job
     WHERE
@@ -40,10 +40,10 @@ updated_job AS (
         -- If the job is actively running, we want to let its current client and
         -- producer handle the cancellation. Otherwise, immediately cancel it.
         state = CASE WHEN state = 'running' THEN state ELSE 'cancelled' END,
-        finalized_at = CASE WHEN state = 'running' THEN finalized_at ELSE coalesce($4::timestamptz, now()) END,
+        finalized_at = CASE WHEN state = 'running' THEN finalized_at ELSE coalesce($5::timestamptz, now()) END,
         -- Mark the job as cancelled by query so that the rescuer knows not to
         -- rescue it, even if it gets stuck in the running state:
-        metadata = jsonb_set(metadata, '{cancel_attempted_at}'::text[], $5::jsonb, true)
+        metadata = jsonb_set(metadata, '{cancel_attempted_at}'::text[], $6::jsonb, true)
     FROM notification
     WHERE river_job.id = notification.id
     RETURNING river_job.id, river_job.args, river_job.attempt, river_job.attempted_at, river_job.attempted_by, river_job.created_at, river_job.errors, river_job.finalized_at, river_job.kind, river_job.max_attempts, river_job.metadata, river_job.priority, river_job.queue, river_job.state, river_job.scheduled_at, river_job.tags, river_job.unique_key, river_job.unique_states
@@ -59,6 +59,7 @@ FROM updated_job
 
 type JobCancelParams struct {
 	ID                int64
+	Notify            bool
 	Schema            pgtype.Text
 	ControlTopic      string
 	Now               *time.Time
@@ -68,6 +69,7 @@ type JobCancelParams struct {
 func (q *Queries) JobCancel(ctx context.Context, db DBTX, arg *JobCancelParams) (*RiverJob, error) {
 	row := db.QueryRow(ctx, jobCancel,
 		arg.ID,
+		arg.Notify,
 		arg.Schema,
 		arg.ControlTopic,
 		arg.Now,
@@ -587,6 +589,35 @@ func (q *Queries) JobGetByKindMany(ctx context.Context, db DBTX, kind []string) 
 	return items, nil
 }
 
+const jobGetCancelRequested = `-- name: JobGetCancelRequested :many
+SELECT id
+FROM /* TEMPLATE: schema */river_job
+WHERE id = any($1::bigint[])
+    AND metadata ? 'cancel_attempted_at'
+    AND state = 'running'
+ORDER BY id
+`
+
+func (q *Queries) JobGetCancelRequested(ctx context.Context, db DBTX, id []int64) ([]int64, error) {
+	rows, err := db.Query(ctx, jobGetCancelRequested, id)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []int64
+	for rows.Next() {
+		var id int64
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		items = append(items, id)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const jobGetStuck = `-- name: JobGetStuck :many
 SELECT id, args, attempt, attempted_at, attempted_by, created_at, errors, finalized_at, kind, max_attempts, metadata, priority, queue, state, scheduled_at, tags, unique_key, unique_states
 FROM /* TEMPLATE: schema */river_job
@@ -697,7 +728,9 @@ ON CONFLICT (unique_key)
         AND /* TEMPLATE: schema */river_job_state_in_bitmask(unique_states, state)
     -- Something needs to be updated for a row to be returned on a conflict.
     DO UPDATE SET kind = EXCLUDED.kind
-RETURNING river_job.id, river_job.args, river_job.attempt, river_job.attempted_at, river_job.attempted_by, river_job.created_at, river_job.errors, river_job.finalized_at, river_job.kind, river_job.max_attempts, river_job.metadata, river_job.priority, river_job.queue, river_job.state, river_job.scheduled_at, river_job.tags, river_job.unique_key, river_job.unique_states, (xmax != 0) AS unique_skipped_as_duplicate
+RETURNING
+    river_job.id, river_job.args, river_job.attempt, river_job.attempted_at, river_job.attempted_by, river_job.created_at, river_job.errors, river_job.finalized_at, river_job.kind, river_job.max_attempts, river_job.metadata, river_job.priority, river_job.queue, river_job.state, river_job.scheduled_at, river_job.tags, river_job.unique_key, river_job.unique_states,
+    /* TEMPLATE_BEGIN: unique_skipped_as_duplicate */ (xmax != 0) /* TEMPLATE_END */ AS unique_skipped_as_duplicate
 `
 
 type JobInsertFastManyParams struct {

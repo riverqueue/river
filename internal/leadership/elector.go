@@ -44,7 +44,10 @@ const (
 )
 
 type Notification struct {
-	IsLeader  bool
+	IsLeader bool
+	// Term identifies a local leadership term and increases on each election.
+	// Pass it to RequestResign to avoid resigning a subsequent term.
+	Term      uint64
 	Timestamp time.Time
 }
 
@@ -233,6 +236,7 @@ type Elector struct {
 	isLeader             bool
 	pendingRequestResign bool
 	subscriptions        []*Subscription
+	term                 uint64
 }
 
 type leadershipTerm struct {
@@ -303,6 +307,29 @@ func trySendWakeup(ctx context.Context, wakeupChan chan struct{}) {
 	case wakeupChan <- struct{}{}:
 	default:
 	}
+}
+
+// RequestResign requests resignation of this elector's given leadership term.
+// It is safe to call concurrently and returns without waiting for resignation.
+// Requests for a past term, a follower, or a cancelled context have no effect.
+// A zero term requests resignation of whichever term is current, as used for
+// database notifications. Local callers should use the term from Listen.
+func (e *Elector) RequestResign(ctx context.Context, term uint64) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+
+	if ctx.Err() != nil || !e.isLeader || (term != 0 && term != e.term) {
+		return
+	}
+
+	e.pendingRequestResign = true
+	trySendWakeup(ctx, e.wakeupChan)
+}
+
+// SetNotifier changes the notifier before startup, after database capability
+// detection. It must only be called while the elector is stopped.
+func (e *Elector) SetNotifier(notifier *notifier.Notifier) {
+	e.notifier = notifier
 }
 
 func (e *Elector) Start(ctx context.Context) error {
@@ -448,11 +475,7 @@ func (e *Elector) handleLeadershipNotification(ctx context.Context, topic notifi
 
 	switch notification.Action {
 	case DBNotificationKindRequestResign:
-		if !e.markPendingRequestResign() {
-			return
-		}
-
-		trySendWakeup(ctx, e.wakeupChan)
+		e.RequestResign(ctx, 0)
 	case DBNotificationKindResigned:
 		// If this a resignation from _this_ client, ignore the change.
 		if notification.LeaderID == e.config.ClientID {
@@ -656,6 +679,7 @@ func (e *Elector) Listen() *Subscription {
 
 	initialNotification := &Notification{
 		IsLeader:  e.isLeader,
+		Term:      e.term,
 		Timestamp: sub.creationTime,
 	}
 	sub.enqueue(initialNotification)
@@ -695,30 +719,21 @@ func (e *Elector) leaderTTL() time.Duration {
 	return e.config.ElectInterval + electIntervalTTLPaddingDefault
 }
 
-func (e *Elector) markPendingRequestResign() bool {
-	e.mu.Lock()
-	defer e.mu.Unlock()
-
-	if !e.isLeader {
-		return false
-	}
-
-	e.pendingRequestResign = true
-	return true
-}
-
 func (e *Elector) publishLeadershipState(isLeader bool) {
 	notifyTime := time.Now().UTC()
 	e.mu.Lock()
 	defer e.mu.Unlock()
 
 	e.isLeader = isLeader
-	if !isLeader {
+	if isLeader {
+		e.term++
+	} else {
 		e.pendingRequestResign = false
 	}
 
 	notification := &Notification{
 		IsLeader:  isLeader,
+		Term:      e.term,
 		Timestamp: notifyTime,
 	}
 
