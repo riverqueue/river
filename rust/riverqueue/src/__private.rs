@@ -712,6 +712,8 @@ pub struct LeaderTerm {
 #[derive(Debug)]
 #[non_exhaustive]
 pub struct MaintenanceServiceContext {
+    /// The client running the service, without keeping it alive.
+    pub client: WeakClient,
     /// The client's database.
     pub database: PilotDatabase,
     /// The leadership term the service runs in.
@@ -725,6 +727,8 @@ pub struct RuntimeServiceContext {
     /// Cancelled when the service should stop, which happens as soon as the
     /// client starts stopping.
     pub cancellation: CancellationToken,
+    /// The client running the service, without keeping it alive.
+    pub client: WeakClient,
     /// The client's database.
     pub database: PilotDatabase,
 }
@@ -792,7 +796,7 @@ pub struct PilotInstallContext {
 /// version-locked to `riverqueue`, allowing the SPI to evolve with both
 /// implementations.
 #[async_trait]
-pub trait Pilot: Send + Sync + 'static {
+pub trait Pilot: std::any::Any + Send + Sync + 'static {
     /// Binds the pilot to the client being built, like River Go's
     /// `PilotInit`. River calls it once per client, before the builder
     /// returns the client; a pilot installed on several clients is called

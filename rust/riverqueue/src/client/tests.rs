@@ -249,6 +249,27 @@ async fn worker_failures_record_the_error_chain_and_panic_value() {
 
 #[cfg(feature = "sqlite")]
 #[tokio::test]
+async fn extension_client_finds_only_the_installed_pilot() {
+    #[derive(Debug)]
+    struct InstalledPilot;
+    impl Pilot for InstalledPilot {}
+
+    #[derive(Debug)]
+    struct OtherPilot;
+    impl Pilot for OtherPilot {}
+
+    let pool = sqlx::SqlitePool::connect_lazy("sqlite::memory:").unwrap();
+    let client = Client::builder(pool)
+        .with_pilot(InstalledPilot)
+        .build()
+        .unwrap();
+    let extension = crate::__private::ExtensionClient::new(&client);
+    assert!(extension.pilot::<InstalledPilot>().is_some());
+    assert!(extension.pilot::<OtherPilot>().is_none());
+}
+
+#[cfg(feature = "sqlite")]
+#[tokio::test]
 async fn erased_transactions_run_requests_in_the_callers_transaction() {
     #[derive(Deserialize, serde::Serialize)]
     struct ErasedArgs {}

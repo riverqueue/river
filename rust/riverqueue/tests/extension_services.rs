@@ -25,9 +25,9 @@ use std::{
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use riverqueue::__private::{
-    ClientBuilderExt, MaintenanceService, MaintenanceServiceContext, Pilot, PilotError,
-    PilotProducer, ProducerKeepAliveContext, ProducerShutdownContext, ProducerStartContext,
-    RuntimeService, RuntimeServiceContext,
+    ClientBuilderExt, ExtensionClient, MaintenanceService, MaintenanceServiceContext, Pilot,
+    PilotError, PilotProducer, ProducerKeepAliveContext, ProducerShutdownContext,
+    ProducerStartContext, RuntimeService, RuntimeServiceContext,
 };
 use riverqueue::{
     Client, Job, JobArgs, JobRow, JobState, MaintenanceConfig, QueueConfig, WorkContext,
@@ -146,6 +146,12 @@ impl MaintenanceService for ServicePilot {
     }
 
     async fn run(&self, context: MaintenanceServiceContext) -> Result<(), PilotError> {
+        // The service reaches its client and, through it, this pilot. A
+        // failure here restarts the service, which the recorded calls show.
+        let client = context.client.upgrade().ok_or("client is gone")?;
+        ExtensionClient::new(&client)
+            .pilot::<Self>()
+            .ok_or("pilot not found")?;
         let run = self.maintenance_runs.fetch_add(1, Ordering::SeqCst);
         self.calls
             .push(Call::MaintenanceStarted(context.term.elected_at));
@@ -165,6 +171,10 @@ impl MaintenanceService for ServicePilot {
 #[async_trait]
 impl RuntimeService for ServicePilot {
     async fn run(&self, context: RuntimeServiceContext) -> Result<(), PilotError> {
+        let client = context.client.upgrade().ok_or("client is gone")?;
+        ExtensionClient::new(&client)
+            .pilot::<Self>()
+            .ok_or("pilot not found")?;
         self.calls.push(Call::RuntimeStarted);
         context.database.begin().await?.commit().await?;
         context.cancellation.cancelled().await;

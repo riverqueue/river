@@ -280,6 +280,12 @@ impl std::fmt::Debug for WeakClient {
 }
 
 impl WeakClient {
+    pub(crate) fn new(inner: &Arc<ClientInner>) -> Self {
+        Self {
+            inner: Arc::downgrade(inner),
+        }
+    }
+
     /// Upgrades the handle while its originating client remains alive.
     #[must_use]
     pub fn upgrade(&self) -> Option<Client> {

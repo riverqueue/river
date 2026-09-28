@@ -160,6 +160,7 @@ async fn run_term(inner: Arc<ClientInner>, breakers: Arc<Breakers>, term: Term) 
     for service in inner.pilot.maintenance_services() {
         services.spawn(supervise_extension_service(
             service,
+            crate::client::WeakClient::new(&inner),
             inner.pilot_database(),
             term.clone(),
         ));
@@ -210,6 +211,7 @@ async fn start_or_resign(inner: &Arc<ClientInner>, cancel: &CancellationToken) -
 /// over after a long healthy run.
 async fn supervise_extension_service(
     service: Arc<dyn crate::__private::MaintenanceService>,
+    client: crate::client::WeakClient,
     database: crate::__private::PilotDatabase,
     term: crate::__private::LeaderTerm,
 ) {
@@ -219,6 +221,7 @@ async fn supervise_extension_service(
         // A task of its own, so a panic ends only this run.
         let mut run = JoinSet::new();
         let context = crate::__private::MaintenanceServiceContext {
+            client: client.clone(),
             database: database.clone(),
             term: term.clone(),
         };

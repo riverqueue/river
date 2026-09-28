@@ -444,6 +444,7 @@ impl Supervisor {
                     };
                     let context = crate::__private::RuntimeServiceContext {
                         cancellation: cancel.clone(),
+                        client: crate::client::WeakClient::new(&inner),
                         database: inner.pilot_database(),
                     };
                     Box::pin(async move {

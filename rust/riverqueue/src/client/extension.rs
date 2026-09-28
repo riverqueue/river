@@ -1,5 +1,6 @@
 //! Unstable extension entry points used by companion crates.
 
+use std::sync::Arc;
 use std::time::Duration;
 
 use chrono::{DateTime, Utc};
@@ -7,7 +8,7 @@ use serde_json::Map;
 use serde_json::value::RawValue;
 
 use crate::__private::DatabaseConnection as PilotDatabaseConnection;
-use crate::__private::{PreparedInsertParams, RawInsertResult};
+use crate::__private::{Pilot, PreparedInsertParams, RawInsertResult};
 use crate::client::WeakClient;
 use crate::client::request::{Target, request_type};
 use crate::client::validate::validate_insert_parts;
@@ -41,6 +42,16 @@ impl<'client> ExtensionClient<'client> {
     #[must_use]
     pub fn downgrade(&self) -> WeakClient {
         self.client.downgrade()
+    }
+
+    /// Returns the client's pilot when it's a `P`, so a companion crate can
+    /// reach the pilot it installed from any handle to the client, such as
+    /// a worker's [`WorkContext::client`](crate::WorkContext::client).
+    #[must_use]
+    pub fn pilot<P: Pilot>(&self) -> Option<Arc<P>> {
+        let pilot: Arc<dyn Pilot> = Arc::clone(&self.client.inner.pilot);
+        let pilot: Arc<dyn std::any::Any + Send + Sync> = pilot;
+        pilot.downcast::<P>().ok()
     }
 
     /// Resolves typed insertion options the same way a typed insert does.
