@@ -61,6 +61,13 @@ jobs:
       - name: Public API compatibility
         run: make check/rust/semver
 
+      # docs.rs builds with a nightly toolchain and `--cfg docsrs`, which
+      # enables the crates' `doc_cfg` feature badges. Last, since installing
+      # nightly makes it the default toolchain for later steps.
+      - uses: dtolnay/rust-toolchain@nightly
+      - name: Documentation as docs.rs builds it
+        run: make doc/rust/docsrs
+
   msrv:
     runs-on: ubuntu-latest
     timeout-minutes: 20

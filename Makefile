@@ -174,6 +174,10 @@ doc/rust: ## Build Rust API documentation, compiled examples, and doctests for e
 	cd rust && RUSTDOCFLAGS="-D warnings" cargo test -p riverqueue -p riverqueue-migrate -p riverqueue-cli -p riverqueue-test --no-default-features --features sqlite --doc --locked
 	cd rust && cargo check --workspace --examples --all-features --locked
 
+.PHONY: doc/rust/docsrs
+doc/rust/docsrs: ## Build Rust API documentation as docs.rs does (nightly toolchain, `--cfg docsrs`)
+	cd rust && RUSTDOCFLAGS="--cfg docsrs -D warnings" CARGO_TARGET_DIR="$${CARGO_TARGET_DIR:-target}/docsrs" cargo +nightly doc -p riverqueue -p riverqueue-migrate -p riverqueue-test --all-features --no-deps --locked
+
 .PHONY: check/rust/dependencies
 check/rust/dependencies: ## Audit Rust advisories, licenses, bans, and sources
 	cd rust && cargo deny check
