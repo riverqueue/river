@@ -10,6 +10,7 @@ use tokio::{sync::mpsc, time::Instant};
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, error, info, warn};
 
+use crate::database::DatabasePool;
 #[cfg(feature = "sqlite")]
 use crate::database::sqlite;
 use crate::{Error, client::ClientInner};
@@ -437,46 +438,42 @@ impl DatabaseLeaderStore {
 #[async_trait]
 impl LeaderStore for DatabaseLeaderStore {
     async fn elect(&self, ttl: Duration) -> Result<Option<DateTime<Utc>>, Error> {
-        #[cfg(feature = "sqlite")]
-        if let Some(pool) = self.inner.sqlite_pool() {
-            let mut transaction = crate::database::begin_sqlite_write(pool).await?;
-            let now = Utc::now();
-            sqlite::leader_delete_expired(&mut transaction, now)
-                .await
-                .map_err(sqlite_error)?;
-            let leader = sqlite::leader_elect(&mut transaction, &self.inner.id, now, ttl)
-                .await
-                .map_err(sqlite_error)?;
-            transaction.commit().await?;
-            return Ok(leader.map(|leader| leader.elected_at));
+        match self.inner.database.pool() {
+            #[cfg(feature = "sqlite")]
+            DatabasePool::Sqlite(pool) => {
+                let mut transaction = crate::database::begin_sqlite_write(pool).await?;
+                let now = Utc::now();
+                sqlite::leader_delete_expired(&mut transaction, now)
+                    .await
+                    .map_err(sqlite_error)?;
+                let leader = sqlite::leader_elect(&mut transaction, &self.inner.id, now, ttl)
+                    .await
+                    .map_err(sqlite_error)?;
+                transaction.commit().await?;
+                Ok(leader.map(|leader| leader.elected_at))
+            }
+            #[cfg(feature = "postgres")]
+            DatabasePool::Postgres(pool) => {
+                let table = self.inner.schema.qualify("river_leader");
+                let mut transaction = crate::database::begin_postgres(pool).await?;
+                sqlx::query(AssertSqlSafe(format!(
+                    "DELETE FROM {table} WHERE expires_at < now()"
+                )))
+                .execute(&mut *transaction)
+                .await?;
+                let elected_at = sqlx::query_scalar::<_, DateTime<Utc>>(AssertSqlSafe(format!(
+                    "INSERT INTO {table} (leader_id, elected_at, expires_at) \
+                     VALUES ($1, now(), now() + make_interval(secs => $2)) \
+                     ON CONFLICT (name) DO NOTHING RETURNING elected_at"
+                )))
+                .bind(&self.inner.id)
+                .bind(ttl.as_secs_f64())
+                .fetch_optional(&mut *transaction)
+                .await?;
+                transaction.commit().await?;
+                Ok(elected_at)
+            }
         }
-        #[cfg(feature = "postgres")]
-        {
-            let pool = self
-                .inner
-                .postgres_pool()
-                .expect("client database is PostgreSQL or SQLite");
-            let table = self.inner.schema.qualify("river_leader");
-            let mut transaction = crate::database::begin_postgres(pool).await?;
-            sqlx::query(AssertSqlSafe(format!(
-                "DELETE FROM {table} WHERE expires_at < now()"
-            )))
-            .execute(&mut *transaction)
-            .await?;
-            let elected_at = sqlx::query_scalar::<_, DateTime<Utc>>(AssertSqlSafe(format!(
-                "INSERT INTO {table} (leader_id, elected_at, expires_at) \
-                 VALUES ($1, now(), now() + make_interval(secs => $2)) \
-                 ON CONFLICT (name) DO NOTHING RETURNING elected_at"
-            )))
-            .bind(&self.inner.id)
-            .bind(ttl.as_secs_f64())
-            .fetch_optional(&mut *transaction)
-            .await?;
-            transaction.commit().await?;
-            return Ok(elected_at);
-        }
-        #[allow(unreachable_code)]
-        Err(no_backend())
     }
 
     async fn reelect(
@@ -484,115 +481,99 @@ impl LeaderStore for DatabaseLeaderStore {
         elected_at: DateTime<Utc>,
         ttl: Duration,
     ) -> Result<Option<DateTime<Utc>>, Error> {
-        #[cfg(feature = "sqlite")]
-        if let Some(pool) = self.inner.sqlite_pool() {
-            let mut transaction = crate::database::begin_sqlite_write(pool).await?;
-            let leader = sqlite::leader_reelect(
-                &mut transaction,
-                &self.inner.id,
-                elected_at,
-                Utc::now(),
-                ttl,
-            )
-            .await
-            .map_err(sqlite_error)?;
-            transaction.commit().await?;
-            return Ok(leader.map(|leader| leader.elected_at));
-        }
-        #[cfg(feature = "postgres")]
-        {
-            let pool = self
-                .inner
-                .postgres_pool()
-                .expect("client database is PostgreSQL or SQLite");
-            let table = self.inner.schema.qualify("river_leader");
-            return Ok(
-                sqlx::query_scalar::<_, DateTime<Utc>>(AssertSqlSafe(format!(
-                    "UPDATE {table} SET expires_at = now() + make_interval(secs => $1) \
-                 WHERE elected_at = $2 AND expires_at >= now() AND leader_id = $3 \
-                 RETURNING elected_at"
-                )))
-                .bind(ttl.as_secs_f64())
-                .bind(elected_at)
-                .bind(&self.inner.id)
-                .fetch_optional(pool)
-                .await?,
-            );
-        }
-        #[allow(unreachable_code)]
-        Err(no_backend())
-    }
-
-    async fn resign(&self, elected_at: DateTime<Utc>) -> Result<bool, Error> {
-        #[cfg(feature = "sqlite")]
-        if let Some(pool) = self.inner.sqlite_pool() {
-            let mut transaction = crate::database::begin_sqlite_write(pool).await?;
-            let resigned = sqlite::leader_resign(&mut transaction, &self.inner.id, elected_at)
-                .await
-                .map_err(sqlite_error)?;
-            if resigned {
-                // Go's SQLite driver does not announce resignations, but a
-                // durable outbox row lets polling peers bid promptly.
-                let payload = serde_json::json!({
-                    "action": "resigned",
-                    "leader_id": self.inner.id,
-                })
-                .to_string();
-                sqlite::notification_insert(
+        match self.inner.database.pool() {
+            #[cfg(feature = "sqlite")]
+            DatabasePool::Sqlite(pool) => {
+                let mut transaction = crate::database::begin_sqlite_write(pool).await?;
+                let leader = sqlite::leader_reelect(
                     &mut transaction,
-                    &[sqlite::NotificationInput {
-                        payload: &payload,
-                        topic: crate::NOTIFICATION_TOPIC_LEADERSHIP,
-                    }],
+                    &self.inner.id,
+                    elected_at,
+                    Utc::now(),
+                    ttl,
                 )
                 .await
                 .map_err(sqlite_error)?;
+                transaction.commit().await?;
+                Ok(leader.map(|leader| leader.elected_at))
             }
-            transaction.commit().await?;
-            return Ok(resigned);
+            #[cfg(feature = "postgres")]
+            DatabasePool::Postgres(pool) => {
+                let table = self.inner.schema.qualify("river_leader");
+                Ok(
+                    sqlx::query_scalar::<_, DateTime<Utc>>(AssertSqlSafe(format!(
+                        "UPDATE {table} SET expires_at = now() + make_interval(secs => $1) \
+                     WHERE elected_at = $2 AND expires_at >= now() AND leader_id = $3 \
+                     RETURNING elected_at"
+                    )))
+                    .bind(ttl.as_secs_f64())
+                    .bind(elected_at)
+                    .bind(&self.inner.id)
+                    .fetch_optional(pool)
+                    .await?,
+                )
+            }
         }
-        #[cfg(feature = "postgres")]
-        {
-            let pool = self
-                .inner
-                .postgres_pool()
-                .expect("client database is PostgreSQL or SQLite");
-            let table = self.inner.schema.qualify("river_leader");
-            let result = sqlx::query(AssertSqlSafe(format!(
-                "WITH currently_held_leaders AS (\
-                    SELECT * FROM {table} WHERE elected_at = $1 AND leader_id = $2 FOR UPDATE\
-                 ), notified_resignations AS (\
-                    SELECT pg_notify(\
-                        concat(coalesce($3::text, current_schema()), '.', $4::text), \
-                        json_build_object('leader_id', leader_id, 'action', 'resigned')::text\
-                    ) FROM currently_held_leaders\
-                 ) \
-                 DELETE FROM {table} USING notified_resignations"
-            )))
-            .bind(elected_at)
-            .bind(&self.inner.id)
-            .bind(self.inner.schema.as_deref())
-            .bind(crate::NOTIFICATION_TOPIC_LEADERSHIP)
-            .execute(pool)
-            .await?;
-            return Ok(result.rows_affected() > 0);
+    }
+
+    async fn resign(&self, elected_at: DateTime<Utc>) -> Result<bool, Error> {
+        match self.inner.database.pool() {
+            #[cfg(feature = "sqlite")]
+            DatabasePool::Sqlite(pool) => {
+                let mut transaction = crate::database::begin_sqlite_write(pool).await?;
+                let resigned = sqlite::leader_resign(&mut transaction, &self.inner.id, elected_at)
+                    .await
+                    .map_err(sqlite_error)?;
+                if resigned {
+                    // Go's SQLite driver does not announce resignations, but a
+                    // durable outbox row lets polling peers bid promptly.
+                    let payload = serde_json::json!({
+                        "action": "resigned",
+                        "leader_id": self.inner.id,
+                    })
+                    .to_string();
+                    sqlite::notification_insert(
+                        &mut transaction,
+                        &[sqlite::NotificationInput {
+                            payload: &payload,
+                            topic: crate::NOTIFICATION_TOPIC_LEADERSHIP,
+                        }],
+                    )
+                    .await
+                    .map_err(sqlite_error)?;
+                }
+                transaction.commit().await?;
+                Ok(resigned)
+            }
+            #[cfg(feature = "postgres")]
+            DatabasePool::Postgres(pool) => {
+                let table = self.inner.schema.qualify("river_leader");
+                let result = sqlx::query(AssertSqlSafe(format!(
+                    "WITH currently_held_leaders AS (\
+                        SELECT * FROM {table} WHERE elected_at = $1 AND leader_id = $2 FOR UPDATE\
+                     ), notified_resignations AS (\
+                        SELECT pg_notify(\
+                            concat(coalesce($3::text, current_schema()), '.', $4::text), \
+                            json_build_object('leader_id', leader_id, 'action', 'resigned')::text\
+                        ) FROM currently_held_leaders\
+                     ) \
+                     DELETE FROM {table} USING notified_resignations"
+                )))
+                .bind(elected_at)
+                .bind(&self.inner.id)
+                .bind(self.inner.schema.as_deref())
+                .bind(crate::NOTIFICATION_TOPIC_LEADERSHIP)
+                .execute(pool)
+                .await?;
+                Ok(result.rows_affected() > 0)
+            }
         }
-        #[allow(unreachable_code)]
-        Err(no_backend())
     }
 }
 
 #[cfg(feature = "sqlite")]
 fn sqlite_error(error: sqlite::BackendError) -> Error {
     Error::Database(error.into())
-}
-
-#[allow(dead_code, reason = "only reachable when no backend feature matches")]
-fn no_backend() -> Error {
-    Error::runtime_context(
-        "maintenance",
-        "database dispatch selected no supported backend".to_owned(),
-    )
 }
 
 #[cfg(test)]

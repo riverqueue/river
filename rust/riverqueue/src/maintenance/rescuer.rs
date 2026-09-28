@@ -12,6 +12,7 @@ use crate::__private::{
 
 #[cfg(feature = "postgres")]
 use crate::client::{JobRecord, job_projection, tolerant_row};
+use crate::database::DatabasePool;
 #[cfg(feature = "sqlite")]
 use crate::database::sqlite;
 use crate::{AttemptError, Error, JobRow, JobState, WorkerTimeout, client::ClientInner};
@@ -62,22 +63,21 @@ async fn rescue_batch(
     limit: i64,
     stuck_horizon: DateTime<Utc>,
 ) -> Result<Batch, MaintenanceError> {
-    #[cfg(feature = "sqlite")]
-    if let Some(pool) = context.inner.sqlite_pool() {
-        return super::sqlite_cancellable(
-            &context.cancel,
-            TIMEOUT_DEFAULT,
-            rescue_batch_sqlite(&context.inner, pool, after_id, limit, stuck_horizon),
-        )
-        .await;
+    match context.inner.database.pool() {
+        #[cfg(feature = "sqlite")]
+        DatabasePool::Sqlite(pool) => {
+            super::sqlite_cancellable(
+                &context.cancel,
+                TIMEOUT_DEFAULT,
+                rescue_batch_sqlite(&context.inner, pool, after_id, limit, stuck_horizon),
+            )
+            .await
+        }
+        #[cfg(feature = "postgres")]
+        DatabasePool::Postgres(pool) => {
+            rescue_batch_postgres(context, pool, after_id, limit, stuck_horizon).await
+        }
     }
-    #[cfg(feature = "postgres")]
-    return rescue_batch_postgres(context, after_id, limit, stuck_horizon).await;
-    #[allow(unreachable_code)]
-    Ok(Batch {
-        last_id: None,
-        selected: 0,
-    })
 }
 
 fn rescue_params(
@@ -213,6 +213,7 @@ fn cancel_attempted(value: Option<&serde_json::value::RawValue>) -> bool {
 )]
 async fn rescue_batch_postgres(
     context: &ServiceContext,
+    pool: &sqlx::PgPool,
     after_id: i64,
     limit: i64,
     stuck_horizon: DateTime<Utc>,
@@ -220,9 +221,6 @@ async fn rescue_batch_postgres(
     use super::postgres::{MaintenanceTransaction, cancellable};
 
     let inner = &context.inner;
-    let pool = inner
-        .postgres_pool()
-        .expect("client database is PostgreSQL or SQLite");
     let table = inner.schema.qualify("river_job");
     let mut transaction =
         MaintenanceTransaction::begin(pool, &context.cancel, TIMEOUT_DEFAULT).await?;

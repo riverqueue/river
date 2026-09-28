@@ -8,6 +8,7 @@ use chrono::{DateTime, Utc};
 #[cfg(feature = "postgres")]
 use sqlx::AssertSqlSafe;
 
+use crate::database::DatabasePool;
 #[cfg(feature = "sqlite")]
 use crate::database::sqlite;
 use crate::{__private::FinalizedJobDeleteParams, Error};
@@ -73,43 +74,40 @@ async fn clean_jobs_batch(
     params: &FinalizedJobDeleteParams,
 ) -> Result<u64, MaintenanceError> {
     let timeout = context.inner.maintenance.job_cleaner_timeout;
-    #[cfg(feature = "sqlite")]
-    if let Some(pool) = context.inner.sqlite_pool() {
-        let operation = async {
-            let mut transaction = crate::database::begin_sqlite_write(pool).await?;
-            let count = sqlite_delete_finalized_jobs(&mut transaction, params).await?;
-            transaction.commit().await?;
-            Ok::<_, MaintenanceError>(count)
-        };
-        return super::sqlite_cancellable(&context.cancel, timeout, operation).await;
-    }
-    #[cfg(feature = "postgres")]
-    {
-        use super::postgres::{MaintenanceTransaction, cancellable};
+    match context.inner.database.pool() {
+        #[cfg(feature = "sqlite")]
+        DatabasePool::Sqlite(pool) => {
+            let operation = async {
+                let mut transaction = crate::database::begin_sqlite_write(pool).await?;
+                let count = sqlite_delete_finalized_jobs(&mut transaction, params).await?;
+                transaction.commit().await?;
+                Ok::<_, MaintenanceError>(count)
+            };
+            super::sqlite_cancellable(&context.cancel, timeout, operation).await
+        }
+        #[cfg(feature = "postgres")]
+        DatabasePool::Postgres(pool) => {
+            use super::postgres::{MaintenanceTransaction, cancellable};
 
-        let pool = context
-            .inner
-            .postgres_pool()
-            .expect("client database is PostgreSQL or SQLite");
-        let mut transaction = MaintenanceTransaction::begin(pool, &context.cancel, timeout).await?;
-        let backend_pid = transaction.backend_pid;
-        let count = cancellable(
-            pool,
-            backend_pid,
-            &context.cancel,
-            timeout,
-            postgres_delete_finalized_jobs(
-                &mut transaction.transaction,
-                &context.inner.schema,
-                params,
-            ),
-        )
-        .await?;
-        transaction.commit(pool, &context.cancel).await?;
-        return Ok(count);
+            let mut transaction =
+                MaintenanceTransaction::begin(pool, &context.cancel, timeout).await?;
+            let backend_pid = transaction.backend_pid;
+            let count = cancellable(
+                pool,
+                backend_pid,
+                &context.cancel,
+                timeout,
+                postgres_delete_finalized_jobs(
+                    &mut transaction.transaction,
+                    &context.inner.schema,
+                    params,
+                ),
+            )
+            .await?;
+            transaction.commit(pool, &context.cancel).await?;
+            Ok(count)
+        }
     }
-    #[allow(unreachable_code)]
-    Ok(0)
 }
 
 /// Runs the job cleaner's deletion on PostgreSQL.
@@ -204,53 +202,49 @@ async fn clean_queues_batch(
     updated_before: DateTime<Utc>,
     limit: i64,
 ) -> Result<usize, MaintenanceError> {
-    #[cfg(feature = "sqlite")]
-    if let Some(pool) = context.inner.sqlite_pool() {
-        let operation = async {
-            let mut transaction = crate::database::begin_sqlite_write(pool).await?;
-            let deleted = sqlite::queue_delete_expired(
-                &mut transaction,
-                updated_before,
-                i32::try_from(limit).unwrap_or(i32::MAX),
+    match context.inner.database.pool() {
+        #[cfg(feature = "sqlite")]
+        DatabasePool::Sqlite(pool) => {
+            let operation = async {
+                let mut transaction = crate::database::begin_sqlite_write(pool).await?;
+                let deleted = sqlite::queue_delete_expired(
+                    &mut transaction,
+                    updated_before,
+                    i32::try_from(limit).unwrap_or(i32::MAX),
+                )
+                .await?;
+                transaction.commit().await?;
+                Ok::<_, MaintenanceError>(deleted.len())
+            };
+            super::sqlite_cancellable(&context.cancel, TIMEOUT_DEFAULT, operation).await
+        }
+        #[cfg(feature = "postgres")]
+        DatabasePool::Postgres(pool) => {
+            use super::postgres::{MaintenanceTransaction, cancellable};
+
+            let table = context.inner.schema.qualify("river_queue");
+            let mut transaction =
+                MaintenanceTransaction::begin(pool, &context.cancel, TIMEOUT_DEFAULT).await?;
+            let backend_pid = transaction.backend_pid;
+            let deleted = cancellable(
+                pool,
+                backend_pid,
+                &context.cancel,
+                TIMEOUT_DEFAULT,
+                sqlx::query_scalar::<_, String>(AssertSqlSafe(format!(
+                    "DELETE FROM {table} WHERE name IN (\
+                        SELECT name FROM {table} WHERE updated_at < $1 ORDER BY name LIMIT $2\
+                     ) RETURNING name"
+                )))
+                .bind(updated_before)
+                .bind(limit)
+                .fetch_all(&mut *transaction.transaction),
             )
             .await?;
-            transaction.commit().await?;
-            Ok::<_, MaintenanceError>(deleted.len())
-        };
-        return super::sqlite_cancellable(&context.cancel, TIMEOUT_DEFAULT, operation).await;
+            transaction.commit(pool, &context.cancel).await?;
+            Ok(deleted.len())
+        }
     }
-    #[cfg(feature = "postgres")]
-    {
-        use super::postgres::{MaintenanceTransaction, cancellable};
-
-        let pool = context
-            .inner
-            .postgres_pool()
-            .expect("client database is PostgreSQL or SQLite");
-        let table = context.inner.schema.qualify("river_queue");
-        let mut transaction =
-            MaintenanceTransaction::begin(pool, &context.cancel, TIMEOUT_DEFAULT).await?;
-        let backend_pid = transaction.backend_pid;
-        let deleted = cancellable(
-            pool,
-            backend_pid,
-            &context.cancel,
-            TIMEOUT_DEFAULT,
-            sqlx::query_scalar::<_, String>(AssertSqlSafe(format!(
-                "DELETE FROM {table} WHERE name IN (\
-                    SELECT name FROM {table} WHERE updated_at < $1 ORDER BY name LIMIT $2\
-                 ) RETURNING name"
-            )))
-            .bind(updated_before)
-            .bind(limit)
-            .fetch_all(&mut *transaction.transaction),
-        )
-        .await?;
-        transaction.commit(pool, &context.cancel).await?;
-        return Ok(deleted.len());
-    }
-    #[allow(unreachable_code)]
-    Ok(0)
 }
 
 /// Deletes SQLite notification outbox rows old enough that every poller has
@@ -262,11 +256,10 @@ async fn clean_queues_batch(
 /// so rows expiring meanwhile don't extend it. Repeated timeouts switch to
 /// the reduced batch size.
 #[cfg(feature = "sqlite")]
-pub(super) async fn clean_notifications(context: &ServiceContext) -> Result<u64, MaintenanceError> {
-    let pool = context
-        .inner
-        .sqlite_pool()
-        .expect("notification cleanup is only started for SQLite");
+pub(super) async fn clean_notifications(
+    context: &ServiceContext,
+    pool: &sqlx::SqlitePool,
+) -> Result<u64, MaintenanceError> {
     let retention = chrono::Duration::from_std(NOTIFICATION_RETENTION)
         .map_err(|error| Error::configuration_context("maintenance", error.to_string()))?;
     let created_before = Utc::now() - retention;
@@ -339,7 +332,7 @@ mod sqlite_tests {
             inner: Arc::clone(&client.inner),
         };
 
-        assert_eq!(clean_notifications(&context).await.unwrap(), 5);
+        assert_eq!(clean_notifications(&context, &pool).await.unwrap(), 5);
         let remaining: Vec<String> = sqlx::query_scalar("SELECT payload FROM river_notification")
             .fetch_all(&pool)
             .await

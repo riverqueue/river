@@ -487,19 +487,24 @@ async fn notify_interrupted_jobs(inner: &ClientInner, batch: &[CompletionUpdate]
             .queue_notifications
             .send(RuntimeNotification::Insert((*queue).to_owned()));
     }
-    #[cfg(feature = "postgres")]
-    if let Some(pool) = inner.postgres_pool() {
-        for queue in queues {
-            if let Err(error) = sqlx::query(
-                "SELECT pg_notify(concat(coalesce($1::text, current_schema()), '.', $2::text), json_build_object('queue', $3::text)::text)",
-            )
-            .bind(inner.schema.as_deref())
-            .bind(crate::NOTIFICATION_TOPIC_INSERT)
-            .bind(queue)
-            .execute(pool)
-            .await
-            {
-                debug!(error = %crate::error::Chain(&error), queue, "could not notify peers about interrupted River jobs");
+    match inner.database.pool() {
+        // SQLite clients wrote these notifications with the completion.
+        #[cfg(feature = "sqlite")]
+        DatabasePool::Sqlite(_) => {}
+        #[cfg(feature = "postgres")]
+        DatabasePool::Postgres(pool) => {
+            for queue in queues {
+                if let Err(error) = sqlx::query(
+                    "SELECT pg_notify(concat(coalesce($1::text, current_schema()), '.', $2::text), json_build_object('queue', $3::text)::text)",
+                )
+                .bind(inner.schema.as_deref())
+                .bind(crate::NOTIFICATION_TOPIC_INSERT)
+                .bind(queue)
+                .execute(pool)
+                .await
+                {
+                    debug!(error = %crate::error::Chain(&error), queue, "could not notify peers about interrupted River jobs");
+                }
             }
         }
     }
@@ -521,185 +526,179 @@ pub(super) async fn persist_completion_batch(
     inner: &ClientInner,
     batch: &[CompletionUpdate],
 ) -> Result<Vec<JobRow>, Error> {
-    #[cfg(feature = "sqlite")]
-    if let Some(pool) = inner.sqlite_pool() {
-        let mut transaction = crate::database::begin_sqlite_write(pool).await?;
-        let mut rows = Vec::with_capacity(batch.len());
-        let now = Utc::now();
-        for update in batch {
-            let row = crate::database::sqlite::complete_decoded(
-                &mut transaction,
-                &crate::database::sqlite::CompleteJob {
-                    attempt: update.attempt,
-                    error: update.error.as_ref(),
-                    finalized_at: update.finalized_at,
-                    id: update.job_id,
-                    metadata_updates: (!update.metadata.is_empty()).then_some(&update.metadata),
-                    now,
-                    scheduled_at: update.scheduled_at,
-                    state: update.state,
-                },
-            )
-            .await
-            .map_err(sqlite_backend_error)?;
-            let row = match row {
-                Some(row) => Some(row),
-                None => crate::database::sqlite::merge_metadata_if_not_running(
+    match inner.database.pool() {
+        #[cfg(feature = "sqlite")]
+        DatabasePool::Sqlite(pool) => {
+            let mut transaction = crate::database::begin_sqlite_write(pool).await?;
+            let mut rows = Vec::with_capacity(batch.len());
+            let now = Utc::now();
+            for update in batch {
+                let row = crate::database::sqlite::complete_decoded(
                     &mut transaction,
-                    update.job_id,
-                    &update.metadata,
+                    &crate::database::sqlite::CompleteJob {
+                        attempt: update.attempt,
+                        error: update.error.as_ref(),
+                        finalized_at: update.finalized_at,
+                        id: update.job_id,
+                        metadata_updates: (!update.metadata.is_empty()).then_some(&update.metadata),
+                        now,
+                        scheduled_at: update.scheduled_at,
+                        state: update.state,
+                    },
                 )
                 .await
-                .map_err(sqlite_backend_error)?,
-            };
-            rows.extend(row.and_then(tolerant_row));
-        }
-        let interrupted_queues = rows
-            .iter()
-            .filter(|row| row.state == JobState::Available)
-            .filter(|row| {
-                batch.iter().any(|update| {
-                    update.job_id == row.id && update.event_kind == JobEventKind::Interrupted
+                .map_err(sqlite_backend_error)?;
+                let row = match row {
+                    Some(row) => Some(row),
+                    None => crate::database::sqlite::merge_metadata_if_not_running(
+                        &mut transaction,
+                        update.job_id,
+                        &update.metadata,
+                    )
+                    .await
+                    .map_err(sqlite_backend_error)?,
+                };
+                rows.extend(row.and_then(tolerant_row));
+            }
+            let interrupted_queues = rows
+                .iter()
+                .filter(|row| row.state == JobState::Available)
+                .filter(|row| {
+                    batch.iter().any(|update| {
+                        update.job_id == row.id && update.event_kind == JobEventKind::Interrupted
+                    })
                 })
-            })
-            .map(|row| row.queue.as_str())
-            .collect::<std::collections::BTreeSet<_>>();
-        for queue in interrupted_queues {
-            let payload = serde_json::json!({ "queue": queue }).to_string();
-            crate::database::sqlite::notification_insert(
-                &mut transaction,
-                &[crate::database::sqlite::NotificationInput {
-                    payload: &payload,
-                    topic: crate::NOTIFICATION_TOPIC_INSERT,
-                }],
-            )
-            .await
-            .map_err(sqlite_backend_error)?;
-        }
-        if inner.pilot.intercepts_job_set_state() {
-            after_jobs_set_state(
-                inner,
-                PilotDatabaseConnection::Sqlite(&mut transaction),
-                &batch.iter().map(|update| update.job_id).collect::<Vec<_>>(),
-                &rows,
-            )
-            .await?;
-        }
-        transaction.commit().await?;
-        return Ok(rows);
-    }
-    #[cfg(feature = "postgres")]
-    {
-        let attempt_do_update = batch
-            .iter()
-            .map(|update| update.attempt.is_some())
-            .collect::<Vec<_>>();
-        let attempts = batch
-            .iter()
-            .map(|update| update.attempt.unwrap_or_default())
-            .collect::<Vec<_>>();
-        let errors = batch
-            .iter()
-            .map(|update| update.error.as_ref().map(Json))
-            .collect::<Vec<_>>();
-        let finalized_at = batch
-            .iter()
-            .map(|update| update.finalized_at)
-            .collect::<Vec<_>>();
-        let ids = batch.iter().map(|update| update.job_id).collect::<Vec<_>>();
-        let metadata_do_merge = batch
-            .iter()
-            .map(|update| !update.metadata.is_empty())
-            .collect::<Vec<_>>();
-        let metadata = batch
-            .iter()
-            .map(|update| Json(&update.metadata))
-            .collect::<Vec<_>>();
-        let scheduled_at = batch
-            .iter()
-            .map(|update| update.scheduled_at)
-            .collect::<Vec<_>>();
-        let states = batch
-            .iter()
-            .map(|update| update.state.as_str())
-            .collect::<Vec<_>>();
-        let table = inner.schema.qualify("river_job");
-        let state_type = inner.schema.qualify("river_job_state");
-        let should_cancel = "(job_input.state IN ('available', 'retryable', 'scheduled') \
-                             AND job.metadata ? 'cancel_attempted_at')";
-        let sql = format!(
-            "WITH job_input AS (\
-                SELECT * FROM unnest(\
-                    $1::bigint[], $2::boolean[], $3::smallint[], $4::jsonb[], \
-                    $5::timestamptz[], $6::boolean[], $7::jsonb[], $8::timestamptz[], $9::text[]\
-                ) AS job_input(\
-                    id, attempt_do_update, attempt, errors, finalized_at, \
-                    metadata_do_merge, metadata_updates, scheduled_at, state)\
-             ), updated AS (\
-                UPDATE {table} AS job SET \
-                    attempt = CASE WHEN job.state = 'running' AND NOT {should_cancel} \
-                        AND job_input.attempt_do_update \
-                        THEN job_input.attempt ELSE job.attempt END, \
-                    errors = CASE WHEN job.state = 'running' AND job_input.errors IS NOT NULL \
-                        THEN array_append(coalesce(job.errors, '{{}}'), job_input.errors) \
-                        ELSE job.errors END, \
-                    finalized_at = CASE WHEN job.state = 'running' AND {should_cancel} THEN now() \
-                        WHEN job.state = 'running' AND job_input.finalized_at IS NOT NULL \
-                        THEN job_input.finalized_at ELSE job.finalized_at END, \
-                    metadata = CASE WHEN job_input.metadata_do_merge \
-                        THEN job.metadata || job_input.metadata_updates ELSE job.metadata END, \
-                    scheduled_at = CASE WHEN job.state = 'running' AND NOT {should_cancel} \
-                        AND job_input.scheduled_at IS NOT NULL \
-                        THEN job_input.scheduled_at ELSE job.scheduled_at END, \
-                    state = CASE WHEN job.state = 'running' AND {should_cancel} \
-                        THEN 'cancelled'::{state_type} \
-                        WHEN job.state = 'running' THEN job_input.state::{state_type} \
-                        ELSE job.state END \
-                FROM job_input \
-                WHERE job.id = job_input.id \
-                    AND (job.state = 'running' OR job_input.metadata_do_merge) \
-                RETURNING job.*\
-             ) \
-             SELECT {projection}, false AS unique_skipped_as_duplicate \
-             FROM {table} AS job JOIN job_input ON job.id = job_input.id \
-             WHERE NOT EXISTS (SELECT 1 FROM updated WHERE updated.id = job.id) \
-             UNION ALL \
-             SELECT {projection}, false AS unique_skipped_as_duplicate FROM updated AS job",
-            projection = job_projection("job"),
-        );
-        let query = sqlx::query(AssertSqlSafe(sql))
-            .bind(ids)
-            .bind(attempt_do_update)
-            .bind(attempts)
-            .bind(errors)
-            .bind(finalized_at)
-            .bind(metadata_do_merge)
-            .bind(metadata)
-            .bind(scheduled_at)
-            .bind(states);
-        let pool = inner
-            .postgres_pool()
-            .expect("PostgreSQL completion path requires a PostgreSQL pool");
-        if inner.pilot.intercepts_job_set_state() {
-            let mut transaction = crate::database::begin_postgres(pool).await?;
-            let rows = decode_completion_rows(&query.fetch_all(&mut *transaction).await?);
-            after_jobs_set_state(
-                inner,
-                PilotDatabaseConnection::Postgres(&mut transaction),
-                &batch.iter().map(|update| update.job_id).collect::<Vec<_>>(),
-                &rows,
-            )
-            .await?;
+                .map(|row| row.queue.as_str())
+                .collect::<std::collections::BTreeSet<_>>();
+            for queue in interrupted_queues {
+                let payload = serde_json::json!({ "queue": queue }).to_string();
+                crate::database::sqlite::notification_insert(
+                    &mut transaction,
+                    &[crate::database::sqlite::NotificationInput {
+                        payload: &payload,
+                        topic: crate::NOTIFICATION_TOPIC_INSERT,
+                    }],
+                )
+                .await
+                .map_err(sqlite_backend_error)?;
+            }
+            if inner.pilot.intercepts_job_set_state() {
+                after_jobs_set_state(
+                    inner,
+                    PilotDatabaseConnection::Sqlite(&mut transaction),
+                    &batch.iter().map(|update| update.job_id).collect::<Vec<_>>(),
+                    &rows,
+                )
+                .await?;
+            }
             transaction.commit().await?;
-            return Ok(rows);
+            Ok(rows)
         }
-        return Ok(decode_completion_rows(&query.fetch_all(pool).await?));
+        #[cfg(feature = "postgres")]
+        DatabasePool::Postgres(pool) => {
+            let attempt_do_update = batch
+                .iter()
+                .map(|update| update.attempt.is_some())
+                .collect::<Vec<_>>();
+            let attempts = batch
+                .iter()
+                .map(|update| update.attempt.unwrap_or_default())
+                .collect::<Vec<_>>();
+            let errors = batch
+                .iter()
+                .map(|update| update.error.as_ref().map(Json))
+                .collect::<Vec<_>>();
+            let finalized_at = batch
+                .iter()
+                .map(|update| update.finalized_at)
+                .collect::<Vec<_>>();
+            let ids = batch.iter().map(|update| update.job_id).collect::<Vec<_>>();
+            let metadata_do_merge = batch
+                .iter()
+                .map(|update| !update.metadata.is_empty())
+                .collect::<Vec<_>>();
+            let metadata = batch
+                .iter()
+                .map(|update| Json(&update.metadata))
+                .collect::<Vec<_>>();
+            let scheduled_at = batch
+                .iter()
+                .map(|update| update.scheduled_at)
+                .collect::<Vec<_>>();
+            let states = batch
+                .iter()
+                .map(|update| update.state.as_str())
+                .collect::<Vec<_>>();
+            let table = inner.schema.qualify("river_job");
+            let state_type = inner.schema.qualify("river_job_state");
+            let should_cancel = "(job_input.state IN ('available', 'retryable', 'scheduled') \
+                                 AND job.metadata ? 'cancel_attempted_at')";
+            let sql = format!(
+                "WITH job_input AS (\
+                    SELECT * FROM unnest(\
+                        $1::bigint[], $2::boolean[], $3::smallint[], $4::jsonb[], \
+                        $5::timestamptz[], $6::boolean[], $7::jsonb[], $8::timestamptz[], $9::text[]\
+                    ) AS job_input(\
+                        id, attempt_do_update, attempt, errors, finalized_at, \
+                        metadata_do_merge, metadata_updates, scheduled_at, state)\
+                 ), updated AS (\
+                    UPDATE {table} AS job SET \
+                        attempt = CASE WHEN job.state = 'running' AND NOT {should_cancel} \
+                            AND job_input.attempt_do_update \
+                            THEN job_input.attempt ELSE job.attempt END, \
+                        errors = CASE WHEN job.state = 'running' AND job_input.errors IS NOT NULL \
+                            THEN array_append(coalesce(job.errors, '{{}}'), job_input.errors) \
+                            ELSE job.errors END, \
+                        finalized_at = CASE WHEN job.state = 'running' AND {should_cancel} THEN now() \
+                            WHEN job.state = 'running' AND job_input.finalized_at IS NOT NULL \
+                            THEN job_input.finalized_at ELSE job.finalized_at END, \
+                        metadata = CASE WHEN job_input.metadata_do_merge \
+                            THEN job.metadata || job_input.metadata_updates ELSE job.metadata END, \
+                        scheduled_at = CASE WHEN job.state = 'running' AND NOT {should_cancel} \
+                            AND job_input.scheduled_at IS NOT NULL \
+                            THEN job_input.scheduled_at ELSE job.scheduled_at END, \
+                        state = CASE WHEN job.state = 'running' AND {should_cancel} \
+                            THEN 'cancelled'::{state_type} \
+                            WHEN job.state = 'running' THEN job_input.state::{state_type} \
+                            ELSE job.state END \
+                    FROM job_input \
+                    WHERE job.id = job_input.id \
+                        AND (job.state = 'running' OR job_input.metadata_do_merge) \
+                    RETURNING job.*\
+                 ) \
+                 SELECT {projection}, false AS unique_skipped_as_duplicate \
+                 FROM {table} AS job JOIN job_input ON job.id = job_input.id \
+                 WHERE NOT EXISTS (SELECT 1 FROM updated WHERE updated.id = job.id) \
+                 UNION ALL \
+                 SELECT {projection}, false AS unique_skipped_as_duplicate FROM updated AS job",
+                projection = job_projection("job"),
+            );
+            let query = sqlx::query(AssertSqlSafe(sql))
+                .bind(ids)
+                .bind(attempt_do_update)
+                .bind(attempts)
+                .bind(errors)
+                .bind(finalized_at)
+                .bind(metadata_do_merge)
+                .bind(metadata)
+                .bind(scheduled_at)
+                .bind(states);
+            if inner.pilot.intercepts_job_set_state() {
+                let mut transaction = crate::database::begin_postgres(pool).await?;
+                let rows = decode_completion_rows(&query.fetch_all(&mut *transaction).await?);
+                after_jobs_set_state(
+                    inner,
+                    PilotDatabaseConnection::Postgres(&mut transaction),
+                    &batch.iter().map(|update| update.job_id).collect::<Vec<_>>(),
+                    &rows,
+                )
+                .await?;
+                transaction.commit().await?;
+                return Ok(rows);
+            }
+            Ok(decode_completion_rows(&query.fetch_all(pool).await?))
+        }
     }
-    #[allow(unreachable_code)]
-    Err(Error::runtime_context(
-        "job completion",
-        "database dispatch selected no supported backend",
-    ))
 }
 
 /// Decodes rows returned by a completion. Like River Go's

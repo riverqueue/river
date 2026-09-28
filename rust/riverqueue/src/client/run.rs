@@ -397,17 +397,19 @@ impl Supervisor {
                         });
                         return;
                     }
-                    match inner.database.kind() {
+                    match inner.database.pool() {
                         #[cfg(feature = "postgres")]
-                        DatabaseKind::Postgres => Box::pin(run_notifications(
+                        DatabasePool::Postgres(pool) => Box::pin(run_notifications(
                             Arc::clone(&inner),
+                            pool.clone(),
                             cancel.clone(),
                             inner.queue_notifications.clone(),
                             ready,
                         )),
                         #[cfg(feature = "sqlite")]
-                        DatabaseKind::Sqlite => Box::pin(run_sqlite_notifications(
+                        DatabasePool::Sqlite(pool) => Box::pin(run_sqlite_notifications(
                             Arc::clone(&inner),
+                            pool.clone(),
                             cancel.clone(),
                             inner.queue_notifications.clone(),
                             ready,

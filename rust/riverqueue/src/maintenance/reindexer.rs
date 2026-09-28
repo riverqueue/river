@@ -54,18 +54,13 @@ pub(crate) fn next_run(schedule: PostgresReindexSchedule, after: DateTime<Utc>) 
 /// leader after another leader already ran today's reindex does not run it
 /// again immediately. Later runs advance from the previous scheduled time, not
 /// from when a run finished.
-pub(super) async fn run(context: std::sync::Arc<ServiceContext>) {
+pub(super) async fn run(context: std::sync::Arc<ServiceContext>, pool: sqlx::PgPool) {
     let Some(config) = context.inner.database().postgres_reindex().cloned() else {
         return;
     };
     if config.index_names().is_empty() {
         return;
     }
-    let pool = context
-        .inner
-        .postgres_pool()
-        .expect("reindexer only runs on PostgreSQL")
-        .clone();
     let mut scheduled = next_run(config.schedule(), Utc::now());
     debug!(next_run_at = %scheduled, "River reindexer scheduled its first run");
     loop {

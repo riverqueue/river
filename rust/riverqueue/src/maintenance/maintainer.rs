@@ -7,6 +7,7 @@ use tokio::{sync::mpsc, task::JoinSet};
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, error};
 
+use crate::database::DatabasePool;
 use crate::{Client, client::ClientInner};
 
 use super::{
@@ -129,20 +130,28 @@ async fn run_term(inner: Arc<ClientInner>, breakers: Arc<Breakers>, term: Term) 
         inner.maintenance.queue_cleaner_interval,
         |context| Box::pin(async move { cleaner::clean_queues(&context).await }),
     ));
-    #[cfg(feature = "sqlite")]
-    if inner.sqlite_pool().is_some() {
-        services.spawn(run_periodically(
-            Arc::clone(&context),
-            "SQLite notification cleaner",
-            cleaner::NOTIFICATION_CLEANER_INTERVAL,
-            |context| {
-                Box::pin(async move { cleaner::clean_notifications(&context).await.map(|_| ()) })
-            },
-        ));
-    }
-    #[cfg(feature = "postgres")]
-    if inner.postgres_pool().is_some() {
-        services.spawn(super::reindexer::run(Arc::clone(&context)));
+    match inner.database.pool() {
+        #[cfg(feature = "sqlite")]
+        DatabasePool::Sqlite(pool) => {
+            let pool = pool.clone();
+            services.spawn(run_periodically(
+                Arc::clone(&context),
+                "SQLite notification cleaner",
+                cleaner::NOTIFICATION_CLEANER_INTERVAL,
+                move |context| {
+                    let pool = pool.clone();
+                    Box::pin(async move {
+                        cleaner::clean_notifications(&context, &pool)
+                            .await
+                            .map(|_| ())
+                    })
+                },
+            ));
+        }
+        #[cfg(feature = "postgres")]
+        DatabasePool::Postgres(pool) => {
+            services.spawn(super::reindexer::run(Arc::clone(&context), pool.clone()));
+        }
     }
     let term = crate::__private::LeaderTerm {
         elected_at,
@@ -255,9 +264,7 @@ async fn start(inner: &ClientInner, cancel: &CancellationToken) -> Result<(), Ma
     Ok(())
 }
 
-type RunOnce = fn(
-    Arc<ServiceContext>,
-) -> std::pin::Pin<Box<dyn Future<Output = Result<(), MaintenanceError>> + Send>>;
+type RunOnceFuture = std::pin::Pin<Box<dyn Future<Output = Result<(), MaintenanceError>> + Send>>;
 
 /// Runs a service on an interval with an initial staggered tick, like Go's
 /// `StaggerStart` plus `NewTickerWithInitialTick`. The stagger is capped by
@@ -266,7 +273,7 @@ async fn run_periodically(
     context: Arc<ServiceContext>,
     name: &'static str,
     interval: Duration,
-    run_once: RunOnce,
+    run_once: impl Fn(Arc<ServiceContext>) -> RunOnceFuture + Send + 'static,
 ) {
     let stagger = random_duration(Duration::ZERO, STAGGER_MAX.min(interval));
     if !sleep_cancellable(&context.cancel, stagger).await {

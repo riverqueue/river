@@ -144,6 +144,7 @@ pub(super) fn dispatch_notification(
 #[cfg(feature = "postgres")]
 pub(super) async fn run_notifications(
     inner: Arc<ClientInner>,
+    pool: sqlx::PgPool,
     cancel: CancellationToken,
     queue_notifications: broadcast::Sender<RuntimeNotification>,
     ready: ReadySlot,
@@ -156,6 +157,7 @@ pub(super) async fn run_notifications(
             () = cancel.cancelled() => return Ok(()),
             result = listen_until_error(
                 &inner,
+                &pool,
                 &cancel,
                 &queue_notifications,
                 &ready,
@@ -186,8 +188,13 @@ pub(super) async fn run_notifications(
 /// Connects, subscribes, and dispatches notifications until the connection
 /// fails. Returns `Ok` only when cancelled.
 #[cfg(feature = "postgres")]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "the reconnect loop threads its listener state through each attempt"
+)]
 async fn listen_until_error(
     inner: &ClientInner,
+    pool: &sqlx::PgPool,
     cancel: &CancellationToken,
     queue_notifications: &broadcast::Sender<RuntimeNotification>,
     ready: &ReadySlot,
@@ -195,9 +202,6 @@ async fn listen_until_error(
     attempt: &mut u32,
     missed_notifications: bool,
 ) -> Result<(), Error> {
-    let pool = inner
-        .postgres_pool()
-        .expect("PostgreSQL notifications require a PostgreSQL pool");
     let schema = if let Some(schema) = schema {
         schema.clone()
     } else {
@@ -311,13 +315,11 @@ async fn listen_until_error(
 #[cfg(feature = "sqlite")]
 pub(super) async fn run_sqlite_notifications(
     inner: Arc<ClientInner>,
+    pool: sqlx::SqlitePool,
     cancel: CancellationToken,
     queue_notifications: broadcast::Sender<RuntimeNotification>,
     ready: ReadySlot,
 ) -> Result<(), Error> {
-    let pool = inner
-        .sqlite_pool()
-        .expect("SQLite notifications require a SQLite pool");
     let mut attempt = 0;
     let mut listener = crate::database::sqlite::NotificationListener::default();
     let mut notification_tick =

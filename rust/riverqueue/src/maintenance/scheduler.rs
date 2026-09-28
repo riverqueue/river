@@ -7,6 +7,7 @@ use chrono::{DateTime, Utc};
 #[cfg(feature = "postgres")]
 use sqlx::{AssertSqlSafe, Row};
 
+use crate::database::DatabasePool;
 #[cfg(feature = "sqlite")]
 use crate::database::sqlite;
 
@@ -47,19 +48,21 @@ async fn schedule_batch(context: &ServiceContext, limit: i64) -> Result<usize, M
     let look_ahead = now
         + chrono::Duration::from_std(context.inner.maintenance.scheduler_interval)
             .unwrap_or_default();
-    #[cfg(feature = "sqlite")]
-    if let Some(pool) = context.inner.sqlite_pool() {
-        return super::sqlite_cancellable(
-            &context.cancel,
-            TIMEOUT_DEFAULT,
-            schedule_batch_sqlite(pool, look_ahead, limit),
-        )
-        .await;
+    match context.inner.database.pool() {
+        #[cfg(feature = "sqlite")]
+        DatabasePool::Sqlite(pool) => {
+            super::sqlite_cancellable(
+                &context.cancel,
+                TIMEOUT_DEFAULT,
+                schedule_batch_sqlite(pool, look_ahead, limit),
+            )
+            .await
+        }
+        #[cfg(feature = "postgres")]
+        DatabasePool::Postgres(pool) => {
+            schedule_batch_postgres(context, pool, look_ahead, limit).await
+        }
     }
-    #[cfg(feature = "postgres")]
-    return schedule_batch_postgres(context, look_ahead, limit).await;
-    #[allow(unreachable_code)]
-    Ok(0)
 }
 
 fn notified_queues(scheduled: &[Scheduled]) -> BTreeSet<String> {
@@ -74,15 +77,13 @@ fn notified_queues(scheduled: &[Scheduled]) -> BTreeSet<String> {
 #[cfg(feature = "postgres")]
 async fn schedule_batch_postgres(
     context: &ServiceContext,
+    pool: &sqlx::PgPool,
     look_ahead: DateTime<Utc>,
     limit: i64,
 ) -> Result<usize, MaintenanceError> {
     use super::postgres::{MaintenanceTransaction, cancellable};
 
     let inner = &context.inner;
-    let pool = inner
-        .postgres_pool()
-        .expect("client database is PostgreSQL or SQLite");
     let table = inner.schema.qualify("river_job");
     let state_function = inner.schema.qualify("river_job_state_in_bitmask");
     let state_type = inner.schema.qualify("river_job_state");
