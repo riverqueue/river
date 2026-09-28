@@ -210,7 +210,7 @@ impl fmt::Debug for PeriodicJob {
 }
 
 /// Opaque handle used to remove a dynamically configured periodic job.
-#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub struct PeriodicJobHandle(u64);
 
 pub(crate) struct PeriodicEntry {
@@ -409,6 +409,7 @@ impl PeriodicJobs {
     ) {
         struct DueJob {
             advance_handle: Option<PeriodicJobHandle>,
+            handle: PeriodicJobHandle,
             job: PeriodicJob,
             target: DateTime<Utc>,
         }
@@ -423,6 +424,7 @@ impl PeriodicJobs {
                     if entry.job.opts.run_on_start {
                         due.push(DueJob {
                             advance_handle: None,
+                            handle: *handle,
                             job: entry.job.clone(),
                             target: now,
                         });
@@ -434,11 +436,14 @@ impl PeriodicJobs {
                 {
                     due.push(DueJob {
                         advance_handle: Some(*handle),
+                        handle: *handle,
                         job: entry.job.clone(),
                         target,
                     });
                 }
             }
+            // Insert in the order the jobs were added, as Go's enqueuer does.
+            due.sort_by_key(|due_job| due_job.handle);
             due
         };
 
