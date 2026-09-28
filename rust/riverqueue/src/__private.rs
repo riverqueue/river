@@ -21,7 +21,7 @@ use sqlx::{PgConnection, PgPool};
 use sqlx::{SqliteConnection, SqlitePool};
 use tokio_util::sync::CancellationToken;
 
-pub use crate::client::{ExtensionClient, WeakClient};
+pub use crate::client::{ExtensionClient, PreparedInsertRequest, RawInsertRequest, WeakClient};
 pub use crate::database::erased::{Database, ErasedExecutor, ErasedTransaction};
 pub use crate::pilot::{
     PilotDatabase, PilotProducer, PilotTransaction, ProducerClaimContext, ProducerClaimNext,
@@ -1151,8 +1151,7 @@ pub struct RawInsertResult {
 }
 
 /// A stored job to insert again, such as one set aside and retried later,
-/// with [`ExtensionClient::insert_prepared`] or
-/// [`ExtensionClient::insert_prepared_tx`].
+/// with [`ExtensionClient::insert_prepared`].
 ///
 /// River inserts it like any other job: insert middleware, begin hooks, the
 /// extension's insertion step, and notifications all run once, and they see

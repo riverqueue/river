@@ -1893,14 +1893,14 @@ async fn transactional_inserts_become_visible_on_commit() {
         .await
         .unwrap();
     let raw_transaction_insert = riverqueue::__private::ExtensionClient::new(&client)
-        .insert_raw_tx(
-            &mut transaction,
+        .insert_raw(
             EchoArgs::KIND,
             &[],
             serde_json::value::to_raw_value(&serde_json::json!({"message": "raw from Rust"}))
                 .unwrap(),
             InsertOpts::default(),
         )
+        .tx(&mut transaction)
         .await
         .unwrap();
     assert!(matches!(

@@ -300,7 +300,8 @@ mod postgres {
 
         let mut transaction = schema.pool.begin().await.unwrap();
         extension
-            .insert_prepared_tx(&mut transaction, available_params())
+            .insert_prepared(available_params())
+            .tx(&mut transaction)
             .await
             .unwrap();
         assert!(notified().await.is_empty(), "notified before commit");
@@ -310,7 +311,8 @@ mod postgres {
 
         let mut transaction = schema.pool.begin().await.unwrap();
         extension
-            .insert_prepared_tx(&mut transaction, available_params())
+            .insert_prepared(available_params())
+            .tx(&mut transaction)
             .await
             .unwrap();
         transaction.rollback().await.unwrap();
@@ -386,7 +388,8 @@ mod sqlite {
 
         let mut transaction = pool.begin_with("BEGIN IMMEDIATE").await.unwrap();
         extension
-            .insert_prepared_tx(&mut transaction, available_params())
+            .insert_prepared(available_params())
+            .tx(&mut transaction)
             .await
             .unwrap();
         transaction.commit().await.unwrap();
@@ -394,7 +397,8 @@ mod sqlite {
 
         let mut transaction = pool.begin_with("BEGIN IMMEDIATE").await.unwrap();
         extension
-            .insert_prepared_tx(&mut transaction, available_params())
+            .insert_prepared(available_params())
+            .tx(&mut transaction)
             .await
             .unwrap();
         transaction.rollback().await.unwrap();

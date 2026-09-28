@@ -22,7 +22,7 @@ mod tests;
 mod validate;
 
 pub use self::builder::{ClientBuilder, MaintenanceConfig, QueueConfig, Retention};
-pub use self::extension::ExtensionClient;
+pub use self::extension::{ExtensionClient, PreparedInsertRequest, RawInsertRequest};
 pub use self::insert::{InsertBatchRequest, InsertManyItem, InsertManyRequest, InsertRequest};
 pub use self::jobs::{
     JobCancelRequest, JobCompleteRequest, JobCompleteTxRequest, JobDeleteManyRequest,

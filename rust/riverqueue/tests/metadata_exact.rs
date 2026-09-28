@@ -110,22 +110,20 @@ async fn postgres_reads_metadata_with_large_numbers() {
 
     let mut transaction = schema.pool.begin().await.unwrap();
     let reinserted = ExtensionClient::new(&client)
-        .insert_prepared_tx(
-            &mut transaction,
-            vec![PreparedInsertParams {
-                created_at: reread.created_at,
-                encoded_args: reread.encoded_args.clone(),
-                kind: reread.kind.clone(),
-                max_attempts: reread.max_attempts,
-                metadata: reread.metadata.clone(),
-                priority: reread.priority,
-                queue: reread.queue.clone(),
-                scheduled_at: reread.scheduled_at,
-                tags: reread.tags.clone(),
-                unique_key: reread.unique_key.clone(),
-                unique_states: reread.unique_states.clone(),
-            }],
-        )
+        .insert_prepared(vec![PreparedInsertParams {
+            created_at: reread.created_at,
+            encoded_args: reread.encoded_args.clone(),
+            kind: reread.kind.clone(),
+            max_attempts: reread.max_attempts,
+            metadata: reread.metadata.clone(),
+            priority: reread.priority,
+            queue: reread.queue.clone(),
+            scheduled_at: reread.scheduled_at,
+            tags: reread.tags.clone(),
+            unique_key: reread.unique_key.clone(),
+            unique_states: reread.unique_states.clone(),
+        }])
+        .tx(&mut transaction)
         .await
         .unwrap()
         .remove(0);

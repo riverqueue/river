@@ -906,22 +906,20 @@ async fn sqlite_reinsert_preserves_wire_fields_and_runs_the_canonical_pipeline()
         .await
         .unwrap();
     let reinserted = ExtensionClient::new(&client)
-        .insert_prepared_tx(
-            &mut transaction,
-            vec![PreparedInsertParams {
-                created_at: original.created_at,
-                encoded_args: stored_source_args,
-                kind: "x".to_owned(),
-                max_attempts: original.max_attempts,
-                metadata: original.metadata.clone(),
-                priority: original.priority,
-                queue: original.queue.clone(),
-                scheduled_at: original.scheduled_at,
-                tags: original.tags.clone(),
-                unique_key: original.unique_key.clone(),
-                unique_states: original.unique_states.clone(),
-            }],
-        )
+        .insert_prepared(vec![PreparedInsertParams {
+            created_at: original.created_at,
+            encoded_args: stored_source_args,
+            kind: "x".to_owned(),
+            max_attempts: original.max_attempts,
+            metadata: original.metadata.clone(),
+            priority: original.priority,
+            queue: original.queue.clone(),
+            scheduled_at: original.scheduled_at,
+            tags: original.tags.clone(),
+            unique_key: original.unique_key.clone(),
+            unique_states: original.unique_states.clone(),
+        }])
+        .tx(&mut transaction)
         .await
         .unwrap()
         .remove(0);
