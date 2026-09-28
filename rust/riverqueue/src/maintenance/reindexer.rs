@@ -247,7 +247,7 @@ async fn reindex_one(
     result.map(|_| true)
 }
 
-#[cfg(all(test, feature = "postgres-tests"))]
+#[cfg(all(test, feature = "postgres", river_postgres_tests))]
 pub(super) async fn reindex_one_for_test(
     pool: &PgPool,
     schema: &SchemaName,

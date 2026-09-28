@@ -2,9 +2,9 @@
 //!
 //! Each scenario runs against PostgreSQL (in a unique schema, failing rather
 //! than skipping when `RIVER_RUST_DATABASE_URL` is unset) and SQLite (in a
-//! temporary file). PostgreSQL scenarios build only with `postgres-tests`.
+//! temporary file). PostgreSQL scenarios build only with `--cfg river_postgres_tests`.
 
-#![cfg(any(feature = "postgres-tests", feature = "sqlite"))]
+#![cfg(any(all(feature = "postgres", river_postgres_tests), feature = "sqlite"))]
 
 mod support;
 
@@ -241,7 +241,7 @@ macro_rules! scenarios {
     };
 }
 
-#[cfg(feature = "postgres-tests")]
+#[cfg(all(feature = "postgres", river_postgres_tests))]
 mod postgres {
     use super::*;
     use crate::support::PostgresSchema;

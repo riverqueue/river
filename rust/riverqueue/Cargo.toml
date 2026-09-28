@@ -20,7 +20,6 @@ default = ["postgres"]
 # prefixes, as River Go does, from a bundled time zone database.
 chrono-tz = ["dep:chrono-tz"]
 postgres = ["riverqueue-migrate/postgres", "sqlx/postgres"]
-postgres-tests = ["postgres"]
 sqlite = ["dep:rand", "riverqueue-migrate/sqlite", "sqlx/sqlite"]
 
 [dependencies]
@@ -103,7 +102,7 @@ required-features = ["postgres"]
 
 [[test]]
 name = "postgres_parity"
-required-features = ["postgres-tests"]
+required-features = ["postgres"]
 
 [[test]]
 name = "sqlite_parity"

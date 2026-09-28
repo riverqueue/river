@@ -3,7 +3,7 @@
 //! PostgreSQL tests run in a unique schema and fail rather than skip when
 //! `RIVER_RUST_DATABASE_URL` is unset; SQLite tests use a temporary file.
 
-#![cfg(any(feature = "postgres-tests", feature = "sqlite"))]
+#![cfg(any(all(feature = "postgres", river_postgres_tests), feature = "sqlite"))]
 
 mod support;
 
@@ -110,14 +110,14 @@ impl RuntimeService for CountingService {
 
 /// A migrated database on one backend.
 enum Backend {
-    #[cfg(feature = "postgres-tests")]
+    #[cfg(all(feature = "postgres", river_postgres_tests))]
     Postgres(support::PostgresSchema),
     #[cfg(feature = "sqlite")]
     Sqlite(sqlx::SqlitePool, std::path::PathBuf),
 }
 
 impl Backend {
-    #[cfg(feature = "postgres-tests")]
+    #[cfg(all(feature = "postgres", river_postgres_tests))]
     async fn postgres() -> Self {
         Self::Postgres(support::PostgresSchema::new("river_no_election").await)
     }
@@ -130,7 +130,7 @@ impl Backend {
 
     fn database(&self) -> Database {
         match self {
-            #[cfg(feature = "postgres-tests")]
+            #[cfg(all(feature = "postgres", river_postgres_tests))]
             Self::Postgres(schema) => Database::from_source(
                 riverqueue::database::PostgresDatabase::new(schema.pool.clone())
                     .with_schema(schema.schema.clone()),
@@ -152,7 +152,7 @@ impl Backend {
     /// Returns the elected leader's client ID, if any.
     async fn leader_id(&self) -> Option<String> {
         match self {
-            #[cfg(feature = "postgres-tests")]
+            #[cfg(all(feature = "postgres", river_postgres_tests))]
             Self::Postgres(schema) => sqlx::query_scalar(sqlx::AssertSqlSafe(format!(
                 "SELECT leader_id FROM {}",
                 schema.table("river_leader")
@@ -180,7 +180,7 @@ impl Backend {
 
     async fn cleanup(self) {
         match self {
-            #[cfg(feature = "postgres-tests")]
+            #[cfg(all(feature = "postgres", river_postgres_tests))]
             Self::Postgres(schema) => schema.cleanup().await,
             #[cfg(feature = "sqlite")]
             Self::Sqlite(pool, path) => support::sqlite_cleanup(pool, path).await,
@@ -343,7 +343,7 @@ mod configuration {
     }
 }
 
-#[cfg(feature = "postgres-tests")]
+#[cfg(all(feature = "postgres", river_postgres_tests))]
 mod postgres {
     use super::*;
 

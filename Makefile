@@ -80,6 +80,7 @@ lint/rust: ## Run Rust formatting and clippy checks, including single-backend bu
 	cd rust && cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
 	cd rust && cargo clippy -p riverqueue -p riverqueue-migrate -p riverqueue-cli -p riverqueue-test --no-default-features --features postgres --all-targets --locked -- -D warnings
 	cd rust && cargo clippy -p riverqueue -p riverqueue-migrate -p riverqueue-cli -p riverqueue-test --no-default-features --features sqlite --all-targets --locked -- -D warnings
+	cd rust && $(RUST_POSTGRES_TESTS_ENV) cargo clippy -p riverqueue -p riverqueue-migrate --all-targets --all-features --locked -- -D warnings
 
 .PHONY: lint/conformance
 lint/conformance: ## Lint the opt-in shared interoperability suite
@@ -94,13 +95,21 @@ define test-target
 endef
 $(foreach mod,$(submodules),$(eval $(call test-target,$(mod))))
 
+# `--cfg river_postgres_tests` builds the Rust PostgreSQL integration tests.
+# It goes to both rustc and rustdoc so any doctest gated on it runs too, and
+# into its own target directory so switching it on and off doesn't rebuild
+# the ordinary build's artifacts.
+RUST_POSTGRES_TESTS_ENV = RUSTFLAGS="$$RUSTFLAGS --cfg river_postgres_tests" \
+	RUSTDOCFLAGS="$$RUSTDOCFLAGS --cfg river_postgres_tests" \
+	CARGO_TARGET_DIR="$${CARGO_TARGET_DIR:-target}/postgres-tests"
+
 # PostgreSQL integration tests need RIVER_RUST_DATABASE_URL. Without it
 # test/rust still runs unit, doc, and SQLite integration tests, and fails in CI
 # so a missing URL cannot turn the PostgreSQL suite into a silent pass.
 .PHONY: test/rust
 test/rust: ## Run Rust unit and SQLite tests, plus PostgreSQL tests when RIVER_RUST_DATABASE_URL is set
 	@if [ -n "$$RIVER_RUST_DATABASE_URL" ]; then \
-		cd rust && cargo test --workspace --all-features --locked; \
+		cd rust && $(RUST_POSTGRES_TESTS_ENV) cargo test --workspace --all-features --locked; \
 	elif [ -n "$$CI" ]; then \
 		echo "RIVER_RUST_DATABASE_URL is required in CI to run the Rust PostgreSQL tests" >&2; exit 1; \
 	else \
@@ -111,7 +120,7 @@ test/rust: ## Run Rust unit and SQLite tests, plus PostgreSQL tests when RIVER_R
 .PHONY: test/rust/postgres
 test/rust/postgres: ## Run all Rust tests, including PostgreSQL integration tests (requires RIVER_RUST_DATABASE_URL)
 	@test -n "$$RIVER_RUST_DATABASE_URL" || { echo "RIVER_RUST_DATABASE_URL is required" >&2; exit 1; }
-	cd rust && cargo test --workspace --all-features --locked
+	cd rust && $(RUST_POSTGRES_TESTS_ENV) cargo test --workspace --all-features --locked
 
 .PHONY: test/rust/sqlite
 test/rust/sqlite: ## Run Rust unit, doc, and SQLite integration tests without a PostgreSQL database

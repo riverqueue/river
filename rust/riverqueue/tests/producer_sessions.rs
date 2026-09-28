@@ -5,7 +5,7 @@
 //! PostgreSQL scenarios run in a unique schema and fail rather than skip when
 //! `RIVER_RUST_DATABASE_URL` is unset; SQLite scenarios use temporary files.
 
-#![cfg(any(feature = "postgres-tests", feature = "sqlite"))]
+#![cfg(any(all(feature = "postgres", river_postgres_tests), feature = "sqlite"))]
 
 mod support;
 
@@ -674,7 +674,7 @@ async fn assert_sessions_see_metadata_text<F, Fut>(
     run.shutdown().await.unwrap();
 }
 
-#[cfg(feature = "postgres-tests")]
+#[cfg(all(feature = "postgres", river_postgres_tests))]
 mod postgres {
     use riverqueue::database::PostgresDatabase;
 

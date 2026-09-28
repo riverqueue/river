@@ -5,7 +5,7 @@
 //! (in a unique schema, failing rather than skipping when
 //! `RIVER_RUST_DATABASE_URL` is unset) and SQLite (in a temporary file).
 
-#![cfg(any(feature = "postgres-tests", feature = "sqlite"))]
+#![cfg(any(all(feature = "postgres", river_postgres_tests), feature = "sqlite"))]
 
 mod support;
 
@@ -54,7 +54,7 @@ struct PeerArgs {
 /// Runs raw statements on either backend.
 #[derive(Clone)]
 enum Db {
-    #[cfg(feature = "postgres-tests")]
+    #[cfg(all(feature = "postgres", river_postgres_tests))]
     /// The pool, the qualified job table, and the qualified name for a
     /// test function.
     Postgres(sqlx::PgPool, String, String),
@@ -68,7 +68,7 @@ impl Db {
     async fn exec(&self, postgres: &str, sqlite: &str, id: i64) {
         let _ = (postgres, sqlite);
         match self {
-            #[cfg(feature = "postgres-tests")]
+            #[cfg(all(feature = "postgres", river_postgres_tests))]
             Self::Postgres(pool, table, _) => {
                 sqlx::query(sqlx::AssertSqlSafe(postgres.replace("{table}", table)))
                     .bind(id)
@@ -91,7 +91,7 @@ impl Db {
     async fn raw(&self, postgres: &str, sqlite: &str) {
         let _ = (postgres, sqlite);
         match self {
-            #[cfg(feature = "postgres-tests")]
+            #[cfg(all(feature = "postgres", river_postgres_tests))]
             Self::Postgres(pool, table, function) => {
                 sqlx::raw_sql(sqlx::AssertSqlSafe(
                     postgres
@@ -1272,7 +1272,7 @@ async fn assert_abandoned_attempts_release_peers(
     run.stop().await;
 }
 
-#[cfg(feature = "postgres-tests")]
+#[cfg(all(feature = "postgres", river_postgres_tests))]
 mod postgres {
     use riverqueue::database::PostgresDatabase;
 

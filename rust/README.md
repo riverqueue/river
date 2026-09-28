@@ -69,7 +69,9 @@ final jobs/sec plus p95 end-to-end latency summary. Use `riverqueue bench
 reproducible Go/Rust comparison across enqueue-only, worker-only, and mixed
 workloads.
 
-PostgreSQL integration tests require a disposable database:
+PostgreSQL integration tests require a disposable database. They build only
+with `--cfg river_postgres_tests`, which the Makefile targets pass to rustc
+and rustdoc, building into `target/postgres-tests`:
 
 ```sh
 RIVER_RUST_DATABASE_URL=postgres://localhost/river_rust_test \

@@ -1,4 +1,4 @@
-#![cfg(feature = "postgres-tests")]
+#![cfg(all(feature = "postgres", river_postgres_tests))]
 
 use riverqueue_migrate::SchemaName;
 use riverqueue_migrate::{Direction, MIGRATION_VERSION_LATEST, MigrateOpts, PostgresMigrator};

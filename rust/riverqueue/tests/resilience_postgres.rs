@@ -4,7 +4,7 @@
 //! Each test migrates a uniquely named schema so concurrent runs against one
 //! database cannot interfere.
 
-#![cfg(feature = "postgres-tests")]
+#![cfg(all(feature = "postgres", river_postgres_tests))]
 
 mod support;
 

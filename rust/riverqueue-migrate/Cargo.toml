@@ -15,7 +15,6 @@ all-features = true
 [features]
 default = ["postgres"]
 postgres = ["sqlx/postgres"]
-postgres-tests = ["postgres"]
 sqlite = ["sqlx/sqlite"]
 
 [dependencies]

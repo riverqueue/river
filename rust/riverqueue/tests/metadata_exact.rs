@@ -1,6 +1,6 @@
 //! Persisted metadata stays readable when JSON numbers exceed `f64`.
 
-#![cfg(any(feature = "postgres-tests", feature = "sqlite"))]
+#![cfg(any(all(feature = "postgres", river_postgres_tests), feature = "sqlite"))]
 
 mod support;
 
@@ -42,12 +42,12 @@ async fn insert_with_exact_metadata(client: &Client) -> Vec<JobRow> {
     rows
 }
 
-#[cfg(feature = "postgres-tests")]
+#[cfg(all(feature = "postgres", river_postgres_tests))]
 fn raw_field<'a>(metadata: &'a JobMetadata, key: &str) -> &'a str {
     metadata.get_raw(key).unwrap().get()
 }
 
-#[cfg(feature = "postgres-tests")]
+#[cfg(all(feature = "postgres", river_postgres_tests))]
 #[tokio::test]
 async fn postgres_reads_metadata_with_large_numbers() {
     use riverqueue::__private::{ExtensionClient, PreparedInsertParams};
@@ -135,7 +135,7 @@ async fn postgres_reads_metadata_with_large_numbers() {
     schema.cleanup().await;
 }
 
-#[cfg(feature = "postgres-tests")]
+#[cfg(all(feature = "postgres", river_postgres_tests))]
 #[tokio::test]
 async fn postgres_insert_opts_keep_metadata_number_tokens() {
     use riverqueue::database::PostgresDatabase;

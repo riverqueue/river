@@ -754,7 +754,7 @@ mod tests {
     }
 }
 
-#[cfg(all(test, feature = "postgres-tests"))]
+#[cfg(all(test, feature = "postgres", river_postgres_tests))]
 mod postgres_begin_tests {
     use std::{sync::Arc, time::Duration};
 

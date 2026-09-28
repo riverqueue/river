@@ -1,4 +1,4 @@
-#![cfg(feature = "postgres-tests")]
+#![cfg(all(feature = "postgres", river_postgres_tests))]
 
 mod support;
 

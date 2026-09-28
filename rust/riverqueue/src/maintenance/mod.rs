@@ -26,7 +26,7 @@ mod postgres;
 mod reindexer;
 mod rescuer;
 mod scheduler;
-#[cfg(all(test, feature = "postgres-tests"))]
+#[cfg(all(test, feature = "postgres", river_postgres_tests))]
 mod tests;
 
 #[cfg(feature = "postgres")]

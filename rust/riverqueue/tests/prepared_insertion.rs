@@ -6,7 +6,7 @@
 //! PostgreSQL scenarios run in a unique schema and fail rather than skip when
 //! `RIVER_RUST_DATABASE_URL` is unset; SQLite scenarios use temporary files.
 
-#![cfg(any(feature = "postgres-tests", feature = "sqlite"))]
+#![cfg(any(all(feature = "postgres", river_postgres_tests), feature = "sqlite"))]
 
 mod support;
 
@@ -204,7 +204,7 @@ fn available_params() -> Vec<PreparedInsertParams> {
         .collect()
 }
 
-#[cfg(feature = "postgres-tests")]
+#[cfg(all(feature = "postgres", river_postgres_tests))]
 mod postgres {
     use riverqueue::database::PostgresDatabase;
 
