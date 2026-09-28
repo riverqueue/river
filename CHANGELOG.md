@@ -16,6 +16,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Added `Config.FetchOnlyKnownKinds` to restrict job fetching to registered worker kinds, including aliases. Clients with different workers can share a queue while leaving unknown jobs available without consuming attempts. Disabled by default; leader election and stuck-job rescue behavior are unchanged. [PR #1396](https://github.com/riverqueue/river/pull/1396).
 - Added `Config.LeaderElectionDisabled` to let a client work jobs without participating in leader election or running maintenance services. Other eligible clients in the same database and schema continue handling scheduling, retries, periodic enqueueing, rescue, and cleanup. [PR #1382](https://github.com/riverqueue/river/pull/1382).
+- Added support for YugabyteDB. When `LISTEN/NOTIFY` is unavailable or disabled, clients automatically poll for running job cancellations and queue pause, resume, and metadata changes, and skip unsupported notification broadcasts. This works with the default `PollOnly: false`. Native notifications require YugabyteDB 2025.2.3 or later with `ysql_yb_enable_listen_notify=true` on both Masters and TServers. [PR #1347](https://github.com/riverqueue/river/pull/1347).
 
 ### Changed
 
@@ -25,7 +26,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Fixed cancelled transaction starts leaving Turso connections unusable, which could prevent maintenance from recovering after a startup failure. [PR #1347](https://github.com/riverqueue/river/pull/1347).
 - Fixed maintenance startup failures leaving a client renewing leadership with maintenance stopped in poll-only mode. After exhausting startup retries, clients now request local resignation without depending on database notifications. [PR #1347](https://github.com/riverqueue/river/pull/1347).
-- Fixed YugabyteDB clients relying on notifications when `LISTEN/NOTIFY` is unavailable or disabled. Clients now automatically poll for running job cancellations and queue pause, resume, and metadata changes with the default `PollOnly: false`, and skip unsupported notification broadcasts. Native notifications require YugabyteDB 2025.2.3 or later with `ysql_yb_enable_listen_notify=true` on both Masters and TServers. [PR #1347](https://github.com/riverqueue/river/pull/1347).
 - Fixed the default retry policy scheduling a job's retry about 292 years in the past on amd64 once the job had errored 310 or more times, which made it run again immediately. The capped retry delay is now exactly the maximum duration on every architecture. [PR #1402](https://github.com/riverqueue/river/pull/1402).
 - Fixed up migrations targeting an already-applied version to do nothing instead of applying later pending migrations. [PR #1403](https://github.com/riverqueue/river/pull/1403).
 - Fixed job cancellations received during a fetch being lost before the fetched jobs started. Matching jobs now receive cancellation before work begins. [PR #1397](https://github.com/riverqueue/river/pull/1397).
