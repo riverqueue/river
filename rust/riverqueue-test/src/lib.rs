@@ -167,8 +167,7 @@ where
     run_worker(worker, context, job).await
 }
 
-/// Inserts `args` with `client` and works the job once with `worker`, like
-/// Go's `rivertest.Worker`.
+/// Inserts `args` with `client` and works the job once with `worker`.
 ///
 /// The job is inserted with its type's default options and claimed for
 /// `client` the way a fetch claims it, so it is `running` with its first

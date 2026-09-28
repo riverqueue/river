@@ -84,8 +84,8 @@ impl PanicError {
 /// [`WorkContext::cancellation_token`](crate::WorkContext::cancellation_token)
 /// was cancelled.
 ///
-/// This is River's equivalent of Go's `context.Canceled`. When a client's hard
-/// shutdown cancels a job, a worker that returns this error (directly or
+/// When a client's hard shutdown cancels a job, a worker that returns this
+/// error (directly or
 /// anywhere in its error's source chain) is treated as interrupted: the job
 /// becomes available again with the attempt refunded and no error recorded.
 /// Any other error returned during shutdown is recorded and retried like an
@@ -164,16 +164,15 @@ impl Metric {
 
 /// A job about to be inserted, as seen by hooks and insertion middleware.
 ///
-/// This is the Rust counterpart of River Go's `rivertype.JobInsertParams`.
 /// River resolves options, validates them, and computes the unique key before
 /// any extension runs, so changing the arguments, queue, or schedule here
-/// doesn't change the job's uniqueness, just as in River Go.
+/// doesn't change the job's uniqueness.
 #[derive(Clone, Debug)]
 #[non_exhaustive]
 pub struct InsertContext {
     /// Serialized arguments that will be persisted, as exact JSON text.
     /// Replace them with [`encode_args`](crate::encoding::encode_args) to keep
-    /// the encoding River Go would produce.
+    /// River's argument encoding.
     pub encoded_args: Box<serde_json::value::RawValue>,
     /// Stable job kind.
     pub kind: String,
@@ -296,7 +295,7 @@ pub trait Hook: Send + Sync + 'static {
     /// Runs inside work middleware, after the worker returns, and returns
     /// the attempt's result.
     ///
-    /// Like River Go's `HookWorkEnd`, the returned result replaces the
+    /// The returned result replaces the
     /// worker's, so a hook should return `result` unchanged unless it means
     /// to change the outcome, for example to turn a specific error into a
     /// snooze. Hooks run in registration order, each receiving the previous
@@ -401,8 +400,7 @@ impl<H: Hook> DynHook for H {
 
 /// Middleware wrapping each insertion, including batches.
 ///
-/// Like River Go's `JobInsertMiddleware`, middleware sees every job in an
-/// insertion at once and decides whether and how to continue by calling
+/// Middleware sees every job in an insertion at once and decides whether and how to continue by calling
 /// [`InsertNext::run`]. Middleware registered first is outermost. It can
 /// change jobs before passing them on, observe or change the results, wrap
 /// the insertion in a span or timer, or return early without inserting.
@@ -553,16 +551,15 @@ impl InsertedJob {
 
 /// Middleware wrapping each job attempt.
 ///
-/// Like River Go's `WorkerMiddleware`, middleware decides whether and how to
-/// continue by calling [`WorkNext::run`], and returns the attempt's result.
+/// Middleware decides whether and how to continue by calling [`WorkNext::run`], and returns the attempt's result.
 /// Middleware registered first is outermost. [`Hook::work_begin`], argument
 /// decoding, the worker, and [`Hook::work_end`] all run inside the innermost
 /// middleware, so middleware can change the job before it's decoded, wrap
 /// the attempt in a span or timer, or change its result. A job whose kind has
 /// no registered worker fails before any middleware runs.
 ///
-/// When the worker panics, the panic unwinds through middleware as it does in
-/// River Go; River records it as a failed attempt.
+/// When the worker panics, the panic unwinds through middleware, and River
+/// records it as a failed attempt.
 ///
 /// ```
 /// use riverqueue::{JobRow, WorkContext, WorkError, WorkMiddleware, WorkNext, WorkOutcome};

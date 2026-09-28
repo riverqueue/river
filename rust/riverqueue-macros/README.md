@@ -24,17 +24,18 @@ struct SendInvoice {
 ```
 
 `unique(...)` accepts `by_args`, `by_args("nested.path", ...)`, `by_period`
-(a Go duration such as `"1h30m"`), `by_queue`, `by_state(...)`, and
-`exclude_kind`, mirroring River Go's `UniqueOpts`. Fields marked
+(a duration of at least one second, such as `"90s"` or `"1h30m"`),
+`by_queue`, `by_state(...)`, and `exclude_kind`, matching the setters of
+`UniqueOpts`. Fields marked
 `#[river(unique)]`, plus any `by_args` paths, are the arguments hashed for
 uniqueness; with neither, every argument is hashed. Marking a field without
 `unique(by_args)` is a compile error, since it would otherwise have no effect.
 Unique paths follow Serde's serialization-side `rename` and `rename_all` rules,
 including raw Rust identifiers. Conditionally skipped optional fields are
-omitted in the same way as River Go; flattened or always skipped unique fields
-are rejected because their wire path is ambiguous.
+omitted from the unique key when absent; flattened or always skipped unique
+fields are rejected because their wire path is ambiguous.
 
 `insert_opts = path::to_fn` names a `fn() -> InsertOpts` whose options are
-overlaid on the attribute defaults, like Go's `JobArgsWithInsertOpts`.
+overlaid on the attribute defaults.
 `crate = "path"` sets the path to `riverqueue` when it is renamed or
 re-exported.

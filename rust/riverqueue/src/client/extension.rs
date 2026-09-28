@@ -158,9 +158,9 @@ impl<'client> ExtensionClient<'client> {
     }
 
     /// Inserts stored jobs again, such as jobs set aside and retried later,
-    /// like River Go's ordinary `insertMany`: insert middleware, begin hooks,
-    /// the extension's insertion step, and notifications run once, in one
-    /// transaction. See [`PreparedInsertParams`] for what the jobs keep.
+    /// the way an ordinary batch insertion runs: insert middleware, begin
+    /// hooks, the extension's insertion step, and notifications run once, in
+    /// one transaction. See [`PreparedInsertParams`] for what the jobs keep.
     ///
     /// The request runs when awaited, in a caller-managed transaction with
     /// [`tx`](PreparedInsertRequest::tx). Awaiting it returns the errors of

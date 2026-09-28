@@ -67,11 +67,11 @@ impl JobListCursor {
 
     /// Encodes this cursor for storage in an API pagination token.
     ///
-    /// The text is byte-for-byte what River Go's `JobListCursor.MarshalText`
-    /// produces: padded URL-safe Base64 of Go's `encoding/json` encoding,
-    /// including its string escaping and shortest fractional seconds. A
-    /// cursor without a time, because its list is ordered by ID or its job's
-    /// time field is null, carries Go's zero time.
+    /// The text is the cursor format every River client reads and writes:
+    /// padded URL-safe Base64 of the cursor's JSON, in the
+    /// [`encoding`](crate::encoding) River uses for job arguments. A cursor
+    /// without a time, because its list is ordered by ID or its job's time
+    /// field is null, carries `0001-01-01T00:00:00Z`.
     ///
     /// # Panics
     ///

@@ -15,7 +15,6 @@
 //! # async fn example(client: Client, id: i64) -> Result<(), Error> {
 //! match client.jobs().get(id).await {
 //!     Ok(job) => println!("job {id} is {}", job.state),
-//!     // River Go's `errors.Is(err, river.ErrNotFound)`.
 //!     Err(Error::NotFound(Record::Job(_))) => println!("job {id} doesn't exist"),
 //!     // Database failures hold SQLx's error on either backend.
 //!     Err(Error::Database(sqlx::Error::PoolTimedOut)) => println!("database busy"),
@@ -249,16 +248,14 @@ pub enum Error {
     NotFound(Record),
 
     /// A queue is already added to this client, or its removal is still
-    /// waiting for its producer to stop, like River Go's
-    /// `QueueAlreadyAddedError`.
+    /// waiting for its producer to stop.
     #[error("queue {name:?} is already added")]
     QueueAlreadyAdded {
         /// The queue's name.
         name: String,
     },
 
-    /// This client doesn't work the queue, like River Go's
-    /// `QueueNotFoundError`.
+    /// This client doesn't work the queue.
     #[error("queue {name:?} is not added to this client")]
     QueueNotAdded {
         /// The queue's name.
@@ -356,8 +353,7 @@ impl Error {
 /// Formats an error with its whole source chain, `outer: inner: innermost`,
 /// for recorded job errors and River's own log lines.
 ///
-/// This is the Rust counterpart of Go's `err.Error()` on a wrapped error. An
-/// error whose message already ends with `: {source}`, as some libraries'
+/// An error whose message already ends with `: {source}`, as some libraries'
 /// errors (including SQLx's) do, is shortened so the source's message
 /// appears once; snafu's `CleanedErrorText` applies the same rule.
 pub(crate) struct Chain<'a>(pub(crate) &'a (dyn std::error::Error + 'static));

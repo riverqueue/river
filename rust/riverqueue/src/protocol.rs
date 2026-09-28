@@ -1,4 +1,4 @@
-//! Wire-protocol values shared with River Go and other River clients.
+//! Wire-protocol values shared by every River client.
 //!
 //! Applications don't need these to insert or work jobs. They're useful for
 //! tools that interoperate with River's tables directly, such as computing
@@ -43,8 +43,8 @@ pub struct UniqueKeyInput<'a> {
     pub unique_fields: &'a [&'a [&'a str]],
 }
 
-/// Computes the SHA-256 unique key River Go stores in `river_job.unique_key`
-/// for the same inputs. Returns `None` when `opts` enables no uniqueness
+/// Computes the SHA-256 unique key River stores in `river_job.unique_key`
+/// for these inputs. Returns `None` when `opts` enables no uniqueness
 /// dimension.
 ///
 /// # Errors

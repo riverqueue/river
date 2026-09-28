@@ -6,7 +6,7 @@ inserted jobs, and ways to run a worker once, with or without a database.
 ## Asserting on inserted jobs
 
 `require_inserted`, `require_many_inserted`, and `require_not_inserted` check
-the jobs a test's code inserted, like River Go's `rivertest` helpers. Each
+the jobs a test's code inserted. Each
 lists jobs of the expected kinds in insertion order and panics with a
 descriptive message when the expectation isn't met, failing the test.
 The `_with` variants take `RequireInsertedOpts`, which adds expected
@@ -99,8 +99,7 @@ retries, or completion persistence.
 
 ## Running a worker with a client
 
-`work_with_client` is the database-backed counterpart, like Go's
-`rivertest.Worker`. It inserts the job with a client, claims it the way a
+`work_with_client` is the database-backed counterpart. It inserts the job with a client, claims it the way a
 fetch does, and runs the worker with that client in its `WorkContext`, so a
 worker that inserts follow-up jobs through `context.client()` or completes
 its job in its own transaction with `context.job_complete_tx` runs as it

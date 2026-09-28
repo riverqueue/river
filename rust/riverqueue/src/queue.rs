@@ -103,7 +103,7 @@ impl From<String> for QueueSelector {
 /// Changes applied by [`Queues::update`](crate::Queues::update).
 ///
 /// Fields left unset keep their current value. The queue's `updated_at` is
-/// refreshed either way, like River Go.
+/// refreshed either way.
 #[derive(Clone, Debug, Default, PartialEq)]
 #[non_exhaustive]
 pub struct QueueUpdateParams {

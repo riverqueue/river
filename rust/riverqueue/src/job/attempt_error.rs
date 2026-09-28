@@ -20,7 +20,7 @@ use super::AttemptError;
 use crate::client::saturating_i16;
 
 impl<'de> Deserialize<'de> for AttemptError {
-    /// Decodes an attempt error leniently, like River Go.
+    /// Decodes an attempt error leniently.
     ///
     /// Only a JSON deserializer (such as [`serde_json`]'s) can decode an
     /// attempt error, since fields in an unexpected shape are kept as their

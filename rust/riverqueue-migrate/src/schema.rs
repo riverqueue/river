@@ -18,8 +18,8 @@ pub const SCHEMA_MAX_LEN: usize = POSTGRES_IDENTIFIER_MAX - NOTIFICATION_TOPIC_L
 ///
 /// [`SchemaName::current`] uses the connection's current schema (normally
 /// `public`, following `search_path`). An explicit schema is quoted wherever
-/// River renders it, exactly like River Go's `SafeIdentifier`, so names such
-/// as `river-prod` or `MyRiver` work as written. Pass the same schema to the
+/// River renders it, so names such as `river-prod` or `MyRiver` work as
+/// written. Pass the same schema to the
 /// migrator and the client.
 ///
 /// ```
@@ -41,8 +41,8 @@ impl SchemaName {
 
     /// Validates an optional explicit schema.
     ///
-    /// Like Go's `SafeIdentifier` quoting, any name is accepted and quoted
-    /// when rendered, including mixed case and punctuation such as
+    /// Any name is accepted and quoted when rendered, including mixed case
+    /// and punctuation such as
     /// `river-prod`. Names containing NUL are rejected, as are names too long
     /// to prefix River's notification topics within PostgreSQL's identifier
     /// limit.

@@ -10,9 +10,9 @@ use crate::{Client, Error, QueueConfig};
 ///
 /// This is the client's runtime configuration, not the shared queue records
 /// managed through [`Client::queues`]: adding or removing a queue here
-/// changes only which queues this client's producers fetch from. Like River
-/// Go's `QueueBundle`, adding a queue that's already added is an error, and
-/// removing one waits for its producer to stop.
+/// changes only which queues this client's producers fetch from. Adding a
+/// queue that's already added is an error, and removing one waits for its
+/// producer to stop.
 ///
 /// Changes apply to a running client asynchronously:
 ///
@@ -102,8 +102,7 @@ impl LocalQueues<'_> {
     /// returns the queue's configuration.
     ///
     /// The producer stops fetching at once and then waits for the jobs it
-    /// fetched to finish, like River Go's `QueueBundle.Remove`. A client
-    /// that isn't running returns at once.
+    /// fetched to finish. A client that isn't running returns at once.
     ///
     /// # Cancel safety
     ///

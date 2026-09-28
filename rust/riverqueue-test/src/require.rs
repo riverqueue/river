@@ -1,5 +1,4 @@
-//! Assertions about inserted jobs, like River Go's `rivertest.RequireInserted`
-//! family.
+//! Assertions about inserted jobs.
 //!
 //! Each assertion lists the jobs of the expected kinds, in every state, in
 //! insertion (ID) order, and panics with a descriptive message when the
@@ -18,8 +17,7 @@ use riverqueue::{
 /// The most jobs an assertion reads, which is River's list limit.
 const LIST_LIMIT: u32 = 10_000;
 
-/// Expected properties of an inserted job, like River Go's
-/// `rivertest.RequireInsertedOpts`.
+/// Expected properties of an inserted job.
 ///
 /// Every property that's set must match. [`require_not_inserted`] fails only
 /// when a job matches all of them.

@@ -61,8 +61,7 @@ impl WorkContext {
     }
 
     /// Completes the running job in a caller-managed transaction, for example
-    /// alongside business writes the job performed, like River Go's
-    /// `JobCompleteTx`.
+    /// alongside business writes the job performed.
     ///
     /// Metadata recorded on this context, including output, is merged into
     /// the job. The job becomes completed only when the transaction commits,
@@ -99,7 +98,7 @@ impl WorkContext {
     /// # Errors
     ///
     /// Returns an error when `value` can't be serialized to JSON, including
-    /// when it contains a non-finite float, which River Go can't encode.
+    /// when it contains a non-finite float, which JSON can't represent.
     pub fn metadata_set(
         &self,
         key: impl Into<String>,
@@ -112,13 +111,13 @@ impl WorkContext {
     }
 
     /// Records the job's output under River's reserved output metadata key,
-    /// where [`JobRow::output`] and River UI read it. Like River Go, output
-    /// is limited to 32 MB of JSON, but should be kept much smaller.
+    /// where [`JobRow::output`] and River UI read it. Output is limited to
+    /// 32 MB of JSON, but should be kept much smaller.
     ///
     /// # Errors
     ///
     /// Returns an error when `output` can't be serialized to JSON (including
-    /// when it contains a non-finite float, as in Go) or its JSON is larger
+    /// when it contains a non-finite float) or its JSON is larger
     /// than 32 MB.
     pub fn record_output(&self, output: impl Serialize) -> Result<(), serde_json::Error> {
         crate::encoding::check_finite(&output)?;
@@ -665,8 +664,8 @@ where
     /// Worker-specific error type. Errors use River's retry policy.
     ///
     /// The job's recorded error is the error's message followed by each of
-    /// its sources, `outer: inner`, like Go's `err.Error()` on a wrapped
-    /// error, so the cause of a failure stays visible on the job.
+    /// its sources, `outer: inner`, so the cause of a failure stays visible
+    /// on the job.
     ///
     /// Any error convertible into [`BoxError`] works, including concrete
     /// error types, `Box<dyn Error + Send + Sync>`, and report types such as

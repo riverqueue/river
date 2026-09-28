@@ -546,11 +546,11 @@ pub struct Stopper {
 }
 
 impl Stopper {
-    /// Requests a soft stop, like Go's `Client.Stop`.
+    /// Requests a soft stop.
     ///
     /// The client stops fetching new jobs and lets running jobs finish before
-    /// it stops. As in Go, leader election, maintenance, and the notification
-    /// listener stop at once, while each queue's producer keeps reporting its
+    /// it stops. Leader election, maintenance, and the notification listener
+    /// stop at once, while each queue's producer keeps reporting its
     /// running jobs until they finish. When the builder's `soft_stop_timeout`
     /// is set, jobs still running after that timeout are cancelled as if by
     /// [`Stopper::stop_now`].
@@ -558,7 +558,7 @@ impl Stopper {
         self.fetch_cancel.cancel();
     }
 
-    /// Requests a hard stop, like Go's `Client.StopAndCancel`.
+    /// Requests a hard stop.
     ///
     /// The client stops fetching new jobs and cancels the
     /// [`WorkContext::cancellation_token`](crate::WorkContext::cancellation_token) of every running job. The client
@@ -729,9 +729,8 @@ impl RunHandle {
     /// created or refreshed its `river_queue` row, and the selected backend's
     /// notification path is active.
     ///
-    /// Go's `Client.Start` returns once the same work is done, so a client
-    /// that awaited this can be relied on like a started Go client, for
-    /// example by a peer that pauses one of its queues. Poll-only clients skip
+    /// Once it returns, other clients can rely on the client's queues, for
+    /// example to pause one of them. Poll-only clients skip
     /// the notification path. Once readiness is observed, later calls return
     /// the same result immediately.
     ///

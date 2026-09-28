@@ -52,7 +52,7 @@ impl JobMetadata {
     }
 
     /// Borrows one field's original JSON value, resolving duplicate names to
-    /// their last occurrence as Go's `encoding/json` does.
+    /// their last occurrence.
     #[must_use]
     pub fn get_raw(&self, key: &str) -> Option<&RawValue> {
         // Borrowed RawValue skips the number parser, including numbers much

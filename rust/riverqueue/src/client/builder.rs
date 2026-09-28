@@ -55,7 +55,7 @@ impl Retention {
 ///
 /// Like River's other configuration values, `MaintenanceConfig` has a getter
 /// for each setting and a `with_*` method that returns the configuration
-/// with that setting changed. Defaults match River Go's.
+/// with that setting changed.
 #[derive(Clone, Debug)]
 pub struct MaintenanceConfig {
     /// Retention for cancelled jobs; `None` disables deletion.
@@ -161,8 +161,7 @@ impl MaintenanceConfig {
     /// Returns the explicitly configured rescue age, if any.
     ///
     /// When unset, a client rescues jobs running longer than one hour, or
-    /// than its job timeout plus one hour when a job timeout is configured,
-    /// matching Go's `RescueStuckJobsAfter` default.
+    /// than its job timeout plus one hour when a job timeout is configured.
     #[must_use]
     pub const fn rescue_after(&self) -> Option<Duration> {
         self.rescue_after
@@ -393,8 +392,8 @@ impl ClientBuilder {
 
     /// Sets how long a job may run before its
     /// [`WorkContext::cancellation_token`](crate::WorkContext::cancellation_token) is cancelled and the attempt
-    /// fails, unless its worker overrides it. Defaults to one minute, like
-    /// Go's `JobTimeout`. The timeout must be positive; use
+    /// fails, unless its worker overrides it. Defaults to one minute. The
+    /// timeout must be positive; use
     /// [`without_job_timeout`](Self::without_job_timeout) to let jobs run
     /// without a limit.
     #[must_use]
@@ -403,8 +402,7 @@ impl ClientBuilder {
         self
     }
 
-    /// Lets jobs run without a time limit unless their worker sets one,
-    /// like Go's `JobTimeout: -1`.
+    /// Lets jobs run without a time limit unless their worker sets one.
     #[must_use]
     pub fn without_job_timeout(mut self) -> Self {
         self.job_timeout = None;
@@ -455,8 +453,7 @@ impl ClientBuilder {
         self
     }
 
-    /// Keeps this client out of leader election, like Go's
-    /// `Config.LeaderElectionDisabled`.
+    /// Keeps this client out of leader election.
     ///
     /// The client still fetches and works jobs from its queues, sends and
     /// receives notifications, and runs extension runtime services, but it
@@ -529,8 +526,8 @@ impl ClientBuilder {
         self
     }
 
-    /// Escalates a soft stop to a hard stop after this duration, like Go's
-    /// `SoftStopTimeout`. By default, running jobs finish without a limit.
+    /// Escalates a soft stop to a hard stop after this duration. By default,
+    /// running jobs finish without a limit.
     /// The timeout must be positive.
     ///
     /// The client starts this timer when fetching stops, however the stop was

@@ -104,15 +104,15 @@ pub(crate) struct InsertBatchItem {
 
 /// A failed job attempt persisted in `river_job.errors`.
 ///
-/// Attempt errors deserialize from JSON leniently, like River Go's: an
-/// element written by another tool or edited by hand decodes on a best effort
+/// Attempt errors deserialize from JSON leniently: an element written by
+/// another tool or edited by hand decodes on a best effort
 /// basis instead of making its job row unreadable, and only invalid JSON is an
 /// error. Deserializing requires a JSON deserializer, such as `serde_json`'s.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 #[non_exhaustive]
 pub struct AttemptError {
-    /// Time at which the error occurred. It serializes like Go's
-    /// `time.Time`, with the shortest fractional seconds.
+    /// Time at which the error occurred. It serializes as RFC 3339 with the
+    /// shortest fractional seconds.
     #[serde(serialize_with = "crate::encoding::go_time::serialize")]
     pub at: DateTime<Utc>,
     /// Attempt number on which the error occurred.
@@ -236,8 +236,8 @@ impl InsertOpts {
 
     /// Replaces arbitrary JSON object metadata.
     ///
-    /// As in River Go, per-call metadata replaces the job type's default
-    /// metadata as a whole.
+    /// Per-call metadata replaces the job type's default metadata as a
+    /// whole.
     ///
     /// Accepts a [`JobMetadata`] or a `serde_json::Map`. Build a
     /// [`JobMetadata`] from JSON text (for example with `str::parse`) to keep
@@ -360,7 +360,7 @@ impl InsertOpts {
 /// River resolves and validates these from call, job-type, client, and
 /// library defaults before invoking hooks or middleware, and computes the
 /// unique key from them. Extensions may still change them, but River doesn't
-/// validate the changes again before persisting them, as in River Go.
+/// validate the changes again before persisting them.
 #[derive(Clone, Debug)]
 #[non_exhaustive]
 pub struct InsertParams {
@@ -786,9 +786,8 @@ impl UniqueOpts {
     /// Returns the options with encoded arguments included in the unique
     /// key, or not.
     ///
-    /// The arguments must encode to a JSON object. As in River Go, an empty
-    /// array is treated as `{}` and inserting any other non-object arguments
-    /// fails.
+    /// The arguments must encode to a JSON object. An empty array is treated
+    /// as `{}`, and inserting any other non-object arguments fails.
     #[must_use]
     pub const fn with_by_args(mut self, by_args: bool) -> Self {
         self.by_args = by_args;

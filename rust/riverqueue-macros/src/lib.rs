@@ -18,11 +18,11 @@ use syn::{
 /// * `queue = "..."`, `max_attempts = N`, `priority = N`, `pending = true`,
 ///   and `tags("a", "b")`: default insertion options.
 /// * `unique(...)`: makes the job unique by default. Options are `by_args`,
-///   `by_args("nested.path", ...)`, `by_period = "1h"` (a Go duration of at
-///   least one second), `by_queue`, `by_state(available, running, ...)`, and
+///   `by_args("nested.path", ...)`, `by_period = "1h"` (a duration of at least
+///   one second, such as `"90s"` or `"1h30m"`), `by_queue`, `by_state(available, running, ...)`, and
 ///   `exclude_kind`.
 /// * `insert_opts = path::to_fn`: a `fn() -> InsertOpts` whose options are
-///   overlaid on the attribute defaults, like Go's `JobArgsWithInsertOpts`.
+///   overlaid on the attribute defaults.
 /// * `crate = "path"`: the path to `riverqueue` when it is renamed or
 ///   re-exported.
 ///
@@ -30,8 +30,8 @@ use syn::{
 /// together with any `by_args` paths; without either, every argument is
 /// hashed. Marking a field requires `unique(by_args)` on the type. Field
 /// names follow Serde's serialization-side `rename` and `rename_all`. A
-/// unique field may be conditionally omitted with `skip_serializing_if`,
-/// matching River Go, but cannot be flattened or unconditionally skipped.
+/// unique field may be conditionally omitted with `skip_serializing_if`, but
+/// cannot be flattened or unconditionally skipped.
 /// `by_args` paths separate nested names with `.`; escape a literal dot or
 /// backslash with a backslash (for example, `"user\\.id"` selects the single
 /// JSON name `user.id`). Tagged fields use their whole serialized name as one

@@ -80,8 +80,7 @@ const DAYS_OF_WEEK: Bounds = Bounds {
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 #[non_exhaustive]
 pub enum CronTimeZone {
-    /// The process's local time zone, which is what River Go uses because it
-    /// evaluates schedules against `time.Now()`. Containers usually run in
+    /// The process's local time zone, the default. Containers usually run in
     /// UTC; set an explicit zone when clients in different zones share a
     /// schedule.
     #[default]
@@ -109,19 +108,19 @@ enum Spec {
     },
 }
 
-/// A periodic schedule written in River Go's standard cron syntax.
+/// A periodic schedule written in standard five-field cron syntax.
 ///
-/// Parsing accepts exactly the expressions robfig/cron's `ParseStandard`
-/// accepts, and [`CronSchedule::next_after`] returns the same occurrences.
+/// Parsing accepts exactly the expressions every River client accepts, and
+/// [`CronSchedule::next_after`] returns the same occurrences, so a schedule
+/// fires at the same times whichever client leads.
 /// Without the `chrono-tz` feature, which bundles the IANA time zone
 /// database, named `CRON_TZ=`/`TZ=` zones are limited to `UTC`, `Local`, and
 /// `Etc/GMT±N`, and other names are rejected; use
 /// [`CronSchedule::with_time_zone`] for other fixed offsets.
 ///
-/// Daylight saving transitions follow robfig's algorithm and Go's
-/// `time.Date`, so skipped and repeated wall-clock times fire exactly when
-/// they do in Go: a daily schedule at a skipped time doesn't fire that day,
-/// and one at a repeated time can fire twice.
+/// Across daylight saving transitions, a daily schedule at a skipped
+/// wall-clock time doesn't fire that day, and one at a repeated time can
+/// fire twice.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct CronSchedule {
     expression: String,
