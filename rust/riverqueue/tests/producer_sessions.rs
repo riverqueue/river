@@ -536,6 +536,99 @@ async fn assert_queue_changes_reach_the_session(
     run.shutdown().await.unwrap();
 }
 
+/// A job whose worker reports whether its attempt started cancelled.
+#[derive(Clone, Debug, Deserialize, JobArgs, Serialize)]
+#[river(kind = "producer_session_cancel_probe")]
+struct CancelProbeArgs {}
+
+/// Holds each claim that returned jobs, after it committed, until released.
+#[derive(Clone, Default)]
+struct GatedPilot {
+    claimed: Arc<Notify>,
+    release: Arc<Notify>,
+}
+
+#[async_trait]
+impl Pilot for GatedPilot {
+    async fn start_producer(
+        &self,
+        _context: ProducerStartContext,
+    ) -> Result<Option<Box<dyn PilotProducer>>, PilotError> {
+        Ok(Some(Box::new(self.clone())))
+    }
+}
+
+#[async_trait]
+impl PilotProducer for GatedPilot {
+    fn intercepts_claim(&self) -> bool {
+        true
+    }
+
+    async fn claim(
+        &self,
+        context: ProducerClaimContext<'_>,
+        next: ProducerClaimNext<'_>,
+    ) -> Result<Vec<ClaimedJob>, PilotError> {
+        let mut transaction = context.database.begin().await?;
+        let jobs = next.claim(transaction.connection()).await?;
+        transaction.commit().await?;
+        if !jobs.is_empty() {
+            self.claimed.notify_one();
+            self.release.notified().await;
+        }
+        Ok(jobs)
+    }
+}
+
+/// A cancellation that arrives after a job is claimed but before its attempt
+/// is registered still reaches the attempt, like Go's producer keeping
+/// cancellations received during a fetch. The client is poll-only, so
+/// cancelling through it signals its producer directly and the cancellation
+/// is handled before the claim is released.
+async fn assert_cancellation_during_claim_reaches_the_attempt(builder: riverqueue::ClientBuilder) {
+    let pilot = GatedPilot::default();
+    let mut workers = WorkerRegistry::new();
+    workers
+        .register_fn(
+            |context: WorkContext, _job: Job<CancelProbeArgs>| async move {
+                if context.cancellation_token().is_cancelled() {
+                    return Err(std::io::Error::other("started cancelled"));
+                }
+                Ok(WorkOutcome::Complete)
+            },
+        )
+        .unwrap();
+    let client = builder
+        .pilot(pilot.clone())
+        .without_notifications()
+        .queue("default", fast_queue(1))
+        .workers(workers)
+        .build()
+        .unwrap();
+    let id = client.insert(CancelProbeArgs {}).await.unwrap().id();
+    let mut run = client.start().unwrap();
+    tokio::time::timeout(WAIT, pilot.claimed.notified())
+        .await
+        .expect("job claimed");
+
+    let requested = client.jobs().cancel(id).await.unwrap();
+    assert_eq!(requested.state, JobState::Running);
+    pilot.release.notify_one();
+    tokio::time::timeout(WAIT, async {
+        while client.jobs().get(id).await.unwrap().state == JobState::Running {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("job finishes");
+    run.shutdown().await.unwrap();
+
+    assert_eq!(
+        client.jobs().get(id).await.unwrap().state,
+        JobState::Cancelled
+    );
+}
+
 #[cfg(feature = "postgres-tests")]
 mod postgres {
     use riverqueue::database::PostgresDatabase;
@@ -558,6 +651,13 @@ mod postgres {
     async fn abandoned_attempts_finish() {
         let schema = PostgresSchema::new("session_abandoned").await;
         assert_abandoned_attempts_finish(builder(&schema)).await;
+        schema.cleanup().await;
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn cancellation_during_claim_reaches_the_attempt() {
+        let schema = PostgresSchema::new("session_claim_cancel").await;
+        assert_cancellation_during_claim_reaches_the_attempt(builder(&schema)).await;
         schema.cleanup().await;
     }
 
@@ -611,6 +711,13 @@ mod sqlite {
     async fn abandoned_attempts_finish() {
         let (pool, path) = sqlite_file_pool(4).await;
         assert_abandoned_attempts_finish(Client::builder(pool.clone())).await;
+        sqlite_cleanup(pool, path).await;
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn cancellation_during_claim_reaches_the_attempt() {
+        let (pool, path) = sqlite_file_pool(4).await;
+        assert_cancellation_during_claim_reaches_the_attempt(Client::builder(pool.clone())).await;
         sqlite_cleanup(pool, path).await;
     }
 
