@@ -82,6 +82,28 @@ async fn control_and_resign_payloads_use_go_bytes() {
         .unwrap();
     client.queues().pause("alpha").await.unwrap();
     client.request_resign().await.unwrap();
+    // Metadata given as text keeps its key order and escapes.
+    client
+        .queues()
+        .update(
+            "alpha",
+            QueueUpdateParams::new().metadata_raw(
+                serde_json::value::RawValue::from_string(r#"{"z": 1, "a": "x\/y<"}"#.to_owned())
+                    .unwrap(),
+            ),
+        )
+        .await
+        .unwrap();
+    let error = client
+        .queues()
+        .update(
+            "alpha",
+            QueueUpdateParams::new()
+                .metadata_raw(serde_json::value::RawValue::from_string("[1]".to_owned()).unwrap()),
+        )
+        .await
+        .unwrap_err();
+    assert!(matches!(error, Error::Configuration(_)), "{error:?}");
 
     let payloads: Vec<(String, String)> =
         sqlx::query_as("SELECT topic, payload FROM river_notification ORDER BY id")
@@ -105,6 +127,11 @@ async fn control_and_resign_payloads_use_go_bytes() {
             (
                 "river_leadership".to_owned(),
                 r#"{"action":"request_resign","leader_id":""}"#.to_owned()
+            ),
+            (
+                "river_control".to_owned(),
+                r#"{"action":"metadata_changed","metadata":{"z":1,"a":"x\/y\u003c"},"queue":"alpha"}"#
+                    .to_owned()
             ),
         ]
     );

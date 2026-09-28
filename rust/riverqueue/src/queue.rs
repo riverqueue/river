@@ -2,6 +2,7 @@
 
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
+use serde_json::value::RawValue;
 use serde_json::{Map, Value};
 
 /// A queue currently or recently operated by a River client.
@@ -104,10 +105,41 @@ impl From<String> for QueueSelector {
 ///
 /// Fields left unset keep their current value. The queue's `updated_at` is
 /// refreshed either way.
-#[derive(Clone, Debug, Default, PartialEq)]
+#[derive(Clone, Debug, Default)]
 #[non_exhaustive]
 pub struct QueueUpdateParams {
-    pub(crate) metadata: Option<Map<String, Value>>,
+    pub(crate) metadata: Option<QueueMetadata>,
+}
+
+/// New queue metadata, as a map River encodes or as the caller's JSON text.
+#[derive(Clone, Debug)]
+pub(crate) enum QueueMetadata {
+    Map(Map<String, Value>),
+    Raw(Box<RawValue>),
+}
+
+impl QueueMetadata {
+    /// Returns the metadata's JSON text, encoding a map with River's
+    /// encoding.
+    pub(crate) fn into_raw(self) -> Result<Box<RawValue>, serde_json::Error> {
+        match self {
+            Self::Map(map) => RawValue::from_string(crate::encoding::to_go_string(&map)?),
+            Self::Raw(raw) => Ok(raw),
+        }
+    }
+}
+
+impl PartialEq for QueueUpdateParams {
+    fn eq(&self, other: &Self) -> bool {
+        match (&self.metadata, &other.metadata) {
+            (None, None) => true,
+            (Some(QueueMetadata::Map(left)), Some(QueueMetadata::Map(right))) => left == right,
+            (Some(QueueMetadata::Raw(left)), Some(QueueMetadata::Raw(right))) => {
+                left.get() == right.get()
+            }
+            _ => false,
+        }
+    }
 }
 
 impl QueueUpdateParams {
@@ -119,9 +151,25 @@ impl QueueUpdateParams {
 
     /// Replaces the queue's metadata object. Clients working the queue are
     /// notified of the new metadata.
+    ///
+    /// The map is encoded with River's JSON [`encoding`](crate::encoding),
+    /// with its keys in sorted order. Use
+    /// [`metadata_raw`](Self::metadata_raw) to keep an existing JSON text
+    /// as written.
     #[must_use]
     pub fn metadata(mut self, metadata: Map<String, Value>) -> Self {
-        self.metadata = Some(metadata);
+        self.metadata = Some(QueueMetadata::Map(metadata));
+        self
+    }
+
+    /// Replaces the queue's metadata object with JSON text kept as written,
+    /// in its key order and with its escapes, the way other River clients
+    /// store and announce metadata given as text. The text must be a JSON
+    /// object; the update fails with [`Error::Configuration`](crate::Error::Configuration)
+    /// otherwise.
+    #[must_use]
+    pub fn metadata_raw(mut self, metadata: Box<RawValue>) -> Self {
+        self.metadata = Some(QueueMetadata::Raw(metadata));
         self
     }
 }
