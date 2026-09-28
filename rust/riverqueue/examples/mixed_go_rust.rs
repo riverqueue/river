@@ -43,12 +43,12 @@
 
 use std::error::Error;
 
+use riverqueue::sqlx::PgPool;
 use riverqueue::{
     Client, EventKind, InsertOpts, Job, JobArgs, QueueConfig, WorkContext, WorkOutcome,
     WorkerRegistry, migrate::PostgresMigrator,
 };
 use serde::{Deserialize, Serialize};
-use sqlx::PgPool;
 
 /// Inserted by Go, worked here. Field names match the Go struct's JSON tags.
 #[derive(Clone, Debug, Deserialize, JobArgs, Serialize)]

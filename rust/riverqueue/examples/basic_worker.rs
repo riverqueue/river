@@ -6,12 +6,12 @@
 
 use std::error::Error;
 
+use riverqueue::sqlx::PgPool;
 use riverqueue::{
     BoxError, Client, EventKind, Job, JobArgs, QueueConfig, WorkContext, WorkOutcome,
     WorkerRegistry, migrate::PostgresMigrator,
 };
 use serde::{Deserialize, Serialize};
-use sqlx::PgPool;
 
 #[derive(Clone, Debug, Deserialize, JobArgs, Serialize)]
 #[river(kind = "send_email")]

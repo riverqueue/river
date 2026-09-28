@@ -6,12 +6,12 @@
 
 use std::error::Error;
 
+use riverqueue::sqlx::{self, PgPool};
 use riverqueue::{
     Client,
     database::{PostgresDatabase, SchemaName},
 };
 use riverqueue_migrate::PostgresMigrator;
-use sqlx::PgPool;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn Error>> {

@@ -11,12 +11,12 @@
 
 use std::error::Error;
 
+use riverqueue::sqlx::{self, PgPool};
 use riverqueue::{
     Client, EventKind, Job, JobArgs, QueueConfig, WorkContext, WorkOutcome, WorkerRegistry,
     migrate::PostgresMigrator,
 };
 use serde::{Deserialize, Serialize};
-use sqlx::PgPool;
 
 #[derive(Clone, Debug, Deserialize, JobArgs, Serialize)]
 #[river(kind = "confirm_order")]

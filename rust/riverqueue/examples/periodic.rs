@@ -9,12 +9,12 @@
 
 use std::{error::Error, time::Duration};
 
+use riverqueue::sqlx::PgPool;
 use riverqueue::{
     Client, CronSchedule, EventKind, IntervalSchedule, Job, JobArgs, PeriodicJob, PeriodicJobOpts,
     QueueConfig, WorkContext, WorkOutcome, WorkerRegistry, migrate::PostgresMigrator,
 };
 use serde::{Deserialize, Serialize};
-use sqlx::PgPool;
 
 #[derive(Clone, Debug, Deserialize, JobArgs, Serialize)]
 #[river(kind = "refresh_cache")]

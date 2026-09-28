@@ -3,12 +3,12 @@
 
 use std::{error::Error, time::Duration};
 
+use riverqueue::sqlx::PgPool;
 use riverqueue::{
     BoxError, Client, Job, JobArgs, QueueConfig, WorkCancelled, WorkContext, WorkOutcome,
     WorkerRegistry,
 };
 use serde::{Deserialize, Serialize};
-use sqlx::PgPool;
 
 #[derive(Clone, Debug, Deserialize, JobArgs, Serialize)]
 #[river(kind = "generate_report")]

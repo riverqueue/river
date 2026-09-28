@@ -6,9 +6,9 @@
 
 use std::{error::Error, time::Duration};
 
+use riverqueue::sqlx::PgPool;
 use riverqueue::{Client, InsertOpts, JobArgs, UniqueOpts, migrate::PostgresMigrator};
 use serde::{Deserialize, Serialize};
-use sqlx::PgPool;
 
 /// Unique by default: at most one reconciliation per account per hour.
 ///

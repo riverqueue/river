@@ -9,12 +9,12 @@
 
 use std::{convert::Infallible, error::Error, time::Duration};
 
+use riverqueue::sqlx::PgPool;
 use riverqueue::{
     Client, Job, JobArgs, QueueConfig, WorkContext, WorkOutcome, Worker, WorkerRegistry,
     migrate::PostgresMigrator,
 };
 use serde::{Deserialize, Serialize};
-use sqlx::PgPool;
 
 #[derive(Clone, Debug, Deserialize, JobArgs, Serialize)]
 #[river(kind = "cancellable_report")]

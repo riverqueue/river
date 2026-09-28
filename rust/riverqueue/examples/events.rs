@@ -9,12 +9,12 @@
 
 use std::error::Error;
 
+use riverqueue::sqlx::PgPool;
 use riverqueue::{
     Client, Event, EventKind, InsertOpts, Job, JobArgs, JobEventKind, QueueConfig, WorkContext,
     WorkOutcome, WorkerRegistry, migrate::PostgresMigrator,
 };
 use serde::{Deserialize, Serialize};
-use sqlx::PgPool;
 
 #[derive(Clone, Debug, Deserialize, JobArgs, Serialize)]
 #[river(kind = "charge_card")]
