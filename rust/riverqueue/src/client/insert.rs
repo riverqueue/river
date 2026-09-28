@@ -737,14 +737,17 @@ impl Client {
         match connection {
             #[cfg(feature = "postgres")]
             PilotDatabaseConnection::Postgres(connection) => {
-                let queues = queues.into_iter().collect::<Vec<_>>();
+                let payloads = queues
+                    .into_iter()
+                    .map(crate::protocol::insert_notification_payload)
+                    .collect::<Vec<_>>();
                 sqlx::query(
-                    "SELECT pg_notify(concat(coalesce($1::text, current_schema()), '.', $2::text), json_build_object('queue', queue)::text) \
-                     FROM unnest($3::text[]) AS queue",
+                    "SELECT pg_notify(concat(coalesce($1::text, current_schema()), '.', $2::text), payload) \
+                     FROM unnest($3::text[]) AS payload",
                 )
                 .bind(self.inner.schema.as_deref())
                 .bind(crate::protocol::NOTIFICATION_TOPIC_INSERT)
-                .bind(queues)
+                .bind(payloads)
                 .execute(connection)
                 .await?;
             }
@@ -752,7 +755,7 @@ impl Client {
             PilotDatabaseConnection::Sqlite(connection) => {
                 let payloads = queues
                     .into_iter()
-                    .map(|queue| serde_json::json!({ "queue": queue }).to_string())
+                    .map(crate::protocol::insert_notification_payload)
                     .collect::<Vec<_>>();
                 let notifications = payloads
                     .iter()

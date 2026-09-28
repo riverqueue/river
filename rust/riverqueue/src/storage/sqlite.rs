@@ -188,7 +188,7 @@ impl Backend for SqliteBackend<'_> {
             // Running and already-available jobs are returned unchanged.
             return self.job_get(id).await;
         };
-        let payload = serde_json::json!({"queue": row.queue}).to_string();
+        let payload = crate::protocol::insert_notification_payload(&row.queue);
         self.notify(crate::NOTIFICATION_TOPIC_INSERT, &payload)
             .await?;
         Ok(Some(row))

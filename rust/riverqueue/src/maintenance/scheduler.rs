@@ -152,12 +152,17 @@ async fn schedule_batch_postgres(
             &context.cancel,
             TIMEOUT_DEFAULT,
             sqlx::query(
-                "SELECT pg_notify(concat(coalesce($1::text, current_schema()), '.', $2::text), \
-                 json_build_object('queue', queue)::text) FROM unnest($3::text[]) AS queue",
+                "SELECT pg_notify(concat(coalesce($1::text, current_schema()), '.', $2::text), payload) \
+                 FROM unnest($3::text[]) AS payload",
             )
             .bind(context.inner.schema.as_deref())
             .bind(crate::NOTIFICATION_TOPIC_INSERT)
-            .bind(queues)
+            .bind(
+                queues
+                    .iter()
+                    .map(|queue| crate::protocol::insert_notification_payload(queue))
+                    .collect::<Vec<_>>(),
+            )
             .execute(&mut *transaction.transaction),
         )
         .await?;
@@ -213,7 +218,7 @@ async fn schedule_batch_sqlite(
         sqlite::schedule_discard_conflicts(&mut transaction, &conflict_ids, look_ahead).await?;
     }
     for queue in notified_queues(&scheduled) {
-        let payload = serde_json::json!({"queue": queue}).to_string();
+        let payload = crate::protocol::insert_notification_payload(&queue);
         sqlite::notification_insert(
             &mut transaction,
             &[sqlite::NotificationInput {

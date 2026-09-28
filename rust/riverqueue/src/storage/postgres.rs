@@ -208,7 +208,7 @@ impl Backend for PostgresBackend<'_> {
                  FROM locked WHERE job.id = locked.id AND job.state != 'running' \
                    AND NOT (job.state = 'available' AND job.scheduled_at < now()) RETURNING job.*), \
              notified AS (SELECT pg_notify(concat(coalesce($2::text, current_schema()), '.', $3::text), \
-                 json_build_object('queue', queue)::text) FROM updated WHERE state = 'available') \
+                 concat('{{\"queue\": ', to_json(queue)::text, '}}')) FROM updated WHERE state = 'available') \
              SELECT {}, false AS unique_skipped_as_duplicate FROM updated AS job LEFT JOIN notified ON true \
              UNION ALL SELECT {}, false AS unique_skipped_as_duplicate FROM {table} AS job \
                  WHERE id = $1 AND NOT EXISTS (SELECT 1 FROM updated) LIMIT 1",
