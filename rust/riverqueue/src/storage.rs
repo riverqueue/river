@@ -345,12 +345,13 @@ impl<'c> Storage<'c> {
             .ok_or(Error::NotFound(crate::Record::Job(id)))
     }
 
-    /// Asks the current leader to resign once the transaction commits.
+    /// Asks the current leader to resign once the transaction commits, with
+    /// the payload Go writes, including its empty `leader_id`.
     pub(crate) async fn leader_request_resign(&mut self) -> Result<(), Error> {
         self.backend
             .notify(
                 crate::NOTIFICATION_TOPIC_LEADERSHIP,
-                r#"{"action":"request_resign"}"#,
+                r#"{"action":"request_resign","leader_id":""}"#,
             )
             .await
     }
@@ -387,7 +388,10 @@ impl<'c> Storage<'c> {
             "queue": name,
         });
         self.backend
-            .notify(crate::NOTIFICATION_TOPIC_CONTROL, &payload.to_string())
+            .notify(
+                crate::NOTIFICATION_TOPIC_CONTROL,
+                &crate::encoding::to_go_string(&payload)?,
+            )
             .await
     }
 
@@ -414,8 +418,12 @@ impl<'c> Storage<'c> {
                 "metadata": metadata,
                 "queue": name,
             });
+            // Go's escaping, so SQLite outbox rows hold the bytes Go writes.
             self.backend
-                .notify(crate::NOTIFICATION_TOPIC_CONTROL, &payload.to_string())
+                .notify(
+                    crate::NOTIFICATION_TOPIC_CONTROL,
+                    &crate::encoding::to_go_string(&payload)?,
+                )
                 .await?;
         }
         Ok(queue)

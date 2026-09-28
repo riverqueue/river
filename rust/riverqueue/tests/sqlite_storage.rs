@@ -68,6 +68,51 @@ async fn cancel_stores_attempted_at_as_raw_jsonb_text() {
 }
 
 #[tokio::test]
+async fn control_and_resign_payloads_use_go_bytes() {
+    let (client, pool) = setup().await;
+    insert_queue(&pool, "alpha").await;
+
+    client
+        .queues()
+        .update(
+            "alpha",
+            QueueUpdateParams::new().metadata(Map::from_iter([("note".to_owned(), json!("<&>"))])),
+        )
+        .await
+        .unwrap();
+    client.queues().pause("alpha").await.unwrap();
+    client.request_resign().await.unwrap();
+
+    let payloads: Vec<(String, String)> =
+        sqlx::query_as("SELECT topic, payload FROM river_notification ORDER BY id")
+            .fetch_all(&pool)
+            .await
+            .unwrap();
+    // Go escapes `<`, `>`, and `&` in JSON strings, and its resignation
+    // request carries an empty `leader_id`.
+    assert_eq!(
+        payloads,
+        [
+            (
+                "river_control".to_owned(),
+                r#"{"action":"metadata_changed","metadata":{"note":"\u003c\u0026\u003e"},"queue":"alpha"}"#
+                    .to_owned()
+            ),
+            (
+                "river_control".to_owned(),
+                r#"{"action":"pause","queue":"alpha"}"#.to_owned()
+            ),
+            (
+                "river_leadership".to_owned(),
+                r#"{"action":"request_resign","leader_id":""}"#.to_owned()
+            ),
+        ]
+    );
+
+    pool.close().await;
+}
+
+#[tokio::test]
 async fn empty_batches_are_rejected_before_database_work() {
     let (client, pool) = setup().await;
 
