@@ -14,14 +14,26 @@
 //! their producer's session never hears about them, like the other jobs of a
 //! multi-job result in River for Go.
 
-use std::sync::atomic::AtomicU64;
+use std::collections::HashMap;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
+use chrono::{DateTime, Utc};
 use futures_util::future::BoxFuture;
-use tokio::sync::Notify;
+use serde_json::{Map, Value};
+use tokio::sync::{Notify, mpsc, oneshot};
+use tokio_util::sync::CancellationToken;
+use tracing::error;
 
-#[allow(clippy::wildcard_imports)]
-use super::*;
 use crate::__private::{ClaimedJob, PilotDatabase, PilotError};
+use crate::client::ClientInner;
+use crate::client::completer::{CompletionAttempt, CompletionTiming, CompletionUpdate};
+use crate::client::executor::{
+    WorkerFailure, WorkerFailureKind, WorkerResult, persist_result, public_work_result,
+    worker_failure_from_source,
+};
+use crate::{Client, Error, ErrorHandlerDecision, JobRow, JobState, WorkContext, WorkResult};
 
 /// Numbers ledgers so the client-wide owner map can tell them apart.
 static LEDGER_IDS: AtomicU64 = AtomicU64::new(1);

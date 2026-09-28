@@ -1,7 +1,26 @@
 //! Starting clients and observing their lifecycle.
 
-#[allow(clippy::wildcard_imports)]
-use super::*;
+use std::collections::HashMap;
+use std::sync::atomic::Ordering;
+use std::sync::{Arc, Mutex};
+use std::time::Duration;
+
+use tokio::sync::{mpsc, oneshot};
+use tokio::task::JoinSet;
+use tokio_util::sync::CancellationToken;
+use tracing::{debug, error, warn};
+
+use crate::client::ClientInner;
+use crate::client::backoff::exponential_backoff;
+use crate::client::completer::run_completion_batcher;
+#[cfg(feature = "postgres")]
+use crate::client::notifier::run_notifications;
+#[cfg(feature = "sqlite")]
+use crate::client::notifier::run_sqlite_notifications;
+use crate::client::notifier::{ReadySender, ReadySlot};
+use crate::client::producer::run_dynamic_queues;
+use crate::database::DatabasePool;
+use crate::{Client, Error};
 
 /// A boxed application shutdown signal awaited by a started client.
 type ShutdownSignal = std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send>>;
@@ -542,7 +561,7 @@ impl Stopper {
     /// Requests a hard stop, like Go's `Client.StopAndCancel`.
     ///
     /// The client stops fetching new jobs and cancels the
-    /// [`WorkContext::cancellation_token`] of every running job. The client
+    /// [`WorkContext::cancellation_token`](crate::WorkContext::cancellation_token) of every running job. The client
     /// still waits for workers to return: a job that returns promptly after
     /// cancellation is made available again without using up its attempt,
     /// and one that ignores cancellation for longer than the job stuck

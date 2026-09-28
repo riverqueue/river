@@ -286,7 +286,10 @@ fn parse_go_duration(text: &str) -> Result<u128, String> {
     Ok(total)
 }
 
-#[allow(clippy::too_many_lines)]
+#[expect(
+    clippy::too_many_lines,
+    reason = "the derive's validation and generated items read the same parsed attributes"
+)]
 fn expand_job_args(input: &DeriveInput) -> syn::Result<proc_macro2::TokenStream> {
     let attributes = parse_type_attributes(input)?;
     let kind = attributes.kind.clone().ok_or_else(|| {

@@ -6,9 +6,14 @@ use std::{
     pin::Pin,
 };
 
-#[allow(clippy::wildcard_imports)]
-use super::*;
+use serde_json::Map;
+
+use crate::__private::DatabaseConnection as PilotDatabaseConnection;
+use crate::client::attempts::signal_running_attempt;
+use crate::client::request::{Target, request_type};
+use crate::database::DatabaseTransactionExecutor;
 use crate::storage::Access;
+use crate::{Client, Error, JobRow};
 use crate::{JobDeleteManyParams, JobListCursor, JobListParams, JobListResult, JobUpdateParams};
 
 /// Operations on persisted jobs, returned by [`Client::jobs`].
@@ -51,7 +56,7 @@ impl<'a> Jobs<'a> {
     /// A job that is available, scheduled, retryable, or pending is cancelled
     /// immediately and won't run again. A running job is marked for
     /// cancellation, and the client running it cancels the attempt's
-    /// [`WorkContext::cancellation_token`]: if the worker then returns an
+    /// [`WorkContext::cancellation_token`](crate::WorkContext::cancellation_token): if the worker then returns an
     /// error, the job is cancelled rather than retried, while a job that
     /// completes successfully stays completed. A finalized job is returned
     /// unchanged.
@@ -81,7 +86,7 @@ impl<'a> Jobs<'a> {
     /// completed only when the transaction commits. If this completes a job
     /// that is still being worked, the worker's own result is discarded when
     /// it finishes, because the job is no longer running. Workers can use
-    /// [`WorkContext::job_complete_tx`], which also records metadata set on
+    /// [`WorkContext::job_complete_tx`](crate::WorkContext::job_complete_tx), which also records metadata set on
     /// the work context.
     ///
     /// ```no_run

@@ -1,9 +1,10 @@
 //! This client's own queue configuration.
 
+use std::collections::HashMap;
 use std::sync::PoisonError;
 
-#[allow(clippy::wildcard_imports)]
-use super::*;
+use crate::client::builder::validate_queue_settings;
+use crate::{Client, Error, QueueConfig};
 
 /// The queues this client works, returned by [`Client::local_queues`].
 ///

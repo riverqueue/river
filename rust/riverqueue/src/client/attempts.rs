@@ -1,7 +1,12 @@
 //! Tracking of running job attempts for cancellation delivery.
 
-#[allow(clippy::wildcard_imports)]
-use super::*;
+use std::collections::HashMap;
+use std::sync::Mutex;
+use std::sync::atomic::{AtomicU64, Ordering};
+
+use tokio_util::sync::CancellationToken;
+
+use crate::client::{ClientInner, PENDING_CANCELLATION_LIMIT, PENDING_CANCELLATION_RETENTION};
 
 pub(super) fn remove_running_attempt(
     running: &Mutex<HashMap<i64, CancellationToken>>,

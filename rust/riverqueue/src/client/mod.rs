@@ -42,16 +42,10 @@ pub(crate) use self::record::{JobRecord, decode_job_row, job_projection};
 pub use self::resign::ResignRequest;
 pub(crate) use self::run::SERVICE_RESTART_RESET_AFTER;
 pub use self::run::{RunHandle, Stopper};
-#[allow(clippy::wildcard_imports, unused_imports)]
-use self::{
-    attempts::*, backoff::*, builder::*, completer::*, executor::*, extension::*, insert::*,
-    notifier::*, producer::*, request::*, run::*, validate::*,
-};
 pub(crate) use self::{
     completer::after_jobs_set_state, executor::default_retry_delay, notifier::RuntimeNotification,
     producer::standard_claim, validate::validate_queue,
 };
-
 use std::{
     collections::HashMap,
     sync::{
@@ -62,48 +56,25 @@ use std::{
 };
 
 use chrono::{DateTime, Utc};
-use serde::Deserialize;
-use serde_json::{Map, Value, value::RawValue};
-use sha2::{Digest, Sha256};
 #[cfg(feature = "postgres")]
-use sqlx::AssertSqlSafe;
+use sqlx::PgPool;
 #[cfg(feature = "sqlite")]
 use sqlx::SqlitePool;
-#[cfg(feature = "postgres")]
-use sqlx::{
-    Executor, PgPool, Postgres,
-    postgres::{PgListener, PgRow},
-    types::Json,
-};
-use tokio::{
-    sync::{broadcast, mpsc, oneshot, watch},
-    task::JoinSet,
-};
+use tokio::sync::{broadcast, mpsc, watch};
 use tokio_util::sync::CancellationToken;
-use tracing::{Instrument, debug, error, info_span, warn};
 
+use self::completer::CompletionUpdate;
 use crate::__private::{
-    DatabaseConfig as PilotDatabaseConfig, DatabasePool as PilotDatabasePool, NoopPilot, Pilot,
+    DatabaseConfig as PilotDatabaseConfig, DatabaseConnection as PilotDatabaseConnection,
+    DatabasePool as PilotDatabasePool, NoopPilot, Pilot,
 };
-use crate::__private::{
-    DatabaseConnection as PilotDatabaseConnection, JobInsertParams as PilotJobInsertParams,
-    JobSetStateParams,
-};
-
-use crate::extension::{WorkEndpoint, WorkNext};
 use crate::maintenance::LeadershipWakeup;
 use crate::{
-    AttemptError, BoxError, DefaultRetryPolicy, Error, ErrorHandler, ErrorHandlerDecision, Event,
-    EventKind, EventReceiver, FETCH_COOLDOWN_DEFAULT, FETCH_COOLDOWN_MIN,
-    FETCH_POLL_INTERVAL_DEFAULT, Hook, InsertBatch, InsertBatchResult, InsertContext,
-    InsertMiddleware, InsertOpts, InsertParams, InsertResult, JOB_STUCK_THRESHOLD_DEFAULT,
-    JOB_TIMEOUT_DEFAULT, Job, JobArgs, JobEventKind, JobRow, JobState, JobStatistics,
-    MAX_ATTEMPTS_DEFAULT, Metric, PanicError, Plugin, QUEUE_NUM_WORKERS_MAX, QueueEventKind,
-    RetryPolicy, SchemaName, SubscribeConfig, WorkCancelled, WorkContext, WorkError,
-    WorkMiddleware, WorkOutcome, WorkResult, WorkerRegistry, WorkerTimeout,
+    DefaultRetryPolicy, Error, Event, EventKind, EventReceiver, JOB_STUCK_THRESHOLD_DEFAULT,
+    JOB_TIMEOUT_DEFAULT, MAX_ATTEMPTS_DEFAULT, RetryPolicy, SchemaName, SubscribeConfig,
+    WorkerRegistry,
     database::{Database, DatabaseKind, DatabasePool, DatabaseTransactionExecutor, IntoDatabase},
-    periodic::{PeriodicInsert, PeriodicJob, PeriodicJobs},
-    unique::build_unique_key_parts,
+    periodic::PeriodicJobs,
 };
 
 pub(crate) const ATTEMPTED_BY_MAX: i32 = 100;

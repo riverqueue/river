@@ -1,8 +1,8 @@
 //! Operations on persisted queue records.
 
-#[allow(clippy::wildcard_imports)]
-use super::*;
+use crate::client::request::{Target, request_type};
 use crate::storage::Access;
+use crate::{Client, Error};
 use crate::{Queue, QueueListParams, QueueSelector, QueueUpdateParams};
 
 /// Operations on persisted queue records, returned by [`Client::queues`].

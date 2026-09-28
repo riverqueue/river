@@ -1,8 +1,24 @@
 //! Execution of individual job attempts.
 
-#[allow(clippy::wildcard_imports)]
-use super::*;
+use std::sync::Arc;
+use std::time::Duration;
+
+use chrono::{DateTime, Utc};
+use serde_json::{Map, Value};
+use sha2::{Digest, Sha256};
+use tokio::sync::{mpsc, oneshot};
+use tokio_util::sync::CancellationToken;
+use tracing::{Instrument, debug, error, info_span, warn};
+
+use crate::client::attempts::remove_running_attempt;
+use crate::client::completer::{CompletionAttempt, CompletionTiming, CompletionUpdate};
+use crate::client::{ClientInner, PeerLedger, peers};
 use crate::error::{Chain, panic_message};
+use crate::extension::{WorkEndpoint, WorkNext};
+use crate::{
+    AttemptError, BoxError, Client, Error, ErrorHandlerDecision, JobEventKind, JobRow, JobState,
+    PanicError, WorkCancelled, WorkContext, WorkError, WorkOutcome, WorkResult, WorkerTimeout,
+};
 
 /// Runs one claimed job's attempt and persists its result.
 ///
@@ -13,7 +29,10 @@ use crate::error::{Chain, panic_message};
 /// ordinary error handling. The error handler sees the partial row, and the
 /// job is retried with the client's retry policy or discarded at its maximum
 /// attempts.
-#[allow(clippy::too_many_lines)]
+#[expect(
+    clippy::too_many_lines,
+    reason = "one attempt's decode, work, error handling, and persistence share its state"
+)]
 pub(super) async fn execute_job(
     inner: Arc<ClientInner>,
     row: JobRow,
@@ -456,8 +475,11 @@ pub(super) fn public_work_result(result: &WorkerResult) -> WorkResult {
     }
 }
 
-#[allow(clippy::too_many_lines)]
-#[allow(clippy::too_many_arguments)]
+#[expect(
+    clippy::too_many_arguments,
+    clippy::too_many_lines,
+    reason = "maps every attempt outcome to its completion from the attempt's recorded state"
+)]
 pub(super) async fn persist_result(
     inner: &ClientInner,
     row: &JobRow,

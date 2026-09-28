@@ -2,9 +2,11 @@
 
 use std::fmt;
 
-#[allow(clippy::wildcard_imports)]
-use super::*;
+use crate::__private::DatabaseConnection as PilotDatabaseConnection;
+use crate::client::ClientInner;
+use crate::database::DatabaseTransactionExecutor;
 use crate::storage::{Access, Session};
+use crate::{Client, Error};
 
 /// Where a request runs.
 pub(super) enum Target<'a> {
@@ -93,7 +95,7 @@ macro_rules! request_type {
             pub fn tx<'t, E>(self, executor: E) -> $name<'t>
             where
                 'a: 't,
-                E: DatabaseTransactionExecutor<'t>,
+                E: crate::database::DatabaseTransactionExecutor<'t>,
             {
                 $name {
                     client: self.client,

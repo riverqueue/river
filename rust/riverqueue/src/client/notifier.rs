@@ -7,8 +7,24 @@
 //! resubscribes to every topic, and wakes all producers after reconnecting in
 //! case notifications were missed while it was disconnected.
 
-#[allow(clippy::wildcard_imports)]
-use super::*;
+use std::sync::{Arc, Mutex};
+#[cfg(feature = "postgres")]
+use std::time::Duration;
+
+use serde::Deserialize;
+#[cfg(feature = "postgres")]
+use sqlx::postgres::PgListener;
+use tokio::sync::{broadcast, oneshot};
+use tokio_util::sync::CancellationToken;
+use tracing::{debug, error, warn};
+
+use crate::Error;
+use crate::client::ClientInner;
+use crate::client::attempts::signal_running_attempt;
+use crate::client::backoff::exponential_backoff;
+#[cfg(feature = "sqlite")]
+use crate::client::sqlite_backend_error;
+use crate::maintenance::LeadershipWakeup;
 
 /// Timeout for connecting and subscribing, matching River Go's
 /// `listenerTimeout`.

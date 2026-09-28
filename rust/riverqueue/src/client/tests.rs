@@ -1,4 +1,24 @@
+#[cfg(feature = "sqlite")]
+use serde::Deserialize;
+use serde_json::Map;
+
+use super::attempts::{register_running_attempt, remove_running_attempt, signal_running_attempt};
+#[cfg(feature = "postgres")]
+use super::completer::CompletionBatcher;
+#[cfg(feature = "sqlite")]
+use super::completer::{
+    COMPLETION_BACKLOG_LIMIT, COMPLETION_BATCH_SIZE, CompletionTiming, run_completion_batcher,
+};
+use super::completer::{persisted_completion_event_kind, with_completion_retries};
+use super::executor::scheduled_after;
+#[cfg(feature = "sqlite")]
+use super::notifier::dispatch_notification;
 use super::*;
+use crate::{AttemptError, JobEventKind, JobRow, JobState, WorkError, WorkResult};
+#[cfg(feature = "sqlite")]
+use crate::{InsertOpts, InsertParams, WorkContext, WorkOutcome};
+#[cfg(feature = "sqlite")]
+use crate::{Job, JobArgs};
 
 #[test]
 fn completion_events_follow_persisted_state() {

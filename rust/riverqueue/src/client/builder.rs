@@ -1,7 +1,26 @@
 //! Client configuration and construction.
 
-#[allow(clippy::wildcard_imports)]
-use super::*;
+use std::collections::HashMap;
+use std::sync::atomic::{AtomicBool, AtomicU64};
+use std::sync::{Arc, Mutex, RwLock};
+use std::time::Duration;
+
+use serde_json::{Map, Value};
+use tokio::sync::{broadcast, watch};
+
+use crate::__private::Pilot;
+#[cfg(feature = "postgres")]
+use crate::SchemaName;
+#[cfg(feature = "postgres")]
+use crate::client::validate::validate_identifier;
+use crate::client::{ClientInner, EVENT_BUFFER_CAPACITY, validate_queue};
+use crate::database::Database;
+use crate::periodic::{PeriodicJob, PeriodicJobs};
+use crate::{
+    Client, Error, ErrorHandler, FETCH_COOLDOWN_DEFAULT, FETCH_COOLDOWN_MIN,
+    FETCH_POLL_INTERVAL_DEFAULT, Hook, InsertMiddleware, Plugin, QUEUE_NUM_WORKERS_MAX,
+    RetryPolicy, WorkMiddleware, WorkerRegistry,
+};
 
 /// Default age at which running jobs are rescued (Go
 /// `JobRescuerRescueAfterDefault`).
@@ -373,7 +392,7 @@ impl ClientBuilder {
     }
 
     /// Sets how long a job may run before its
-    /// [`WorkContext::cancellation_token`] is cancelled and the attempt
+    /// [`WorkContext::cancellation_token`](crate::WorkContext::cancellation_token) is cancelled and the attempt
     /// fails, unless its worker overrides it. Defaults to one minute, like
     /// Go's `JobTimeout`. The timeout must be positive; use
     /// [`without_job_timeout`](Self::without_job_timeout) to let jobs run

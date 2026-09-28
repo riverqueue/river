@@ -1,13 +1,37 @@
 //! Queue producers that fetch and dispatch jobs.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
+use std::sync::Arc;
+use std::time::Duration;
 
+use chrono::Utc;
 use futures_util::FutureExt as _;
+#[cfg(feature = "postgres")]
+use sqlx::postgres::PgRow;
+#[cfg(feature = "postgres")]
+use sqlx::{AssertSqlSafe, Executor, Postgres};
+use tokio::sync::{broadcast, mpsc, oneshot, watch};
+use tokio::task::JoinSet;
+use tokio_util::sync::CancellationToken;
+use tracing::{debug, error, warn};
 
+use crate::__private::DatabaseConnection as PilotDatabaseConnection;
+use crate::client::attempts::{FetchRegistrationGuard, register_running_attempt};
+use crate::client::backoff::exponential_backoff;
+use crate::client::completer::CompletionUpdate;
+use crate::client::executor::{AbortOnDrop, execute_job};
+#[cfg(feature = "sqlite")]
+use crate::client::sqlite_backend_error;
+use crate::client::{
+    ATTEMPTED_BY_MAX, ClientInner, DecodedJob, PARALLEL_FETCH_MINIMUM, PRODUCER_REPORT_TIMEOUT,
+    PRODUCER_STALE_RETENTION, QUEUE_CONFIG_POLL_INTERVAL, QUEUE_HEARTBEAT_INTERVAL,
+    RuntimeNotification, UndecodableJob,
+};
+#[cfg(feature = "postgres")]
+use crate::client::{decode_job_row, job_projection};
+use crate::database::{DatabaseKind, DatabasePool};
 use crate::pilot::{ProducerConfiguration, SharedProducer};
-
-#[allow(clippy::wildcard_imports)]
-use super::*;
+use crate::{Error, Event, JobRow, Metric, QueueConfig, QueueEventKind};
 
 /// Runs one producer per configured queue and reconciles them with runtime
 /// queue changes.
@@ -527,7 +551,11 @@ async fn shut_down_session(queue: &str, session: &dyn crate::__private::PilotPro
     warn!(queue = %queue, "River extension producer failed to shut down cleanly after all attempts");
 }
 
-#[allow(clippy::too_many_arguments, clippy::too_many_lines)]
+#[expect(
+    clippy::too_many_arguments,
+    clippy::too_many_lines,
+    reason = "a producer's claim loop, reports, and drain share one queue's state"
+)]
 pub(super) async fn run_queue(
     inner: Arc<ClientInner>,
     completion_sender: mpsc::Sender<CompletionUpdate>,

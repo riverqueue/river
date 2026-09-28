@@ -1,8 +1,19 @@
 //! Unstable extension entry points used by companion crates.
 
-#[allow(clippy::wildcard_imports)]
-use super::*;
+use std::time::Duration;
+
+use chrono::{DateTime, Utc};
+use serde_json::Map;
+use serde_json::value::RawValue;
+
+use crate::__private::DatabaseConnection as PilotDatabaseConnection;
 use crate::__private::{PreparedInsertParams, RawInsertResult};
+use crate::client::WeakClient;
+use crate::client::validate::validate_insert_parts;
+use crate::database::DatabaseTransactionExecutor;
+use crate::{
+    Client, Error, InsertContext, InsertOpts, InsertParams, JobArgs, JobRow, JobState, WorkError,
+};
 
 /// Client operations reserved for River's own companion crates.
 ///

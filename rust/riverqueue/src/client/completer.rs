@@ -6,12 +6,35 @@
 //! retried again rather than being dropped, so a transient error cannot leave
 //! successfully worked jobs `running` until the rescuer runs them again.
 
-#[allow(clippy::wildcard_imports)]
-use super::*;
-
+use std::collections::HashMap;
 use std::collections::{HashSet, VecDeque};
+use std::sync::Arc;
+use std::time::Duration;
 
+use chrono::{DateTime, Utc};
 use futures_util::FutureExt as _;
+use serde_json::{Map, Value};
+#[cfg(feature = "postgres")]
+use sqlx::AssertSqlSafe;
+#[cfg(feature = "postgres")]
+use sqlx::postgres::PgRow;
+#[cfg(feature = "postgres")]
+use sqlx::types::Json;
+use tokio::sync::mpsc;
+use tokio::task::JoinSet;
+use tokio_util::sync::CancellationToken;
+use tracing::{debug, error};
+
+use crate::__private::{DatabaseConnection as PilotDatabaseConnection, JobSetStateParams};
+use crate::client::attempts::remove_running_attempt;
+use crate::client::backoff::exponential_backoff;
+#[cfg(feature = "sqlite")]
+use crate::client::sqlite_backend_error;
+use crate::client::{ClientInner, RuntimeNotification, peers, tolerant_row};
+#[cfg(feature = "postgres")]
+use crate::client::{decode_job_row, job_projection};
+use crate::database::{DatabaseKind, DatabasePool};
+use crate::{AttemptError, Error, Event, JobEventKind, JobRow, JobState, JobStatistics};
 
 /// Most updates written by one statement, matching River Go.
 pub(super) const COMPLETION_BATCH_SIZE: usize = 5_000;

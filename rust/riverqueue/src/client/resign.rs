@@ -1,8 +1,9 @@
 //! Leadership resignation requests.
 
-#[allow(clippy::wildcard_imports)]
-use super::*;
+use crate::client::request::{Target, request_type};
+use crate::maintenance::LeadershipWakeup;
 use crate::storage::Access;
+use crate::{Client, Error};
 
 impl Client {
     /// Asks the current leader to resign, so that clients elect a leader

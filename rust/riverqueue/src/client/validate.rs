@@ -1,7 +1,6 @@
 //! Validation of job insertion parameters.
 
-#[allow(clippy::wildcard_imports)]
-use super::*;
+use crate::{Error, InsertParams};
 
 pub(super) fn validate_insert_parts(
     kind: &str,
