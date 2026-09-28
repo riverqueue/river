@@ -206,6 +206,7 @@ WITH locked_jobs AS (
     WHERE
         state = 'available'
         AND queue = @queue::text
+        AND (sqlc.narg('kind')::text[] IS NULL OR kind = ANY(sqlc.narg('kind')::text[]))
         AND scheduled_at <= coalesce(sqlc.narg('now')::timestamptz, now())
     ORDER BY
         priority ASC,

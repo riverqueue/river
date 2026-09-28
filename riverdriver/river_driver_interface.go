@@ -441,7 +441,12 @@ type JobDeleteBeforeParams struct {
 type JobDeleteManyParams JobListParams
 
 type JobGetAvailableParams struct {
-	ClientID       string
+	ClientID string
+
+	// Kind restricts claims to these kinds. Nil allows every kind; an empty,
+	// non-nil slice allows none. Filtering occurs before the limit and locking.
+	Kind []string
+
 	MaxAttemptedBy int
 	MaxToLock      int
 	Now            *time.Time

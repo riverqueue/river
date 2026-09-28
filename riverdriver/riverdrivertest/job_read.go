@@ -263,6 +263,61 @@ func exerciseJobRead[TTx any](ctx context.Context, t *testing.T, executorWithTx 
 			require.Equal(t, []string{testClientID}, jobRow.AttemptedBy)
 		})
 
+		t.Run("ConstrainedToKind", func(t *testing.T) {
+			t.Parallel()
+
+			exec, _ := setup(ctx, t)
+
+			unknown := testfactory.Job(ctx, t, exec, &testfactory.JobOpts{Kind: new("unknown"), Priority: new(1)})
+			known1 := testfactory.Job(ctx, t, exec, &testfactory.JobOpts{Kind: new("known1"), Priority: new(2)})
+			known2 := testfactory.Job(ctx, t, exec, &testfactory.JobOpts{Kind: new("known2"), Priority: new(3)})
+			otherQueue := testfactory.Job(ctx, t, exec, &testfactory.JobOpts{Kind: new("known1"), Priority: new(1), Queue: new("other")})
+
+			// Filtering precedes the limit: the earlier, higher priority unknown
+			// job must not prevent either known kind from being claimed.
+			for _, expected := range []*rivertype.JobRow{known1, known2} {
+				jobs, err := exec.JobGetAvailable(ctx, &riverdriver.JobGetAvailableParams{
+					ClientID:       testClientID,
+					Kind:           []string{"known1", "known2"},
+					MaxAttemptedBy: maxAttemptedBy,
+					MaxToLock:      1,
+					Queue:          rivercommon.QueueDefault,
+				})
+				require.NoError(t, err)
+				require.Len(t, jobs, 1)
+				require.Equal(t, expected.ID, jobs[0].ID)
+				require.Equal(t, expected.Attempt+1, jobs[0].Attempt)
+				require.Equal(t, rivertype.JobStateRunning, jobs[0].State)
+			}
+
+			for _, expected := range []*rivertype.JobRow{unknown, otherQueue} {
+				job, err := exec.JobGetByID(ctx, &riverdriver.JobGetByIDParams{ID: expected.ID})
+				require.NoError(t, err)
+				require.Equal(t, expected, job)
+			}
+		})
+
+		t.Run("ConstrainedToKindEmpty", func(t *testing.T) {
+			t.Parallel()
+
+			exec, _ := setup(ctx, t)
+
+			job := testfactory.Job(ctx, t, exec, &testfactory.JobOpts{})
+			jobs, err := exec.JobGetAvailable(ctx, &riverdriver.JobGetAvailableParams{
+				ClientID:       testClientID,
+				Kind:           []string{},
+				MaxAttemptedBy: maxAttemptedBy,
+				MaxToLock:      maxToLock,
+				Queue:          rivercommon.QueueDefault,
+			})
+			require.NoError(t, err)
+			require.Empty(t, jobs)
+
+			jobAfter, err := exec.JobGetByID(ctx, &riverdriver.JobGetByIDParams{ID: job.ID})
+			require.NoError(t, err)
+			require.Equal(t, job, jobAfter)
+		})
+
 		t.Run("ConstrainedToLimit", func(t *testing.T) {
 			t.Parallel()
 

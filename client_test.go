@@ -2397,6 +2397,65 @@ func (w *workerWithMiddleware[T]) Work(ctx context.Context, job *Job[T]) error {
 	return w.workFunc(ctx, job)
 }
 
+func Test_Client_FetchOnlyKnownKinds(t *testing.T) {
+	t.Parallel()
+
+	var (
+		ctx    = context.Background()
+		driver = riverpgxv5.New(riversharedtest.DBPool(ctx, t))
+		schema = riverdbtest.TestSchema(ctx, t, driver, nil)
+		exec   = driver.GetExecutor()
+	)
+
+	config := newTestConfig(t, schema)
+	config.FetchOnlyKnownKinds = true
+	config.LeaderElectionDisabled = true // Isolate fetching from maintenance.
+	config.Queues = map[string]QueueConfig{QueueDefault: {MaxWorkers: 1}}
+	client1, err := NewClient(driver, config)
+	require.NoError(t, err)
+
+	config.Workers = NewWorkers()
+	client2, err := NewClient(driver, config)
+	require.NoError(t, err)
+	// Registration before Start (including aliases) must be picked up even if
+	// it happens after NewClient has constructed its producers.
+	AddWorker(config.Workers, WorkFunc(func(ctx context.Context, job *Job[withKindAliasesArgs]) error {
+		return nil
+	}))
+
+	unknown := testfactory.Job(ctx, t, exec, &testfactory.JobOpts{Kind: new("unknown"), Priority: new(1), Schema: schema})
+	known1 := testfactory.Job(ctx, t, exec, &testfactory.JobOpts{Kind: new((noOpArgs{}).Kind()), Priority: new(2), Schema: schema})
+	known2 := testfactory.Job(ctx, t, exec, &testfactory.JobOpts{Kind: new((withKindAliasesArgs{}).Kind()), Priority: new(2), Schema: schema})
+	alias := testfactory.Job(ctx, t, exec, &testfactory.JobOpts{Kind: new((withKindAliasesArgs{}).KindAliases()[0]), Priority: new(2), Schema: schema})
+
+	events1 := subscribe(t, client1)
+	events2 := subscribe(t, client2)
+	startClient(ctx, t, client1)
+	startClient(ctx, t, client2)
+
+	event := riversharedtest.WaitOrTimeout(t, events1)
+	require.Equal(t, EventKindJobCompleted, event.Kind)
+	require.Equal(t, known1.ID, event.Job.ID)
+	require.Equal(t, 1, event.Job.Attempt)
+	require.Empty(t, event.Job.Errors)
+
+	workedIDs := make([]int64, 0, 2)
+	for range 2 {
+		event := riversharedtest.WaitOrTimeout(t, events2)
+		require.Equal(t, EventKindJobCompleted, event.Kind)
+		require.Equal(t, 1, event.Job.Attempt)
+		require.Empty(t, event.Job.Errors)
+		workedIDs = append(workedIDs, event.Job.ID)
+	}
+	require.ElementsMatch(t, []int64{known2.ID, alias.ID}, workedIDs)
+
+	require.NoError(t, client1.Stop(ctx))
+	require.NoError(t, client2.Stop(ctx))
+	unknownAfter, err := exec.JobGetByID(ctx, &riverdriver.JobGetByIDParams{ID: unknown.ID, Schema: schema})
+	require.NoError(t, err)
+	require.Equal(t, unknown, unknownAfter)
+}
+
 func Test_Client_LeaderElectionDisabled(t *testing.T) {
 	t.Parallel()
 
@@ -8660,6 +8719,7 @@ func Test_NewClient_Defaults(t *testing.T) {
 	require.NoError(t, err)
 
 	require.Zero(t, client.config.AdvisoryLockPrefix)
+	require.False(t, client.config.FetchOnlyKnownKinds)
 	require.False(t, client.config.LeaderElectionDisabled)
 
 	jobCleaner := maintenance.GetService[*maintenance.JobCleaner](client.queueMaintainer)
@@ -8739,6 +8799,7 @@ func Test_NewClient_Overrides(t *testing.T) {
 		DiscardedJobRetentionPeriod: 3 * time.Hour,
 		ErrorHandler:                errorHandler,
 		FetchCooldown:               123 * time.Millisecond,
+		FetchOnlyKnownKinds:         true,
 		FetchPollInterval:           124 * time.Millisecond,
 		Hooks:                       []rivertype.Hook{&noOpHook{}},
 		JobInsertMiddleware:         []rivertype.JobInsertMiddleware{&noOpInsertMiddleware{}},
@@ -8781,6 +8842,7 @@ func Test_NewClient_Overrides(t *testing.T) {
 
 	require.Equal(t, errorHandler, client.config.ErrorHandler)
 	require.Equal(t, 123*time.Millisecond, client.config.FetchCooldown)
+	require.True(t, client.config.FetchOnlyKnownKinds)
 	require.Equal(t, 124*time.Millisecond, client.config.FetchPollInterval)
 	require.Len(t, client.config.JobInsertMiddleware, 1)
 	require.NotNil(t, client.config.JobStuckHandler)
