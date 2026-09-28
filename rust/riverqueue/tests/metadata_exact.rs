@@ -50,7 +50,7 @@ fn raw_field<'a>(metadata: &'a JobMetadata, key: &str) -> &'a str {
 #[cfg(feature = "postgres-tests")]
 #[tokio::test]
 async fn postgres_reads_metadata_with_large_numbers() {
-    use riverqueue::__private::{ExtensionClient, ExtensionInsertParams};
+    use riverqueue::__private::{ExtensionClient, PreparedInsertParams};
     use riverqueue::database::PostgresDatabase;
     use sqlx::AssertSqlSafe;
 
@@ -109,9 +109,9 @@ async fn postgres_reads_metadata_with_large_numbers() {
 
     let mut transaction = schema.pool.begin().await.unwrap();
     let reinserted = ExtensionClient::new(&client)
-        .insert_tx(
+        .insert_prepared_tx(
             &mut transaction,
-            ExtensionInsertParams {
+            vec![PreparedInsertParams {
                 created_at: reread.created_at,
                 encoded_args: reread.encoded_args.clone(),
                 kind: reread.kind.clone(),
@@ -123,10 +123,11 @@ async fn postgres_reads_metadata_with_large_numbers() {
                 tags: reread.tags.clone(),
                 unique_key: reread.unique_key.clone(),
                 unique_states: reread.unique_states.clone(),
-            },
+            }],
         )
         .await
-        .unwrap();
+        .unwrap()
+        .remove(0);
     transaction.commit().await.unwrap();
     assert_eq!(raw_field(&reinserted.job.metadata, "beyond_float"), beyond);
 

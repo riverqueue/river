@@ -12,7 +12,7 @@ use riverqueue::__private::{
     ClaimedJob, DatabaseConnection, JobInsertParams, JobSetStateParams, Pilot, PilotError,
     PilotProducer, ProducerClaimContext, ProducerClaimNext, ProducerStartContext, RescueParams,
 };
-use riverqueue::__private::{ClientBuilderExt, ExtensionClient, ExtensionInsertParams};
+use riverqueue::__private::{ClientBuilderExt, ExtensionClient, PreparedInsertParams};
 use riverqueue::__private::{MaintenanceService, MaintenanceServiceContext};
 use riverqueue::{
     BoxError, Client, EventKind, Hook, InsertBatch, InsertOpts, Job, JobArgs, JobRow, JobState,
@@ -61,6 +61,17 @@ impl Hook for WrapperTransformHook {
     }
 
     async fn insert_begin(&self, insert: &mut riverqueue::InsertContext) -> Result<(), BoxError> {
+        // As a hook that wraps arguments must, leave arguments that already
+        // carry the outermost wrapper alone, so a stored job inserted again
+        // keeps its arguments.
+        if let Ok(outer) = serde_json::from_str::<
+            std::collections::HashMap<String, Box<serde_json::value::RawValue>>,
+        >(insert.encoded_args.get())
+            && outer.len() == 1
+            && outer.contains_key("B")
+        {
+            return Ok(());
+        }
         insert.encoded_args = serde_json::value::RawValue::from_string(format!(
             "{{{}:{}}}",
             serde_json::to_string(self.0)?,
@@ -891,9 +902,9 @@ async fn sqlite_reinsert_preserves_wire_fields_and_runs_the_canonical_pipeline()
         .await
         .unwrap();
     let reinserted = ExtensionClient::new(&client)
-        .insert_tx(
+        .insert_prepared_tx(
             &mut transaction,
-            ExtensionInsertParams {
+            vec![PreparedInsertParams {
                 created_at: original.created_at,
                 encoded_args: stored_source_args,
                 kind: "x".to_owned(),
@@ -905,10 +916,11 @@ async fn sqlite_reinsert_preserves_wire_fields_and_runs_the_canonical_pipeline()
                 tags: original.tags.clone(),
                 unique_key: original.unique_key.clone(),
                 unique_states: original.unique_states.clone(),
-            },
+            }],
         )
         .await
-        .unwrap();
+        .unwrap()
+        .remove(0);
     transaction.commit().await.unwrap();
 
     assert_ne!(reinserted.job.id, original.id);

@@ -2,7 +2,7 @@
 
 #[allow(clippy::wildcard_imports)]
 use super::*;
-use crate::__private::{ExtensionInsertParams, RawInsertResult};
+use crate::__private::{PreparedInsertParams, RawInsertResult};
 
 /// Client operations reserved for River's own companion crates.
 ///
@@ -185,90 +185,115 @@ impl ExtensionClient<'_> {
         self.insert_raw_job(Some(executor), job).await
     }
 
-    /// Reinserts persisted fields through River's canonical insertion
-    /// pipeline inside a caller-managed transaction.
-    ///
-    /// This exact-version operation lets the backend allocate the ID rather
-    /// than explicitly retaining a source ID, and resets execution state while
-    /// retaining the supplied creation, schedule, and uniqueness wire values.
-    /// Insertion middleware, begin hooks, insertion interception, and the
-    /// backend notification all run exactly once.
+    /// Inserts stored jobs again, such as jobs set aside and retried later,
+    /// like River Go's ordinary `insertMany`: insert middleware, begin hooks,
+    /// the extension's insertion step, and notifications run once, in one
+    /// transaction. See [`PreparedInsertParams`] for what the jobs keep.
     ///
     /// # Errors
     ///
-    /// Returns the errors of an ordinary insertion: invalid options, an
+    /// Returns the errors of an ordinary insertion: invalid parameters, an
     /// extension failure, or a database error.
-    pub async fn insert_tx<'executor, E>(
+    pub async fn insert_prepared(
+        &self,
+        params: Vec<PreparedInsertParams>,
+    ) -> Result<Vec<RawInsertResult>, Error> {
+        if params.is_empty() {
+            return Ok(Vec::new());
+        }
+        let jobs = Self::prepared_jobs(params)?;
+        self.insert_raw_jobs(None, jobs).await
+    }
+
+    /// Inserts stored jobs again inside a caller-managed transaction, like
+    /// [`insert_prepared`](Self::insert_prepared).
+    ///
+    /// # Errors
+    ///
+    /// Returns the errors of an ordinary insertion: invalid parameters, an
+    /// extension failure, a transaction from another backend, or a database
+    /// error.
+    pub async fn insert_prepared_tx<'executor, E>(
         &self,
         transaction: E,
-        params: ExtensionInsertParams,
-    ) -> Result<RawInsertResult, Error>
+        params: Vec<PreparedInsertParams>,
+    ) -> Result<Vec<RawInsertResult>, Error>
     where
         E: DatabaseTransactionExecutor<'executor>,
     {
         let executor = self.client.inner.transaction_connection(transaction)?;
-        let mut source_row = JobRow {
-            attempt: 0,
-            attempted_at: None,
-            attempted_by: Vec::new(),
-            created_at: params.created_at,
-            encoded_args: params.encoded_args,
-            errors: Vec::new(),
-            finalized_at: None,
-            id: 0,
-            kind: params.kind,
-            max_attempts: params.max_attempts,
-            metadata: params.metadata,
-            priority: params.priority,
-            queue: params.queue,
-            scheduled_at: params.scheduled_at,
-            state: JobState::Available,
-            tags: params.tags,
-            unique_key: params.unique_key,
-            unique_states: params.unique_states,
-        };
-        // Exact-version callers supply persisted wire fields. Normalize them
-        // before the ordinary begin pipeline so storage transforms are not
-        // applied twice, then decode the newly persisted result below just as
-        // a typed insertion does.
-        for hook in self.client.inner.hooks.iter().rev() {
-            hook.decode_insert_result(&mut source_row).await?;
+        if params.is_empty() {
+            return Ok(Vec::new());
         }
-        let unique_states = match (&source_row.unique_key, &source_row.unique_states) {
-            (None, None) => None,
-            (Some(_), Some(states)) => Some(
-                states
-                    .iter()
-                    .fold(0, |bitmask, state| bitmask | state.unique_bit()),
-            ),
-            _ => {
-                return Err(Error::invalid_job_context(
-                    "exact-version insertion",
-                    "unique_key and unique_states must either both be set or both be absent"
-                        .to_owned(),
-                ));
-            }
-        };
-        let job = InsertContext {
-            encoded_args: source_row.encoded_args,
-            kind: source_row.kind,
-            opts: InsertParams {
-                extension_options: Map::new(),
-                max_attempts: source_row.max_attempts,
-                metadata: source_row.metadata,
-                pending: false,
-                priority: source_row.priority,
-                queue: source_row.queue,
-                scheduled_at: Some(source_row.scheduled_at),
-                tags: source_row.tags,
-                unique: crate::UniqueOpts::default(),
-            },
-            state: JobState::Available,
-            created_at: Some(source_row.created_at),
-            unique_key: source_row.unique_key,
-            unique_states,
-        };
-        self.insert_raw_job(Some(executor), job).await
+        let jobs = Self::prepared_jobs(params)?;
+        self.insert_raw_jobs(Some(executor), jobs).await
+    }
+
+    /// Validates stored jobs and turns them into insertions that keep their
+    /// unique key and states, creation time, and schedule.
+    fn prepared_jobs(params: Vec<PreparedInsertParams>) -> Result<Vec<InsertContext>, Error> {
+        params
+            .into_iter()
+            .map(|params| {
+                let unique_states = match (&params.unique_key, &params.unique_states) {
+                    (None, None) => None,
+                    (Some(_), Some(states)) => Some(
+                        states
+                            .iter()
+                            .fold(0, |bitmask, state| bitmask | state.unique_bit()),
+                    ),
+                    _ => {
+                        return Err(Error::invalid_job_context(
+                            "prepared insertion",
+                            "unique_key and unique_states must either both be set or both be absent"
+                                .to_owned(),
+                        ));
+                    }
+                };
+                let opts = InsertParams {
+                    extension_options: Map::new(),
+                    max_attempts: params.max_attempts,
+                    metadata: params.metadata,
+                    pending: false,
+                    priority: params.priority,
+                    queue: params.queue,
+                    scheduled_at: Some(params.scheduled_at),
+                    tags: params.tags,
+                    unique: crate::UniqueOpts::default(),
+                };
+                // A stored job's kind was accepted when it was first
+                // inserted, possibly by an older client, so only its options
+                // are checked again.
+                validate_insert_parts(&params.kind, &opts, true)?;
+                Ok(InsertContext {
+                    encoded_args: params.encoded_args,
+                    kind: params.kind,
+                    opts,
+                    state: JobState::Available,
+                    created_at: Some(params.created_at),
+                    unique_key: params.unique_key,
+                    unique_states,
+                })
+            })
+            .collect()
+    }
+
+    async fn insert_raw_jobs(
+        &self,
+        executor: Option<PilotDatabaseConnection<'_>>,
+        jobs: Vec<InsertContext>,
+    ) -> Result<Vec<RawInsertResult>, Error> {
+        self.client
+            .run_insert(executor, jobs, |rows| {
+                Ok(rows
+                    .into_iter()
+                    .map(|row| RawInsertResult {
+                        job: row.job,
+                        unique_skipped_as_duplicate: row.unique_skipped_as_duplicate,
+                    })
+                    .collect())
+            })
+            .await
     }
 
     async fn insert_raw_job(

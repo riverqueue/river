@@ -1125,15 +1125,19 @@ pub struct RawInsertResult {
     pub unique_skipped_as_duplicate: bool,
 }
 
-/// Persisted insertion fields accepted by River's exact-version extension
-/// seam.
+/// A stored job to insert again, such as one set aside and retried later,
+/// with [`ExtensionClient::insert_prepared`] or
+/// [`ExtensionClient::insert_prepared_tx`].
 ///
-/// River resets execution fields and lets the backend allocate the live-row
-/// ID rather than explicitly retaining a source ID. The supplied creation
-/// time, schedule, and uniqueness wire values are retained while the ordinary
-/// hook, middleware, insertion-interception, and notification pipeline runs.
+/// River inserts it like any other job: insert middleware, begin hooks, the
+/// extension's insertion step, and notifications all run once, and they see
+/// the stored arguments and metadata. What they return is stored, so the
+/// job keeps its identity only when every step leaves a stored job alone.
+/// Unique-key calculation doesn't run: the job keeps its unique key and
+/// states, creation time, schedule, and metadata, and gets a new ID.
+/// `encoded_args` may be any JSON value, including an array or `null`.
 #[derive(Clone, Debug)]
-pub struct ExtensionInsertParams {
+pub struct PreparedInsertParams {
     /// Original creation time.
     pub created_at: DateTime<Utc>,
     /// Serialized job arguments.
