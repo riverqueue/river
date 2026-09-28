@@ -10,6 +10,7 @@ mod insert;
 mod jobs;
 mod local_queues;
 mod notifier;
+mod peers;
 mod producer;
 mod queues;
 mod record;
@@ -28,6 +29,7 @@ pub use self::jobs::{
     JobDeleteRequest, JobGetRequest, JobListRequest, JobRetryRequest, JobUpdateRequest, Jobs,
 };
 pub use self::local_queues::LocalQueues;
+pub(crate) use self::peers::PeerLedger;
 pub use self::queues::{
     QueueGetRequest, QueueListRequest, QueuePauseRequest, QueueResumeRequest, QueueUpdateRequest,
     Queues,
@@ -154,6 +156,8 @@ pub(crate) struct ClientInner {
     insert_middleware: Vec<Arc<dyn crate::extension::DynInsertMiddleware>>,
     pub(crate) periodic_jobs: PeriodicJobs,
     pending_cancellations: Mutex<HashMap<i64, std::time::Instant>>,
+    /// Peer jobs owned by running attempts, mapped to their ledger.
+    peer_owners: Mutex<HashMap<i64, u64>>,
     pub(crate) pilot: Arc<dyn Pilot>,
     poll_only: bool,
     producer_report_interval: Duration,

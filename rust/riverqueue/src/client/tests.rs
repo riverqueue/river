@@ -432,6 +432,7 @@ async fn completer_abandons_its_backlog_when_a_batch_fails_during_shutdown() {
                 finalized_at: Some(Utc::now()),
                 job_id,
                 metadata: Map::new(),
+                peer: None,
                 scheduled_at: None,
                 state: JobState::Completed,
                 timing: CompletionTiming {

@@ -1087,6 +1087,14 @@ impl ClaimedJob {
             .map(|undecodable| undecodable.error.as_str())
     }
 
+    /// Whether `column` of a partly decoded row couldn't be decoded.
+    pub(crate) fn column_undecodable(&self, column: &str) -> bool {
+        self.0
+            .as_ref()
+            .err()
+            .is_some_and(|undecodable| undecodable.columns.iter().any(|name| name == column))
+    }
+
     /// Returns the claimed row, with any field that couldn't be decoded left
     /// empty, unless not even the row's identity could be decoded.
     pub(crate) fn row(&self) -> Option<&JobRow> {
@@ -1150,26 +1158,139 @@ pub struct ExtensionInsertParams {
     pub unique_states: Option<Vec<JobState>>,
 }
 
-/// Eligibility and metadata changes for an exact-version atomic job claim.
+/// Inputs to a peer claim's callback, from [`PeerAttempts::claim`].
+#[derive(Debug)]
+#[non_exhaustive]
+pub struct PeerClaimContext<'c> {
+    /// The coordinating attempt's cancellation token.
+    pub cancellation: &'c CancellationToken,
+    /// Cancelled when the coordinator's producer stops claiming.
+    pub claim_stop: &'c CancellationToken,
+    /// This client's identifier, which claimed rows' `attempted_by` must
+    /// end with.
+    pub client_id: &'c str,
+    /// The claim's transaction, which River commits once the callback
+    /// returns and its rows pass River's checks.
+    pub connection: DatabaseConnection<'c>,
+    /// The client's database.
+    pub database: &'c PilotDatabase,
+}
+
+/// An outcome for one peer, for [`PeerAttempts::complete`].
+#[derive(Debug)]
+#[non_exhaustive]
+pub struct PeerOutcome {
+    /// The peer, as [`PeerAttempts::claim`] returned it.
+    pub job: JobRow,
+    /// The peer's result, as a worker would return it.
+    pub result: Result<crate::WorkOutcome, crate::BoxError>,
+}
+
+impl PeerOutcome {
+    /// Creates an outcome for `job`.
+    #[must_use]
+    pub const fn new(job: JobRow, result: Result<crate::WorkOutcome, crate::BoxError>) -> Self {
+        Self { job, result }
+    }
+}
+
+/// The peers of a running attempt: jobs the attempt, their coordinator,
+/// claims and completes alongside its own job, such as a group of related
+/// jobs it works together.
 ///
-/// River claims available, due jobs matching the kind, queue, and top-level
-/// metadata values. It excludes one coordinating job, records the claiming
-/// client and attempt, applies `metadata_updates`, and returns complete rows in
-/// priority, scheduled-time, and ID order.
-#[derive(Clone, Debug)]
-pub struct ExtensionClaimParams {
-    /// Job ID excluded from the claim.
-    pub excluded_job_id: i64,
-    /// Stable job kind to claim.
-    pub kind: String,
-    /// Maximum number of jobs to claim.
-    pub maximum: i32,
-    /// Top-level metadata values that must match exactly.
-    pub metadata_matches: Map<String, Value>,
-    /// Top-level metadata values merged into every claimed job.
-    pub metadata_updates: Map<String, Value>,
-    /// Queue from which jobs are claimed.
-    pub queue: String,
+/// River owns each peer from the commit of the claim that took it until its
+/// outcome persists. Peers take no producer slots and never reach
+/// [`PilotProducer::job_finished`]. When the coordinator's attempt ends,
+/// River refuses new peer operations, waits for those it accepted, and gives
+/// every peer still without an outcome one before the coordinator's own: an
+/// interruption when River stopped the coordinator, and a failure otherwise,
+/// including when the coordinator's job was cancelled remotely. A peer stops
+/// being owned when its outcome persists, before its event, so it can be
+/// claimed again at once.
+#[derive(Clone, Copy, Debug)]
+pub struct PeerAttempts<'a> {
+    context: &'a crate::WorkContext,
+}
+
+impl<'a> PeerAttempts<'a> {
+    /// Returns the peers of the attempt `context` belongs to.
+    #[must_use]
+    pub const fn new(context: &'a crate::WorkContext) -> Self {
+        Self { context }
+    }
+
+    fn attempt(
+        self,
+    ) -> Result<
+        (
+            &'a crate::Client,
+            &'a std::sync::Arc<crate::client::PeerLedger>,
+        ),
+        crate::Error,
+    > {
+        match (self.context.client(), self.context.peers()) {
+            (Some(client), Some(peers)) => Ok((client, peers)),
+            _ => Err(crate::Error::Extension {
+                phase: crate::ExtensionPhase::AddOnPeerAttempts,
+                source: "peer operations require a running attempt".into(),
+            }),
+        }
+    }
+
+    /// Claims peers with `run` in a transaction River opens and commits.
+    ///
+    /// `run` must claim on the context's connection, like a producer claim:
+    /// it moves rows to `running`, increments their attempt, and appends this
+    /// client to `attempted_by`, and builds each result with
+    /// [`claimed_postgres_job`] or [`claimed_sqlite_job`]. Before commit,
+    /// River rejects the whole claim when a row can't be identified, appears
+    /// twice, is the coordinator's own job, is already owned by an attempt
+    /// or worked by this client, is at an attempt this coordinator already
+    /// saw end, or isn't running under this client. A claim whose coordinator
+    /// is cancelled or whose producer stops before commit rolls back. River
+    /// doesn't retry a failed claim.
+    ///
+    /// Returns the decoded rows River now tracks. A row that couldn't be
+    /// fully decoded is completed as a failure instead and not returned.
+    ///
+    /// # Errors
+    ///
+    /// Returns an [`Error::Extension`](crate::Error::Extension) error for a
+    /// claim River rejected, from `run`, or once the coordinator ended, and a
+    /// database error when the transaction fails.
+    pub async fn claim<F>(self, run: F) -> Result<Vec<JobRow>, crate::Error>
+    where
+        F: for<'c> FnOnce(
+                PeerClaimContext<'c>,
+            ) -> futures_util::future::BoxFuture<
+                'c,
+                Result<Vec<ClaimedJob>, PilotError>,
+            > + Send,
+    {
+        let (client, peers) = self.attempt()?;
+        peers.claim(&client.inner, self.context, run).await
+    }
+
+    /// Completes peers through River's ordinary completion pipeline: the
+    /// error handler, the coordinator's recorded metadata, retry selection,
+    /// the extension's set-state step, events, and fenced persistence.
+    /// Returns once every outcome persisted.
+    ///
+    /// Outcomes are accepted all or none: each job must be a peer of this
+    /// attempt at the attempt it was claimed at, appear once, and have no
+    /// outcome yet.
+    ///
+    /// # Errors
+    ///
+    /// Returns an [`Error::Extension`](crate::Error::Extension) error for
+    /// outcomes River rejected or once the coordinator ended, and a runtime
+    /// error when an outcome couldn't be handed to the completer or wasn't
+    /// persisted. An outcome not handed over leaves its peer without one, so
+    /// River supplies one when the coordinator ends.
+    pub async fn complete(self, outcomes: Vec<PeerOutcome>) -> Result<(), crate::Error> {
+        let (client, peers) = self.attempt()?;
+        peers.complete(&client.inner, self.context, outcomes).await
+    }
 }
 
 impl RawInsertResult {

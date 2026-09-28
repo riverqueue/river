@@ -12,18 +12,18 @@ use std::{
 };
 
 use async_trait::async_trait;
+use riverqueue::__private::ClientBuilderExt;
 use riverqueue::__private::{
     ClaimedJob, DatabaseConnection, JobSetStateParams, MaintenanceService,
     MaintenanceServiceContext, Pilot, PilotError, PilotProducer, ProducerClaimContext,
     ProducerClaimNext, ProducerStartContext, RuntimeService, RuntimeServiceContext,
 };
-use riverqueue::__private::{ClientBuilderExt, ExtensionClaimParams, ExtensionClient};
 use riverqueue::{
-    BoxError, Client, EventKind, InsertBatch, InsertOpts, IntervalSchedule, Job, JobArgs,
-    JobListOrderBy, JobListParams, JobRow, JobState, JobUpdateParams, MaintenanceConfig,
-    PeriodicJob, PeriodicJobOpts, QueueConfig, QueueListParams, RetryPolicy, UniqueOpts,
-    WorkContext, WorkError, WorkOutcome, Worker, WorkerRegistry, WorkerTimeout,
-    database::{PostgresDatabase, PostgresReindexConfig, PostgresReindexSchedule, SchemaName},
+    Client, EventKind, InsertBatch, InsertOpts, IntervalSchedule, Job, JobArgs, JobListOrderBy,
+    JobListParams, JobRow, JobState, JobUpdateParams, MaintenanceConfig, PeriodicJob,
+    PeriodicJobOpts, QueueConfig, QueueListParams, UniqueOpts, WorkContext, WorkError, WorkOutcome,
+    Worker, WorkerRegistry, WorkerTimeout,
+    database::{PostgresDatabase, PostgresReindexConfig, PostgresReindexSchedule},
 };
 use riverqueue_migrate::{Direction, MigrateOpts};
 use riverqueue_migrate::{MIGRATION_VERSION_LATEST, PostgresMigrator};
@@ -336,41 +336,6 @@ struct TestPilot {
     runtime_stops: Arc<AtomicUsize>,
 }
 
-#[derive(Clone)]
-struct ContinueCompletionPilot {
-    completions: Arc<AtomicUsize>,
-}
-
-#[async_trait]
-impl Pilot for ContinueCompletionPilot {
-    fn intercepts_job_set_state(&self) -> bool {
-        true
-    }
-
-    async fn after_jobs_set_state(
-        &self,
-        _connection: DatabaseConnection<'_>,
-        params: &JobSetStateParams,
-    ) -> Result<(), PilotError> {
-        self.completions
-            .fetch_add(params.jobs.len(), Ordering::SeqCst);
-        Ok(())
-    }
-}
-
-struct LongRetryPolicy;
-
-impl RetryPolicy for LongRetryPolicy {
-    fn next_retry(
-        &self,
-        _job: &JobRow,
-        _error: &riverqueue::WorkError,
-        _now: chrono::DateTime<chrono::Utc>,
-    ) -> Duration {
-        Duration::from_hours(1)
-    }
-}
-
 #[async_trait]
 impl Pilot for TestPilot {
     fn intercepts_job_set_state(&self) -> bool {
@@ -540,19 +505,6 @@ impl Worker<TransactionalArgs> for TransactionalWorker {
         transaction.commit().await?;
         Ok(WorkOutcome::Complete)
     }
-}
-
-#[tokio::test]
-async fn cancellation_wins_over_rescheduling_completion_updates() {
-    let database = support::PostgresSchema::new("rs_cancel_win").await;
-    let pool = database.pool.clone();
-    let schema = database.schema.clone();
-
-    for direct_completion in [false, true] {
-        assert_cancellation_wins(&pool, &schema, direct_completion).await;
-    }
-
-    database.cleanup().await;
 }
 
 #[tokio::test]
@@ -850,140 +802,6 @@ async fn concurrent_unique_inserts_return_the_conflicting_job() {
             "unique case {message} should return the winner to every conflicting insert"
         );
     }
-
-    database.cleanup().await;
-}
-
-#[tokio::test]
-#[allow(
-    clippy::too_many_lines,
-    reason = "one backend regression verifies atomic selection, ordering, row updates, and decode rollback"
-)]
-async fn extension_claim_returns_ordered_rows_and_rolls_back_decode_errors() {
-    let database = support::PostgresSchema::new("rs_ext_claim").await;
-    let pool = database.pool.clone();
-    let schema = database.schema.clone();
-    let client = Client::builder(PostgresDatabase::new(pool.clone()).schema(schema.clone()))
-        .id("postgres-extension-claimer")
-        .build()
-        .unwrap();
-    let table = schema.qualify("river_job");
-    let now = chrono::Utc::now();
-    let matches = serde_json::Map::from_iter([
-        ("group".to_owned(), serde_json::json!("shared")),
-        ("mode".to_owned(), serde_json::json!("open")),
-    ]);
-    let leader = client
-        .insert(EchoArgs {
-            message: "leader".to_owned(),
-        })
-        .opts(InsertOpts::default().with_metadata(matches.clone()))
-        .await
-        .unwrap();
-    let mut expected = Vec::new();
-    for (message, priority, scheduled_at) in [
-        ("third", 2, now - chrono::Duration::minutes(3)),
-        ("second", 1, now - chrono::Duration::minutes(1)),
-        ("first", 1, now - chrono::Duration::minutes(2)),
-    ] {
-        let inserted = client
-            .insert(EchoArgs {
-                message: message.to_owned(),
-            })
-            .opts(
-                InsertOpts::default()
-                    .with_metadata(matches.clone())
-                    .with_priority(priority),
-            )
-            .await
-            .unwrap();
-        let update_sql = format!("UPDATE {table} SET scheduled_at = $1 WHERE id = $2");
-        sqlx::query(AssertSqlSafe(update_sql))
-            .bind(scheduled_at)
-            .bind(inserted.job.row.id)
-            .execute(&pool)
-            .await
-            .unwrap();
-        expected.push(inserted);
-    }
-    client
-        .insert(EchoArgs {
-            message: "wrong metadata".to_owned(),
-        })
-        .opts(
-            InsertOpts::default().with_metadata(serde_json::Map::from_iter([
-                ("group".to_owned(), serde_json::json!("shared")),
-                ("mode".to_owned(), serde_json::json!("closed")),
-            ])),
-        )
-        .await
-        .unwrap();
-
-    let rows = ExtensionClient::new(&client)
-        .claim_jobs(ExtensionClaimParams {
-            excluded_job_id: leader.job.row.id,
-            kind: EchoArgs::KIND.to_owned(),
-            maximum: 3,
-            metadata_matches: matches,
-            metadata_updates: serde_json::Map::from_iter([(
-                "claim".to_owned(),
-                serde_json::json!("leader"),
-            )]),
-            queue: "default".to_owned(),
-        })
-        .await
-        .unwrap();
-    assert_eq!(
-        rows.iter().map(|row| row.id).collect::<Vec<_>>(),
-        [
-            expected[2].job.row.id,
-            expected[1].job.row.id,
-            expected[0].job.row.id,
-        ]
-    );
-    for row in &rows {
-        assert_eq!(row.state, JobState::Running);
-        assert_eq!(row.attempt, 1);
-        assert_eq!(row.attempted_by, ["postgres-extension-claimer"]);
-        assert_eq!(
-            row.metadata.get::<String>("claim").unwrap().as_deref(),
-            Some("leader")
-        );
-    }
-
-    let invalid = client.insert(FailArgs {}).await.unwrap();
-    // Attempt errors decode leniently, but a `NULL` tag can't become a
-    // `JobRow`, so claiming it through the extension fails and rolls back.
-    let corrupt_sql = format!("UPDATE {table} SET tags = ARRAY[NULL]::varchar[] WHERE id = $1");
-    sqlx::query(AssertSqlSafe(corrupt_sql))
-        .bind(invalid.job.row.id)
-        .execute(&pool)
-        .await
-        .unwrap();
-    let claimed = ExtensionClient::new(&client)
-        .claim_jobs(ExtensionClaimParams {
-            excluded_job_id: 0,
-            kind: FailArgs::KIND.to_owned(),
-            maximum: 1,
-            metadata_matches: serde_json::Map::new(),
-            metadata_updates: serde_json::Map::new(),
-            queue: "default".to_owned(),
-        })
-        .await;
-    let error = claimed.unwrap_err();
-    assert!(matches!(error, riverqueue::Error::InvalidJob(_)), "{error}");
-    assert!(
-        error.to_string().contains("error unmarshaling `tags`"),
-        "{error}"
-    );
-    let state_sql = format!("SELECT state::text, attempt FROM {table} WHERE id = $1");
-    let (state, attempt): (String, i16) = sqlx::query_as(AssertSqlSafe(state_sql))
-        .bind(invalid.job.row.id)
-        .fetch_one(&pool)
-        .await
-        .unwrap();
-    assert_eq!(state, "available");
-    assert_eq!(attempt, 0);
 
     database.cleanup().await;
 }
@@ -2119,94 +1937,6 @@ async fn transactional_inserts_become_visible_on_commit() {
     drop(pool_connection);
 
     database.cleanup().await;
-}
-
-async fn assert_cancellation_wins(pool: &PgPool, schema: &SchemaName, direct_completion: bool) {
-    const ATTEMPT: i16 = 7;
-
-    let pilot_completions = Arc::new(AtomicUsize::new(0));
-    let mut workers = WorkerRegistry::new();
-    workers.register::<EchoArgs, _>(EchoWorker).unwrap();
-    let builder = Client::builder(PostgresDatabase::new(pool.clone()).schema(schema.clone()))
-        .id(if direct_completion {
-            "rust-cancellation-direct"
-        } else {
-            "rust-cancellation-batch"
-        })
-        .retry_policy(LongRetryPolicy)
-        .workers(workers)
-        .queue(
-            "default",
-            QueueConfig::new(1).with_fetch_poll_interval(Duration::from_mins(1)),
-        )
-        .without_notifications();
-    let client = if direct_completion {
-        builder
-            .pilot(ContinueCompletionPilot {
-                completions: Arc::clone(&pilot_completions),
-            })
-            .build()
-            .unwrap()
-    } else {
-        builder.build().unwrap()
-    };
-
-    let original_scheduled_at = chrono::Utc::now() + chrono::Duration::hours(2);
-    let table = schema.qualify("river_job");
-    let mut claimed_rows = Vec::new();
-    let mut expected = Vec::new();
-    for message in ["long snooze", "short snooze", "retryable error"] {
-        let inserted = client
-            .insert(EchoArgs {
-                message: message.to_owned(),
-            })
-            .opts(
-                InsertOpts::default()
-                    .with_max_attempts(20)
-                    .with_scheduled_at(original_scheduled_at),
-            )
-            .await
-            .unwrap();
-        sqlx::query(AssertSqlSafe(format!(
-            "UPDATE {table} SET attempt = $2, attempted_at = now(), state = 'running' WHERE id = $1"
-        )))
-        .bind(inserted.job.row.id)
-        .bind(ATTEMPT)
-        .execute(pool)
-        .await
-        .unwrap();
-        let marked = client.jobs().cancel(inserted.job.row.id).await.unwrap();
-        assert_eq!(marked.state, JobState::Running);
-        assert!(marked.metadata.contains_key("cancel_attempted_at"));
-        expected.push((marked.id, marked.attempt, marked.scheduled_at));
-        claimed_rows.push(marked);
-    }
-
-    let mut run = client.start().unwrap();
-    run.wait_ready().await.unwrap();
-    let results: Vec<Result<WorkOutcome, BoxError>> = vec![
-        Ok(WorkOutcome::Snooze(Duration::from_hours(1))),
-        Ok(WorkOutcome::Snooze(Duration::ZERO)),
-        Err(Box::new(std::io::Error::other("retryable failure"))),
-    ];
-    ExtensionClient::new(&client)
-        .persist_claimed_outcomes(
-            &riverqueue::__private::work_context(CancellationToken::new()),
-            claimed_rows.into_iter().zip(results).collect(),
-        )
-        .await
-        .unwrap();
-
-    for (id, attempt, scheduled_at) in expected {
-        let cancelled = wait_for_state(&client, id, JobState::Cancelled).await;
-        assert_eq!(cancelled.attempt, attempt);
-        assert_eq!(cancelled.scheduled_at, scheduled_at);
-    }
-    assert_eq!(
-        pilot_completions.load(Ordering::SeqCst),
-        usize::from(direct_completion) * 3
-    );
-    run.shutdown().await.unwrap();
 }
 
 /// Builds the maintenance client shared by the pilot and rescuer tests.

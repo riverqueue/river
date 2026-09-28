@@ -31,6 +31,9 @@ pub(crate) struct UndecodableJob {
     /// Why the row couldn't be decoded, with a line for each field that
     /// couldn't be, like River Go's joined decode errors.
     pub(crate) error: String,
+    /// The columns that couldn't be decoded, when the row could be
+    /// identified.
+    pub(crate) columns: Vec<String>,
     /// The row with every field that could be decoded and the others left
     /// empty, or `None` when not even the columns that identify the job could
     /// be.
@@ -47,7 +50,9 @@ pub(crate) type DecodedJob = Result<JobRow, UndecodableJob>;
 pub(crate) fn tolerant_row(decoded: DecodedJob) -> Option<JobRow> {
     match decoded {
         Ok(row) => Some(row),
-        Err(UndecodableJob { error, row: None }) => {
+        Err(UndecodableJob {
+            error, row: None, ..
+        }) => {
             error!(%error, "River job row couldn't be identified; skipping it");
             None
         }
@@ -57,7 +62,10 @@ pub(crate) fn tolerant_row(decoded: DecodedJob) -> Option<JobRow> {
 
 /// Collects why fields of one row couldn't be decoded.
 #[derive(Default)]
-pub(crate) struct FieldErrors(Vec<String>);
+pub(crate) struct FieldErrors {
+    columns: Vec<String>,
+    messages: Vec<String>,
+}
 
 impl FieldErrors {
     /// Returns a decoded field, or records why it couldn't be decoded and
@@ -68,7 +76,8 @@ impl FieldErrors {
         decoded: Result<T, impl Display>,
     ) -> T {
         decoded.unwrap_or_else(|error| {
-            self.0
+            self.columns.push(column.to_owned());
+            self.messages
                 .push(format!("error unmarshaling `{column}`: {error}"));
             T::default()
         })
@@ -77,11 +86,12 @@ impl FieldErrors {
     /// Finishes decoding `row`, reporting it as undecodable if any of its
     /// fields couldn't be decoded.
     pub(crate) fn finish(self, row: JobRow) -> DecodedJob {
-        if self.0.is_empty() {
+        if self.messages.is_empty() {
             Ok(row)
         } else {
             Err(UndecodableJob {
-                error: self.0.join("\n"),
+                columns: self.columns,
+                error: self.messages.join("\n"),
                 row: Some(Box::new(row)),
             })
         }
@@ -169,6 +179,7 @@ impl JobRecord {
     /// only represent an object.
     pub(crate) fn decode(self) -> DecodedJob {
         let state = JobState::try_from(self.state.as_str()).map_err(|error| UndecodableJob {
+            columns: Vec::new(),
             error: format!("job {}: {error}", self.id),
             row: None,
         })?;
@@ -233,6 +244,7 @@ impl JobRecord {
 pub(crate) fn decode_job_row(row: &PgRow) -> DecodedJob {
     JobRecord::from_row(row)
         .map_err(|error| UndecodableJob {
+            columns: Vec::new(),
             error: error.to_string(),
             row: None,
         })?

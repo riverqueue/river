@@ -128,6 +128,8 @@ pub enum ExtensionPhase {
     AddOnJobRetry,
     /// An add-on crate's step after job state changes are persisted.
     AddOnJobSetState,
+    /// An add-on crate claiming or completing a running attempt's peers.
+    AddOnPeerAttempts,
     /// An add-on crate's session for a queue producer.
     AddOnProducer,
     /// An add-on crate validating a queue's settings.
@@ -165,6 +167,7 @@ impl fmt::Display for ExtensionPhase {
             Self::AddOnJobCancel => "add-on job cancel",
             Self::AddOnJobRetry => "add-on job retry",
             Self::AddOnJobSetState => "add-on job set state",
+            Self::AddOnPeerAttempts => "add-on peer attempts",
             Self::AddOnProducer => "add-on producer",
             Self::AddOnQueueSettings => "add-on queue settings",
             Self::AddOnRescue => "add-on rescue",

@@ -421,9 +421,7 @@ pub(crate) fn validate_claimed(
                 row.queue
             ));
         }
-        let attempted_by_undecodable = job
-            .decode_error()
-            .is_some_and(|error| error.contains("`attempted_by`"));
+        let attempted_by_undecodable = job.column_undecodable("attempted_by");
         if !attempted_by_undecodable
             && row.attempted_by.last().map(String::as_str) != Some(client_id)
         {

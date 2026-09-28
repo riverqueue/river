@@ -28,6 +28,8 @@ pub struct WorkContext {
     client: Option<Client>,
     job_id: Option<i64>,
     metadata_updates: Arc<Mutex<Map<String, Value>>>,
+    /// The attempt's peers, for an attempt a client runs.
+    peers: Option<Arc<crate::client::PeerLedger>>,
     resumable: Arc<Mutex<ResumableState>>,
 }
 
@@ -40,6 +42,7 @@ impl WorkContext {
             client: None,
             job_id: None,
             metadata_updates: Arc::new(Mutex::new(Map::new())),
+            peers: None,
             resumable: Arc::new(Mutex::new(ResumableState::default())),
         }
     }
@@ -405,8 +408,20 @@ impl WorkContext {
             client: Some(client),
             job_id: Some(job_id),
             metadata_updates: Arc::new(Mutex::new(Map::new())),
+            peers: None,
             resumable: Arc::new(Mutex::new(state)),
         }
+    }
+
+    /// Attaches the attempt's peer ledger.
+    pub(crate) fn with_peers(mut self, peers: Arc<crate::client::PeerLedger>) -> Self {
+        self.peers = Some(peers);
+        self
+    }
+
+    /// Returns the attempt's peer ledger, for an attempt a client runs.
+    pub(crate) const fn peers(&self) -> Option<&Arc<crate::client::PeerLedger>> {
+        self.peers.as_ref()
     }
 
     /// Creates a detached attempt context using persisted resumable metadata.

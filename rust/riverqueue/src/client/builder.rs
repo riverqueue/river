@@ -695,6 +695,7 @@ impl ClientBuilder {
                 insert_middleware: self.insert_middleware,
                 periodic_jobs,
                 pending_cancellations: Mutex::new(HashMap::new()),
+                peer_owners: Mutex::new(HashMap::new()),
                 pilot: self.pilot,
                 poll_only: self.poll_only,
                 producer_report_interval: self.producer_report_interval,

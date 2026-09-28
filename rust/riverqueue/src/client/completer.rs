@@ -47,6 +47,8 @@ pub(super) struct CompletionUpdate {
     pub(super) scheduled_at: Option<DateTime<Utc>>,
     pub(super) state: JobState,
     pub(super) timing: CompletionTiming,
+    /// Set for a peer attempt's outcome, whose ownership ends as it persists.
+    pub(super) peer: Option<Arc<peers::PeerCompletion>>,
 }
 
 /// Maps a persisted row to the event it reports.
@@ -739,6 +741,11 @@ pub(super) fn finish_batched_completion(
     update: &CompletionUpdate,
     record: Option<JobRow>,
 ) {
+    // A stale result settles the peer's ownership just as an applied one
+    // does, and before its event, so the job can be claimed again at once.
+    if let Some(peer) = &update.peer {
+        peer.persisted(inner);
+    }
     if let Some(row) = record {
         if let Some(event_kind) = persisted_completion_event_kind(row.state, update.event_kind) {
             let event = Event::job_with_statistics(

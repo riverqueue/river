@@ -14,14 +14,13 @@ use std::{
 
 use riverqueue::{
     BoxError, Client, EventKind, EventReceiver, EventRecvError, Extensions, Hook, InsertContext,
-    InsertMiddleware, InsertNext, InsertOpts, InsertedJobs, Job, JobArgs, JobRow, JobState, Metric,
+    InsertMiddleware, InsertNext, InsertedJobs, Job, JobArgs, JobRow, JobState, Metric,
     PeriodicJobs, Plugin, QueueConfig, SubscribeConfig, WorkContext, WorkError, WorkMiddleware,
     WorkNext, WorkOutcome, Worker, WorkerRegistry, database::PostgresDatabase,
 };
 use serde::{Deserialize, Serialize};
 use sqlx::AssertSqlSafe;
 use tokio::sync::Semaphore;
-use tokio_util::sync::CancellationToken;
 
 #[derive(Clone, Debug, Deserialize, JobArgs, Serialize)]
 #[river(kind = "rust_runtime_config")]
@@ -358,69 +357,6 @@ async fn completion_burst_does_not_lag_large_subscription() {
     .await
     .unwrap();
     assert_eq!(completed_count, i64::try_from(JOB_COUNT).unwrap());
-    database.cleanup().await;
-}
-
-#[tokio::test]
-async fn extension_claimed_outcomes_use_postgres_completion_batcher() {
-    let database = support::PostgresSchema::new("rt_ext_completion").await;
-    let pool = database.pool.clone();
-    let schema = database.schema.clone();
-
-    let mut workers = WorkerRegistry::new();
-    workers.register::<BurstArgs, _>(BurstWorker).unwrap();
-    let client = Client::builder(PostgresDatabase::new(pool.clone()).schema(schema.clone()))
-        .id("rust-extension-completion-test")
-        .without_notifications()
-        .workers(workers)
-        .queue(
-            "default",
-            QueueConfig::new(1).with_fetch_poll_interval(Duration::from_mins(1)),
-        )
-        .build()
-        .unwrap();
-    let mut events = client.subscribe(&[EventKind::JobCompleted]).unwrap();
-    let mut run = client.start().unwrap();
-    run.wait_ready().await.unwrap();
-
-    let inserted = client
-        .insert(BurstArgs {})
-        .opts(
-            InsertOpts::default()
-                .with_scheduled_at(chrono::Utc::now() + chrono::Duration::hours(1)),
-        )
-        .await
-        .unwrap();
-    let table = schema.qualify("river_job");
-    sqlx::query(AssertSqlSafe(format!(
-        "UPDATE {table} SET state = 'running', attempt = 1, attempted_at = now() WHERE id = $1"
-    )))
-    .bind(inserted.job.row.id)
-    .execute(&pool)
-    .await
-    .unwrap();
-    let row = client.jobs().get(inserted.job.row.id).await.unwrap();
-    let context = riverqueue::__private::work_context(CancellationToken::new());
-    context.metadata_set("shared_completion", true).unwrap();
-    riverqueue::__private::ExtensionClient::new(&client)
-        .persist_claimed_outcomes(&context, vec![(row, Ok(WorkOutcome::Complete))])
-        .await
-        .unwrap();
-
-    let event = tokio::time::timeout(Duration::from_secs(5), events.recv())
-        .await
-        .unwrap()
-        .unwrap();
-    let event = event.as_job().unwrap();
-    assert_eq!(event.job.id, inserted.job.row.id);
-    assert_eq!(event.job.state, JobState::Completed);
-    assert_eq!(
-        event.job.metadata.get::<bool>("shared_completion").unwrap(),
-        Some(true)
-    );
-    assert!(event.statistics.is_some());
-
-    run.shutdown().await.unwrap();
     database.cleanup().await;
 }
 

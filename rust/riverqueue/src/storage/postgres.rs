@@ -5,7 +5,7 @@ use serde_json::{Map, Value};
 use sqlx::{AssertSqlSafe, FromRow, PgConnection, Postgres, types::Json};
 
 use super::Backend;
-use crate::__private::{DatabaseConnection, ExtensionClaimParams};
+use crate::__private::DatabaseConnection;
 use crate::client::{JobRecord, go_time_json, job_projection};
 use crate::query::{JobListSqlPart, JobListTimeField};
 use crate::{Error, JobListParams, JobRow, JobState, Queue, SchemaName};
@@ -243,48 +243,6 @@ impl Backend for PostgresBackend<'_> {
             .await?
             .map(JobRecord::into_job_row)
             .transpose()
-    }
-
-    async fn jobs_claim_filtered(
-        &mut self,
-        client_id: &str,
-        max_attempted_by: i32,
-        params: &ExtensionClaimParams,
-    ) -> Result<Vec<JobRow>, Error> {
-        let table = self.schema.qualify("river_job");
-        let sql = format!(
-            "WITH locked AS (\
-                SELECT id FROM {table} \
-                WHERE state = 'available' AND queue = $1 AND kind = $2 \
-                  AND id != $3 AND scheduled_at <= now() \
-                  AND metadata @> $4::jsonb \
-                ORDER BY priority ASC, scheduled_at ASC, id ASC \
-                LIMIT $5 FOR UPDATE SKIP LOCKED\
-             ) UPDATE {table} AS job \
-                SET state = 'running', attempt = job.attempt + 1, \
-                    attempted_at = now(), attempted_by = array_append(\
-                        CASE WHEN array_length(job.attempted_by, 1) >= $7 \
-                             THEN job.attempted_by[array_length(job.attempted_by, 1) + 2 - $7:] \
-                             ELSE job.attempted_by END, $6), \
-                    metadata = job.metadata || $8::jsonb \
-                FROM locked WHERE job.id = locked.id \
-                RETURNING {}, false AS unique_skipped_as_duplicate",
-            job_projection("job")
-        );
-        sqlx::query_as::<_, JobRecord>(AssertSqlSafe(sql))
-            .bind(&params.queue)
-            .bind(&params.kind)
-            .bind(params.excluded_job_id)
-            .bind(Json(&params.metadata_matches))
-            .bind(params.maximum)
-            .bind(client_id)
-            .bind(max_attempted_by)
-            .bind(Json(&params.metadata_updates))
-            .fetch_all(&mut *self.connection)
-            .await?
-            .into_iter()
-            .map(JobRecord::into_job_row)
-            .collect()
     }
 
     async fn notify(&mut self, topic: &str, payload: &str) -> Result<(), Error> {

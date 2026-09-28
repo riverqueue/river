@@ -130,19 +130,6 @@ pub(crate) struct ClaimJobs<'a> {
     pub queue: &'a str,
 }
 
-#[derive(Clone, Debug)]
-pub(crate) struct ClaimFilteredJobs<'a> {
-    pub client_id: &'a str,
-    pub excluded_job_id: i64,
-    pub kind: &'a str,
-    pub limit: i32,
-    pub max_attempted_by: i32,
-    pub metadata_matches: &'a Map<String, Value>,
-    pub metadata_updates: &'a Map<String, Value>,
-    pub now: DateTime<Utc>,
-    pub queue: &'a str,
-}
-
 #[derive(Clone, Debug, Default)]
 pub(crate) struct ListJobs<'a> {
     /// Excludes running jobs before applying the limit, as bulk deletion does.
@@ -251,6 +238,7 @@ impl JobRecord {
     /// [`JobRow`] can only represent an object.
     fn decode(self) -> DecodedJob {
         let unidentifiable = |error: String| UndecodableJob {
+            columns: Vec::new(),
             error: format!("job {}: {error}", self.id),
             row: None,
         };
@@ -306,6 +294,7 @@ impl JobRecord {
 pub(crate) fn decode_job_row(row: &SqliteRow) -> DecodedJob {
     JobRecord::from_row(row)
         .map_err(|error| UndecodableJob {
+            columns: Vec::new(),
             error: error.to_string(),
             row: None,
         })?
@@ -554,88 +543,6 @@ pub(crate) async fn claim(
 
     let rows = query.build().fetch_all(&mut *connection).await?;
     Ok(rows.iter().map(decode_job_row).collect())
-}
-
-/// Atomically claims due jobs matching exact-version extension filters.
-pub(crate) async fn claim_filtered(
-    connection: &mut SqliteConnection,
-    params: &ClaimFilteredJobs<'_>,
-) -> Result<Vec<JobRow>, BackendError> {
-    if params.limit <= 0 {
-        return Ok(Vec::new());
-    }
-
-    let now = sqlite_time(params.now);
-    let metadata_updates = json_text(params.metadata_updates)?;
-    let mut query = QueryBuilder::<Sqlite>::new(
-        r#"
-        UPDATE river_job
-        SET
-            attempt = attempt + 1,
-            attempted_at = "#,
-    );
-    query.push_bind(&now);
-    query.push(
-        r#",
-            attempted_by = jsonb(json_insert(
-                (
-                    SELECT jsonb_group_array(value)
-                    FROM (
-                        SELECT value FROM (
-                            SELECT key, value
-                            FROM json_each(coalesce(attempted_by, jsonb('[]')))
-                            ORDER BY key DESC
-                            LIMIT "#,
-    );
-    query.push_bind(params.max_attempted_by.saturating_sub(1));
-    query.push(
-        r#"
-                        ) ORDER BY key ASC
-                    )
-                ),
-                '$[#]',
-                "#,
-    );
-    query.push_bind(params.client_id);
-    query.push(
-        r#"
-            )),
-            metadata = jsonb(json_patch(json(metadata), json("#,
-    );
-    query.push_bind(metadata_updates);
-    query.push(
-        r#"))),
-            state = 'running'
-        WHERE id IN (
-            SELECT river_job.id
-            FROM river_job
-            WHERE state = 'available'
-              AND queue = "#,
-    );
-    query.push_bind(params.queue);
-    query.push(" AND kind = ");
-    query.push_bind(params.kind);
-    query.push(" AND id != ");
-    query.push_bind(params.excluded_job_id);
-    query.push(" AND scheduled_at <= ");
-    query.push_bind(&now);
-    for (key, value) in params.metadata_matches {
-        let path = format!("$.{}", serde_json::to_string(key)?);
-        query.push(" AND json_extract(json(metadata), ");
-        query.push_bind(path);
-        query.push(") IS json_extract(");
-        query.push_bind(serde_json::to_string(value)?);
-        query.push(", '$')");
-    }
-    query.push(" ORDER BY priority ASC, scheduled_at ASC, id ASC LIMIT ");
-    query.push_bind(params.limit);
-    query.push(format!(") RETURNING {JOB_COLUMNS}"));
-
-    let records = query
-        .build_query_as::<JobRecord>()
-        .fetch_all(&mut *connection)
-        .await?;
-    records.into_iter().map(JobRecord::into_job).collect()
 }
 
 /// Claims exactly the IDs selected by an exact-version extension.

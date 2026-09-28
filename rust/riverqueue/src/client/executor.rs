@@ -21,6 +21,7 @@ pub(super) async fn execute_job(
     hard_cancel: CancellationToken,
     cancellation: CancellationToken,
     completion_sender: mpsc::Sender<CompletionUpdate>,
+    claim_stop: CancellationToken,
 ) {
     let span = info_span!("river_job", job_id = row.id, job_kind = %row.kind, queue = %row.queue);
     async move {
@@ -32,6 +33,10 @@ pub(super) async fn execute_job(
                     .ok()
             })
             .unwrap_or_default();
+        // Like River Go's executor start time, which it records as the
+        // attempt error's `at`.
+        let attempt_started_at = Utc::now();
+        let peers = Arc::new(PeerLedger::new(row.id, attempt_started_at, claim_stop));
         let context = WorkContext::for_job(
             Client {
                 inner: Arc::clone(&inner),
@@ -39,10 +44,8 @@ pub(super) async fn execute_job(
             cancellation.clone(),
             row.id,
             &row.metadata,
-        );
-        // Like River Go's executor start time, which it records as the
-        // attempt error's `at`.
-        let attempt_started_at = Utc::now();
+        )
+        .with_peers(Arc::clone(&peers));
         let work_started = std::time::Instant::now();
         let mut cancellation_cause = None;
         let worked = decode_error.is_none();
@@ -68,7 +71,9 @@ pub(super) async fn execute_job(
         let Some(result) = result else {
             // The task outlived its abort during shutdown and may still be
             // running. Leave the row `running` for the rescuer rather than
-            // making it available to run concurrently with the original.
+            // making it available to run concurrently with the original. Its
+            // peers are left to the rescuer as well.
+            peers.abandon(&inner);
             remove_running_attempt(&inner.running, row.id, &cancellation);
             return;
         };
@@ -134,6 +139,15 @@ pub(super) async fn execute_job(
                 }
             }
         }
+        // Peers settle before the coordinator's own outcome, so its
+        // producer's `job_finished` comes after them.
+        peers
+            .finish(
+                &inner,
+                &context,
+                cancellation_cause == Some(CancellationCause::Shutdown),
+            )
+            .await;
         let metadata_updates = context.metadata_updates();
         let completion = CompletionAttempt {
             cancellation: cancellation.clone(),
@@ -153,6 +167,7 @@ pub(super) async fn execute_job(
             error_handler_result,
             worked,
             &completion_sender,
+            None,
         )
         .await;
         // Once enqueued, the completer owns the running attempt until the
@@ -445,6 +460,7 @@ pub(super) async fn persist_result(
     error_handler_result: ErrorHandlerDecision,
     worked: bool,
     completion_sender: &mpsc::Sender<CompletionUpdate>,
+    peer: Option<Arc<peers::PeerCompletion>>,
 ) -> Result<(), Error> {
     let now = Utc::now();
     let (state, finalized_at, scheduled_at, attempt, attempt_error, metadata, event_kind) =
@@ -598,6 +614,7 @@ pub(super) async fn persist_result(
             scheduled_at,
             state,
             timing: completion.timing,
+            peer,
         })
         .await
         .map_err(|_| Error::runtime_context("job completion", "completion batcher stopped"))

@@ -747,7 +747,7 @@ pub(super) async fn run_queue(
         let claimed = rows.into_iter().map(|row| (row, None)).chain(
             undecodable
                 .into_iter()
-                .filter_map(|UndecodableJob { error, row }| {
+                .filter_map(|UndecodableJob { error, row, .. }| {
                     let Some(row) = row else {
                         error!(%error, "claimed River job row couldn't be identified; leaving it for the rescuer");
                         return None;
@@ -767,6 +767,7 @@ pub(super) async fn run_queue(
             let task_inner = Arc::clone(&inner);
             let completion_sender = completion_sender.clone();
             let task_row = row.clone();
+            let claim_stop = fetch_cancel.clone();
             attempts.spawn(&row, async move {
                 execute_job(
                     task_inner,
@@ -775,6 +776,7 @@ pub(super) async fn run_queue(
                     hard_cancel,
                     cancellation,
                     completion_sender,
+                    claim_stop,
                 )
                 .await;
             });
@@ -1103,13 +1105,4 @@ impl FetchedJobs {
     pub(super) fn len(&self) -> usize {
         self.rows.len() + self.undecodable.len()
     }
-}
-
-pub(super) fn sort_claimed_jobs(rows: &mut [JobRow]) {
-    rows.sort_by(|left, right| {
-        left.priority
-            .cmp(&right.priority)
-            .then_with(|| left.scheduled_at.cmp(&right.scheduled_at))
-            .then_with(|| left.id.cmp(&right.id))
-    });
 }

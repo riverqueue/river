@@ -23,7 +23,7 @@ use sqlx::Postgres;
 use sqlx::Sqlite;
 use sqlx::{Transaction, pool::PoolConnection};
 
-use crate::__private::{DatabaseConnection, ExtensionClaimParams};
+use crate::__private::DatabaseConnection;
 use crate::client::{ClientInner, after_jobs_set_state};
 use crate::database::{Database, DatabasePool};
 use crate::{
@@ -85,14 +85,6 @@ pub(crate) trait Backend {
         id: i64,
         metadata: &Map<String, Value>,
     ) -> Result<Option<JobRow>, Error>;
-
-    /// Claims available jobs matching an extension's filter.
-    async fn jobs_claim_filtered(
-        &mut self,
-        client_id: &str,
-        max_attempted_by: i32,
-        params: &ExtensionClaimParams,
-    ) -> Result<Vec<JobRow>, Error>;
 
     /// Sends a notification that is delivered when the connection's
     /// transaction commits.
@@ -190,19 +182,6 @@ impl Backend for AnyBackend<'_> {
         metadata: &Map<String, Value>,
     ) -> Result<Option<JobRow>, Error> {
         dispatch!(self, backend => backend.job_update(id, metadata).await)
-    }
-
-    async fn jobs_claim_filtered(
-        &mut self,
-        client_id: &str,
-        max_attempted_by: i32,
-        params: &ExtensionClaimParams,
-    ) -> Result<Vec<JobRow>, Error> {
-        dispatch!(self, backend => {
-            backend
-                .jobs_claim_filtered(client_id, max_attempted_by, params)
-                .await
-        })
     }
 
     async fn notify(&mut self, topic: &str, payload: &str) -> Result<(), Error> {
@@ -364,17 +343,6 @@ impl<'c> Storage<'c> {
             .job_update(id, &metadata)
             .await?
             .ok_or(Error::NotFound(crate::Record::Job(id)))
-    }
-
-    /// Claims available jobs matching an extension's filter for this client.
-    pub(crate) async fn jobs_claim_filtered(
-        &mut self,
-        max_attempted_by: i32,
-        params: &ExtensionClaimParams,
-    ) -> Result<Vec<JobRow>, Error> {
-        self.backend
-            .jobs_claim_filtered(&self.inner.id, max_attempted_by, params)
-            .await
     }
 
     /// Asks the current leader to resign once the transaction commits.

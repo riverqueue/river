@@ -5,7 +5,7 @@ use serde_json::{Map, Value};
 use sqlx::SqliteConnection;
 
 use super::Backend;
-use crate::__private::{DatabaseConnection, ExtensionClaimParams};
+use crate::__private::DatabaseConnection;
 use crate::database::sqlite;
 use crate::{Error, JobListParams, JobRow, JobState, Queue};
 
@@ -202,30 +202,6 @@ impl Backend for SqliteBackend<'_> {
         sqlite::update(self.connection, id, metadata)
             .await
             .map_err(database_error)
-    }
-
-    async fn jobs_claim_filtered(
-        &mut self,
-        client_id: &str,
-        max_attempted_by: i32,
-        params: &ExtensionClaimParams,
-    ) -> Result<Vec<JobRow>, Error> {
-        sqlite::claim_filtered(
-            self.connection,
-            &sqlite::ClaimFilteredJobs {
-                client_id,
-                excluded_job_id: params.excluded_job_id,
-                kind: &params.kind,
-                limit: params.maximum,
-                max_attempted_by,
-                metadata_matches: &params.metadata_matches,
-                metadata_updates: &params.metadata_updates,
-                now: Utc::now(),
-                queue: &params.queue,
-            },
-        )
-        .await
-        .map_err(database_error)
     }
 
     async fn notify(&mut self, topic: &str, payload: &str) -> Result<(), Error> {

@@ -12,14 +12,12 @@ use riverqueue::__private::{
     ClaimedJob, DatabaseConnection, JobInsertParams, JobSetStateParams, Pilot, PilotError,
     PilotProducer, ProducerClaimContext, ProducerClaimNext, ProducerStartContext, RescueParams,
 };
-use riverqueue::__private::{
-    ClientBuilderExt, ExtensionClaimParams, ExtensionClient, ExtensionInsertParams,
-};
+use riverqueue::__private::{ClientBuilderExt, ExtensionClient, ExtensionInsertParams};
 use riverqueue::__private::{MaintenanceService, MaintenanceServiceContext};
 use riverqueue::{
-    BoxError, Client, ErrorHandler, ErrorHandlerDecision, EventKind, Hook, InsertBatch, InsertOpts,
-    Job, JobArgs, JobRow, JobState, MaintenanceConfig, QueueConfig, UniqueOpts, WorkContext,
-    WorkError, WorkOutcome, WorkResult, WorkerRegistry, database::DatabaseKind,
+    BoxError, Client, EventKind, Hook, InsertBatch, InsertOpts, Job, JobArgs, JobRow, JobState,
+    MaintenanceConfig, QueueConfig, UniqueOpts, WorkContext, WorkOutcome, WorkerRegistry,
+    database::DatabaseKind,
 };
 use riverqueue_migrate::SqliteMigrator;
 use serde::{Deserialize, Serialize};
@@ -44,64 +42,7 @@ struct CancelIgnoredArgs {}
 #[river(kind = "rust_sqlite_unknown")]
 struct UnknownArgs {}
 
-#[derive(Debug, thiserror::Error)]
-#[error("extension execution failed")]
-struct ExtensionExecutionError;
-
-#[derive(Default)]
-struct CompletionObserver {
-    error_job_ids: Mutex<Vec<i64>>,
-    work_end_count: AtomicUsize,
-}
-
-#[derive(Clone)]
-struct CompletionErrorHandler(Arc<CompletionObserver>);
-
-#[derive(Clone)]
-struct CompletionHook(Arc<CompletionObserver>);
-
 struct WrapperTransformHook(&'static str);
-
-#[allow(
-    clippy::unused_async_trait_impl,
-    reason = "these extensions only record state synchronously"
-)]
-impl ErrorHandler for CompletionErrorHandler {
-    async fn handle_error(
-        &self,
-        _context: &WorkContext,
-        job: &JobRow,
-        result: &WorkResult,
-    ) -> Result<ErrorHandlerDecision, BoxError> {
-        let WorkResult::Failed(error) = result else {
-            panic!("expected a failed extension result")
-        };
-        assert!(
-            error
-                .get_ref()
-                .downcast_ref::<ExtensionExecutionError>()
-                .is_some()
-        );
-        self.0.error_job_ids.lock().unwrap().push(job.id);
-        Ok(ErrorHandlerDecision::Cancel)
-    }
-}
-
-#[allow(
-    clippy::unused_async_trait_impl,
-    reason = "these extensions only record state synchronously"
-)]
-impl Hook for CompletionHook {
-    async fn work_end(
-        &self,
-        _context: &WorkContext,
-        _job: &JobRow,
-        result: Result<WorkOutcome, WorkError>,
-    ) -> Result<WorkOutcome, WorkError> {
-        self.0.work_end_count.fetch_add(1, Ordering::SeqCst);
-        result
-    }
-}
 
 #[allow(
     clippy::unused_async_trait_impl,
@@ -133,7 +74,6 @@ impl Hook for WrapperTransformHook {
 enum CompletionBehavior {
     Continue,
     Fail,
-    FailFirst,
     Mark,
 }
 
@@ -215,10 +155,7 @@ impl Pilot for SqlitePilot {
             CompletionBehavior::Fail => {
                 Err(std::io::Error::other("completion interception failed").into())
             }
-            CompletionBehavior::FailFirst if self.completion_calls.load(Ordering::SeqCst) == 1 => {
-                Err(std::io::Error::other("first completion interception failed").into())
-            }
-            CompletionBehavior::Continue | CompletionBehavior::FailFirst => Ok(()),
+            CompletionBehavior::Continue => Ok(()),
             CompletionBehavior::Mark => {
                 for job in params.jobs {
                     sqlx::query(
@@ -462,218 +399,6 @@ fn runtime_workers(worked: Arc<Semaphore>) -> WorkerRegistry {
 }
 
 #[tokio::test]
-#[allow(
-    clippy::too_many_lines,
-    reason = "one end-to-end scenario covers every peer outcome and race"
-)]
-async fn extension_claimed_outcomes_use_canonical_completion_pipeline() {
-    let pool = setup().await;
-    let observer = Arc::new(CompletionObserver::default());
-    let client = Client::builder(pool.clone())
-        .id("sqlite-extension-completions")
-        .error_handler(CompletionErrorHandler(Arc::clone(&observer)))
-        .hook(CompletionHook(Arc::clone(&observer)))
-        .workers(runtime_workers(Arc::new(Semaphore::new(0))))
-        .queue(
-            "default",
-            QueueConfig::new(1)
-                .with_fetch_cooldown(Duration::from_millis(1))
-                .with_fetch_poll_interval(Duration::from_millis(10)),
-        )
-        .build()
-        .unwrap();
-    let mut events = client
-        .subscribe(&[
-            EventKind::JobCancelled,
-            EventKind::JobCompleted,
-            EventKind::JobFailed,
-            EventKind::JobSnoozed,
-        ])
-        .unwrap();
-    let mut run = client.start().unwrap();
-    run.wait_ready().await.unwrap();
-
-    let scheduled_at = chrono::Utc::now() + chrono::Duration::hours(1);
-    let mut rows = Vec::new();
-    for value in 1..=4 {
-        let inserted = client
-            .insert(RuntimeArgs { value })
-            .opts(InsertOpts::default().with_scheduled_at(scheduled_at))
-            .await
-            .unwrap();
-        sqlx::query(
-            "UPDATE river_job SET state = 'running', attempt = 1, \
-             attempted_at = datetime('now', 'subsec') WHERE id = ?",
-        )
-        .bind(inserted.job.row.id)
-        .execute(&pool)
-        .await
-        .unwrap();
-        rows.push(client.jobs().get(inserted.job.row.id).await.unwrap());
-    }
-    // Finalized now, so the job cleaner doesn't delete the row before the
-    // outcome is persisted.
-    sqlx::query(
-        "UPDATE river_job SET state = 'discarded', finalized_at = datetime('now', 'subsec') \
-         WHERE id = ?",
-    )
-    .bind(rows[2].id)
-    .execute(&pool)
-    .await
-    .unwrap();
-    sqlx::query(
-        "UPDATE river_job SET metadata = jsonb_set(metadata, '$.cancel_attempted_at', \
-         jsonb('\"2026-01-02T03:05:00Z\"')) WHERE id = ?",
-    )
-    .bind(rows[3].id)
-    .execute(&pool)
-    .await
-    .unwrap();
-
-    let execution_context =
-        riverqueue::__private::work_context(tokio_util::sync::CancellationToken::new());
-    execution_context
-        .metadata_set("shared_completion", true)
-        .unwrap();
-    let failed_job_id = rows[1].id;
-    ExtensionClient::new(&client)
-        .persist_claimed_outcomes(
-            &execution_context,
-            vec![
-                (rows[0].clone(), Ok(WorkOutcome::Complete)),
-                (
-                    rows[1].clone(),
-                    Err(Box::new(ExtensionExecutionError) as BoxError),
-                ),
-                (rows[2].clone(), Ok(WorkOutcome::Complete)),
-                (
-                    rows[3].clone(),
-                    Ok(WorkOutcome::Snooze(Duration::from_hours(1))),
-                ),
-            ],
-        )
-        .await
-        .unwrap();
-
-    let mut received = std::collections::HashMap::new();
-    for _ in 0..4 {
-        let event = tokio::time::timeout(Duration::from_secs(5), events.recv())
-            .await
-            .unwrap()
-            .unwrap();
-        let job_event = event.as_job().unwrap();
-        assert!(job_event.statistics.is_some());
-        assert_eq!(
-            job_event
-                .job
-                .metadata
-                .get::<bool>("shared_completion")
-                .unwrap(),
-            Some(true)
-        );
-        received.insert(job_event.job.id, (event.kind(), job_event.job.state));
-    }
-    assert_eq!(
-        received.get(&rows[0].id),
-        Some(&(EventKind::JobCompleted, JobState::Completed))
-    );
-    assert_eq!(
-        received.get(&rows[1].id),
-        Some(&(EventKind::JobCancelled, JobState::Cancelled))
-    );
-    assert_eq!(
-        received.get(&rows[2].id),
-        Some(&(EventKind::JobFailed, JobState::Discarded))
-    );
-    assert_eq!(
-        received.get(&rows[3].id),
-        Some(&(EventKind::JobCancelled, JobState::Cancelled))
-    );
-    assert_eq!(*observer.error_job_ids.lock().unwrap(), [failed_job_id]);
-    assert_eq!(observer.work_end_count.load(Ordering::SeqCst), 0);
-
-    run.shutdown().await.unwrap();
-}
-
-#[tokio::test]
-async fn extension_claimed_outcomes_retry_after_interception_error() {
-    let pool = setup().await;
-    let mut pilot = SqlitePilot::new();
-    pilot.completion = Some(CompletionBehavior::FailFirst);
-    let client = Client::builder(pool.clone())
-        .id("sqlite-extension-completion-error")
-        .pilot(pilot.clone())
-        .workers(runtime_workers(Arc::new(Semaphore::new(0))))
-        .queue(
-            "default",
-            QueueConfig::new(1).with_fetch_poll_interval(Duration::from_mins(1)),
-        )
-        .build()
-        .unwrap();
-    let mut events = client.subscribe(&[EventKind::JobCompleted]).unwrap();
-    let mut run = client.start().unwrap();
-    run.wait_ready().await.unwrap();
-
-    let scheduled_at = chrono::Utc::now() + chrono::Duration::hours(1);
-    let mut rows = Vec::new();
-    for value in 1..=2 {
-        let inserted = client
-            .insert(RuntimeArgs { value })
-            .opts(InsertOpts::default().with_scheduled_at(scheduled_at))
-            .await
-            .unwrap();
-        sqlx::query(
-            "UPDATE river_job SET state = 'running', attempt = 1, \
-             attempted_at = datetime('now', 'subsec') WHERE id = ?",
-        )
-        .bind(inserted.job.row.id)
-        .execute(&pool)
-        .await
-        .unwrap();
-        rows.push(client.jobs().get(inserted.job.row.id).await.unwrap());
-    }
-    let context = riverqueue::__private::work_context(tokio_util::sync::CancellationToken::new());
-    ExtensionClient::new(&client)
-        .persist_claimed_outcomes(
-            &context,
-            rows.iter()
-                .cloned()
-                .map(|row| (row, Ok(WorkOutcome::Complete)))
-                .collect(),
-        )
-        .await
-        .unwrap();
-    // The hook's first failure rolls the batch back; the completer retries it.
-    let mut completed = Vec::new();
-    for _ in 0..2 {
-        let event = tokio::time::timeout(Duration::from_secs(10), events.recv())
-            .await
-            .unwrap()
-            .unwrap();
-        completed.push(event.as_job().unwrap().job.id);
-    }
-    completed.sort_unstable();
-    assert_eq!(completed, [rows[0].id, rows[1].id]);
-    for row in &rows {
-        assert_eq!(
-            client.jobs().get(row.id).await.unwrap().state,
-            JobState::Completed
-        );
-        let effects: i64 = sqlx::query_scalar(
-            "SELECT count(*) FROM pilot_effect WHERE operation = 'completion' AND job_id = ?",
-        )
-        .bind(row.id)
-        .fetch_one(&pool)
-        .await
-        .unwrap();
-        assert_eq!(effects, 1, "the failed attempt's side effects rolled back");
-    }
-    assert!(pilot.completion_calls.load(Ordering::SeqCst) >= 2);
-
-    run.shutdown_now().await.unwrap();
-}
-
-#[tokio::test]
 async fn sqlite_pilot_completion_continue_and_mark_are_atomic() {
     for behavior in [CompletionBehavior::Continue, CompletionBehavior::Mark] {
         let pool = setup().await;
@@ -912,141 +637,6 @@ async fn sqlite_queue_start_retries_transient_write_contention() {
     run.shutdown().await.unwrap();
     pool.close().await;
     remove_sqlite_files(&database_path);
-}
-
-#[tokio::test]
-#[allow(
-    clippy::too_many_lines,
-    reason = "one backend regression verifies atomic selection, ordering, row updates, and decode rollback"
-)]
-async fn sqlite_extension_claim_returns_ordered_rows_and_rolls_back_decode_errors() {
-    let pool = setup().await;
-    let client = Client::builder(pool.clone())
-        .id("sqlite-extension-claimer")
-        .build()
-        .unwrap();
-    let now = chrono::Utc::now();
-    let matches = serde_json::Map::from_iter([
-        ("group".to_owned(), serde_json::json!("shared")),
-        ("mode".to_owned(), serde_json::json!("open")),
-    ]);
-    let leader = client
-        .insert(RuntimeArgs { value: 50 })
-        .opts(InsertOpts::default().with_metadata(matches.clone()))
-        .await
-        .unwrap();
-    let mut expected = Vec::new();
-    for (value, priority, scheduled_at) in [
-        (51, 2, now - chrono::Duration::minutes(3)),
-        (52, 1, now - chrono::Duration::minutes(1)),
-        (53, 1, now - chrono::Duration::minutes(2)),
-    ] {
-        let inserted = client
-            .insert(RuntimeArgs { value })
-            .opts(
-                InsertOpts::default()
-                    .with_metadata(matches.clone())
-                    .with_priority(priority),
-            )
-            .await
-            .unwrap();
-        sqlx::query("UPDATE river_job SET scheduled_at = ? WHERE id = ?")
-            .bind(riverqueue::__private::sqlite_timestamp(scheduled_at))
-            .bind(inserted.job.row.id)
-            .execute(&pool)
-            .await
-            .unwrap();
-        expected.push(inserted);
-    }
-    client
-        .insert(RuntimeArgs { value: 54 })
-        .opts(
-            InsertOpts::default().with_metadata(serde_json::Map::from_iter([
-                ("group".to_owned(), serde_json::json!("shared")),
-                ("mode".to_owned(), serde_json::json!("closed")),
-            ])),
-        )
-        .await
-        .unwrap();
-    let future = client
-        .insert(RuntimeArgs { value: 55 })
-        .opts(InsertOpts::default().with_metadata(matches.clone()))
-        .await
-        .unwrap();
-    sqlx::query("UPDATE river_job SET scheduled_at = ? WHERE id = ?")
-        .bind(riverqueue::__private::sqlite_timestamp(
-            now + chrono::Duration::hours(1),
-        ))
-        .bind(future.job.row.id)
-        .execute(&pool)
-        .await
-        .unwrap();
-
-    let rows = ExtensionClient::new(&client)
-        .claim_jobs(ExtensionClaimParams {
-            excluded_job_id: leader.job.row.id,
-            kind: RuntimeArgs::KIND.to_owned(),
-            maximum: 3,
-            metadata_matches: matches,
-            metadata_updates: serde_json::Map::from_iter([(
-                "claim".to_owned(),
-                serde_json::json!("leader-50"),
-            )]),
-            queue: "default".to_owned(),
-        })
-        .await
-        .unwrap();
-    assert_eq!(
-        rows.iter().map(|row| row.id).collect::<Vec<_>>(),
-        [
-            expected[2].job.row.id,
-            expected[1].job.row.id,
-            expected[0].job.row.id,
-        ]
-    );
-    for row in &rows {
-        assert_eq!(row.state, JobState::Running);
-        assert_eq!(row.attempt, 1);
-        assert_eq!(row.attempted_by, ["sqlite-extension-claimer"]);
-        assert_eq!(
-            row.metadata.get::<String>("claim").unwrap().as_deref(),
-            Some("leader-50")
-        );
-    }
-    assert_eq!(
-        client.jobs().get(leader.job.row.id).await.unwrap().state,
-        JobState::Available
-    );
-
-    let invalid = client.insert(UnknownArgs {}).await.unwrap();
-    sqlx::query("UPDATE river_job SET tags = jsonb('{}') WHERE id = ?")
-        .bind(invalid.job.row.id)
-        .execute(&pool)
-        .await
-        .unwrap();
-    let error = ExtensionClient::new(&client)
-        .claim_jobs(ExtensionClaimParams {
-            excluded_job_id: 0,
-            kind: UnknownArgs::KIND.to_owned(),
-            maximum: 1,
-            metadata_matches: serde_json::Map::new(),
-            metadata_updates: serde_json::Map::new(),
-            queue: "default".to_owned(),
-        })
-        .await
-        .unwrap_err();
-    assert!(
-        error.to_string().contains("error unmarshaling `tags`"),
-        "{error}"
-    );
-    let (state, attempt): (String, i16) =
-        sqlx::query_as("SELECT state, attempt FROM river_job WHERE id = ?")
-            .bind(invalid.job.row.id)
-            .fetch_one(&pool)
-            .await
-            .unwrap();
-    assert_eq!(state, "available");
-    assert_eq!(attempt, 0);
 }
 
 #[tokio::test]

@@ -2,7 +2,7 @@
 
 #[allow(clippy::wildcard_imports)]
 use super::*;
-use crate::__private::{ExtensionClaimParams, ExtensionInsertParams, RawInsertResult};
+use crate::__private::{ExtensionInsertParams, RawInsertResult};
 
 /// Client operations reserved for River's own companion crates.
 ///
@@ -40,33 +40,6 @@ impl<'client> ExtensionClient<'client> {
 }
 
 impl ExtensionClient<'_> {
-    /// Atomically claims complete job rows for an exact-version extension.
-    ///
-    /// Eligible jobs are available, due, and match the supplied kind, queue,
-    /// and top-level metadata values. River records the attempt and client ID,
-    /// applies the metadata updates in the same transaction, and returns rows
-    /// ordered by priority, scheduled time, and ID.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error when the claim query or its transaction fails.
-    pub async fn claim_jobs(&self, params: ExtensionClaimParams) -> Result<Vec<JobRow>, Error> {
-        if params.maximum <= 0 {
-            return Ok(Vec::new());
-        }
-        let inner = &self.client.inner;
-        let mut session =
-            crate::storage::Session::begin(&inner.database, crate::storage::Access::Transaction)
-                .await?;
-        let mut rows = session
-            .storage(inner)
-            .jobs_claim_filtered(ATTEMPTED_BY_MAX, &params)
-            .await?;
-        sort_claimed_jobs(&mut rows);
-        session.commit().await?;
-        Ok(rows)
-    }
-
     /// Computes the configured retry delay for an exact-version extension.
     #[must_use]
     pub fn retry_delay(&self, row: &JobRow, error: &WorkError, now: DateTime<Utc>) -> Duration {
@@ -77,134 +50,6 @@ impl ExtensionClient<'_> {
     #[must_use]
     pub fn scheduler_interval(&self) -> Duration {
         self.client.inner.maintenance.scheduler_interval
-    }
-
-    /// Reports outcomes for jobs claimed and executed by an exact-version
-    /// extension through River's canonical completion pipeline.
-    ///
-    /// The extension's handler context supplies metadata updates shared by the
-    /// execution. Each failed outcome runs the error handler for its own job,
-    /// then every outcome uses ordinary retry selection, persistence batching
-    /// (including the extension's set-state hook and retries), event
-    /// delivery, and statistics.
-    /// Work middleware and work hooks are deliberately not invoked again: they
-    /// surround the extension's handler once, before it reports these results.
-    /// Outcomes racing an external terminal transition preserve the persisted
-    /// state while retaining the submitted event reason.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error when the client runtime is not accepting completions.
-    /// Persistence failures, including errors from the extension's set-state
-    /// hook, are retried and reported by the running completion service,
-    /// matching regular worker behavior.
-    pub async fn persist_claimed_outcomes(
-        &self,
-        execution_context: &WorkContext,
-        outcomes: Vec<(JobRow, Result<WorkOutcome, BoxError>)>,
-    ) -> Result<(), Error> {
-        if outcomes.is_empty() {
-            return Ok(());
-        }
-        let metadata_updates = execution_context.metadata_updates();
-        let completion_sender = self
-            .client
-            .inner
-            .completion_sender
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .as_ref()
-            .and_then(mpsc::WeakSender::upgrade)
-            .ok_or_else(|| {
-                Error::runtime_context(
-                    "completion pipeline",
-                    "client runtime is not accepting job completions".to_owned(),
-                )
-            })?;
-        let mut first_error = None;
-        for (row, result) in outcomes {
-            if let Err(error) = self
-                .persist_claimed_outcome(
-                    row,
-                    result,
-                    execution_context.cancellation_token(),
-                    &metadata_updates,
-                    &completion_sender,
-                )
-                .await
-                && first_error.is_none()
-            {
-                first_error = Some(error);
-            }
-        }
-        if let Some(error) = first_error {
-            return Err(error);
-        }
-        Ok(())
-    }
-
-    async fn persist_claimed_outcome(
-        &self,
-        row: JobRow,
-        result: Result<WorkOutcome, BoxError>,
-        execution_cancellation: &CancellationToken,
-        metadata_updates: &Map<String, Value>,
-        completion_sender: &mpsc::Sender<CompletionUpdate>,
-    ) -> Result<(), Error> {
-        let cancellation = CancellationToken::new();
-        let context = WorkContext::for_job(
-            self.client.clone(),
-            execution_cancellation.clone(),
-            row.id,
-            &row.metadata,
-        );
-        for (key, value) in metadata_updates {
-            context.insert_metadata(key.clone(), value.clone());
-        }
-        let result = result.map_err(worker_failure_from_source);
-        let work_result = public_work_result(&result);
-        let mut error_handler_result = ErrorHandlerDecision::default();
-        if let Some(error_handler) = &self.client.inner.error_handler
-            && matches!(work_result, WorkResult::Failed(_))
-        {
-            match error_handler
-                .handle_error(&context, &row, &work_result)
-                .await
-            {
-                Ok(decision) => error_handler_result = decision,
-                Err(error) => {
-                    error!(error = %crate::error::Chain(&error), "River error handler failed");
-                }
-            }
-        }
-        let queue_wait_duration = row
-            .attempted_at
-            .and_then(|attempted_at| {
-                (attempted_at - row.scheduled_at.max(row.created_at))
-                    .to_std()
-                    .ok()
-            })
-            .unwrap_or_default();
-        let completion = CompletionAttempt {
-            cancellation,
-            timing: CompletionTiming {
-                completion_started: std::time::Instant::now(),
-                queue_wait_duration,
-                run_duration: Duration::ZERO,
-            },
-        };
-        persist_result(
-            &self.client.inner,
-            &row,
-            Utc::now(),
-            &completion,
-            result,
-            context.metadata_updates(),
-            error_handler_result,
-            true,
-            completion_sender,
-        )
-        .await
     }
 
     /// Inserts an encoded job through River's exact-version extension seam.
