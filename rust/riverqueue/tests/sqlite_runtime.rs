@@ -221,6 +221,10 @@ impl Pilot for SqlitePilot {
         connection: DatabaseConnection<'_>,
         params: &RescueParams,
     ) -> Result<Option<Vec<i64>>, PilotError> {
+        // River bounds the selection like its own rescuer reads.
+        if params.timeout != Duration::from_secs(30) {
+            return Err(std::io::Error::other("unexpected rescue timeout").into());
+        }
         self.rescue_calls.fetch_add(1, Ordering::SeqCst);
         let connection = connection
             .into_sqlite()

@@ -674,7 +674,7 @@ impl ClientBuilder {
         let (queue_changes, _) = watch::channel(0_u64);
         let (leadership_wakeups, _) = broadcast::channel(1_024);
         let (queue_notifications, _) = broadcast::channel(1_024);
-        Ok(Client {
+        let client = Client {
             inner: Arc::new(ClientInner {
                 completion_sender: Mutex::new(None),
                 database: self.database,
@@ -714,7 +714,16 @@ impl ClientBuilder {
                 workers: self.workers,
                 work_middleware: self.work_middleware,
             }),
-        })
+        };
+        client
+            .inner
+            .pilot
+            .install(crate::__private::PilotInstallContext {
+                client: client.downgrade(),
+                database: client.inner.pilot_database(),
+                producer_report_interval: client.inner.producer_report_interval,
+            });
+        Ok(client)
     }
 }
 

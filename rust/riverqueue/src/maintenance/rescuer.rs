@@ -92,6 +92,7 @@ fn rescue_params(
         maximum: limit,
         rescue_after: inner.maintenance.effective_rescue_after(),
         stuck_horizon,
+        timeout: TIMEOUT_DEFAULT,
     }
 }
 

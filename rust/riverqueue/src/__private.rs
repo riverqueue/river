@@ -575,6 +575,10 @@ pub struct RescueParams {
     /// Jobs attempted at or after this time are not stuck. Computed once per
     /// rescuer pass.
     pub stuck_horizon: DateTime<Utc>,
+    /// The limit on the rescuer transaction the selection runs in. An
+    /// extension that reads through a connection of its own should bound
+    /// that read the same way.
+    pub timeout: Duration,
 }
 
 /// One stuck job's transition exactly as the OSS rescuer would persist it.
@@ -768,6 +772,20 @@ pub trait RuntimeService: Send + Sync + 'static {
     async fn run(&self, context: RuntimeServiceContext) -> Result<(), PilotError>;
 }
 
+/// What a pilot gets when its client is built, from
+/// [`Pilot::install`].
+#[derive(Debug)]
+#[non_exhaustive]
+pub struct PilotInstallContext {
+    /// The client, without keeping it alive.
+    pub client: WeakClient,
+    /// The client's database, for the pilot's own statements.
+    pub database: PilotDatabase,
+    /// How often producers report to their sessions, which peers use to tell
+    /// when a producer has gone stale.
+    pub producer_report_interval: Duration,
+}
+
 /// Exact-version extension seam for matched companion crates.
 ///
 /// This trait is intentionally not a stable River API. The internal crate is
@@ -775,6 +793,13 @@ pub trait RuntimeService: Send + Sync + 'static {
 /// implementations.
 #[async_trait]
 pub trait Pilot: Send + Sync + 'static {
+    /// Binds the pilot to the client being built, like River Go's
+    /// `PilotInit`. River calls it once per client, before the builder
+    /// returns the client; a pilot installed on several clients is called
+    /// once for each. The pilot keeps what it needs from `context` rather
+    /// than reading the client's public database accessors.
+    fn install(&self, _context: PilotInstallContext) {}
+
     /// Queues whose finalized jobs are owned by an extension-specific cleaner
     /// and skipped by River's job cleaner, like Go's
     /// `Pilot.JobCleanerQueuesExcluded`. Read on every cleaner pass.

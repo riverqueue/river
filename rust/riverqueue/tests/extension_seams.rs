@@ -67,6 +67,49 @@ fn finalized_deletions() -> Vec<(riverqueue::__private::FinalizedJobDeleteParams
     ]
 }
 
+/// Records what River binds the pilot to when its client is built.
+#[derive(Clone, Default)]
+struct InstallPilot {
+    installs: Arc<Mutex<Vec<riverqueue::__private::PilotInstallContext>>>,
+}
+
+impl Pilot for InstallPilot {
+    fn install(&self, context: riverqueue::__private::PilotInstallContext) {
+        self.installs.lock().unwrap().push(context);
+    }
+}
+
+/// River binds its pilot to the client once, as it's built: to the client
+/// itself without keeping it alive, its database, and the report interval.
+async fn assert_pilot_is_installed_once(builder: impl Fn() -> riverqueue::ClientBuilder) {
+    let pilot = InstallPilot::default();
+    let client = builder()
+        .pilot(pilot.clone())
+        .producer_report_interval(std::time::Duration::from_secs(7))
+        .build()
+        .unwrap();
+    let installs = std::mem::take(&mut *pilot.installs.lock().unwrap());
+    assert_eq!(installs.len(), 1);
+    let install = &installs[0];
+    assert_eq!(install.database.kind(), client.database_kind());
+    assert_eq!(
+        install.producer_report_interval,
+        std::time::Duration::from_secs(7)
+    );
+    assert_eq!(install.client.upgrade().unwrap().id(), client.id());
+    drop(client);
+    assert!(install.client.upgrade().is_none());
+    // The database works on its own.
+    install
+        .database
+        .begin()
+        .await
+        .unwrap()
+        .commit()
+        .await
+        .unwrap();
+}
+
 /// Records each batch [`Pilot::before_jobs_insert`] receives and tags its
 /// jobs.
 struct BatchInsertPilot {
@@ -274,6 +317,13 @@ mod postgres {
     }
 
     #[tokio::test(flavor = "multi_thread")]
+    async fn pilot_is_installed_once() {
+        let schema = PostgresSchema::new("seam_install").await;
+        assert_pilot_is_installed_once(|| builder(&schema)).await;
+        schema.cleanup().await;
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
     async fn extension_options_reach_the_insert_hook() {
         let schema = PostgresSchema::new("seam_extension_options").await;
         assert_extension_options_reach_the_insert_hook(|| builder(&schema)).await;
@@ -329,6 +379,13 @@ mod sqlite {
             let expected: Vec<i64> = kept.iter().map(|&index| ids[index]).collect();
             assert_eq!(remaining, expected, "{params:?}");
         }
+        sqlite_cleanup(pool, path).await;
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn pilot_is_installed_once() {
+        let (pool, path) = sqlite_file_pool(4).await;
+        assert_pilot_is_installed_once(|| Client::builder(pool.clone())).await;
         sqlite_cleanup(pool, path).await;
     }
 
