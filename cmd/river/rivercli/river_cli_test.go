@@ -9,6 +9,7 @@ import (
 	"maps"
 	"net/url"
 	"runtime/debug"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -23,6 +24,7 @@ import (
 	"github.com/riverqueue/river/riverdriver/riverpgxv5"
 	"github.com/riverqueue/river/rivermigrate"
 	"github.com/riverqueue/river/rivershared/riversharedtest"
+	"github.com/riverqueue/river/rivershared/util/randutil"
 )
 
 type DriverProcurerStub struct {
@@ -169,6 +171,45 @@ func TestBaseCommandSetIntegration(t *testing.T) {
 
 		cmd.SetArgs([]string{"migrate-down", "--database-url", "post://"})
 		require.EqualError(t, cmd.Execute(), "unsupported database URL (`post://`); try one with a `postgres://`, `postgresql://`, or `sqlite://` scheme/prefix")
+	})
+
+	t.Run("MigrateUpWithAppliedTargetVersion", func(t *testing.T) {
+		t.Parallel()
+
+		ctx := context.Background()
+		cmd, bundle := setup(t)
+		dbPool := riversharedtest.DBPool(ctx, t)
+		schema := "river_cli_target_test_" + randutil.Hex(8)
+		_, err := dbPool.Exec(ctx, "CREATE SCHEMA "+schema)
+		require.NoError(t, err)
+		t.Cleanup(func() {
+			_, err := dbPool.Exec(ctx, "DROP SCHEMA "+schema+" CASCADE")
+			require.NoError(t, err)
+		})
+
+		migrator, err := rivermigrate.New(riverpgxv5.New(dbPool), &rivermigrate.Config{Schema: schema})
+		require.NoError(t, err)
+
+		// Leave the latest migration pending, then ask the CLI to migrate up
+		// to an older version that is already applied.
+		versions := migrator.AllVersions()
+		currentVersion := versions[len(versions)-2].Version
+		targetVersion := versions[len(versions)-3].Version
+
+		_, err = migrator.Migrate(ctx, rivermigrate.DirectionUp, &rivermigrate.MigrateOpts{TargetVersion: currentVersion})
+		require.NoError(t, err)
+
+		cmd.SetArgs([]string{
+			"migrate-up", "--database-url", riversharedtest.TestDatabaseURL(),
+			"--schema", schema, "--target-version", strconv.Itoa(targetVersion),
+		})
+		require.NoError(t, cmd.Execute())
+		require.Equal(t, "no migrations to apply\n", bundle.out.String())
+
+		existingVersions, err := migrator.ExistingVersions(ctx)
+		require.NoError(t, err)
+		require.Len(t, existingVersions, len(versions)-1)
+		require.Equal(t, currentVersion, existingVersions[len(existingVersions)-1].Version)
 	})
 
 	t.Run("MissingDatabaseURLAndPGEnv", func(t *testing.T) {

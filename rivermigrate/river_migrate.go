@@ -226,9 +226,8 @@ type MigrateOpts struct {
 	MaxSteps int
 
 	// TargetVersion is a specific migration version to apply migrations to. The
-	// version must exist and it must be in the possible list of migrations to
-	// apply. e.g. If requesting an up migration with version 3, version 3 must
-	// not already be applied.
+	// version must exist. An up migration whose target is already applied does
+	// nothing, even if later migrations are pending.
 	//
 	// When applying migrations up, migrations are applied including the target
 	// version, so when starting at version 0 and requesting version 3, versions
@@ -525,6 +524,10 @@ func (m *Migrator[TTx]) validate(ctx context.Context, exec riverdriver.Executor,
 // Common code shared between the up and down migration directions that walks
 // through each target migration and applies it, logging appropriately.
 func (m *Migrator[TTx]) applyMigrations(ctx context.Context, exec riverdriver.Executor, direction Direction, opts *MigrateOpts, inOuterTx bool, sortedTargetMigrations []Migration) (*MigrateResult, error) {
+	targetWasPending := slices.ContainsFunc(sortedTargetMigrations, func(migration Migration) bool {
+		return migration.Version == opts.TargetVersion
+	})
+
 	var maxSteps int
 	switch {
 	case opts.MaxSteps != 0:
@@ -547,11 +550,13 @@ func (m *Migrator[TTx]) applyMigrations(ctx context.Context, exec riverdriver.Ex
 
 		targetIndex := slices.IndexFunc(sortedTargetMigrations, func(b Migration) bool { return b.Version == opts.TargetVersion })
 		if targetIndex == -1 {
-			// Error, but only if the migration doesn't exist or was never
-			// applied on a down migration. Up migrations with TargetVersion
-			// that's already applied should fall through with a no-op.
-			if _, ok := m.migrations[opts.TargetVersion]; !ok || direction == DirectionDown {
+			if direction == DirectionDown {
 				return nil, fmt.Errorf("version %d is not in target list of valid migrations to apply", opts.TargetVersion)
+			}
+			// The target was already applied if it was absent before MaxSteps
+			// trimmed the list. Keep the trimmed list when the target is pending.
+			if !targetWasPending {
+				sortedTargetMigrations = []Migration{}
 			}
 		} else {
 			// Replace target list with list up to target index. Migrations are

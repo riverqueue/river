@@ -540,6 +540,31 @@ func TestMigrator(t *testing.T) {
 		require.Equal(t, pgerrcode.UndefinedColumn, pgErr.Code)
 	})
 
+	t.Run("MigrateUpWithMaxStepsAndTargetVersion", func(t *testing.T) {
+		t.Parallel()
+
+		migrator, bundle := setup(t)
+
+		_, err := migrator.Migrate(ctx, DirectionUp, &MigrateOpts{TargetVersion: migrationsBundle.MaxVersion})
+		require.NoError(t, err)
+
+		// The target is pending but beyond the one-step limit, so only the
+		// first pending migration should be applied.
+		res, err := migrator.Migrate(ctx, DirectionUp, &MigrateOpts{
+			MaxSteps:      1,
+			TargetVersion: migrationsBundle.WithTestVersionsMaxVersion,
+		})
+		require.NoError(t, err)
+		require.Equal(t, []int{migrationsBundle.MaxVersion + 1}, sliceutil.Map(res.Versions, migrateVersionToInt))
+
+		migrations, err := bundle.driver.GetExecutor().MigrationGetByLine(ctx, &riverdriver.MigrationGetByLineParams{
+			Line:   riverdriver.MigrationLineMain,
+			Schema: bundle.schema,
+		})
+		require.NoError(t, err)
+		require.Equal(t, seqOneTo(migrationsBundle.MaxVersion+1), sliceutil.Map(migrations, driverMigrationToInt))
+	})
+
 	t.Run("MigrateUpWithPool", func(t *testing.T) {
 		t.Parallel()
 
@@ -579,6 +604,41 @@ func TestMigrator(t *testing.T) {
 		res, err = migrator.Migrate(ctx, DirectionUp, &MigrateOpts{TargetVersion: migrationsBundle.MaxVersion + 2})
 		require.NoError(t, err)
 		require.Empty(t, res.Versions)
+	})
+
+	t.Run("MigrateUpWithTargetVersionAlreadyApplied", func(t *testing.T) {
+		t.Parallel()
+
+		for _, testCase := range []struct {
+			name          string
+			targetVersion int
+		}{
+			{name: "TargetBelowCurrentVersion", targetVersion: migrationsBundle.MaxVersion - 1},
+			{name: "TargetEqualsCurrentVersion", targetVersion: migrationsBundle.MaxVersion},
+		} {
+			t.Run(testCase.name, func(t *testing.T) {
+				t.Parallel()
+
+				migrator, bundle := setup(t)
+
+				// Stop before the two test migrations, leaving newer versions
+				// pending for both already-applied target cases.
+				_, err := migrator.Migrate(ctx, DirectionUp, &MigrateOpts{TargetVersion: migrationsBundle.MaxVersion})
+				require.NoError(t, err)
+
+				res, err := migrator.Migrate(ctx, DirectionUp, &MigrateOpts{TargetVersion: testCase.targetVersion})
+				require.NoError(t, err)
+				require.Equal(t, DirectionUp, res.Direction)
+				require.Empty(t, res.Versions)
+
+				migrations, err := bundle.driver.GetExecutor().MigrationGetByLine(ctx, &riverdriver.MigrationGetByLineParams{
+					Line:   riverdriver.MigrationLineMain,
+					Schema: bundle.schema,
+				})
+				require.NoError(t, err)
+				require.Equal(t, seqOneTo(migrationsBundle.MaxVersion), sliceutil.Map(migrations, driverMigrationToInt))
+			})
+		}
 	})
 
 	t.Run("MigrateUpWithTargetVersionInvalid", func(t *testing.T) {
