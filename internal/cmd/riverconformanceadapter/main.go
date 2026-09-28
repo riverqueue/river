@@ -236,7 +236,7 @@ func checkRequest(req *request, methods []string) error {
 }
 
 // rawJobRow is a job's JSON and timestamp columns as the database renders
-// them, for byte-level comparison across implementations.
+// them, for comparison across implementations.
 type rawJobRow struct {
 	Args        string  `json:"args"`
 	AttemptedAt *string `json:"attempted_at"`
@@ -261,9 +261,9 @@ type rawJobRow struct {
 	UniqueStatesType *string `json:"unique_states_type"`
 }
 
-// rawJSONBColumns is a SQLite job's JSONB columns as uppercase hex, so
-// implementations can compare the element types SQLite stored as well as the
-// JSON text.
+// rawJSONBColumns is a SQLite job's JSONB columns as uppercase hex, so the
+// harness can check that each column is stored as JSONB and decodes to the
+// JSON text's value.
 type rawJSONBColumns struct {
 	Args        string  `json:"args"`
 	AttemptedBy *string `json:"attempted_by"`

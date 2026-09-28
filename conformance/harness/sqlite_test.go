@@ -60,10 +60,10 @@ func TestMixedSQLiteConformance(t *testing.T) {
 			verifyTransactionalBatchInsertion(t, actor, observer)
 		})
 	})
-	t.Run("sqlite_job_row_bytes", func(t *testing.T) {
+	t.Run("sqlite_job_rows", func(t *testing.T) {
 		defer scenarios.record(t)
 
-		verifySQLiteJobRowBytes(t, goAdapter, candidateAdapter)
+		verifySQLiteJobRows(t, goAdapter, candidateAdapter)
 	})
 	t.Run("sqlite_unique_column_bytes", func(t *testing.T) {
 		defer scenarios.record(t)
@@ -193,11 +193,11 @@ func TestMixedSQLiteRuntimeConformance(t *testing.T) {
 
 		verifySQLiteTransactionalNotification(t, goAdapter, candidateAdapter)
 	})
-	t.Run("sqlite_runtime_job_row_bytes", func(t *testing.T) {
+	t.Run("sqlite_runtime_job_rows", func(t *testing.T) {
 		defer scenarios.record(t)
 
-		verifySQLiteWorkedJobRowBytes(t, goAdapter, candidateAdapter)
-		verifySQLiteRuntimeJobRowBytes(t, repositoryRoot, databaseURL, profileName, goAdapter, candidateAdapter)
+		verifySQLiteWorkedJobRows(t, goAdapter, candidateAdapter)
+		verifySQLiteRuntimeJobRows(t, repositoryRoot, databaseURL, profileName, goAdapter, candidateAdapter)
 	})
 	t.Run("sqlite_runtime_job_list_cursor_interchange", func(t *testing.T) {
 		defer scenarios.record(t)

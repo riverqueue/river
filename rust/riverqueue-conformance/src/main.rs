@@ -468,7 +468,7 @@ impl ContractParams {
 }
 
 /// A job's JSON and timestamp columns as the database renders them, for
-/// byte-level comparison across implementations.
+/// comparison across implementations.
 #[derive(sqlx::FromRow, Serialize)]
 struct RawJobRow {
     args: String,
@@ -495,8 +495,8 @@ struct RawJobRow {
     unique_states_type: Option<String>,
 }
 
-/// A SQLite job's JSONB columns as uppercase hex, so implementations can
-/// compare the element types SQLite stored as well as the JSON text.
+/// A SQLite job's JSONB columns as uppercase hex, so the harness can check
+/// that each column is stored as JSONB and decodes to the JSON text's value.
 #[derive(sqlx::FromRow, Serialize)]
 struct RawJsonbColumns {
     args: String,
