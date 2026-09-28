@@ -312,6 +312,7 @@ impl SubscribeConfig {
 
 /// Error returned while receiving client events.
 #[derive(Debug, Error)]
+#[non_exhaustive]
 pub enum EventRecvError {
     /// The client dropped the contained number of events because the receiver
     /// lagged its bounded buffer. The next call resumes at the oldest retained

@@ -114,6 +114,7 @@ impl fmt::Display for SchemaName {
 
 /// Invalid River schema name.
 #[derive(Debug, Error)]
+#[non_exhaustive]
 pub enum SchemaNameError {
     /// Schema contains a NUL character, which PostgreSQL identifiers cannot.
     #[error("schema name cannot contain NUL: {0:?}")]

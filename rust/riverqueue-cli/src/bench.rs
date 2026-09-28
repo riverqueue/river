@@ -159,9 +159,9 @@ impl BenchmarkProgress {
                         self.failed.store(u64::MAX, Ordering::Relaxed);
                         return Err(format!("benchmark event receiver lagged by {count} events"));
                     }
-                    Err(EventRecvError::Closed) => {
+                    Err(error) => {
                         self.failed.store(u64::MAX, Ordering::Relaxed);
-                        return Err("benchmark event receiver closed".to_owned());
+                        return Err(format!("benchmark event receiver failed: {error}"));
                     }
                 },
             }
