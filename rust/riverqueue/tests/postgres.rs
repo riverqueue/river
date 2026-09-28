@@ -1456,9 +1456,9 @@ async fn migrator_steps_a_custom_schema_up_and_down() {
             .collect::<Vec<_>>(),
         vec![1, 2, 3, 4]
     );
-    assert!(!custom_migrator.validate(None).await.unwrap().ok);
+    assert!(!custom_migrator.validate(None).await.unwrap().is_valid());
     custom_migrator.migrate_up().await.unwrap();
-    assert!(custom_migrator.validate(None).await.unwrap().ok);
+    assert!(custom_migrator.validate(None).await.unwrap().is_valid());
     custom_migrator
         .migrate(Direction::Down, MigrateOpts::new().with_target_version(3))
         .await

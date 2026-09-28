@@ -1672,7 +1672,7 @@ impl Adapter {
                     .map(|version| version.version)
                     .collect::<Vec<_>>();
                 let existing = migrator.existing_versions().await?;
-                let valid = migrator.validate(None).await?.ok;
+                let valid = migrator.validate(None).await?.is_valid();
                 Ok(json!({"applied": applied, "existing": existing, "valid": valid}))
             }
             "reset" => {
@@ -2625,7 +2625,7 @@ impl SqliteAdapter {
                     .map(|version| version.version)
                     .collect::<Vec<_>>();
                 let existing = migrator.existing_versions().await?;
-                let valid = migrator.validate(None).await?.ok;
+                let valid = migrator.validate(None).await?.is_valid();
                 Ok(json!({"applied": applied, "existing": existing, "valid": valid}))
             }
             "reset" => {

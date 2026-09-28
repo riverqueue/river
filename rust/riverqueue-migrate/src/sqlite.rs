@@ -48,7 +48,7 @@ impl SqliteMigrator {
 
     /// Returns every SQLite migration bundled with this crate.
     #[must_use]
-    pub fn all_versions(&self) -> &'static [Migration] {
+    pub fn all_versions() -> &'static [Migration] {
         &SQLITE_MIGRATIONS
     }
 
@@ -96,9 +96,10 @@ impl SqliteMigrator {
     ///
     /// # Errors
     ///
-    /// Returns [`Error::Invalid`] when the options are inconsistent, for
-    /// example a target version that doesn't exist or, when migrating down,
-    /// isn't applied, and [`Error::Database`] when a migration fails.
+    /// Returns [`Error::UnknownVersion`] when the target version doesn't exist,
+    /// [`Error::TargetNotSelected`] when a down target isn't applied or is
+    /// beyond the step limit, [`Error::OtherMigrationLines`] when reverting
+    /// version 5 would lose other migration lines' records, and [`Error::Database`] when a migration fails.
     pub async fn migrate(
         &self,
         direction: Direction,
@@ -149,7 +150,7 @@ impl SqliteMigrator {
     ///
     /// # Errors
     ///
-    /// Returns [`Error::Invalid`] when the target version doesn't exist and
+    /// Returns [`Error::UnknownVersion`] when the target version doesn't exist and
     /// [`Error::Database`] when reading the applied versions fails.
     pub async fn validate(&self, target_version: Option<i64>) -> Result<ValidateResult, Error> {
         validate_target(&SQLITE_MIGRATIONS, target_version, false)?;
@@ -181,10 +182,9 @@ impl SqliteMigrator {
             .await
             .map_err(Error::Database)?;
             if has_other_lines {
-                return Err(Error::Invalid(
-                    "found non-main migration lines; version 005 is irreversible without losing migration information"
-                        .to_owned(),
-                ));
+                return Err(Error::OtherMigrationLines {
+                    version: migration.version,
+                });
             }
         }
 

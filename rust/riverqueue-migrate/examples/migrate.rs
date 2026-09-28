@@ -17,8 +17,8 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
     migrator.migrate_up().await?;
     let validation = migrator.validate(None).await?;
-    if !validation.ok {
-        return Err(validation.messages.join("; ").into());
+    if !validation.is_valid() {
+        return Err(validation.to_string().into());
     }
     Ok(())
 }

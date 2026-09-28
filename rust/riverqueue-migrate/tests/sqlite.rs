@@ -12,14 +12,16 @@ async fn all_versions_options_and_validation() {
     let migrator = SqliteMigrator::new(pool.clone());
 
     assert_eq!(
-        migrator
-            .all_versions()
+        SqliteMigrator::all_versions()
             .iter()
             .map(|migration| migration.version)
             .collect::<Vec<_>>(),
         (1..=MIGRATION_VERSION_LATEST).collect::<Vec<_>>()
     );
-    assert_eq!(migrator.all_versions().len(), SQLITE_MIGRATIONS.len());
+    assert_eq!(
+        SqliteMigrator::all_versions().len(),
+        SQLITE_MIGRATIONS.len()
+    );
     assert_eq!(
         migrator.existing_versions().await.unwrap(),
         Vec::<i64>::new()
@@ -52,15 +54,16 @@ async fn all_versions_options_and_validation() {
     );
 
     let validation = migrator.validate(Some(3)).await.unwrap();
-    assert!(!validation.ok);
-    assert_eq!(validation.messages, vec!["unapplied migrations: [1, 2, 3]"]);
+    assert!(!validation.is_valid());
+    assert_eq!(validation.unapplied, [1, 2, 3]);
+    assert_eq!(validation.to_string(), "unapplied migrations: [1, 2, 3]");
 
     migrator
         .migrate(Direction::Up, MigrateOpts::new().with_max_steps(2))
         .await
         .unwrap();
     assert_eq!(migrator.existing_versions().await.unwrap(), vec![1, 2]);
-    assert!(migrator.validate(Some(2)).await.unwrap().ok);
+    assert!(migrator.validate(Some(2)).await.unwrap().is_valid());
 
     let error = migrator
         .migrate(
@@ -69,7 +72,10 @@ async fn all_versions_options_and_validation() {
         )
         .await
         .unwrap_err();
-    assert!(matches!(error, Error::Invalid(_)));
+    assert!(matches!(
+        error,
+        Error::UnknownVersion { version } if version == MIGRATION_VERSION_LATEST + 1
+    ));
 
     pool.close().await;
 }
@@ -92,7 +98,11 @@ async fn downgrade_preserves_non_main_migration_lines() {
         .migrate(Direction::Down, MigrateOpts::new().with_target_version(4))
         .await
         .unwrap_err();
-    assert!(matches!(error, Error::Invalid(_)));
+    assert!(matches!(error, Error::OtherMigrationLines { version: 5 }));
+    assert_eq!(
+        error.to_string(),
+        "found non-main migration lines; version 005 is irreversible without losing migration information"
+    );
     assert_eq!(
         migrator.existing_versions().await.unwrap(),
         (1..=5).collect::<Vec<_>>()
@@ -214,7 +224,7 @@ async fn migrates_up_from_every_historical_version() {
 
         migrator.migrate_up().await.unwrap();
         assert_eq!(schema_snapshot(&pool).await, expected, "version {version}");
-        assert!(migrator.validate(None).await.unwrap().ok);
+        assert!(migrator.validate(None).await.unwrap().is_valid());
         pool.close().await;
     }
 }

@@ -154,13 +154,32 @@ pub struct MigrateResult {
 }
 
 /// Result of checking whether required migrations are applied.
-#[derive(Clone, Debug, Eq, PartialEq)]
+///
+/// Its `Display` output describes the unapplied versions, for reporting a
+/// failed validation.
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
 #[non_exhaustive]
 pub struct ValidateResult {
-    /// Human-readable validation failures.
-    pub messages: Vec<String>,
-    /// Whether all required migrations are applied.
-    pub ok: bool,
+    /// Required versions that aren't applied, in ascending order.
+    pub unapplied: Vec<i64>,
+}
+
+impl ValidateResult {
+    /// Returns whether every required migration is applied.
+    #[must_use]
+    pub fn is_valid(&self) -> bool {
+        self.unapplied.is_empty()
+    }
+}
+
+impl std::fmt::Display for ValidateResult {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        if self.is_valid() {
+            formatter.write_str("all required migrations are applied")
+        } else {
+            write!(formatter, "unapplied migrations: {:?}", self.unapplied)
+        }
+    }
 }
 
 /// Canonical PostgreSQL migration bundle.
@@ -183,13 +202,34 @@ pub const POSTGRES_MIGRATIONS: [Migration; 7] = [
 #[derive(Debug, Error)]
 #[non_exhaustive]
 pub enum Error {
-    /// Migration options are inconsistent or refer to an unknown version.
-    #[error("invalid migration request: {0}")]
-    Invalid(String),
-
     /// A database operation failed.
     #[error(transparent)]
     Database(#[from] sqlx::Error),
+
+    /// Migrating down past `version` would delete the migration records of
+    /// other migration lines, which the down migration can't restore.
+    #[error(
+        "found non-main migration lines; version {version:03} is irreversible without losing migration information"
+    )]
+    OtherMigrationLines {
+        /// The migration that would be reverted.
+        version: i64,
+    },
+
+    /// A down migration's target isn't among the applied versions it can
+    /// revert to within its step limit.
+    #[error("version {version} is not in target list of valid migrations to apply")]
+    TargetNotSelected {
+        /// The requested target version.
+        version: i64,
+    },
+
+    /// A target version isn't one of River's migrations.
+    #[error("version {version} is not a River migration")]
+    UnknownVersion {
+        /// The requested target version.
+        version: i64,
+    },
 }
 
 /// Applies and validates River's PostgreSQL migration history.
@@ -204,7 +244,7 @@ pub struct PostgresMigrator {
 impl PostgresMigrator {
     /// Returns every migration bundled with this crate.
     #[must_use]
-    pub fn all_versions(&self) -> &'static [Migration] {
+    pub fn all_versions() -> &'static [Migration] {
         &POSTGRES_MIGRATIONS
     }
 
@@ -294,9 +334,9 @@ impl PostgresMigrator {
     ///
     /// # Errors
     ///
-    /// Returns [`Error::Invalid`] when the options are inconsistent, for
-    /// example a target version that doesn't exist or, when migrating down,
-    /// isn't applied, and [`Error::Database`] when a migration fails.
+    /// Returns [`Error::UnknownVersion`] when the target version doesn't exist,
+    /// [`Error::TargetNotSelected`] when a down target isn't applied or is
+    /// beyond the step limit, and [`Error::Database`] when a migration fails.
     pub async fn migrate(
         &self,
         direction: Direction,
@@ -335,7 +375,7 @@ impl PostgresMigrator {
     ///
     /// # Errors
     ///
-    /// Returns [`Error::Invalid`] when the target version doesn't exist and
+    /// Returns [`Error::UnknownVersion`] when the target version doesn't exist and
     /// [`Error::Database`] when reading the applied versions fails.
     pub async fn validate(&self, target_version: Option<i64>) -> Result<ValidateResult, Error> {
         validate_target(&POSTGRES_MIGRATIONS, target_version, false)?;
@@ -450,9 +490,7 @@ fn select_migrations(
                 }
             }
             None if direction == Direction::Down => {
-                return Err(Error::Invalid(format!(
-                    "version {target} is not in target list of valid migrations to apply"
-                )));
+                return Err(Error::TargetNotSelected { version: target });
             }
             // An up target that is already applied is a no-op. Unlike Go,
             // which then applies every remaining migration despite
@@ -474,17 +512,7 @@ fn validate_migrations(
         .filter(|migration| !applied.contains(&migration.version))
         .map(|migration| migration.version)
         .collect::<Vec<_>>();
-    if missing.is_empty() {
-        ValidateResult {
-            messages: Vec::new(),
-            ok: true,
-        }
-    } else {
-        ValidateResult {
-            messages: vec![format!("unapplied migrations: {missing:?}")],
-            ok: false,
-        }
-    }
+    ValidateResult { unapplied: missing }
 }
 
 fn validate_target(
@@ -498,9 +526,7 @@ fn validate_target(
             .iter()
             .any(|migration| migration.version == target)
     {
-        return Err(Error::Invalid(format!(
-            "version {target} is not a River migration"
-        )));
+        return Err(Error::UnknownVersion { version: target });
     }
     Ok(())
 }
@@ -595,7 +621,7 @@ mod tests {
                 MigrateOpts::new().with_target_version(5).with_max_steps(2),
                 &all
             ),
-            Err(Error::Invalid(message)) if message.contains("not in target list")
+            Err(Error::TargetNotSelected { version: 5 })
         ));
 
         // A down target that is not applied is an error rather than a no-op.
@@ -605,7 +631,7 @@ mod tests {
                 MigrateOpts::new().with_target_version(5),
                 &[1, 2, 3]
             ),
-            Err(Error::Invalid(message)) if message.contains("not in target list")
+            Err(Error::TargetNotSelected { version: 5 })
         ));
 
         // Up targets stop at the target and are no-ops once applied.

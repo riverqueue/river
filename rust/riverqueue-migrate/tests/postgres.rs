@@ -95,7 +95,7 @@ async fn main_line_migrations_preserve_other_lines() {
 
     let all_main = (1..=MIGRATION_VERSION_LATEST).collect::<Vec<_>>();
     assert_eq!(migrator.existing_versions().await.unwrap(), all_main);
-    assert!(migrator.validate(None).await.unwrap().ok);
+    assert!(migrator.validate(None).await.unwrap().is_valid());
     assert!(migrator.migrate_up().await.unwrap().is_empty());
 
     // Down to 005 and back up only touches the main line.
@@ -166,7 +166,7 @@ async fn mixed_case_schema_is_detected_as_migrated() {
     );
     // A second run must see the applied versions instead of re-running 001.
     assert!(migrator.migrate_up().await.unwrap().is_empty());
-    assert!(migrator.validate(None).await.unwrap().ok);
+    assert!(migrator.validate(None).await.unwrap().is_valid());
 
     drop_schema(&pool, &schema).await;
 }
@@ -190,7 +190,7 @@ async fn unknown_versions_are_ignored_and_unapplied_down_targets_fail() {
     .await
     .unwrap();
     assert!(migrator.migrate_up().await.unwrap().is_empty());
-    assert!(migrator.validate(None).await.unwrap().ok);
+    assert!(migrator.validate(None).await.unwrap().is_valid());
     let reverted = migrator
         .migrate(Direction::Down, MigrateOpts::new())
         .await

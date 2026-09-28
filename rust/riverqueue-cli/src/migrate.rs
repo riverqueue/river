@@ -121,10 +121,8 @@ pub(crate) async fn run(
         }
         "validate" => {
             let result = migrator.validate(args.target_version).await?;
-            if !result.ok {
-                for message in result.messages {
-                    eprintln!("{message}");
-                }
+            if !result.is_valid() {
+                eprintln!("{result}");
                 std::process::exit(2);
             }
             println!("River migrations valid");
