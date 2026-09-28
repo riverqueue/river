@@ -36,7 +36,12 @@ impl Client {
 request_type! {
     /// A leadership resignation request, returned by
     /// [`Client::request_resign`]. Await it to send the request.
-    ResignRequest {} -> ()
+    ///
+    /// A poll-only client doesn't read notifications, so it hears its own
+    /// request directly once the request commits. If the request is dropped
+    /// while that commit is in flight, the request may commit without being
+    /// heard, and a poll-only leader then keeps its term.
+    write ResignRequest {} -> ()
 }
 
 impl ResignRequest<'_> {

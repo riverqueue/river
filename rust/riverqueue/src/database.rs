@@ -412,11 +412,11 @@ impl IntoDatabase for &SqliteDatabase {}
 /// implemented for pools or bare connections so a request's `tx` method
 /// cannot accidentally run in autocommit mode.
 ///
-/// For SQLite transactions that may write, use
-/// `pool.begin_with("BEGIN IMMEDIATE")`. A deferred transaction that reads
-/// before writing can fail with `SQLITE_BUSY_SNAPSHOT` when another pool
-/// connection commits between those operations; a busy timeout cannot make a
-/// stale snapshot writable.
+/// Begin transactions with [`begin_postgres`], or on SQLite with
+/// [`begin_sqlite_write`] for transactions that may write. Both are safe to
+/// abandon partway, and `begin_sqlite_write` takes SQLite's write lock up
+/// front, so a transaction that reads before it writes can't fail with
+/// `SQLITE_BUSY_SNAPSHOT` when another connection commits in between.
 ///
 /// A transaction borrowed mutably is accepted:
 ///
@@ -426,7 +426,7 @@ impl IntoDatabase for &SqliteDatabase {}
 /// #     client: &riverqueue::Client,
 /// #     pool: &sqlx::PgPool,
 /// # ) -> Result<(), riverqueue::Error> {
-/// let mut tx = pool.begin().await?;
+/// let mut tx = riverqueue::database::begin_postgres(pool).await?;
 /// client.jobs().get(1).tx(&mut tx).await?;
 /// tx.commit().await?;
 /// # Ok(())

@@ -465,7 +465,9 @@ impl Client {
             && !self.inner.workers.kinds().is_empty()
             && !self.inner.workers.contains_kind(kind)
         {
-            return Err(Error::UnknownJobKind(kind.to_owned()));
+            return Err(Error::UnknownJobKind {
+                kind: kind.to_owned(),
+            });
         }
         Ok(())
     }

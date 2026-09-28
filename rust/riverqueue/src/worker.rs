@@ -77,6 +77,12 @@ impl WorkContext {
     /// running, [`Error::DatabaseMismatch`] for a transaction from another
     /// backend, [`Error::Extension`] when an extension's completion hook
     /// fails, and [`Error::Database`] when the database operation fails.
+    ///
+    /// # Cancel safety
+    ///
+    /// Dropping the future before it finishes leaves what it already ran in
+    /// the caller's transaction; roll that transaction back rather than
+    /// committing it. The job stays running until a committed completion.
     pub async fn job_complete_tx<'executor, E>(&self, connection: E) -> Result<JobRow, Error>
     where
         E: DatabaseTransactionExecutor<'executor>,
@@ -154,20 +160,25 @@ impl WorkContext {
     ///
     /// Returns [`Error::ResumableStep`] with the step's error, and a runtime
     /// error when the context doesn't belong to a job being worked.
+    ///
+    /// # Cancel safety
+    ///
+    /// Dropping the future drops the step's future with it. The step isn't
+    /// recorded as completed or as started, so it can run again, in this
+    /// attempt or a later one.
     pub async fn resumable_step<F, Fut, E>(&self, name: &str, step: F) -> Result<(), Error>
     where
         E: Into<BoxError>,
         F: FnOnce() -> Fut,
         Fut: Future<Output = Result<(), E>>,
     {
-        let previous_step_name = match self.begin_resumable_step(name, false)? {
-            StepAction::Run(previous) => previous,
+        let guard = match self.begin_resumable_step(name, false)? {
+            StepAction::Run(previous) => RunningStep::new(self, name, previous),
             StepAction::Skip => return Ok(()),
         };
 
         let result = step().await;
-        let mut state = self.lock_resumable();
-        state.step_name = previous_step_name;
+        let mut state = guard.finish();
         match result {
             Ok(()) => {
                 state.completed_step = Some(name.to_owned());
@@ -185,6 +196,12 @@ impl WorkContext {
     ///
     /// Returns the errors of [`WorkContext::resumable_step`], and a runtime
     /// error when the recorded cursor can't be decoded as `T`.
+    ///
+    /// # Cancel safety
+    ///
+    /// As with [`WorkContext::resumable_step`], a dropped step isn't recorded
+    /// as completed. A cursor it set is kept, so a later attempt resumes the
+    /// step from that cursor.
     pub async fn resumable_step_with_cursor<T, F, Fut, E>(
         &self,
         name: &str,
@@ -196,8 +213,8 @@ impl WorkContext {
         Fut: Future<Output = Result<(), E>>,
         T: Default + DeserializeOwned,
     {
-        let previous_step_name = match self.begin_resumable_step(name, true)? {
-            StepAction::Run(previous) => previous,
+        let guard = match self.begin_resumable_step(name, true)? {
+            StepAction::Run(previous) => RunningStep::new(self, name, previous),
             StepAction::Skip => return Ok(()),
         };
 
@@ -213,14 +230,12 @@ impl WorkContext {
         let cursor = match cursor {
             Ok(cursor) => cursor.unwrap_or_default(),
             Err(error) => {
-                let mut state = self.lock_resumable();
-                state.step_name = previous_step_name;
+                let mut state = guard.finish();
                 return Err(state.fail_step(name, Box::new(error)));
             }
         };
         let result = step(cursor).await;
-        let mut state = self.lock_resumable();
-        state.step_name = previous_step_name;
+        let mut state = guard.finish();
         match result {
             Ok(()) => {
                 state.completed_step = Some(name.to_owned());
@@ -256,6 +271,12 @@ impl WorkContext {
     ///
     /// Returns a runtime error outside a resumable step, and the database
     /// error when the update fails.
+    ///
+    /// # Cancel safety
+    ///
+    /// Dropping the future before it finishes leaves what it already ran in
+    /// the caller's transaction; roll that transaction back rather than
+    /// committing it.
     pub async fn resumable_set_step_tx<'executor, E>(&self, connection: E) -> Result<JobRow, Error>
     where
         E: DatabaseTransactionExecutor<'executor>,
@@ -272,6 +293,11 @@ impl WorkContext {
     /// Returns a runtime error outside a resumable cursor step, a JSON error
     /// when the cursor can't be encoded, and the database error when the update
     /// fails.
+    ///
+    /// # Cancel safety
+    ///
+    /// Like [`WorkContext::resumable_set_step_tx`], a dropped future leaves
+    /// what it already ran in the caller's transaction.
     pub async fn resumable_set_step_cursor_tx<'executor, T, E>(
         &self,
         connection: E,
@@ -563,6 +589,46 @@ enum StepAction {
     Skip,
 }
 
+/// A resumable step that has started. Finishing it restores the enclosing
+/// step. Dropping it unfinished, when the step's future is dropped, also
+/// forgets that the step started, so the step can run again in this attempt
+/// and no cursor can be set for it outside the step.
+struct RunningStep<'a> {
+    context: &'a WorkContext,
+    finished: bool,
+    name: &'a str,
+    previous: Option<String>,
+}
+
+impl<'a> RunningStep<'a> {
+    const fn new(context: &'a WorkContext, name: &'a str, previous: Option<String>) -> Self {
+        Self {
+            context,
+            finished: false,
+            name,
+            previous,
+        }
+    }
+
+    /// Restores the enclosing step and returns the locked state.
+    fn finish(mut self) -> MutexGuard<'a, ResumableState> {
+        self.finished = true;
+        let mut state = self.context.lock_resumable();
+        state.step_name = self.previous.take();
+        state
+    }
+}
+
+impl Drop for RunningStep<'_> {
+    fn drop(&mut self) {
+        if !self.finished {
+            let mut state = self.context.lock_resumable();
+            state.step_name = self.previous.take();
+            state.all_step_names.remove(self.name);
+        }
+    }
+}
+
 /// Successful control outcome returned by a worker.
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 #[non_exhaustive]
@@ -802,8 +868,9 @@ impl WorkerRegistry {
     ///
     /// # Errors
     ///
-    /// Returns [`Error::Configuration`] when a worker for the same kind is
-    /// already registered.
+    /// Returns [`Error::InvalidJob`] when the kind or one of its aliases is
+    /// empty or 128 bytes or longer, or when a worker is already registered
+    /// for it.
     pub fn register<A, W>(&mut self, worker: W) -> Result<&mut Self, Error>
     where
         A: JobArgs,
@@ -897,10 +964,17 @@ impl WorkerRegistry {
         row: &JobRow,
     ) -> Result<&Arc<dyn ErasedWorker>, Box<dyn StdError + Send + Sync>> {
         self.workers.get(row.kind.as_str()).ok_or_else(|| {
-            Box::new(Error::UnknownJobKind(row.kind.clone())) as Box<dyn StdError + Send + Sync>
+            Box::new(UnregisteredKind(row.kind.clone())) as Box<dyn StdError + Send + Sync>
         })
     }
 }
+
+/// The attempt error River records for a job whose kind has no worker. Its
+/// text is part of the protocol: every implementation records River Go's
+/// wording, so a job's errors read the same whichever client worked it.
+#[derive(Debug, thiserror::Error)]
+#[error("job kind is not registered in the client's Workers bundle: {0}")]
+struct UnregisteredKind(String);
 
 /// Maximum encoded size of recorded output (Go `maxOutputSizeBytes`).
 const MAX_OUTPUT_BYTES: usize = 32 * 1024 * 1024;
@@ -1054,6 +1128,42 @@ mod tests {
             context.metadata_updates()[crate::METADATA_KEY_RESUMABLE_STEP],
             "first"
         );
+    }
+
+    #[tokio::test]
+    async fn resumable_dropped_step_can_run_again() {
+        let context = WorkContext::new(CancellationToken::new());
+        // Drop the step's future while the step is running.
+        let dropped = tokio::time::timeout(
+            std::time::Duration::from_millis(10),
+            context.resumable_step_with_cursor("first", |_: i64| {
+                let context = context.clone();
+                async move {
+                    context.resumable_set_cursor(&1)?;
+                    std::future::pending::<()>().await;
+                    Ok::<_, Error>(())
+                }
+            }),
+        )
+        .await;
+        assert!(dropped.is_err());
+
+        // The step no longer runs, so no cursor can be set outside it, and
+        // the same step runs again with the cursor it recorded.
+        assert!(context.resumable_set_cursor(&2).is_err());
+        let mut seen = None;
+        context
+            .resumable_step_with_cursor("first", |cursor: i64| {
+                seen = Some(cursor);
+                async { Ok::<_, Error>(()) }
+            })
+            .await
+            .unwrap();
+        assert_eq!(seen, Some(1));
+        context
+            .resumable_step("second", || async { Ok::<_, Error>(()) })
+            .await
+            .unwrap();
     }
 
     #[tokio::test]

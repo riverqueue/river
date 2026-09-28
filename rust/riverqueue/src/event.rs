@@ -356,6 +356,11 @@ impl EventReceiver {
     /// Returns [`EventRecvError::Lagged`] with the number of events dropped
     /// because the receiver fell behind, after which receiving resumes, and
     /// [`EventRecvError::Closed`] once the client is gone.
+    ///
+    /// # Cancel safety
+    ///
+    /// This method is cancel safe: dropping its future before it completes
+    /// loses no event, and the next call receives it.
     pub async fn recv(&mut self) -> Result<Event, EventRecvError> {
         let dropped = self.dropped.swap(0, Ordering::AcqRel);
         if dropped > 0 {

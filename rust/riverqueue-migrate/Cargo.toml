@@ -20,6 +20,7 @@ sqlite = ["sqlx/sqlite"]
 [dependencies]
 sqlx.workspace = true
 thiserror.workspace = true
+tokio.workspace = true
 
 [[example]]
 name = "migrate"

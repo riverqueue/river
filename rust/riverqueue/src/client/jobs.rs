@@ -239,7 +239,14 @@ impl<'a> Jobs<'a> {
 request_type! {
     /// A job cancellation, returned by [`Jobs::cancel`]. Await it to cancel
     /// the job and get its current row.
-    JobCancelRequest { id: i64 } -> JobRow
+    ///
+    /// A client without a notification listener, such as a poll-only
+    /// client, signals its own running attempt of the job directly once the
+    /// cancellation commits. If the request is dropped while that commit is
+    /// in flight, the cancellation may commit without the signal; the
+    /// attempt then keeps running until it ends, and a failure it returns is
+    /// recorded as a cancellation instead of retried.
+    write JobCancelRequest { id: i64 } -> JobRow
 }
 
 impl JobCancelRequest<'_> {
@@ -277,7 +284,7 @@ impl JobCancelRequest<'_> {
 request_type! {
     /// A job deletion, returned by [`Jobs::delete`]. Await it to delete the
     /// job and get its former row.
-    JobDeleteRequest { id: i64 } -> JobRow
+    write JobDeleteRequest { id: i64 } -> JobRow
 }
 
 impl JobDeleteRequest<'_> {
@@ -293,7 +300,7 @@ impl JobDeleteRequest<'_> {
 request_type! {
     /// A bulk job deletion, returned by [`Jobs::delete_many`]. Await it to
     /// delete the jobs and get their former rows.
-    JobDeleteManyRequest { params: JobDeleteManyParams } -> Vec<JobRow>
+    write JobDeleteManyRequest { params: JobDeleteManyParams } -> Vec<JobRow>
 }
 
 impl JobDeleteManyRequest<'_> {
@@ -308,7 +315,7 @@ impl JobDeleteManyRequest<'_> {
 
 request_type! {
     /// A job lookup, returned by [`Jobs::get`]. Await it to get the job.
-    JobGetRequest { id: i64 } -> JobRow
+    read JobGetRequest { id: i64 } -> JobRow
 }
 
 impl JobGetRequest<'_> {
@@ -322,7 +329,7 @@ impl JobGetRequest<'_> {
 request_type! {
     /// A job listing, returned by [`Jobs::list`]. Await it to get a page of
     /// jobs.
-    JobListRequest { params: JobListParams } -> JobListResult
+    read JobListRequest { params: JobListParams } -> JobListResult
 }
 
 impl JobListRequest<'_> {
@@ -340,7 +347,7 @@ impl JobListRequest<'_> {
 request_type! {
     /// A job retry, returned by [`Jobs::retry`]. Await it to make the job
     /// available and get its current row.
-    JobRetryRequest { id: i64 } -> JobRow
+    write JobRetryRequest { id: i64 } -> JobRow
 }
 
 impl JobRetryRequest<'_> {
@@ -364,7 +371,7 @@ impl JobRetryRequest<'_> {
 request_type! {
     /// A job update, returned by [`Jobs::update`]. Await it to update the job
     /// and get its new row.
-    JobUpdateRequest { id: i64, params: JobUpdateParams } -> JobRow
+    write JobUpdateRequest { id: i64, params: JobUpdateParams } -> JobRow
 }
 
 impl JobUpdateRequest<'_> {
@@ -394,7 +401,9 @@ impl<'a> JobCompleteRequest<'a> {
     /// completed only when the transaction commits.
     ///
     /// `executor` must be a SQLx transaction for the client's database
-    /// backend; begin SQLite transactions with `BEGIN IMMEDIATE`.
+    /// backend, begun with
+    /// [`begin_postgres`](crate::database::begin_postgres) or
+    /// [`begin_sqlite_write`](crate::database::begin_sqlite_write).
     pub fn tx<'t, E>(self, executor: E) -> JobCompleteTxRequest<'t>
     where
         'a: 't,
@@ -419,6 +428,12 @@ impl<'a> JobCompleteRequest<'a> {
 /// [`Error::DatabaseMismatch`] for a transaction from another backend,
 /// [`Error::Extension`] when an extension's completion hook fails, and
 /// [`Error::Database`] when the database operation fails.
+///
+/// # Cancel safety
+///
+/// Dropping the request before it finishes leaves what it already ran,
+/// possibly including an open savepoint, in the caller's transaction; roll
+/// that transaction back rather than committing it.
 #[must_use = "requests do nothing unless awaited"]
 pub struct JobCompleteTxRequest<'a> {
     client: &'a Client,

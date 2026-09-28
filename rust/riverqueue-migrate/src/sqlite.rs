@@ -4,7 +4,7 @@ use sqlx::{Row, SqlitePool};
 
 use crate::{
     Direction, Error, MIGRATION_LINE_MAIN, MigrateOpts, MigrateResult, MigrateVersion, Migration,
-    ValidateResult, select_migrations, validate_migrations, validate_target,
+    ValidateResult, run_to_completion, select_migrations, validate_migrations, validate_target,
 };
 
 macro_rules! sqlite_migration {
@@ -100,6 +100,14 @@ impl SqliteMigrator {
     /// [`Error::TargetNotSelected`] when a down target isn't applied or is
     /// beyond the step limit, [`Error::OtherMigrationLines`] when reverting
     /// version 5 would lose other migration lines' records, and [`Error::Database`] when a migration fails.
+    ///
+    /// # Cancel safety
+    ///
+    /// Each migration and its record in `river_migration` commit together in
+    /// their own transaction, on a task of their own. Dropping the future
+    /// stops migrating once the migration in progress finishes: it and
+    /// every migration before it stay applied, and migrating again
+    /// continues from there.
     pub async fn migrate(
         &self,
         direction: Direction,
@@ -115,7 +123,14 @@ impl SqliteMigrator {
             let mut duration = Duration::ZERO;
             if !opts.dry_run {
                 let started_at = Instant::now();
-                self.apply(direction, migration, &sql).await?;
+                // Each migration runs to completion on its own task, so
+                // dropping this future never abandons one partway.
+                let migrator = self.clone();
+                let task_sql = sql.clone();
+                run_to_completion(
+                    async move { migrator.apply(direction, migration, &task_sql).await },
+                )
+                .await?;
                 duration = started_at.elapsed();
             }
             versions.push(MigrateVersion {
@@ -136,6 +151,14 @@ impl SqliteMigrator {
     /// # Errors
     ///
     /// Returns [`Error::Database`] when a migration fails.
+    ///
+    /// # Cancel safety
+    ///
+    /// Each migration and its record in `river_migration` commit together in
+    /// their own transaction, on a task of their own. Dropping the future
+    /// stops migrating once the migration in progress finishes: it and
+    /// every migration before it stay applied, and migrating again
+    /// continues from there.
     pub async fn migrate_up(&self) -> Result<Vec<i64>, Error> {
         Ok(self
             .migrate(Direction::Up, MigrateOpts::default())

@@ -156,7 +156,7 @@ impl<'a> Queues<'a> {
 request_type! {
     /// A queue lookup, returned by [`Queues::get`]. Await it to get the
     /// queue record.
-    QueueGetRequest { name: String } -> Queue
+    read QueueGetRequest { name: String } -> Queue
 }
 
 impl QueueGetRequest<'_> {
@@ -174,7 +174,7 @@ impl QueueGetRequest<'_> {
 request_type! {
     /// A queue listing, returned by [`Queues::list`]. Await it to get queue
     /// records in name order.
-    QueueListRequest { params: QueueListParams } -> Vec<Queue>
+    read QueueListRequest { params: QueueListParams } -> Vec<Queue>
 }
 
 impl QueueListRequest<'_> {
@@ -188,7 +188,7 @@ impl QueueListRequest<'_> {
 request_type! {
     /// A queue pause, returned by [`Queues::pause`]. Await it to pause the
     /// selected queues.
-    QueuePauseRequest { selector: QueueSelector } -> ()
+    write QueuePauseRequest { selector: QueueSelector } -> ()
 }
 
 impl QueuePauseRequest<'_> {
@@ -200,7 +200,7 @@ impl QueuePauseRequest<'_> {
 request_type! {
     /// A queue resumption, returned by [`Queues::resume`]. Await it to
     /// resume the selected queues.
-    QueueResumeRequest { selector: QueueSelector } -> ()
+    write QueueResumeRequest { selector: QueueSelector } -> ()
 }
 
 impl QueueResumeRequest<'_> {
@@ -240,7 +240,7 @@ async fn set_paused(
 request_type! {
     /// A queue update, returned by [`Queues::update`]. Await it to update the
     /// queue and get its new record.
-    QueueUpdateRequest { name: String, params: QueueUpdateParams } -> Queue
+    write QueueUpdateRequest { name: String, params: QueueUpdateParams } -> Queue
 }
 
 impl QueueUpdateRequest<'_> {

@@ -287,7 +287,7 @@ request_type! {
     /// returned by [`ExtensionClient::insert_raw`],
     /// [`ExtensionClient::insert_raw_params`], or
     /// [`ExtensionClient::insert_periodic`]. Await it to insert.
-    RawInsertRequest {
+    write RawInsertRequest {
         encoded_args: Box<RawValue>,
         kind: &'a str,
         options: RawInsertOptions,
@@ -339,7 +339,7 @@ impl RawInsertRequest<'_> {
 request_type! {
     /// A reinsertion of stored jobs, returned by
     /// [`ExtensionClient::insert_prepared`]. Await it to insert.
-    PreparedInsertRequest {
+    write PreparedInsertRequest {
         params: Vec<PreparedInsertParams>,
     } -> Vec<RawInsertResult>
 }

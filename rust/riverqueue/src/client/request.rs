@@ -70,8 +70,47 @@ impl fmt::Debug for Target<'_> {
 ///
 /// The request type must implement `async fn run(self) -> Result<Output,
 /// Error>`.
+///
+/// Prefix the name with `read` for a request that only reads, or `write` for
+/// one that changes data; each gets the matching cancel safety section.
 macro_rules! request_type {
     (
+        $(#[$attr:meta])*
+        read $name:ident { $($field:ident: $type:ty),* $(,)? } -> $output:ty
+    ) => {
+        $crate::client::request::request_type! {
+            @define
+            $(#[$attr])*
+            ///
+            /// # Cancel safety
+            ///
+            /// The request only reads, so dropping it before it finishes
+            /// changes nothing.
+            $name { $($field: $type),* } -> $output
+        }
+    };
+    (
+        $(#[$attr:meta])*
+        write $name:ident { $($field:ident: $type:ty),* $(,)? } -> $output:ty
+    ) => {
+        $crate::client::request::request_type! {
+            @define
+            $(#[$attr])*
+            ///
+            /// # Cancel safety
+            ///
+            /// On the client's own pool, River runs the request as one
+            /// statement or one transaction, so dropping it before it
+            /// finishes never leaves it partly applied. A request dropped
+            /// while its commit is in flight may still have taken effect.
+            /// With [`tx`](Self::tx), what it already ran, possibly including
+            /// an open savepoint, stays in the caller's transaction; roll that
+            /// transaction back rather than committing it.
+            $name { $($field: $type),* } -> $output
+        }
+    };
+    (
+        @define
         $(#[$attr:meta])*
         $name:ident { $($field:ident: $type:ty),* $(,)? } -> $output:ty
     ) => {
@@ -90,8 +129,9 @@ macro_rules! request_type {
             /// The request sees the transaction's uncommitted changes, and
             /// its own changes and notifications take effect only when the
             /// caller commits. `executor` must be a SQLx transaction for the
-            /// client's database backend; begin SQLite transactions that may
-            /// write with `BEGIN IMMEDIATE`.
+            /// client's database backend, begun with
+            /// [`begin_postgres`](crate::database::begin_postgres) or
+            /// [`begin_sqlite_write`](crate::database::begin_sqlite_write).
             pub fn tx<'t, E>(self, executor: E) -> $name<'t>
             where
                 'a: 't,

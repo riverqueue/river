@@ -291,8 +291,11 @@ pub enum Error {
     RuntimeTask(tokio::task::JoinError),
 
     /// A client with workers cannot insert an unregistered kind by default.
-    #[error("job kind is not registered in the client's Workers bundle: {0}")]
-    UnknownJobKind(String),
+    #[error("job kind {kind:?} has no registered worker")]
+    UnknownJobKind {
+        /// The job kind without a registered worker.
+        kind: String,
+    },
 }
 
 impl Error {

@@ -47,8 +47,8 @@ impl Client {
     /// # Errors
     ///
     /// Returns [`Error::RuntimeUnavailable`] when called outside a Tokio
-    /// runtime, a configuration error when the client has no queues, and a
-    /// runtime error when the client is already running.
+    /// runtime, a configuration error when the client has no queues, and
+    /// [`Error::AlreadyRunning`] when the client is already running.
     pub fn start(&self) -> Result<RunHandle, Error> {
         self.start_inner(None)
     }
