@@ -1300,7 +1300,9 @@ func (q *Queries) JobList(ctx context.Context, db DBTX, max int64) ([]*RiverJob,
 const jobRescue = `-- name: JobRescue :exec
 UPDATE /* TEMPLATE: schema */river_job
 SET
-    errors = jsonb(json_insert(json(coalesce(errors, jsonb('[]'))), '$[#]', json(?1))),
+    errors = CASE WHEN coalesce(json_type(errors), 'array') <> 'array'
+                  THEN jsonb(json_array(json(errors), json(?1)))
+                  ELSE jsonb(json_insert(json(coalesce(errors, jsonb('[]'))), '$[#]', json(?1))) END,
     finalized_at = cast(?2 as text),
     scheduled_at = cast(?3 AS text),
     metadata = jsonb_set(

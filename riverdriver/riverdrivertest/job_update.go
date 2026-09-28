@@ -319,6 +319,44 @@ func exerciseJobUpdate[TTx any](ctx context.Context, t *testing.T, executorWithT
 		}
 	})
 
+	// SQLite can hold a non-array errors value on a stuck job. Rescue must
+	// preserve it and append the rescue error while updating the whole batch.
+	t.Run("JobRescueMany_NonArrayErrorsWrapped", func(t *testing.T) {
+		t.Parallel()
+
+		exec, bundle := setup(ctx, t)
+		if bundle.driver.DatabaseName() != riverdriver.DatabaseNameSQLite {
+			t.Skip("only SQLite's JSON columns can hold a non-array errors value")
+		}
+
+		now := precisionTestTime
+		attemptedAt := now.Add(-time.Hour)
+		badJob := testfactory.Job(ctx, t, exec, &testfactory.JobOpts{AttemptedAt: &attemptedAt, State: new(rivertype.JobStateRunning)})
+		goodJob := testfactory.Job(ctx, t, exec, &testfactory.JobOpts{AttemptedAt: &attemptedAt, State: new(rivertype.JobStateRunning)})
+		sqliteSetJobJSONColumn(ctx, t, exec, badJob.ID, "errors", `{"error":"existing value"}`)
+
+		_, err := exec.JobRescueMany(ctx, &riverdriver.JobRescueManyParams{
+			ID:           []int64{badJob.ID, goodJob.ID},
+			Error:        [][]byte{[]byte(`{"error":"rescue error"}`), []byte(`{"error":"rescue error"}`)},
+			FinalizedAt:  []*time.Time{nil, nil},
+			ScheduledAt:  []time.Time{now, now},
+			State:        []string{string(rivertype.JobStateRetryable), string(rivertype.JobStateRetryable)},
+			StuckHorizon: now,
+		})
+		require.NoError(t, err)
+
+		badAfter, err := exec.JobGetByID(ctx, &riverdriver.JobGetByIDParams{ID: badJob.ID})
+		require.NoError(t, err)
+		require.Equal(t, rivertype.JobStateRetryable, badAfter.State)
+		require.Equal(t, []string{"existing value", "rescue error"},
+			sliceutil.Map(badAfter.Errors, func(e rivertype.AttemptError) string { return e.Error }))
+
+		goodAfter, err := exec.JobGetByID(ctx, &riverdriver.JobGetByIDParams{ID: goodJob.ID})
+		require.NoError(t, err)
+		require.Equal(t, rivertype.JobStateRetryable, goodAfter.State)
+		require.Equal(t, "rescue error", goodAfter.Errors[0].Error)
+	})
+
 	t.Run("JobRescueMany_ReclaimedAfterFetch", func(t *testing.T) {
 		t.Parallel()
 
