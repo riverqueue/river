@@ -1,14 +1,9 @@
 # River for Rust (preview)
 
-This workspace contains the native Rust implementation of River. It targets
-the same persistence and coordination protocol as the Go library while
-exposing an API designed for Rust and Tokio. PostgreSQL is the mature shared-
-database backend; SQLite implements the same logical protocol through River's
-sealed built-in backend boundary.
-
-The PostgreSQL surface is implemented and checked against the pinned Go
-baseline. The crates remain pre-release while the release process is
-unfinished. Shared cross-language fixtures live in
+This workspace contains River's Rust implementation. It shares River's
+database schema and job protocol with River for Go on PostgreSQL and SQLite,
+with an API designed for Rust and Tokio. The crates are a pre-release
+preview. Shared cross-language fixtures live in
 [`../conformance`](../conformance).
 
 ## Workspace crates
@@ -22,11 +17,9 @@ unfinished. Shared cross-language fixtures live in
 - `riverqueue-test`: typed fixtures and worker-test helpers.
 - `riverqueue-conformance`: private verification package.
 
-The primary API uses a caller-owned SQLx pool, Tokio, typed workers, and
-`CancellationToken`. `Client` is deliberately non-generic and accepts built-in
-PostgreSQL or SQLite sources; it does not expose Go's driver interface or a
-third-party SQL dialect trait. This leaves room for a future built-in MySQL
-backend without propagating a driver type through workers and extensions.
+The API uses a caller-owned SQLx pool, Tokio, typed workers, and
+`CancellationToken`. `Client` isn't generic over the database: it accepts a
+PostgreSQL or SQLite pool, and there's no driver trait to implement.
 
 ## Quick start
 

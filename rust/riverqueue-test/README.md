@@ -25,17 +25,21 @@ struct SendWelcomeEmail {
     user_id: i64,
 }
 
-# async fn sign_up(_client: &Client, _user_id: i64) {}
-# async fn example(client: Client) {
-sign_up(&client, 42).await;
+async fn sign_up(client: &Client, user_id: i64) -> Result<(), riverqueue::Error> {
+    client.insert(SendWelcomeEmail { user_id }).await?;
+    Ok(())
+}
 
-let job = require_inserted_with::<SendWelcomeEmail>(
-    &client,
-    &RequireInsertedOpts::new().with_state(JobState::Available),
-)
-.await;
-assert_eq!(job.args.user_id, 42);
-# }
+async fn test_sign_up(client: &Client) {
+    sign_up(client, 42).await.unwrap();
+
+    let job = require_inserted_with::<SendWelcomeEmail>(
+        client,
+        &RequireInsertedOpts::new().with_state(JobState::Available),
+    )
+    .await;
+    assert_eq!(job.args.user_id, 42);
+}
 ```
 
 ## Running a worker once
@@ -72,16 +76,17 @@ impl Worker<Thumbnail> for ThumbnailWorker {
     }
 }
 
-# async fn example() {
-let job = TestJobBuilder::new(Thumbnail { image_id: 42 })
-    .id(100)
-    .build()
-    .unwrap();
-let worked = work_once(&ThumbnailWorker, job).await;
+#[tokio::test]
+async fn thumbnail_records_its_image() {
+    let job = TestJobBuilder::new(Thumbnail { image_id: 42 })
+        .id(100)
+        .build()
+        .unwrap();
+    let worked = work_once(&ThumbnailWorker, job).await;
 
-assert_eq!(worked.result.as_ref().unwrap(), &WorkOutcome::Complete);
-assert_eq!(worked.output(), Some(&serde_json::json!({"image_id": 42})));
-# }
+    assert_eq!(worked.result.as_ref().unwrap(), &WorkOutcome::Complete);
+    assert_eq!(worked.output(), Some(&serde_json::json!({"image_id": 42})));
+}
 ```
 
 `work_once` restores and finalizes resumable state, including failures that the

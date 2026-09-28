@@ -1,14 +1,14 @@
 # riverqueue
 
-`riverqueue` is the native Rust and Tokio client for
-[River](https://riverqueue.com), a fast and reliable background job system.
-It uses the same database protocol as River Go so Rust and Go producers,
-workers, migrators, and maintenance services can operate on one queue.
+`riverqueue` is the Rust and Tokio client for [River](https://riverqueue.com),
+a fast and reliable background job system backed by PostgreSQL or SQLite. It
+shares River's database schema and job protocol with River for Go, so Rust
+and Go services can insert and work jobs in the same database.
 
-This crate is a pre-release preview. Each release is matched to the River Go
-release with the same minor version; see the
-[mixed deployment guide](https://docs.rs/riverqueue/latest/riverqueue/guide/mixed_deployments/index.html) for running both
-against one database.
+This crate is a pre-release preview. Each release matches the River for Go
+release with the same minor version; the
+[mixed deployment guide](https://docs.rs/riverqueue/latest/riverqueue/guide/mixed_deployments/index.html)
+covers running both against one database.
 
 ## Quick start
 
@@ -16,14 +16,12 @@ Define serializable arguments, register an async function or a [`Worker`],
 apply River's migrations, and start a client:
 
 ```rust,no_run
+use riverqueue::migrate::PostgresMigrator;
+use riverqueue::sqlx::PgPool;
 use riverqueue::{
     BoxError, Client, Job, JobArgs, QueueConfig, WorkContext, WorkOutcome, WorkerRegistry,
 };
-# #[cfg(feature = "postgres")]
-use riverqueue::migrate::PostgresMigrator;
 use serde::{Deserialize, Serialize};
-# #[cfg(feature = "postgres")]
-use sqlx::PgPool;
 
 #[derive(Clone, Debug, Deserialize, JobArgs, Serialize)]
 #[river(kind = "send_email")]
@@ -31,7 +29,6 @@ struct SendEmail {
     address: String,
 }
 
-# #[cfg(feature = "postgres")]
 async fn send_email(
     context: WorkContext,
     job: Job<SendEmail>,
@@ -41,7 +38,6 @@ async fn send_email(
     Ok(WorkOutcome::Complete)
 }
 
-# #[cfg(feature = "postgres")]
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let pool = PgPool::connect(&std::env::var("DATABASE_URL")?).await?;
@@ -70,71 +66,63 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     run.wait().await?;
     Ok(())
 }
-# #[cfg(not(feature = "postgres"))]
-# fn main() {}
 ```
 
-Migrations must be applied before any client starts. `Client::start` must run
-inside a Tokio runtime. Keep its `RunHandle`
-and await `wait`, `shutdown` (soft stop), or `shutdown_now` (cancel running
-jobs); these take `&mut self` and are cancel safe. `RunHandle::stopper` returns
-a cloneable `Stopper` for stopping the client from another task, such as a
-signal handler. Dropping the handle requests a hard stop, while `detach`
-explicitly leaves the client running unsupervised.
+Apply migrations before any client starts, and start clients inside a Tokio
+runtime. `Client::start` returns a `RunHandle`: await `wait`, `shutdown` (a
+soft stop that lets running jobs finish), or `shutdown_now` (which cancels
+them). `RunHandle::stopper` returns a cloneable `Stopper` for stopping the
+client from another task, such as a signal handler. The handle controls the
+running client: dropping every `Client` clone doesn't stop it, dropping the
+handle requests a hard stop, and `RunHandle::detach` leaves the client running
+unsupervised.
 
 ## Inserting jobs
 
-`Client::insert(args)` is the common path. Job-type defaults come from
-`JobArgs::default_insert_opts`; client defaults and River defaults fill values
-the job type leaves unspecified. A call can override only the fields it needs:
+`Client::insert(args)` inserts a job with its type's default options, which
+come from `JobArgs::default_insert_opts`. A call can override only the options
+it needs:
 
 ```rust,no_run
-# use riverqueue::{Client, InsertOpts, JobArgs};
-# use serde::{Deserialize, Serialize};
-# use sqlx::PgPool;
-# #[derive(Clone, Deserialize, JobArgs, Serialize)]
-# #[river(kind = "send_email")]
-# struct SendEmail { address: String }
-# async fn example(client: Client) -> Result<(), riverqueue::Error> {
-client
-    .insert(SendEmail { address: "urgent@example.com".to_owned() })
-    .opts(
-        InsertOpts::default()
-            .with_queue("critical")
-            .with_priority(1)
-            .with_max_attempts(8),
-    )
-    .await?;
-# Ok(())
-# }
+use riverqueue::{Client, InsertOpts, JobArgs};
+use serde::{Deserialize, Serialize};
+
+#[derive(Clone, Deserialize, JobArgs, Serialize)]
+#[river(kind = "send_email")]
+struct SendEmail {
+    address: String,
+}
+
+async fn enqueue_urgent(client: &Client) -> Result<(), riverqueue::Error> {
+    client
+        .insert(SendEmail { address: "urgent@example.com".to_owned() })
+        .opts(
+            InsertOpts::default()
+                .with_queue("critical")
+                .with_priority(1)
+                .with_max_attempts(8),
+        )
+        .await?;
+    Ok(())
+}
 ```
 
-The precedence is call override, job-type default, client default, then River
-default. It is based on whether an option was supplied, not whether its value
-happens to equal a default. `insert_many` inserts many jobs of one kind
-atomically and returns results in input order; `insert_batch` does the same
-for jobs of different kinds. There's no equivalent of River Go's
-`InsertManyFast` yet, so bulk inserts use `insert_many`.
+An option set on the call wins over the job type's default, which wins over
+the client's default, which wins over River's. `insert_many` inserts many jobs
+of one kind atomically and returns results in input order; `insert_batch` does
+the same for jobs of different kinds.
 
 Chain `.tx(&mut transaction)` onto an insertion, or onto any request from
 `client.jobs()` or `client.queues()`, to run it in the same SQL transaction as
-application writes. Notifications become visible only on commit, and jobs do
-not survive rollback. With a multi-connection SQLite pool, start transactions
-that may write with `riverqueue::database::begin_sqlite_write(&pool)`, which
-uses `BEGIN IMMEDIATE`. SQLite's ordinary deferred `begin()` can establish a
-read snapshot that cannot be upgraded after another connection commits,
-producing `SQLITE_BUSY_SNAPSHOT` even when a busy timeout is set. River starts
-its own SQLite writer transactions in immediate mode; callers choose the mode
-of transactions passed to `.tx`.
-
-Don't abandon a `pool.begin()` future partway, for example inside a
-`select!` or timeout that can fire first. SQLx 0.9 records a transaction only
-after the server answers `BEGIN`, so a begin dropped between the two leaves
-its connection back in the pool still inside a transaction. That includes
-begins inside workers: River drops a worker's future when it ignores
-cancellation past the job stuck threshold. `riverqueue::database::begin_postgres`
-and `begin_sqlite_write` begin on a separate task, as River does for its own
-transactions, so they're safe to abandon.
+application writes. Jobs become visible, and clients are notified, only when
+the transaction commits. Begin transactions with
+`riverqueue::database::begin_postgres(&pool)`, or on SQLite with
+`riverqueue::database::begin_sqlite_write(&pool)`, which uses
+`BEGIN IMMEDIATE` so a transaction that reads before it writes can't fail with
+`SQLITE_BUSY_SNAPSHOT`. Both begin on a separate task, so they're safe to
+abandon partway, for example in a `select!` or a timeout; SQLx's own
+`pool.begin()` isn't, and can return a connection to the pool still inside a
+transaction.
 
 ## Managing jobs and queues
 
@@ -145,24 +133,25 @@ this client works while it runs. Job and queue requests run when awaited and
 take `.tx(&mut transaction)` like insertions:
 
 ```rust,no_run
-# use riverqueue::{Client, JobListParams, JobState, QueueConfig, QueueSelector};
-# #[cfg(feature = "postgres")]
-# async fn example(client: Client, pool: sqlx::PgPool) -> Result<(), riverqueue::Error> {
-let page = client
-    .jobs()
-    .list(JobListParams::default().states([JobState::Retryable]).limit(50))
-    .await?;
-for job in &page.jobs {
-    client.jobs().retry(job.id).await?;
+use riverqueue::sqlx::PgPool;
+use riverqueue::{Client, JobListParams, JobState, QueueConfig, QueueSelector};
+
+async fn maintain(client: &Client, pool: &PgPool) -> Result<(), riverqueue::Error> {
+    let page = client
+        .jobs()
+        .list(JobListParams::default().states([JobState::Retryable]).limit(50))
+        .await?;
+    for job in &page.jobs {
+        client.jobs().retry(job.id).await?;
+    }
+
+    let mut transaction = riverqueue::database::begin_postgres(pool).await?;
+    client.queues().pause(QueueSelector::All).tx(&mut transaction).await?;
+    transaction.commit().await?;
+
+    client.local_queues().add("reports", QueueConfig::new(2))?;
+    Ok(())
 }
-
-let mut transaction = riverqueue::database::begin_postgres(&pool).await?;
-client.queues().pause(QueueSelector::All).tx(&mut transaction).await?;
-transaction.commit().await?;
-
-client.local_queues().add("reports", QueueConfig::new(2))?;
-# Ok(())
-# }
 ```
 
 ## Worker outcomes and cancellation
@@ -175,145 +164,113 @@ the maximum attempt count is reached.
 The `WorkContext` cancellation token is triggered by a job timeout, remote job
 cancellation, or client stop. Workers should select or check cancellation at
 natural await points. After the configured stuck threshold, River can abort a
-Tokio task that yields, but Rust cannot forcibly stop arbitrary CPU work or an
-already-running blocking call.
+Tokio task that yields, but it can't stop CPU-bound work or a blocking call
+already in progress.
 
 Implement [`Worker`] when a kind needs a custom timeout or next-retry decision.
-Use `WorkerRegistry::register_fn` for the common async function or capturing
-closure case. Worker error types remain inspectable at the typed boundary;
-extension and database errors preserve their original source chains.
+Use `WorkerRegistry::register_fn` for an async function or capturing closure.
 
-## Events and backpressure
+## Events
 
 Subscriptions are local observations, not a durable event stream. Subscribe
-before starting a client if startup races matter. `Event` has separate job and
-queue variants, so payloads cannot represent an invalid kind/data combination.
-Receivers are bounded and report `EventRecvError::Lagged` with the dropped
-count. Job events are sent only after persistence commits, but independent jobs
-have no global completion order.
+before starting a client to see events from its first jobs. Receivers are
+bounded and report `EventRecvError::Lagged` with the number of dropped events,
+and `EventReceiver` is also a `Stream`. Job events are sent after their
+results are persisted, and independent jobs have no global completion order.
 
 ## Reliability features
 
-- Unique jobs can hash kind, encoded argument paths, queue, period, and active
-  states. The derive macro follows Serde's serialization names. Missing optional
-  fields are omitted to match River Go.
-- Periodic jobs are leader-owned and can be configured statically or at
-  runtime. Stable IDs prevent duplicate registration. `CronSchedule` accepts
-  River Go's standard five-field cron syntax and descriptors such as `@hourly`
-  and `@every 90s` with identical semantics, evaluated in the process's local
-  time zone like Go unless another `CronTimeZone` is chosen. `CRON_TZ=` and
-  `TZ=` prefixes naming IANA zones such as `America/New_York` need the
-  `chrono-tz` feature, which bundles the time zone database; without it only
-  `UTC`, `Local`, and `Etc/GMT±N` names parse.
-- Resumable steps persist the last completed step and optional cursor. Use the
-  transactional checkpoint helpers when progress and business data must commit
-  together.
-- Completion, cancellation, retry, snooze, rescue, queue state, and reserved
-  metadata transitions match River Go and are exercised by the shared
-  conformance harness.
-- Hooks and middleware nest as in River Go: insertion middleware wraps the
-  insert-begin hooks, and work middleware wraps the work hooks, argument
-  decoding, and the worker. See [`WorkMiddleware`] and [`Hook`].
+- Unique jobs deduplicate by kind, encoded arguments or selected argument
+  paths, queue, period, and job state. The derive macro follows Serde's
+  serialization names and omits missing optional fields.
+- Periodic jobs run on the elected leader and can be configured when the client
+  is built or at runtime; stable IDs prevent duplicate registration.
+  `CronSchedule` accepts standard five-field cron syntax and descriptors such
+  as `@hourly` and `@every 90s`, evaluated in the process's local time zone
+  unless another `CronTimeZone` is chosen. `CRON_TZ=` and `TZ=` prefixes
+  naming IANA zones such as `America/New_York` need the `chrono-tz` feature,
+  which bundles the time zone database; without it only `UTC`, `Local`, and
+  `Etc/GMT±N` names parse.
+- Resumable steps persist the last completed step and an optional cursor. Use
+  the transactional checkpoint helpers when progress and business data must
+  commit together.
+- Insertion middleware wraps the insert-begin hooks, and work middleware wraps
+  the work hooks, argument decoding, and the worker. See [`WorkMiddleware`]
+  and [`Hook`].
 
 ## Leadership and maintenance
 
-Like River Go, one client at a time holds a database lease and runs the
-leader-owned services: the job scheduler, stuck-job rescuer, job and queue
-cleaners, periodic job enqueuer, PostgreSQL reindexer, and SQLite notification
-cleaner. The elector renews the lease on its own schedule and bounds every
-attempt by the time the current term can still be trusted, measured from when
-the attempt started. Each service runs in its own task under a per-term
-cancellation token, so losing the lease, a trust window elapsing, or shutdown
-stops maintenance immediately. On PostgreSQL, in-flight maintenance
-statements are also cancelled on the server and bounded by a transaction-local
-`statement_timeout`, and an interrupted `REINDEX CONCURRENTLY` drops the
-artifacts it created.
+One client at a time holds a database lease and runs the leader-owned
+services: the job scheduler, the stuck-job rescuer, the job and queue cleaners,
+the periodic job enqueuer, the PostgreSQL reindexer, and the SQLite
+notification cleaner. Losing the lease or stopping the client stops them
+immediately.
 
-Renewal and resignation are guarded by the term's `elected_at`, so a client
-never extends or deletes a newer term, even one taken over by another client
-with the same ID. The default client ID combines the host name, the creation
-time, and a random suffix so that containers sharing a host name do not share
-an identity; set a stable `id` only when it is unique per process.
+The default client ID combines the host name, the creation time, and a random
+suffix; set a stable `id` only when it's unique per process.
 
 The rescuer considers a job stuck after `rescue_after`, which defaults to one
 hour, or to the job timeout plus one hour when a job timeout is configured, and
-must not be shorter than the job timeout. As in Go, the leader discards stuck
-jobs of kinds its own worker registry does not know, so clients that share a
-schema but register different kinds can discard each other's stuck jobs while
-leading; keep worker registries aligned across such a fleet, or build the
-clients that don't know every kind with
-`ClientBuilder::without_leader_election`, like Go's
-`Config.LeaderElectionDisabled`. Those clients keep working their queues but
-never become leader, so at least one other client must stay eligible. The same
-leader-owned services run on SQLite, where they act on rows written by any
-implementation, exactly as Go's SQLite driver does.
+must not be shorter than the job timeout. The leader discards stuck jobs of
+kinds its own worker registry doesn't know, so clients that share a database
+should register the same kinds. A client that doesn't know every kind can be
+built with `ClientBuilder::without_leader_election`: it works its queues but
+never becomes leader, so at least one other client must stay eligible.
 
 Periodic jobs are scheduled from the time each term begins, and jobs with
-`PeriodicJobOpts::with_run_on_start` are inserted once per gained term. As in Go, an occurrence whose insert
-fails is logged and skipped, and a client that loses leadership stops
-inserting immediately.
+`PeriodicJobOpts::with_run_on_start(true)` are inserted once per term gained.
+An occurrence whose insert fails is logged and skipped.
 
 ## Database support
 
-River supports PostgreSQL and SQLite, selected by passing an SQLx pool (or a
-`PostgresDatabase`/`SqliteDatabase` with options) to `Client::builder`. Both
-implement the same job and queue behavior. `Client` isn't generic over the
-database, so backend types don't leak into workers, contexts, or extensions,
-and there's no database driver trait to implement.
+Pass an SQLx pool, or a `PostgresDatabase` or `SqliteDatabase` with options,
+to `Client::builder`. Both backends implement the same job and queue behavior,
+and `Client` isn't generic over the database, so backend types don't reach
+workers, contexts, or extensions.
 
-Database-specific behavior stays behind each backend: PostgreSQL uses schemas,
-`LISTEN`/`NOTIFY`, and advisory locking; SQLite uses its canonical River
-schema, serialized writer transactions, and durable notification-outbox
-polling. Capability differences must be explicit rather than silently changing
-job semantics.
-
-SQLite requires version 3.45 or newer because River stores JSON using SQLite's
-JSONB functions. The client uses the caller-owned SQLx pool and does not change
+SQLite requires version 3.45 or newer, since River stores JSON with SQLite's
+JSONB functions. River uses the caller's pool as configured and doesn't change
 connection pragmas. For a file database, enable WAL and a busy timeout so a
-short writer collision waits instead of immediately failing. A private
-`:memory:` database belongs to one connection, so either limit the pool to one
-connection or deliberately use a shared-cache URI:
+short writer collision waits instead of failing. A private `:memory:` database
+belongs to one connection, so limit the pool to one connection or use a
+shared-cache URI:
 
 ```rust,no_run
 use std::{str::FromStr, time::Duration};
 
 use riverqueue::Client;
-# #[cfg(feature = "sqlite")]
-use sqlx::sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePoolOptions};
+use riverqueue::sqlx::sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePoolOptions};
 
-# #[cfg(feature = "sqlite")]
-# async fn example() -> Result<(), Box<dyn std::error::Error>> {
-let options = SqliteConnectOptions::from_str("sqlite://river.db")?
-    .create_if_missing(true)
-    .journal_mode(SqliteJournalMode::Wal)
-    .busy_timeout(Duration::from_secs(5));
-let pool = SqlitePoolOptions::new()
-    .max_connections(5)
-    .connect_with(options)
-    .await?;
-let client = Client::builder(pool).build()?;
-# let _ = client;
-# Ok(())
-# }
+async fn sqlite_client() -> Result<Client, Box<dyn std::error::Error>> {
+    let options = SqliteConnectOptions::from_str("sqlite://river.db")?
+        .create_if_missing(true)
+        .journal_mode(SqliteJournalMode::Wal)
+        .busy_timeout(Duration::from_secs(5));
+    let pool = SqlitePoolOptions::new()
+        .max_connections(5)
+        .connect_with(options)
+        .await?;
+    Ok(Client::builder(pool).build()?)
+}
 ```
 
 ## Modules
 
-- [`job`] — arguments, insertion options, persisted rows, outcomes, and unique
+- [`job`]: arguments, insertion options, persisted rows, outcomes, and unique
   job configuration.
-- [`encoding`] — the Go-compatible JSON encoding River uses for job arguments,
-  which keeps unique keys identical across Go and Rust.
-- [`worker`] — typed workers, function registration, cancellation, outputs,
+- [`encoding`]: the JSON encoding River uses for job arguments, which keeps
+  unique keys identical across Rust and Go.
+- [`worker`]: typed workers, function registration, cancellation, outputs,
   and resumable work.
-- [`event`] — valid event payloads and bounded subscriptions.
-- [`queue`] and [`query`] — queue records and storage filters/cursors.
-- [`periodic`] — schedules and dynamic periodic-job registration.
-- [`extension`] — hooks, middleware, policies, and metrics.
-- [`database`] — PostgreSQL and SQLite database options, and the transaction
-  types River's `.tx` methods accept.
-- [`error`] — structured, source-preserving public errors.
-- [`protocol`] — wire values such as notification topics and unique keys for
-  tools that interoperate with River's tables directly.
+- [`event`]: event payloads and bounded subscriptions.
+- [`queue`] and [`query`]: queue records and job list filters and cursors.
+- [`periodic`]: schedules and runtime periodic job registration.
+- [`extension`]: hooks, middleware, policies, and metrics.
+- [`database`]: PostgreSQL and SQLite database options, and the transactions
+  River's `.tx` methods accept.
+- [`error`]: structured errors that keep their sources.
+- [`protocol`]: wire values such as notification topics and unique keys, for
+  tools that work with River's tables directly.
 
 Setters follow two conventions. Builders and request parameters, which
 exist only to be passed on (`ClientBuilder`, `JobListParams`,
@@ -323,38 +280,35 @@ same-named getter (`InsertOpts`, `UniqueOpts`, `PeriodicJobOpts`,
 `QueueConfig`, `MaintenanceConfig`, `SubscribeConfig`, `PostgresDatabase`,
 `PostgresMigrator`) use `with_*` methods that return the value with one
 setting changed, like `PathBuf::with_extension`, so `UniqueOpts::by_args`
-reads what `UniqueOpts::with_by_args` sets.
-Constructors with a required extra argument are also named `with_*`, like
-`Vec::with_capacity`. Durations that can be disabled are explicit, as in
-`ClientBuilder::without_job_timeout` and `Retention::Keep`, rather than
-`Option`s whose `None` means something.
+reads what `UniqueOpts::with_by_args` sets. Durations that can be disabled
+are explicit, as in `ClientBuilder::without_job_timeout` and
+`Retention::Keep`.
 
 The crate's `examples` directory has runnable programs for a basic worker,
 graceful shutdown, cancellation, transactional enqueueing and completion,
 unique and periodic jobs, events, custom PostgreSQL schemas, SQLite, and a
-Go and Rust service sharing one database. The higher-level
-[River documentation](https://riverqueue.com/docs) explains queueing concepts;
-until the website becomes language-aware, Rust API details live in this
-crate's rustdoc and examples.
+Rust and Go service sharing one database. The
+[River documentation](https://riverqueue.com/docs) explains queueing concepts.
 
 ## Benchmarking
 
 The [`riverqueue-cli`](https://crates.io/crates/riverqueue-cli) crate provides
-`riverqueue bench`, a destructive development-database benchmark analogous to
-Go's `river bench`. It truncates the selected River job table and reports
-periodic throughput plus final throughput and p95 latency. Run
-`riverqueue bench --help` and use a disposable database.
+`riverqueue bench`, a benchmark for development databases. It truncates the
+selected River job table, so use a disposable database, and reports periodic
+throughput plus final throughput and p95 latency. Run
+`riverqueue bench --help` for its options.
 
-[`Client::start`]: https://docs.rs/riverqueue/latest/riverqueue/struct.Client.html#method.start
 [`Hook`]: https://docs.rs/riverqueue/latest/riverqueue/trait.Hook.html
 [`WorkMiddleware`]: https://docs.rs/riverqueue/latest/riverqueue/trait.WorkMiddleware.html
 [`Worker`]: https://docs.rs/riverqueue/latest/riverqueue/trait.Worker.html
 [`database`]: https://docs.rs/riverqueue/latest/riverqueue/database/index.html
+[`encoding`]: https://docs.rs/riverqueue/latest/riverqueue/encoding/index.html
 [`error`]: https://docs.rs/riverqueue/latest/riverqueue/error/index.html
 [`event`]: https://docs.rs/riverqueue/latest/riverqueue/event/index.html
 [`extension`]: https://docs.rs/riverqueue/latest/riverqueue/extension/index.html
 [`job`]: https://docs.rs/riverqueue/latest/riverqueue/job/index.html
 [`periodic`]: https://docs.rs/riverqueue/latest/riverqueue/periodic/index.html
+[`protocol`]: https://docs.rs/riverqueue/latest/riverqueue/protocol/index.html
 [`query`]: https://docs.rs/riverqueue/latest/riverqueue/query/index.html
 [`queue`]: https://docs.rs/riverqueue/latest/riverqueue/queue/index.html
 [`worker`]: https://docs.rs/riverqueue/latest/riverqueue/worker/index.html

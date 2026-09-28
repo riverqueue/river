@@ -1,4 +1,15 @@
-#![doc = include_str!("../README.md")]
+// The README's examples use both backends, so it's the crate documentation
+// (and its examples run as doctests) when both are enabled, as on docs.rs.
+#![cfg_attr(
+    all(feature = "postgres", feature = "sqlite"),
+    doc = include_str!("../README.md")
+)]
+#![cfg_attr(
+    not(all(feature = "postgres", feature = "sqlite")),
+    doc = "The Rust and Tokio client for [River](https://riverqueue.com). The full crate \
+           documentation, from the README, builds with both the `postgres` and `sqlite` \
+           features, as on [docs.rs](https://docs.rs/riverqueue)."
+)]
 #![cfg_attr(docsrs, feature(doc_cfg))]
 #![forbid(unsafe_code)]
 #![warn(missing_docs)]
