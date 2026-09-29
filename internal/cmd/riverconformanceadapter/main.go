@@ -3469,8 +3469,13 @@ func handleCronNext(rawParams json.RawMessage) (any, error) {
 	if err != nil {
 		return nil, err
 	}
+	// The schedule is evaluated in `from`'s fixed offset. Decoding a time
+	// whose offset matches the host's zone yields `time.Local` instead, which
+	// would move occurrences across that zone's DST changes and make the
+	// result depend on the host.
+	_, offset := params.From.Zone()
 	next := make([]string, 0, params.Count)
-	current := params.From
+	current := params.From.In(time.FixedZone("", offset))
 	for range params.Count {
 		current = schedule.Next(current)
 		if current.IsZero() {

@@ -171,8 +171,9 @@ an adapter whose implementation does not expose them; the Go reference is one.
   River's Go retry policy. Implementations with seedable jitter use the seed;
   the Go reference's jitter is process-random and ignores it.
 - `cron_next` takes `expression`, an RFC 3339 `from` time, and `count`, and
-  returns up to `count` successive occurrences as RFC 3339 strings in the
-  reference time's offset. It must accept exactly River Go's documented cron
+  returns up to `count` successive occurrences as RFC 3339 strings. The
+  schedule is evaluated and formatted in the reference time's fixed offset,
+  whatever the host's time zone. It must accept exactly River Go's documented cron
   syntax (robfig/cron `ParseStandard`) and reject everything else; the
   `cron_cases` and `cron_invalid` sections of
   `fixtures/maintenance_values.json` are the goldens.
