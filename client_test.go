@@ -5773,7 +5773,10 @@ func Test_Client_JobRetry(t *testing.T) {
 		require.Nil(t, job)
 	})
 
-	// ConcurrentRetryLoserSeesWinnersCommitNotStaleSnapshot pins the documented
+	// Forces the interleaving deterministically: the winner's retryTx is held
+	// open while the loser's retry parks on the row lock (observed via
+	// pg_stat_activity). RED without a locking fallback read.
+
 	// JobRetryTx contract: "A retried job isn't visible to be worked until the
 	// transaction commits, and if the transaction rolls back, so too is the
 	// retried job" — a caller that waits for that transaction must therefore
@@ -5807,7 +5810,6 @@ func Test_Client_JobRetry(t *testing.T) {
 		require.NoError(t, err)
 		require.Equal(t, rivertype.JobStateCancelled, cancelledJob.State)
 
-		// Winner: retry in a transaction held open across the loser's attempt.
 		winnerTx, err := bundle.dbPool.Begin(ctx)
 		require.NoError(t, err)
 		defer func() { _ = winnerTx.Rollback(context.WithoutCancel(ctx)) }()
@@ -5817,9 +5819,6 @@ func Test_Client_JobRetry(t *testing.T) {
 		require.Equal(t, rivertype.JobStateAvailable, winnerRow.State)
 		require.Nil(t, winnerRow.FinalizedAt)
 
-		// Loser: fresh transaction whose first statement pins its snapshot and
-		// reports its backend PID; the retry itself then blocks on the winner's
-		// row lock.
 		loserTx, err := bundle.dbPool.Begin(ctx)
 		require.NoError(t, err)
 		defer func() { _ = loserTx.Rollback(context.WithoutCancel(ctx)) }()
@@ -5854,8 +5853,6 @@ func Test_Client_JobRetry(t *testing.T) {
 			"loser of a retry race returned a stale pre-commit row; its fallback read must see the winner's commit")
 		require.Nil(t, loser.row.FinalizedAt,
 			"loser must observe the winner's finalization clear, not its own snapshot's")
-
-		// The row itself was never double-touched: exactly one retry happened.
 		finalRow, err := client.JobGet(ctx, insertRes.Job.ID)
 		require.NoError(t, err)
 		require.Equal(t, rivertype.JobStateAvailable, finalRow.State)
