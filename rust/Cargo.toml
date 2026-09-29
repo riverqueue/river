@@ -50,3 +50,8 @@ doc_markdown = "allow"
 missing_errors_doc = "warn"
 module_name_repetitions = "allow"
 must_use_candidate = "allow"
+
+# Line tables keep file and line numbers in backtraces and panics at a
+# fraction of full debug info's size. The `test` profile inherits this.
+[profile.dev]
+debug = "line-tables-only"
