@@ -225,7 +225,7 @@ Exported methods of `*river.Client[TTx]`.
 | `client.Schema` | api_equivalent |  | Accessor for the configured schema (see config.Schema). |
 | `client.Start` | api_equivalent | `sqlite_runtime_lifecycle_shutdown` (TestMixedSQLiteRuntimeConformance) | Language-native client start. |
 | `client.Stop` | api_equivalent | `sqlite_runtime_lifecycle_shutdown` (TestMixedSQLiteRuntimeConformance) | Language-native graceful stop that lets running jobs finish. |
-| `client.StopAndCancel` | api_equivalent | `ignored_cancellation_hard_abort` (TestMixedConformance) | Language-native hard stop that cancels running jobs; the adapter's stop with cancel uses it. |
+| `client.StopAndCancel` | api_equivalent | `ignored_cancellation_hard_abort` (TestMixedConformance) | Language-native hard stop that cancels running jobs; a job still ignoring cancellation after the stuck threshold is aborted and its attempt fails. The adapter's stop with cancel uses it. |
 | `client.Stopped` | api_equivalent |  | Go channel closed when the client has fully stopped; other languages signal completion in their own idiom. |
 | `client.Subscribe` | api_equivalent | `remote_queue_subscription_events` (TestMixedConformance)<br>`sqlite_runtime_extensions_resumable_subscriptions` (TestMixedSQLiteRuntimeConformance) | Language-native local event subscription; the adapter reports observed events via runtime_stats. |
 | `client.SubscribeConfig` | not_applicable |  | Go-specific variant of Subscribe that overrides the channel buffer size. |

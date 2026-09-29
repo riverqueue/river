@@ -566,7 +566,9 @@ impl Stopper {
     /// still waits for workers to return: a job that returns promptly after
     /// cancellation is made available again without using up its attempt,
     /// and one that ignores cancellation for longer than the job stuck
-    /// threshold is aborted. A job whose cancellation was requested with
+    /// threshold is aborted, which fails its attempt: the attempt counts and
+    /// the job is retried or discarded like any failed attempt. A job whose
+    /// cancellation was requested with
     /// [`Jobs::cancel`](crate::Jobs::cancel) is cancelled rather than
     /// made available.
     pub fn stop_now(&self) {

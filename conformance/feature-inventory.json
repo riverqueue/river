@@ -417,7 +417,7 @@
       "area": "client",
       "detail": "func(context.Context) error",
       "id": "client.StopAndCancel",
-      "rationale": "Language-native hard stop that cancels running jobs; the adapter's stop with cancel uses it.",
+      "rationale": "Language-native hard stop that cancels running jobs; a job still ignoring cancellation after the stuck threshold is aborted and its attempt fails. The adapter's stop with cancel uses it.",
       "scenarios": [
         "ignored_cancellation_hard_abort"
       ],

@@ -336,7 +336,9 @@ const ABORT_GRACE_DURING_SHUTDOWN: Duration = Duration::from_millis(100);
 /// own timeout when it sets one, otherwise the client's.
 ///
 /// After `job_stuck_threshold`, the stuck handler runs and the task is
-/// aborted. Tokio abort only takes effect at the task's next `.await`, so a
+/// aborted. The aborted attempt fails with "job aborted after ignoring
+/// cancellation", during a hard stop as well, so it counts and is retried or
+/// discarded like any failed attempt. Tokio abort only takes effect at the task's next `.await`, so a
 /// task blocked in synchronous code keeps its worker slot until it actually
 /// ends: the queue never exceeds `max_workers`, and the job is not persisted
 /// (and so cannot be fetched again) while the original may still be running.
@@ -396,17 +398,18 @@ pub(super) async fn finish_cancelled_task(
 /// client cancelled it, mirroring River Go's `isSoftStopCancelError`.
 ///
 /// A worker that returns [`WorkCancelled`] (anywhere in its error's source
-/// chain) stopped cooperatively, and a task River aborted after the stuck
-/// threshold was stopped by the client. Panics and other returned errors are
-/// genuine failures that are recorded and retried.
+/// chain) stopped cooperatively. A task River aborted because it still
+/// ignored cancellation after the stuck threshold didn't stop on its own: it
+/// had that long to respond, so its attempt fails and follows the ordinary
+/// retry path like panics and other returned errors.
 pub(super) fn is_soft_stop_failure(failure: &WorkerFailure) -> bool {
     match failure.kind {
-        WorkerFailureKind::Aborted => true,
         WorkerFailureKind::Error => failure
             .source
             .as_ref()
             .is_some_and(|error| WorkCancelled::is_in_chain(error.get_ref())),
-        WorkerFailureKind::Cancelled
+        WorkerFailureKind::Aborted
+        | WorkerFailureKind::Cancelled
         | WorkerFailureKind::Interrupted
         | WorkerFailureKind::Panic => false,
     }

@@ -1792,45 +1792,78 @@ async fn resumable_cursor_and_transactional_checkpoints() {
     database.cleanup().await;
 }
 
+/// A hard stop gives a job ignoring cancellation the stuck threshold to
+/// return, then aborts it and fails its attempt: the attempt counts, the
+/// error is recorded, and the job is retried or, at its maximum attempts,
+/// discarded.
 #[tokio::test]
-async fn shutdown_now_interrupts_a_job_ignoring_cancellation() {
+async fn shutdown_now_fails_a_job_ignoring_cancellation() {
     let database = support::PostgresSchema::current("rs_interrupt").await;
 
-    let mut interrupt_workers = WorkerRegistry::new();
-    interrupt_workers
+    let mut workers = WorkerRegistry::new();
+    workers
         .register::<IgnoresCancelArgs, _>(IgnoresCancelWorker)
         .unwrap();
-    let interrupt_client = Client::builder(database.pool.clone())
+    let client = Client::builder(database.pool.clone())
         .id("rust-interrupt-client")
         .job_stuck_threshold(Duration::from_millis(10))
-        .workers(interrupt_workers)
-        .queue("interrupt", QueueConfig::new(1))
+        .workers(workers)
+        .queue("interrupt", QueueConfig::new(2))
         .build()
         .unwrap();
-    let interrupted = interrupt_client
+    let retried = client
         .insert(IgnoresCancelArgs {})
         .opts(InsertOpts::default().with_queue("interrupt"))
         .await
-        .unwrap();
-    let mut interrupted_events = interrupt_client
-        .subscribe(&[EventKind::JobInterrupted])
-        .unwrap();
-    let mut interrupt_handle = interrupt_client.start().unwrap();
-    wait_for_state(&interrupt_client, interrupted.job.row.id, JobState::Running).await;
-    interrupt_handle.shutdown_now().await.unwrap();
-    let interrupted_row = interrupt_client
-        .jobs()
-        .get(interrupted.job.row.id)
-        .await
-        .unwrap();
-    assert_eq!(interrupted_row.attempt, 0);
-    assert_eq!(interrupted_row.state, JobState::Available);
-    assert!(interrupted_row.errors.is_empty());
-    let event = tokio::time::timeout(Duration::from_secs(1), interrupted_events.recv())
+        .unwrap()
+        .job
+        .row
+        .id;
+    let discarded = client
+        .insert(IgnoresCancelArgs {})
+        .opts(
+            InsertOpts::default()
+                .with_queue("interrupt")
+                .with_max_attempts(1),
+        )
         .await
         .unwrap()
+        .job
+        .row
+        .id;
+    let mut events = client
+        .subscribe(&[EventKind::JobFailed, EventKind::JobInterrupted])
         .unwrap();
-    assert_eq!(event.as_job().unwrap().job.id, interrupted.job.row.id);
+    let mut handle = client.start().unwrap();
+    wait_for_state(&client, retried, JobState::Running).await;
+    wait_for_state(&client, discarded, JobState::Running).await;
+    handle.shutdown_now().await.unwrap();
+
+    for (id, states) in [
+        (retried, &[JobState::Available, JobState::Retryable][..]),
+        (discarded, &[JobState::Discarded][..]),
+    ] {
+        let row = client.jobs().get(id).await.unwrap();
+        assert_eq!(row.attempt, 1);
+        assert!(states.contains(&row.state), "{row:?}");
+        assert_eq!(row.errors.len(), 1);
+        assert_eq!(row.errors[0].attempt, 1);
+        assert_eq!(
+            row.errors[0].error,
+            "job aborted after ignoring cancellation"
+        );
+    }
+    let mut failed = Vec::new();
+    for _ in 0..2 {
+        let event = tokio::time::timeout(Duration::from_secs(1), events.recv())
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(event.kind(), EventKind::JobFailed);
+        failed.push(event.as_job().unwrap().job.id);
+    }
+    failed.sort_unstable();
+    assert_eq!(failed, [retried, discarded]);
 
     database.cleanup().await;
 }

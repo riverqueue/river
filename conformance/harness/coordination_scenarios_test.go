@@ -631,10 +631,12 @@ func verifySkipLockedCompetition(t *testing.T, goAdapter, candidateAdapter *adap
 	candidateAdapter.call(t, "stop", map[string]any{}, nil)
 }
 
-// verifyIgnoredCancellationHardAbort stops a disposable candidate process
-// whose worker ignores cancellation and requires the attempt to be returned
-// to the queue. Go cannot abort a goroutine that ignores its context, so this
-// scenario exercises the candidate's runtime only.
+// verifyIgnoredCancellationHardAbort hard-stops a disposable candidate
+// process whose worker ignores cancellation. The job gets the stuck threshold
+// to respond, and is then aborted, which fails its attempt: the attempt
+// counts, its error is recorded, and the job follows the retry path. Go
+// cannot abort a goroutine that ignores its context, so this scenario
+// exercises the candidate's runtime only.
 func verifyIgnoredCancellationHardAbort(t *testing.T, repositoryRoot, databaseURL string, pair mixedPair) {
 	t.Helper()
 
@@ -642,7 +644,7 @@ func verifyIgnoredCancellationHardAbort(t *testing.T, repositoryRoot, databaseUR
 	stuck := startCandidateAdapter(t, repositoryRoot, databaseURL, "candidate-stuck", pair.candidateSpec, pair.candidateSpec.RestartCommand)
 	stuckClientID := pair.candidateSpec.Implementation + "-stuck-worker"
 	stuck.call(t, "start", map[string]any{
-		"client_id": stuckClientID, "max_workers": 1, "queue": "ignored",
+		"client_id": stuckClientID, "job_stuck_threshold_ms": 100, "max_workers": 1, "queue": "ignored",
 	}, nil)
 	var stuckJob normalizedJob
 	pair.reference.call(t, "insert", map[string]any{
@@ -655,8 +657,11 @@ func verifyIgnoredCancellationHardAbort(t *testing.T, repositoryRoot, databaseUR
 	}, &stuckJob)
 	stuck.call(t, "stop", map[string]any{"cancel": true}, nil)
 	pair.reference.call(t, "get", map[string]any{"id": stuckJob.ID}, &stuckJob)
-	require.Equal(t, "available", stuckJob.State)
-	require.Equal(t, 0, stuckJob.Attempt)
+	require.Contains(t, []string{"available", "retryable"}, stuckJob.State)
+	require.Equal(t, 1, stuckJob.Attempt)
+	require.Len(t, stuckJob.Errors, 1)
+	require.Equal(t, 1, stuckJob.Errors[0].Attempt)
+	require.NotEmpty(t, stuckJob.Errors[0].Error)
 }
 
 // verifyProcessKillRestartAndRescue kills a candidate process mid-attempt and

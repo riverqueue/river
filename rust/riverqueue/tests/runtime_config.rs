@@ -606,8 +606,8 @@ async fn shutdown_waits_for_active_work_and_soft_stop_escalates() {
             )
             .build()
             .unwrap();
-    let mut interrupted_events = escalation_client
-        .subscribe(&[EventKind::JobInterrupted])
+    let mut failed_events = escalation_client
+        .subscribe(&[EventKind::JobFailed, EventKind::JobInterrupted])
         .unwrap();
     let stuck = escalation_client
         .insert(ShutdownArgs {
@@ -625,18 +625,28 @@ async fn shutdown_waits_for_active_work_and_soft_stop_escalates() {
         .unwrap()
         .unwrap();
     assert!(shutdown_started.elapsed() >= Duration::from_millis(50));
-    let interrupted = escalation_client
+    // The escalated stop aborted the job after the stuck threshold, which
+    // fails its attempt.
+    let aborted = escalation_client
         .jobs()
         .get(stuck.job.row.id)
         .await
         .unwrap();
-    assert_eq!(interrupted.attempt, 0);
-    assert_eq!(interrupted.state, JobState::Available);
-    assert!(interrupted.errors.is_empty());
-    let event = tokio::time::timeout(Duration::from_secs(1), interrupted_events.recv())
+    assert_eq!(aborted.attempt, 1);
+    assert!(
+        matches!(aborted.state, JobState::Available | JobState::Retryable),
+        "{aborted:?}"
+    );
+    assert_eq!(aborted.errors.len(), 1);
+    assert_eq!(
+        aborted.errors[0].error,
+        "job aborted after ignoring cancellation"
+    );
+    let event = tokio::time::timeout(Duration::from_secs(1), failed_events.recv())
         .await
         .unwrap()
         .unwrap();
+    assert_eq!(event.kind(), EventKind::JobFailed);
     assert_eq!(event.as_job().unwrap().job.id, stuck.job.row.id);
 
     database.cleanup().await;
