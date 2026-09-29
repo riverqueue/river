@@ -27,6 +27,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Fixed remote cancellation leaving peer jobs running until rescue when a worker returns per-job results for several jobs. The cancelled job now settles as cancelled, and peers settle according to their own results. [PR #1408](https://github.com/riverqueue/river/pull/1408).
 - Fixed cancelled transaction starts leaving Turso connections unusable, which could prevent maintenance from recovering after a startup failure. [PR #1347](https://github.com/riverqueue/river/pull/1347).
 - Fixed maintenance startup failures leaving a client renewing leadership with maintenance stopped in poll-only mode. After exhausting startup retries, clients now request local resignation without depending on database notifications. [PR #1347](https://github.com/riverqueue/river/pull/1347).
 - Fixed the default retry policy scheduling a job's retry about 292 years in the past on amd64 once the job had errored 310 or more times, which made it run again immediately. The capped retry delay is now exactly the maximum duration on every architecture. [PR #1402](https://github.com/riverqueue/river/pull/1402).

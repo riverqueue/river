@@ -659,6 +659,8 @@ func TestJobExecutor_Execute(t *testing.T) {
 	})
 
 	t.Run("ExpandableErrorsApplyToMultipleJobsIndividually", func(t *testing.T) {
+		t.Parallel()
+
 		makeExtraRunningJobs := func(t *testing.T, exec riverdriver.Executor) []*rivertype.JobRow {
 			t.Helper()
 
@@ -680,6 +682,33 @@ func TestJobExecutor_Execute(t *testing.T) {
 			require.NoError(t, err)
 			require.Len(t, locked, 3)
 			return locked
+		}
+		runRemoteCancel := func(t *testing.T, executor *JobExecutor, bundle *testBundle, jobs []*rivertype.JobRow, errorsByID map[int64]error, numResults int) {
+			t.Helper()
+
+			workCtx, cancelFunc := context.WithCancelCause(ctx)
+			t.Cleanup(func() { cancelFunc(nil) })
+			executor.CancelFunc = cancelFunc
+			executor.WorkUnit = newWorkUnitFactoryWithCustomRetry(func() error {
+				executor.Cancel(ctx)
+				return &errorBundle{errorsByID: errorsByID, jobs: jobs}
+			}, nil).MakeUnit(bundle.jobRow)
+
+			executor.Execute(workCtx)
+			riversharedtest.WaitOrTimeoutN(t, bundle.updateCh, numResults)
+		}
+		requireJobResult := func(t *testing.T, exec riverdriver.Executor, jobRow *rivertype.JobRow, state rivertype.JobState, errorText string) {
+			t.Helper()
+
+			job, err := exec.JobGetByID(ctx, &riverdriver.JobGetByIDParams{ID: jobRow.ID, Schema: ""})
+			require.NoError(t, err)
+			require.Equal(t, state, job.State)
+			if errorText == "" {
+				require.Empty(t, job.Errors)
+				return
+			}
+			require.Len(t, job.Errors, 1)
+			require.Equal(t, errorText, job.Errors[0].Error)
 		}
 
 		t.Run("AllJobsShareSameNormalError", func(t *testing.T) {
@@ -804,6 +833,70 @@ func TestJobExecutor_Execute(t *testing.T) {
 			require.Len(t, handledJobs, len(allJobs))
 			for i, job := range handledJobs {
 				require.Same(t, allJobs[i], job)
+			}
+		})
+
+		t.Run("RemoteCancellationPreservesSuccessfulPeers", func(t *testing.T) {
+			t.Parallel()
+
+			// Successful peers must complete even when the leader's context is
+			// cancelled. Both an explicit nil and a missing error mean success.
+			executor, bundle := setup(t)
+			allJobs := append([]*rivertype.JobRow{bundle.jobRow}, makeExtraRunningJobs(t, bundle.exec)...)
+			errorsByID := map[int64]error{
+				allJobs[0].ID: nil,
+				allJobs[1].ID: errors.New("peer error"),
+				allJobs[2].ID: nil,
+			}
+
+			runRemoteCancel(t, executor, bundle, allJobs, errorsByID, len(allJobs))
+
+			requireJobResult(t, bundle.exec, allJobs[0], rivertype.JobStateCancelled, rivertype.ErrJobCancelledRemotely.Error())
+			requireJobResult(t, bundle.exec, allJobs[1], rivertype.JobStateRetryable, "peer error")
+			for _, peer := range allJobs[2:] {
+				requireJobResult(t, bundle.exec, peer, rivertype.JobStateCompleted, "")
+			}
+		})
+
+		t.Run("RemoteCancellationReportsEachJob", func(t *testing.T) {
+			t.Parallel()
+
+			// A remote cancel targets the leader; each peer keeps its own error
+			// and enters the normal retry path.
+			executor, bundle := setup(t)
+			allJobs := append([]*rivertype.JobRow{bundle.jobRow}, makeExtraRunningJobs(t, bundle.exec)...)
+			errorsByID := map[int64]error{
+				allJobs[0].ID: errors.New("leader error"),
+				allJobs[1].ID: errors.New("peer error 1"),
+				allJobs[2].ID: errors.New("peer error 2"),
+				allJobs[3].ID: errors.New("peer error 3"),
+			}
+
+			runRemoteCancel(t, executor, bundle, allJobs, errorsByID, len(allJobs))
+
+			requireJobResult(t, bundle.exec, allJobs[0], rivertype.JobStateCancelled, rivertype.ErrJobCancelledRemotely.Error())
+			for _, peer := range allJobs[1:] {
+				requireJobResult(t, bundle.exec, peer, rivertype.JobStateRetryable, errorsByID[peer.ID].Error())
+			}
+		})
+
+		t.Run("RemoteCancellationReportsLeaderMissingFromJobs", func(t *testing.T) {
+			t.Parallel()
+
+			// The cancelled leader must still be reported when a worker's job
+			// list contains only the peers it claimed.
+			executor, bundle := setup(t)
+			peers := makeExtraRunningJobs(t, bundle.exec)
+			errorsByID := make(map[int64]error, len(peers))
+			for i, peer := range peers {
+				errorsByID[peer.ID] = fmt.Errorf("peer error %d", i)
+			}
+
+			runRemoteCancel(t, executor, bundle, peers, errorsByID, len(peers)+1)
+
+			requireJobResult(t, bundle.exec, bundle.jobRow, rivertype.JobStateCancelled, rivertype.ErrJobCancelledRemotely.Error())
+			for i, peer := range peers {
+				requireJobResult(t, bundle.exec, peer, rivertype.JobStateRetryable, fmt.Sprintf("peer error %d", i))
 			}
 		})
 	})

@@ -154,27 +154,41 @@ func (e *JobExecutor) Execute(ctx context.Context) {
 	}
 
 	res := e.execute(ctx)
+	e.reportResults(ctx, res)
+	e.ProducerCallbacks.JobDone(e.JobRow)
+}
+
+func (e *JobExecutor) reportResults(ctx context.Context, res *jobExecutorResult) {
+	if multiJobErrors, ok := res.Err.(withJobsAndErrorsByID); ok {
+		e.reportMultiJobResults(ctx, res, multiJobErrors)
+		return
+	}
+
 	if res.Err != nil && errors.Is(context.Cause(ctx), rivertype.ErrJobCancelledRemotely) {
 		res.Err = context.Cause(ctx)
 	}
+	e.reportResult(ctx, e.JobRow, res)
+}
 
-	var multiJobErrors withJobsAndErrorsByID
-	if res.Err != nil {
-		multiJobErrors, _ = res.Err.(withJobsAndErrorsByID)
+func (e *JobExecutor) reportMultiJobResults(ctx context.Context, res *jobExecutorResult, multiJobErrors withJobsAndErrorsByID) {
+	cancelCause := context.Cause(ctx)
+	remotelyCancelled := errors.Is(cancelCause, rivertype.ErrJobCancelledRemotely)
+	if remotelyCancelled {
+		leaderRes := *res
+		leaderRes.Err = cancelCause
+		e.reportResult(ctx, e.JobRow, &leaderRes)
 	}
 
-	if multiJobErrors == nil {
-		e.reportResult(ctx, e.JobRow, res)
-	} else {
-		errorsByID := multiJobErrors.ErrorsByID()
-		for _, jobRow := range multiJobErrors.Jobs() {
-			jobSpecificRes := *res
-			jobSpecificRes.Err = errorsByID[jobRow.ID]
-			e.reportResult(ctx, jobRow, &jobSpecificRes)
+	errorsByID := multiJobErrors.ErrorsByID()
+	for _, jobRow := range multiJobErrors.Jobs() {
+		if remotelyCancelled && jobRow.ID == e.JobRow.ID {
+			continue
 		}
-	}
 
-	e.ProducerCallbacks.JobDone(e.JobRow)
+		jobSpecificRes := *res
+		jobSpecificRes.Err = errorsByID[jobRow.ID]
+		e.reportResult(ctx, jobRow, &jobSpecificRes)
+	}
 }
 
 // Executes the job, handling a panic if necessary (and various other error
