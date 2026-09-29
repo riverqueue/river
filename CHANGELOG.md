@@ -12,6 +12,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - If you're on Postgres, you can ignore it with no adverse affects.
 - If you're on SQLite, it rebuilds `river_job` to add an `AUTOINCREMENT` keyword to the primary key, preventing a possible edge case where generated job IDs could be reused after deletion. It's not necessary to run the migration for River to work, but it's a good idea to get it in when convenient. [PR #1390](https://github.com/riverqueue/river/pull/1390).
 
+⚠️ **Breaking behavior change:** `UniqueOpts{ExcludeKind: true}` with no other unique fields set was previously a silent no-op; it's now rejected at insert time with an explicit error. [PR #1404](https://github.com/riverqueue/river/pull/1404).
+
 ### Added
 
 - Added `Config.FetchOnlyKnownKinds` to restrict job fetching to registered worker kinds, including aliases. Clients with different workers can share a queue while leaving unknown jobs available without consuming attempts. Disabled by default; leader election and stuck-job rescue behavior are unchanged. [PR #1396](https://github.com/riverqueue/river/pull/1396).
@@ -21,6 +23,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 
 - `UniqueOpts.ByPeriod` now derives a job's period from its effective scheduled time (`InsertOpts.ScheduledAt` when set, otherwise the insertion time), so scheduled jobs are deduplicated against other jobs scheduled in the same period rather than against jobs inserted in the same period. Periods are also now always measured in UTC, so processes and `ScheduledAt` values in different time zones produce the same unique key for the same period. Unique keys for scheduled `ByPeriod` jobs, and for any `ByPeriod` job inserted from a process whose local time zone isn't UTC, differ from those produced by previous versions. During a rolling upgrade, old and new clients may therefore each insert one job for such a period; jobs that aren't scheduled and are inserted from UTC processes are unaffected. [PR #1377](https://github.com/riverqueue/river/pull/1377).
+- `UniqueOpts{ExcludeKind: true}` alone is now rejected at insert time instead of being silently ignored. `UniqueOpts.isEmpty()` now considers `ExcludeKind`, in line with the equivalent handling in internal/dbunique. [PR #1404](https://github.com/riverqueue/river/pull/1404).
 
 ### Fixed
 
