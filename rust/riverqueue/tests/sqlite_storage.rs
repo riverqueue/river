@@ -120,6 +120,80 @@ async fn empty_batches_are_rejected_before_database_work() {
     pool.close().await;
 }
 
+/// Like Go's SQLite driver, an insert binds no time it wasn't given: SQLite
+/// stamps `created_at` on every row, and `scheduled_at` on unscheduled rows,
+/// with its own `datetime('now', 'subsec')`, while an explicit schedule is
+/// stored as given.
+#[tokio::test]
+async fn inserts_leave_unset_times_to_sqlite() {
+    let (client, pool) = setup().await;
+    let sqlite_now = || async {
+        sqlx::query_scalar::<_, String>("SELECT datetime('now', 'subsec')")
+            .fetch_one(&pool)
+            .await
+            .unwrap()
+    };
+    let stored = |id: i64| {
+        let pool = pool.clone();
+        async move {
+            sqlx::query_as::<_, (String, String)>(
+                "SELECT created_at, scheduled_at FROM river_job WHERE id = ?",
+            )
+            .bind(id)
+            .fetch_one(&pool)
+            .await
+            .unwrap()
+        }
+    };
+    let is_sqlite_time = |text: &str| {
+        text.len() == 23
+            && chrono::NaiveDateTime::parse_from_str(text, "%Y-%m-%d %H:%M:%S%.3f").is_ok()
+    };
+
+    let before = sqlite_now().await;
+    let unscheduled = client
+        .insert(EmptyBatchArgs { value: 1 })
+        .await
+        .unwrap()
+        .id();
+    let mut batch = InsertBatch::new();
+    batch
+        .push(EmptyBatchArgs { value: 2 })
+        .push(EmptyBatchArgs { value: 3 });
+    let batched = client
+        .insert_batch(batch)
+        .await
+        .unwrap()
+        .iter()
+        .map(riverqueue::InsertBatchResult::id)
+        .collect::<Vec<_>>();
+    let scheduled_for = Utc::now() + Duration::hours(1);
+    let scheduled = client
+        .insert(EmptyBatchArgs { value: 4 })
+        .opts(riverqueue::InsertOpts::default().with_scheduled_at(scheduled_for))
+        .await
+        .unwrap()
+        .id();
+    let after = sqlite_now().await;
+
+    for id in std::iter::once(unscheduled).chain(batched) {
+        let (created_at, scheduled_at) = stored(id).await;
+        assert!(is_sqlite_time(&created_at), "{created_at}");
+        // SQLite's `now` holds for one statement, so both columns agree.
+        assert_eq!(created_at, scheduled_at);
+        assert!(
+            before <= created_at && created_at <= after,
+            "{before} <= {created_at} <= {after}"
+        );
+    }
+    let (created_at, scheduled_at) = stored(scheduled).await;
+    assert!(is_sqlite_time(&created_at), "{created_at}");
+    assert!(before <= created_at && created_at <= after);
+    assert_eq!(scheduled_at, sqlite_time(scheduled_for));
+
+    pool.close().await;
+}
+
 #[tokio::test]
 async fn job_list_time_without_states_uses_schedule_and_finalized_requires_states() {
     let (client, pool) = setup().await;

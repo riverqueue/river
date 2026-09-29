@@ -694,10 +694,9 @@ impl Client {
             }
         }
 
-        let now = Utc::now();
         let mut rows = Vec::with_capacity(jobs.len());
         for job in jobs {
-            rows.push(self.insert_row(connection.reborrow(), job, now).await?);
+            rows.push(self.insert_row(connection.reborrow(), job).await?);
         }
         if intercepts {
             self.after_jobs_inserted(connection.reborrow(), &rows)
@@ -795,7 +794,6 @@ impl Client {
         &self,
         connection: PilotDatabaseConnection<'_>,
         job: InsertContext,
-        now: DateTime<Utc>,
     ) -> Result<InsertedJob, Error> {
         let InsertContext {
             encoded_args,
@@ -806,7 +804,6 @@ impl Client {
             unique_key,
             unique_states,
         } = job;
-        let _ = now;
         match connection {
             #[cfg(feature = "postgres")]
             PilotDatabaseConnection::Postgres(connection) => {
@@ -850,7 +847,8 @@ impl Client {
             }
             #[cfg(feature = "sqlite")]
             PilotDatabaseConnection::Sqlite(connection) => {
-                // Like Go's SQLite driver, every inserted row carries a nonce.
+                // Like Go's SQLite driver, every inserted row carries a nonce,
+                // and times left unset are filled in by SQLite's own clock.
                 let nonce = Self::unique_insert_nonce();
                 let inserted = crate::database::sqlite::insert(
                     connection,
@@ -858,7 +856,7 @@ impl Client {
                         attempt: 0,
                         attempted_at: None,
                         attempted_by: &[],
-                        created_at: created_at.unwrap_or(now),
+                        created_at,
                         encoded_args: &encoded_args,
                         errors: &[],
                         finalized_at: None,
@@ -868,7 +866,7 @@ impl Client {
                         metadata: &opts.metadata,
                         priority: opts.priority,
                         queue: &opts.queue,
-                        scheduled_at: opts.scheduled_at.unwrap_or(now),
+                        scheduled_at: opts.scheduled_at,
                         state,
                         tags: &opts.tags,
                         unique_key: unique_key.as_deref(),

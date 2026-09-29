@@ -97,7 +97,8 @@ pub(crate) struct InsertJob<'a> {
     pub attempted_at: Option<DateTime<Utc>>,
     pub attempted_by: &'a [String],
     pub attempt: i16,
-    pub created_at: DateTime<Utc>,
+    /// When unset, SQLite's `datetime('now', 'subsec')`, like Go's driver.
+    pub created_at: Option<DateTime<Utc>>,
     pub encoded_args: &'a serde_json::value::RawValue,
     pub errors: &'a [AttemptError],
     pub finalized_at: Option<DateTime<Utc>>,
@@ -107,7 +108,8 @@ pub(crate) struct InsertJob<'a> {
     pub metadata: &'a JobMetadata,
     pub priority: i16,
     pub queue: &'a str,
-    pub scheduled_at: DateTime<Utc>,
+    /// When unset, SQLite's `datetime('now', 'subsec')`, like Go's driver.
+    pub scheduled_at: Option<DateTime<Utc>>,
     pub state: JobState,
     pub tags: &'a [String],
     pub unique_key: Option<&'a [u8]>,
@@ -407,8 +409,9 @@ pub(crate) async fn insert(
             scheduled_at, state, tags, unique_key, unique_states
         ) VALUES (
             ?, jsonb(?), ?, ?, CASE WHEN ? = '[]' THEN NULL ELSE jsonb(?) END,
-            ?, CASE WHEN ? = '[]' THEN NULL ELSE jsonb(?) END, ?, ?, ?,
-            jsonb(?), ?, ?, ?, ?, jsonb(?), ?, ?
+            coalesce(?, datetime('now', 'subsec')),
+            CASE WHEN ? = '[]' THEN NULL ELSE jsonb(?) END, ?, ?, ?,
+            jsonb(?), ?, ?, coalesce(?, datetime('now', 'subsec')), ?, jsonb(?), ?, ?
         )
         ON CONFLICT (unique_key)
             WHERE unique_key IS NOT NULL
@@ -435,7 +438,7 @@ pub(crate) async fn insert(
         .bind(sqlite_time_optional(params.attempted_at))
         .bind(&attempted_by)
         .bind(&attempted_by)
-        .bind(sqlite_time(params.created_at))
+        .bind(sqlite_time_optional(params.created_at))
         .bind(&errors)
         .bind(&errors)
         .bind(sqlite_time_optional(params.finalized_at))
@@ -444,7 +447,7 @@ pub(crate) async fn insert(
         .bind(metadata)
         .bind(params.priority)
         .bind(params.queue)
-        .bind(sqlite_time(params.scheduled_at))
+        .bind(sqlite_time_optional(params.scheduled_at))
         .bind(params.state.as_str())
         .bind(tags)
         .bind(params.unique_key)
@@ -1838,7 +1841,7 @@ mod tests {
             attempt: 0,
             attempted_at: None,
             attempted_by: &[],
-            created_at: now,
+            created_at: Some(now),
             encoded_args: &args,
             errors: &[],
             finalized_at: None,
@@ -1848,7 +1851,7 @@ mod tests {
             metadata: &metadata,
             priority: 1,
             queue: "default",
-            scheduled_at: now,
+            scheduled_at: Some(now),
             state: JobState::Available,
             tags: &tags,
             unique_key: Some(&unique_key),
@@ -1973,7 +1976,7 @@ mod tests {
                 attempt: 0,
                 attempted_at: None,
                 attempted_by: &[],
-                created_at: now,
+                created_at: Some(now),
                 encoded_args: &args,
                 errors: &[],
                 finalized_at: None,
@@ -1983,7 +1986,7 @@ mod tests {
                 metadata: &metadata,
                 priority: 1,
                 queue: "default",
-                scheduled_at: now,
+                scheduled_at: Some(now),
                 state: JobState::Scheduled,
                 tags: &[],
                 unique_key: None,
@@ -2386,7 +2389,7 @@ mod tests {
                 attempt: 0,
                 attempted_at: None,
                 attempted_by: &[],
-                created_at: now,
+                created_at: Some(now),
                 encoded_args: &serde_json::value::to_raw_value(&json!({})).unwrap(),
                 errors: &[],
                 finalized_at: None,
@@ -2396,7 +2399,7 @@ mod tests {
                 metadata: &JobMetadata::default(),
                 priority: 1,
                 queue: "default",
-                scheduled_at: now,
+                scheduled_at: Some(now),
                 state: JobState::Available,
                 tags: &[],
                 unique_key: None,
@@ -2444,7 +2447,7 @@ mod tests {
                 attempt: i16::from(running),
                 attempted_at: running.then_some(now - TimeDelta::hours(2)),
                 attempted_by: &[],
-                created_at: now,
+                created_at: Some(now),
                 encoded_args: &serde_json::value::to_raw_value(&json!({})).unwrap(),
                 errors: &[],
                 finalized_at: None,
@@ -2454,7 +2457,7 @@ mod tests {
                 metadata: &JobMetadata::default(),
                 priority: 1,
                 queue: "default",
-                scheduled_at: now,
+                scheduled_at: Some(now),
                 state,
                 tags: &["tag".to_owned()],
                 unique_key: None,
@@ -2657,7 +2660,7 @@ mod tests {
                 attempt: 1,
                 attempted_at: Some(now),
                 attempted_by: &["client".to_owned()],
-                created_at: now,
+                created_at: Some(now),
                 encoded_args: &serde_json::value::to_raw_value(&json!({})).unwrap(),
                 errors: &[],
                 finalized_at: None,
@@ -2667,7 +2670,7 @@ mod tests {
                 metadata: &JobMetadata::from(Map::from_iter([("winner".to_owned(), json!(true))])),
                 priority: 1,
                 queue: "default",
-                scheduled_at: now,
+                scheduled_at: Some(now),
                 state: JobState::Running,
                 tags: &[],
                 unique_key: None,
