@@ -219,6 +219,10 @@ type UniqueOpts struct {
 	// ExcludeKind indicates that the job kind should not be included in the
 	// uniqueness check. This is useful when you want to enforce uniqueness
 	// across all jobs regardless of kind.
+	//
+	// Must be combined with at least one of ByArgs, ByQueue, or ByPeriod;
+	// otherwise the key would be constant across the entire table and the
+	// combination is rejected by validate.
 	ExcludeKind bool
 }
 
@@ -232,7 +236,8 @@ func (o *UniqueOpts) isEmpty() bool {
 	return !o.ByArgs &&
 		o.ByPeriod == time.Duration(0) &&
 		!o.ByQueue &&
-		o.ByState == nil
+		o.ByState == nil &&
+		!o.ExcludeKind
 }
 
 var jobStateAll = rivertype.JobStates() //nolint:gochecknoglobals
@@ -260,6 +265,10 @@ func (o *UniqueOpts) validate() error {
 
 	if o.ByPeriod != time.Duration(0) && o.ByPeriod < 1*time.Second {
 		return errors.New("UniqueOpts.ByPeriod should not be less than 1 second")
+	}
+
+	if o.ExcludeKind && !o.ByArgs && !o.ByQueue && o.ByPeriod == 0 {
+		return errors.New("UniqueOpts.ExcludeKind requires ByArgs, ByQueue, or ByPeriod")
 	}
 
 	// Job states are typed, but since the underlying type is a string, users
