@@ -13,6 +13,14 @@
 //! before the coordinator's own outcome. Peers don't take producer slots, and
 //! their producer's session never hears about them, like the other jobs of a
 //! multi-job result in River for Go.
+//!
+//! A soft stop doesn't end a coordinator's claims: the producer stops
+//! fetching new jobs, but a running coordinator may keep claiming peers until
+//! its attempt ends, so it can finish gathering and work the group it has.
+//! The stop waits for that attempt, which settles every peer before its own
+//! outcome, so the stop waits for the peers too. Only the attempt's
+//! cancellation, by a hard stop or a remote cancellation, and the attempt's
+//! end refuse claims.
 
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -66,8 +74,6 @@ struct LedgerState {
 
 /// The peers of one coordinating attempt.
 pub(crate) struct PeerLedger {
-    /// Stops new claims when the coordinator's producer stops claiming.
-    claim_stop: CancellationToken,
     /// The coordinator's job ID.
     coordinator: i64,
     /// When the coordinator's attempt started, recorded as its peers'
@@ -178,13 +184,8 @@ fn not_running() -> Error {
 }
 
 impl PeerLedger {
-    pub(super) fn new(
-        coordinator: i64,
-        started_at: DateTime<Utc>,
-        claim_stop: CancellationToken,
-    ) -> Self {
+    pub(super) fn new(coordinator: i64, started_at: DateTime<Utc>) -> Self {
         Self {
-            claim_stop,
             coordinator,
             started_at,
             id: LEDGER_IDS.fetch_add(1, Ordering::Relaxed),
@@ -211,7 +212,8 @@ impl PeerLedger {
 
     /// Claims peers with `run` in a transaction River commits, and returns
     /// the decoded rows River now tracks. Rows that couldn't be decoded are
-    /// completed as failures instead.
+    /// completed as failures instead. Claims continue through a soft stop and
+    /// end with the attempt's cancellation or its end.
     pub(crate) async fn claim<F>(
         self: &Arc<Self>,
         inner: &Arc<ClientInner>,
@@ -226,20 +228,17 @@ impl PeerLedger {
     {
         let _operation = self.begin()?;
         let cancellation = context.cancellation_token();
-        let stopped = || cancellation.is_cancelled() || self.claim_stop.is_cancelled();
-        if stopped() {
+        if cancellation.is_cancelled() {
             return Err(peer_error("peer claim cancelled"));
         }
         let database: PilotDatabase = inner.pilot_database();
         let mut transaction = tokio::select! {
             biased;
             () = cancellation.cancelled() => return Err(peer_error("peer claim cancelled")),
-            () = self.claim_stop.cancelled() => return Err(peer_error("peer claim cancelled")),
             transaction = database.begin() => transaction?,
         };
         let claimed = run(crate::__private::PeerClaimContext {
             cancellation,
-            claim_stop: &self.claim_stop,
             client_id: &inner.id,
             connection: transaction.connection(),
             database: &database,
@@ -250,7 +249,7 @@ impl PeerLedger {
             source,
         })?;
         // A claim whose coordinator was cancelled before commit rolls back.
-        if stopped() {
+        if cancellation.is_cancelled() {
             return Err(peer_error("peer claim cancelled"));
         }
         // Released again unless the rows become the coordinator's peers,

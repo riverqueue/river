@@ -1194,10 +1194,10 @@ pub struct PreparedInsertParams {
 #[derive(Debug)]
 #[non_exhaustive]
 pub struct PeerClaimContext<'c> {
-    /// The coordinating attempt's cancellation token.
+    /// The coordinating attempt's cancellation token, cancelled by a hard
+    /// stop or a remote cancellation of the coordinator's job. A soft stop
+    /// leaves it alone.
     pub cancellation: &'c CancellationToken,
-    /// Cancelled when the coordinator's producer stops claiming.
-    pub claim_stop: &'c CancellationToken,
     /// This client's identifier, which claimed rows' `attempted_by` must
     /// end with.
     pub client_id: &'c str,
@@ -1239,6 +1239,12 @@ impl PeerOutcome {
 /// including when the coordinator's job was cancelled remotely. A peer stops
 /// being owned when its outcome persists, before its event, so it can be
 /// claimed again at once.
+///
+/// A soft stop doesn't end peer operations. A coordinator keeps claiming and
+/// completing peers after its producer stops fetching new jobs, until its
+/// attempt ends, and the client's stop waits for the attempt and so for
+/// every peer it claimed. A hard stop cancels the attempt, which ends its
+/// claims.
 #[derive(Clone, Copy, Debug)]
 pub struct PeerAttempts<'a> {
     context: &'a crate::WorkContext,
@@ -1279,8 +1285,9 @@ impl<'a> PeerAttempts<'a> {
     /// twice, is the coordinator's own job, is already owned by an attempt
     /// or worked by this client, is at an attempt this coordinator already
     /// saw end, or isn't running under this client. A claim whose coordinator
-    /// is cancelled or whose producer stops before commit rolls back. River
-    /// doesn't retry a failed claim.
+    /// is cancelled before commit, by a hard stop or a remote cancellation,
+    /// rolls back. A soft stop doesn't stop claims: the coordinator may keep
+    /// claiming until its attempt ends. River doesn't retry a failed claim.
     ///
     /// Returns the decoded rows River now tracks. A row that couldn't be
     /// fully decoded is completed as a failure instead and not returned.
@@ -1288,8 +1295,9 @@ impl<'a> PeerAttempts<'a> {
     /// # Errors
     ///
     /// Returns an [`Error::Extension`](crate::Error::Extension) error for a
-    /// claim River rejected, from `run`, or once the coordinator ended, and a
-    /// database error when the transaction fails.
+    /// claim River rejected, from `run`, once the coordinator's attempt was
+    /// cancelled, or once it ended, and a database error when the transaction
+    /// fails.
     pub async fn claim<F>(self, run: F) -> Result<Vec<JobRow>, crate::Error>
     where
         F: for<'c> FnOnce(

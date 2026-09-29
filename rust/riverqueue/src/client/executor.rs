@@ -40,7 +40,6 @@ pub(super) async fn execute_job(
     hard_cancel: CancellationToken,
     cancellation: CancellationToken,
     completion_sender: mpsc::Sender<CompletionUpdate>,
-    claim_stop: CancellationToken,
 ) {
     let span = info_span!("river_job", job_id = row.id, job_kind = %row.kind, queue = %row.queue);
     async move {
@@ -55,7 +54,7 @@ pub(super) async fn execute_job(
         // Like River Go's executor start time, which it records as the
         // attempt error's `at`.
         let attempt_started_at = Utc::now();
-        let peers = Arc::new(PeerLedger::new(row.id, attempt_started_at, claim_stop));
+        let peers = Arc::new(PeerLedger::new(row.id, attempt_started_at));
         let context = WorkContext::for_job(
             Client {
                 inner: Arc::clone(&inner),

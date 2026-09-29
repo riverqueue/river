@@ -296,10 +296,7 @@ async fn scripted_claim(
         }
         Take::ClaimUntilCancelled(signal) => {
             signals.raise(signal);
-            tokio::select! {
-                () = context.cancellation.cancelled() => {}
-                () = context.claim_stop.cancelled() => {}
-            }
+            context.cancellation.cancelled().await;
         }
         Take::ClaimAfterGate => {
             signals.raise("claim holds its rows");
@@ -1019,10 +1016,100 @@ async fn assert_stops_interrupt_and_cancellations_fail(
     }
 }
 
+/// A soft stop doesn't end a coordinator's claims: a coordinator that starts
+/// claiming after its producer stopped fetching still claims and completes
+/// its peers, and the stop resolves only after they persisted. A claim after
+/// a hard stop or a remote cancellation of the coordinator is refused and
+/// leaves the peers untouched.
+async fn assert_soft_stops_keep_claims_open(
+    builder: impl Fn() -> riverqueue::ClientBuilder,
+    db: Db,
+) {
+    let script: Script = Arc::new(|context, _row, env| {
+        Box::pin(async move {
+            let mut checks = Checks::new();
+            env.signals.raise("running");
+            env.gate.notified().await;
+            let claimed = env.claim(&context, Take::Claim, &env.peers).await;
+            check(
+                &mut checks,
+                "claim during a soft stop succeeds",
+                claimed
+                    .as_ref()
+                    .is_ok_and(|rows| rows.len() == env.peers.len()),
+            );
+            let outcomes = claimed
+                .unwrap_or_default()
+                .into_iter()
+                .map(|row| PeerOutcome::new(row, Ok(WorkOutcome::Complete)))
+                .collect();
+            check(
+                &mut checks,
+                "peers complete during a soft stop",
+                PeerAttempts::new(&context).complete(outcomes).await.is_ok(),
+            );
+            let _ = env.checks.send(checks);
+            WorkOutcome::Complete
+        })
+    });
+    let mut run = Run::start(builder(), db.clone(), 2, script).await;
+    run.env.signals.wait("running").await;
+    // The producer stops fetching at once; only then does the coordinator
+    // start claiming.
+    run.handle.stopper().stop();
+    run.env.gate.notify_one();
+    tokio::time::timeout(WAIT, run.handle.wait())
+        .await
+        .expect("client stops")
+        .unwrap();
+    run.assert_checks().await;
+    for id in run.env.peers.iter().copied().chain([run.coordinator]) {
+        let row = run.client.jobs().get(id).await.unwrap();
+        assert_eq!(row.state, JobState::Completed, "{row:?}");
+    }
+    assert_eq!(*run.pilot.finished.lock().unwrap(), vec![run.coordinator]);
+
+    for remote in [false, true] {
+        let script: Script = Arc::new(|context, _row, env| {
+            Box::pin(async move {
+                let mut checks = Checks::new();
+                env.signals.raise("running");
+                context.cancellation_token().cancelled().await;
+                check(
+                    &mut checks,
+                    "claim after cancellation is refused",
+                    env.claim(&context, Take::Claim, &env.peers)
+                        .await
+                        .is_err_and(|error| peer_error(&error, "cancelled")),
+                );
+                let _ = env.checks.send(checks);
+                WorkOutcome::Complete
+            })
+        });
+        let mut run = Run::start(builder(), db.clone(), 1, script).await;
+        run.env.signals.wait("running").await;
+        if remote {
+            // The coordinator hears of its cancellation through the
+            // notification listener, which must be listening first.
+            run.handle.wait_ready().await.unwrap();
+            run.client.jobs().cancel(run.coordinator).await.unwrap();
+            run.assert_checks().await;
+            run.settled(run.coordinator).await;
+        } else {
+            run.handle.stopper().stop_now();
+            run.assert_checks().await;
+        }
+        let peer = run.client.jobs().get(run.env.peers[0]).await.unwrap();
+        assert_eq!(peer.state, JobState::Available, "{peer:?}");
+        assert_eq!(peer.attempt, 0);
+        run.stop().await;
+    }
+}
+
 /// Once the coordinator's attempt ended, its peer operations are refused.
 /// A claim still in flight when it ends is waited for: its rows become
 /// peers and then fail like any peer left without an outcome. A claim
-/// stopped before commit rolls back.
+/// whose coordinator is cancelled before commit rolls back.
 async fn assert_coordinator_lifetime_bounds_operations(
     builder: impl Fn() -> riverqueue::ClientBuilder,
     db: Db,
@@ -1084,9 +1171,9 @@ async fn assert_coordinator_lifetime_bounds_operations(
     });
     let mut run = Run::start(builder(), db, 1, script).await;
     run.env.signals.wait("claiming").await;
-    // Stopping the client stops claims without a write, which SQLite couldn't
-    // take while the claim holds its write lock.
-    run.handle.stopper().stop();
+    // A hard stop cancels the coordinator without a write, which SQLite
+    // couldn't take while the claim holds its write lock.
+    run.handle.stopper().stop_now();
     run.assert_checks().await;
     let peer = run.client.jobs().get(run.env.peers[0]).await.unwrap();
     assert_eq!(peer.state, JobState::Available);
@@ -1436,6 +1523,13 @@ mod postgres {
     }
 
     #[tokio::test(flavor = "multi_thread")]
+    async fn soft_stops_keep_claims_open() {
+        let schema = PostgresSchema::new("peer_soft_stop").await;
+        assert_soft_stops_keep_claims_open(|| builder(&schema), db(&schema)).await;
+        schema.cleanup().await;
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
     async fn stops_interrupt_and_cancellations_fail() {
         let schema = PostgresSchema::new("peer_stop").await;
         assert_stops_interrupt_and_cancellations_fail(|| builder(&schema), db(&schema)).await;
@@ -1519,6 +1613,17 @@ mod sqlite {
         let (pool, path) = sqlite_file_pool(4).await;
         assert_outcomes_use_the_completion_pipeline(
             Client::builder(pool.clone()),
+            Db::Sqlite(pool.clone()),
+        )
+        .await;
+        sqlite_cleanup(pool, path).await;
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn soft_stops_keep_claims_open() {
+        let (pool, path) = sqlite_file_pool(4).await;
+        assert_soft_stops_keep_claims_open(
+            || Client::builder(pool.clone()),
             Db::Sqlite(pool.clone()),
         )
         .await;

@@ -804,7 +804,6 @@ pub(super) async fn run_queue(
             );
             let task_inner = Arc::clone(&inner);
             let completion_sender = completion_sender.clone();
-            let claim_stop = fetch_cancel.clone();
             let session_row = attempts.session.is_some().then(|| row.clone());
             attempts.spawn(session_row, async move {
                 execute_job(
@@ -814,7 +813,6 @@ pub(super) async fn run_queue(
                     hard_cancel,
                     cancellation,
                     completion_sender,
-                    claim_stop,
                 )
                 .await;
             });
