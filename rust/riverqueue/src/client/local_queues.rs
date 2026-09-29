@@ -172,7 +172,7 @@ impl LocalQueues<'_> {
     }
 
     fn validate(self, name: &str, config: &QueueConfig) -> Result<(), Error> {
-        config.validate(name)?;
+        config.validate(name, self.client.inner.fetch_cooldown)?;
         validate_queue_settings(self.client.inner.pilot.as_ref(), name, config)
     }
 }

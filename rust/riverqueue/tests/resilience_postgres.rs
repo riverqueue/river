@@ -1041,8 +1041,12 @@ async fn client_survives_database_outage_and_catches_up() {
             )
             .build()
             .unwrap();
-    // A second client inserts directly while the first is cut off.
-    let inserter = Client::builder(schema.database()).build().unwrap();
+    // A second client inserts directly while the first is cut off. Its
+    // short fetch cooldown lets every insertion here notify the queue.
+    let inserter = Client::builder(schema.database())
+        .fetch_cooldown(Duration::from_millis(1))
+        .build()
+        .unwrap();
 
     let mut run = client.start().unwrap();
     run.wait_ready().await.unwrap();

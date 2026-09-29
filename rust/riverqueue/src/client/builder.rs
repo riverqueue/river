@@ -13,13 +13,12 @@ use crate::__private::Pilot;
 use crate::SchemaName;
 #[cfg(feature = "postgres")]
 use crate::client::validate::validate_identifier;
-use crate::client::{ClientInner, EVENT_BUFFER_CAPACITY, validate_queue};
+use crate::client::{ClientInner, EVENT_BUFFER_CAPACITY, InsertNotifyLimiter, validate_queue};
 use crate::database::Database;
 use crate::periodic::{PeriodicJob, PeriodicJobs};
 use crate::{
-    Client, Error, ErrorHandler, FETCH_COOLDOWN_DEFAULT, FETCH_COOLDOWN_MIN,
-    FETCH_POLL_INTERVAL_DEFAULT, Hook, InsertMiddleware, Plugin, QUEUE_NUM_WORKERS_MAX,
-    RetryPolicy, WorkMiddleware, WorkerRegistry,
+    Client, Error, ErrorHandler, FETCH_COOLDOWN_MIN, FETCH_POLL_INTERVAL_DEFAULT, Hook,
+    InsertMiddleware, Plugin, QUEUE_NUM_WORKERS_MAX, RetryPolicy, WorkMiddleware, WorkerRegistry,
 };
 
 /// Default age at which running jobs are rescued (Go
@@ -229,8 +228,9 @@ impl Default for MaintenanceConfig {
 pub struct QueueConfig {
     /// Settings for an add-on crate, which River passes through unchanged.
     pub(crate) extension_settings: Map<String, Value>,
-    /// Minimum delay between fetches.
-    pub(crate) fetch_cooldown: Duration,
+    /// Minimum delay between fetches, overriding the client's
+    /// [`ClientBuilder::fetch_cooldown`] when set.
+    pub(crate) fetch_cooldown: Option<Duration>,
     /// Fallback polling interval.
     pub(crate) fetch_poll_interval: Duration,
     /// Maximum jobs run concurrently by this client.
@@ -243,15 +243,16 @@ impl QueueConfig {
     pub fn new(max_workers: usize) -> Self {
         Self {
             extension_settings: Map::new(),
-            fetch_cooldown: FETCH_COOLDOWN_DEFAULT,
+            fetch_cooldown: None,
             fetch_poll_interval: FETCH_POLL_INTERVAL_DEFAULT,
             max_workers,
         }
     }
 
-    /// Returns the minimum delay between fetches.
+    /// Returns this queue's minimum delay between fetches, or `None` when it
+    /// uses the client's [`ClientBuilder::fetch_cooldown`].
     #[must_use]
-    pub const fn fetch_cooldown(&self) -> Duration {
+    pub const fn fetch_cooldown(&self) -> Option<Duration> {
         self.fetch_cooldown
     }
 
@@ -267,10 +268,16 @@ impl QueueConfig {
         self.max_workers
     }
 
-    /// Sets the minimum delay between fetches.
+    /// Sets the minimum delay between fetches for this queue, overriding the
+    /// client's [`ClientBuilder::fetch_cooldown`]. Throughput is limited by
+    /// this value. It must be at least [`FETCH_COOLDOWN_MIN`](crate::FETCH_COOLDOWN_MIN) and no longer
+    /// than the fetch poll interval.
+    ///
+    /// The override only paces this queue's fetches. Insert notifications
+    /// are always suppressed for the client's fetch cooldown.
     #[must_use]
     pub const fn with_fetch_cooldown(mut self, interval: Duration) -> Self {
-        self.fetch_cooldown = interval;
+        self.fetch_cooldown = Some(interval);
         self
     }
 
@@ -288,19 +295,33 @@ impl QueueConfig {
         self
     }
 
-    pub(super) fn validate(&self, name: &str) -> Result<(), Error> {
+    /// Returns the minimum delay between this queue's fetches, given the
+    /// client's fetch cooldown.
+    pub(crate) fn resolved_fetch_cooldown(&self, client_fetch_cooldown: Duration) -> Duration {
+        self.fetch_cooldown.unwrap_or(client_fetch_cooldown)
+    }
+
+    /// Validates the queue, given the client's fetch cooldown.
+    pub(super) fn validate(
+        &self,
+        name: &str,
+        client_fetch_cooldown: Duration,
+    ) -> Result<(), Error> {
         validate_queue(name)?;
         if !(1..=QUEUE_NUM_WORKERS_MAX).contains(&self.max_workers) {
             return Err(Error::configuration(format!(
                 "queue {name:?} max_workers must be between 1 and {QUEUE_NUM_WORKERS_MAX}"
             )));
         }
-        if self.fetch_cooldown < FETCH_COOLDOWN_MIN {
+        if self
+            .fetch_cooldown
+            .is_some_and(|cooldown| cooldown < FETCH_COOLDOWN_MIN)
+        {
             return Err(Error::configuration(
                 "fetch cooldown must be at least one millisecond".to_owned(),
             ));
         }
-        if self.fetch_poll_interval < self.fetch_cooldown {
+        if self.fetch_poll_interval < self.resolved_fetch_cooldown(client_fetch_cooldown) {
             return Err(Error::configuration(
                 "fetch poll interval cannot be shorter than fetch cooldown".to_owned(),
             ));
@@ -318,6 +339,7 @@ pub struct ClientBuilder {
     pub(super) database: Database,
     pub(super) default_max_attempts: i16,
     pub(super) error_handler: Option<Arc<dyn crate::extension::DynErrorHandler>>,
+    pub(super) fetch_cooldown: Duration,
     pub(super) hooks: Vec<Arc<dyn crate::extension::DynHook>>,
     pub(super) id: String,
     pub(super) job_stuck_threshold: Duration,
@@ -366,6 +388,32 @@ impl ClientBuilder {
     #[must_use]
     pub fn error_handler<H: ErrorHandler>(mut self, handler: H) -> Self {
         self.error_handler = Some(Arc::new(handler));
+        self
+    }
+
+    /// Sets the minimum delay between fetches of new jobs. Jobs are fetched
+    /// at most this often, and when no insert notifications arrive, fetches
+    /// may wait as long as a queue's fetch poll interval. Throughput is
+    /// limited by this value. A queue may override it with
+    /// [`QueueConfig::with_fetch_cooldown`].
+    ///
+    /// It also paces insert notifications. After this client notifies a
+    /// queue that jobs were inserted, further notifications for that queue
+    /// are skipped until the cooldown has passed, whichever insertion,
+    /// transaction, or scheduler pass would send them. The window starts when
+    /// the notification is written, even if its transaction later rolls
+    /// back. A job whose notification was skipped is found by the next fetch
+    /// of its queue, which may wait for the queue's fetch poll interval.
+    ///
+    /// Like River Go's `Config.FetchCooldown`, it defaults to
+    /// [`FETCH_COOLDOWN_DEFAULT`](crate::FETCH_COOLDOWN_DEFAULT) (100
+    /// milliseconds) and must be at least
+    /// [`FETCH_COOLDOWN_MIN`](crate::FETCH_COOLDOWN_MIN) (one millisecond).
+    /// A queue's fetch poll interval can't be shorter than the cooldown it
+    /// uses.
+    #[must_use]
+    pub fn fetch_cooldown(mut self, cooldown: Duration) -> Self {
+        self.fetch_cooldown = cooldown;
         self
     }
 
@@ -592,8 +640,13 @@ impl ClientBuilder {
                 "job timeout must be positive; use without_job_timeout to disable it".to_owned(),
             ));
         }
+        if self.fetch_cooldown < FETCH_COOLDOWN_MIN {
+            return Err(Error::configuration(
+                "fetch cooldown must be at least one millisecond".to_owned(),
+            ));
+        }
         for (name, config) in &self.queues {
-            config.validate(name)?;
+            config.validate(name, self.fetch_cooldown)?;
             validate_queue_settings(self.pilot.as_ref(), name, config)?;
         }
         if self.producer_report_interval.is_zero() {
@@ -697,6 +750,7 @@ impl ClientBuilder {
                 default_max_attempts: self.default_max_attempts,
                 error_handler: self.error_handler,
                 events,
+                fetch_cooldown: self.fetch_cooldown,
                 fetch_registration_windows: AtomicU64::new(0),
                 hooks: self.hooks,
                 id: self.id,
@@ -709,6 +763,7 @@ impl ClientBuilder {
                 #[cfg(test)]
                 notifier_start_panics: AtomicU64::new(0),
                 insert_middleware: self.insert_middleware,
+                insert_notify_limiter: InsertNotifyLimiter::new(self.fetch_cooldown),
                 periodic_jobs,
                 pending_cancellations: Mutex::new(HashMap::new()),
                 peer_owners: Mutex::new(HashMap::new()),

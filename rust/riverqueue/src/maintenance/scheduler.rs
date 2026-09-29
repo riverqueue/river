@@ -7,6 +7,8 @@ use chrono::{DateTime, Utc};
 #[cfg(feature = "postgres")]
 use sqlx::{AssertSqlSafe, Row};
 
+#[cfg(feature = "sqlite")]
+use crate::client::InsertNotifyLimiter;
 use crate::database::DatabasePool;
 #[cfg(feature = "sqlite")]
 use crate::database::sqlite;
@@ -54,7 +56,12 @@ async fn schedule_batch(context: &ServiceContext, limit: i64) -> Result<usize, M
             super::sqlite_cancellable(
                 &context.cancel,
                 TIMEOUT_DEFAULT,
-                schedule_batch_sqlite(pool, look_ahead, limit),
+                schedule_batch_sqlite(
+                    pool,
+                    &context.inner.insert_notify_limiter,
+                    look_ahead,
+                    limit,
+                ),
             )
             .await
         }
@@ -145,7 +152,11 @@ async fn schedule_batch_postgres(
             scheduled_at: row.get("scheduled_at"),
         })
         .collect::<Vec<_>>();
-    let queues = notified_queues(&scheduled).into_iter().collect::<Vec<_>>();
+    let notified = notified_queues(&scheduled);
+    let queues = context
+        .inner
+        .insert_notify_limiter
+        .due(notified.iter().map(String::as_str));
     if !queues.is_empty() {
         cancellable(
             pool,
@@ -175,6 +186,7 @@ async fn schedule_batch_postgres(
 #[cfg(feature = "sqlite")]
 async fn schedule_batch_sqlite(
     pool: &sqlx::SqlitePool,
+    notify_limiter: &InsertNotifyLimiter,
     look_ahead: DateTime<Utc>,
     limit: i64,
 ) -> Result<usize, MaintenanceError> {
@@ -218,8 +230,9 @@ async fn schedule_batch_sqlite(
     if !conflict_ids.is_empty() {
         sqlite::schedule_discard_conflicts(&mut transaction, &conflict_ids, look_ahead).await?;
     }
-    for queue in notified_queues(&scheduled) {
-        let payload = crate::protocol::insert_notification_payload(&queue);
+    let notified = notified_queues(&scheduled);
+    for queue in notify_limiter.due(notified.iter().map(String::as_str)) {
+        let payload = crate::protocol::insert_notification_payload(queue);
         sqlite::notification_insert(
             &mut transaction,
             &[sqlite::NotificationInput {
@@ -231,4 +244,93 @@ async fn schedule_batch_sqlite(
     }
     transaction.commit().await?;
     Ok(count)
+}
+
+#[cfg(all(test, feature = "sqlite"))]
+mod sqlite_tests {
+    use std::{sync::Arc, time::Duration};
+
+    use chrono::Utc;
+    use riverqueue_migrate::SqliteMigrator;
+    use serde::{Deserialize, Serialize};
+    use sqlx::{SqlitePool, sqlite::SqlitePoolOptions};
+    use tokio_util::sync::CancellationToken;
+
+    use super::super::{BatchSizes, Breakers, maintainer::ServiceContext};
+    use crate::{Client, InsertOpts, JobArgs, database::sqlite::sqlite_time};
+
+    #[derive(Debug, Deserialize, JobArgs, Serialize)]
+    #[river(kind = "scheduler_notification")]
+    struct NotificationArgs {}
+
+    async fn insert_due_job(pool: &SqlitePool, queue: &str) {
+        sqlx::query(
+            "INSERT INTO river_job (args, kind, max_attempts, metadata, queue, scheduled_at, state) \
+             VALUES (jsonb('{}'), 'scheduler_notification', 25, jsonb('{}'), ?, ?, 'scheduled')",
+        )
+        .bind(queue)
+        .bind(sqlite_time(Utc::now() - chrono::Duration::hours(1)))
+        .execute(pool)
+        .await
+        .unwrap();
+    }
+
+    async fn insert_notifications(pool: &SqlitePool, queue: &str) -> i64 {
+        sqlx::query_scalar(
+            "SELECT count(*) FROM river_notification WHERE topic = 'river_insert' \
+             AND json_extract(payload, '$.queue') = ?",
+        )
+        .bind(queue)
+        .fetch_one(pool)
+        .await
+        .unwrap()
+    }
+
+    /// Like Go, the scheduler notifies through the client's insert
+    /// notification limiter, which insertions share.
+    #[tokio::test]
+    async fn scheduler_notifications_wait_for_the_fetch_cooldown() {
+        let pool = SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect("sqlite::memory:")
+            .await
+            .unwrap();
+        SqliteMigrator::new(pool.clone())
+            .migrate_up()
+            .await
+            .unwrap();
+        let client = Client::builder(pool.clone())
+            .fetch_cooldown(Duration::from_hours(1))
+            .build()
+            .unwrap();
+        let context = ServiceContext {
+            breakers: Arc::new(Breakers::new(BatchSizes::default())),
+            cancel: CancellationToken::new(),
+            inner: Arc::clone(&client.inner),
+        };
+
+        insert_due_job(&pool, "scheduled").await;
+        super::run_once(&context).await.unwrap();
+        assert_eq!(insert_notifications(&pool, "scheduled").await, 1);
+
+        insert_due_job(&pool, "scheduled").await;
+        super::run_once(&context).await.unwrap();
+        assert_eq!(insert_notifications(&pool, "scheduled").await, 1);
+
+        client
+            .insert(NotificationArgs {})
+            .opts(InsertOpts::default().with_queue("inserted"))
+            .await
+            .unwrap();
+        insert_due_job(&pool, "inserted").await;
+        super::run_once(&context).await.unwrap();
+        assert_eq!(insert_notifications(&pool, "inserted").await, 1);
+
+        let available: i64 =
+            sqlx::query_scalar("SELECT count(*) FROM river_job WHERE state = 'available'")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert_eq!(available, 4);
+    }
 }

@@ -742,12 +742,14 @@ impl Client {
     }
 
     /// Sends one insert notification per queue, in the insertion's
-    /// transaction so it's delivered only if the jobs commit.
+    /// transaction so it's delivered only if the jobs commit, skipping
+    /// queues this client notified within its fetch cooldown.
     async fn notify_insert(
         &self,
         connection: PilotDatabaseConnection<'_>,
         queues: std::collections::BTreeSet<&str>,
     ) -> Result<(), Error> {
+        let queues = self.inner.insert_notify_limiter.due(queues);
         if queues.is_empty() {
             return Ok(());
         }

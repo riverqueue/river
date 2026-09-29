@@ -730,9 +730,11 @@ pub(super) async fn run_queue(
         if !should_fetch || paused {
             continue;
         }
-        if let Some(remaining) = last_fetch
-            .and_then(|last_fetch| config.fetch_cooldown.checked_sub(last_fetch.elapsed()))
-        {
+        if let Some(remaining) = last_fetch.and_then(|last_fetch| {
+            config
+                .resolved_fetch_cooldown(inner.fetch_cooldown)
+                .checked_sub(last_fetch.elapsed())
+        }) {
             tokio::select! {
                 () = fetch_cancel.cancelled() => break Ok(()),
                 () = tokio::time::sleep(remaining) => {}

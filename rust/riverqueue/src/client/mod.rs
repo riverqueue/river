@@ -10,6 +10,7 @@ mod insert;
 mod jobs;
 mod local_queues;
 mod notifier;
+mod notify_limiter;
 mod peers;
 mod producer;
 mod queues;
@@ -64,15 +65,16 @@ use tokio::sync::{broadcast, mpsc, watch};
 use tokio_util::sync::CancellationToken;
 
 use self::completer::CompletionUpdate;
+pub(crate) use self::notify_limiter::InsertNotifyLimiter;
 use crate::__private::{
     DatabaseConfig as PilotDatabaseConfig, DatabaseConnection as PilotDatabaseConnection,
     DatabasePool as PilotDatabasePool, NoopPilot, Pilot,
 };
 use crate::maintenance::LeadershipWakeup;
 use crate::{
-    DefaultRetryPolicy, Error, Event, EventKind, EventReceiver, JOB_STUCK_THRESHOLD_DEFAULT,
-    JOB_TIMEOUT_DEFAULT, MAX_ATTEMPTS_DEFAULT, RetryPolicy, SchemaName, SubscribeConfig,
-    WorkerRegistry,
+    DefaultRetryPolicy, Error, Event, EventKind, EventReceiver, FETCH_COOLDOWN_DEFAULT,
+    JOB_STUCK_THRESHOLD_DEFAULT, JOB_TIMEOUT_DEFAULT, MAX_ATTEMPTS_DEFAULT, RetryPolicy,
+    SchemaName, SubscribeConfig, WorkerRegistry,
     database::{Database, DatabaseKind, DatabasePool, DatabaseTransactionExecutor, IntoDatabase},
     periodic::PeriodicJobs,
 };
@@ -106,6 +108,10 @@ pub(crate) struct ClientInner {
     default_max_attempts: i16,
     error_handler: Option<Arc<dyn crate::extension::DynErrorHandler>>,
     pub(crate) events: broadcast::Sender<Event>,
+    /// Minimum delay between fetches for queues without their own, and the
+    /// window in which repeated insert notifications for a queue are
+    /// skipped.
+    pub(crate) fetch_cooldown: Duration,
     fetch_registration_windows: AtomicU64,
     pub(crate) hooks: Vec<Arc<dyn crate::extension::DynHook>>,
     pub(crate) id: String,
@@ -125,6 +131,9 @@ pub(crate) struct ClientInner {
     #[cfg(test)]
     notifier_start_panics: AtomicU64,
     insert_middleware: Vec<Arc<dyn crate::extension::DynInsertMiddleware>>,
+    /// Skips a queue's insert notification sent within the fetch cooldown
+    /// of the previous one.
+    pub(crate) insert_notify_limiter: InsertNotifyLimiter,
     pub(crate) periodic_jobs: PeriodicJobs,
     pending_cancellations: Mutex<HashMap<i64, std::time::Instant>>,
     /// Peer jobs owned by running attempts, mapped to their ledger.
@@ -308,6 +317,7 @@ impl Client {
             database,
             default_max_attempts: MAX_ATTEMPTS_DEFAULT,
             error_handler: None,
+            fetch_cooldown: FETCH_COOLDOWN_DEFAULT,
             hooks: Vec::new(),
             id: default_client_id(),
             job_stuck_threshold: JOB_STUCK_THRESHOLD_DEFAULT,

@@ -508,7 +508,7 @@
       "area": "config",
       "detail": "time.Duration",
       "id": "config.FetchCooldown",
-      "rationale": "Per-process minimum interval between fetches (a throughput throttle). Implementations expose an equivalent knob. It changes neither rows nor notifications, only how often one process claims, so it has no cross-process contract.",
+      "rationale": "Per-client minimum interval between fetches (a throughput throttle), which also suppresses a client's repeated insert notification for a queue within the interval on every backend. Implementations expose an equivalent client-level knob with the same default and minimum. Rows are unaffected; the reference adapter's 1 ms setting keeps notification scenarios deterministic.",
       "source": "client.go:river.Config.FetchCooldown"
     },
     {
@@ -2799,7 +2799,7 @@
       "area": "queue_config",
       "detail": "time.Duration",
       "id": "queue_config.FetchCooldown",
-      "rationale": "Per-queue override of config.FetchCooldown; local throughput throttle.",
+      "rationale": "Per-queue override of config.FetchCooldown for fetching only; local throughput throttle. Insert notifications always use the client-level cooldown.",
       "source": "client.go:river.QueueConfig.FetchCooldown"
     },
     {

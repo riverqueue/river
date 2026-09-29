@@ -1847,7 +1847,6 @@ impl Adapter {
                 let max_workers = optional_i64(&params, "max_workers").unwrap_or(1);
                 let name = required_string(&params, "name")?;
                 let config = QueueConfig::new(usize::try_from(max_workers)?)
-                    .with_fetch_cooldown(Duration::from_millis(1))
                     .with_fetch_poll_interval(Duration::from_millis(10));
                 // The contract adds or reconfigures a queue. Like Go's
                 // adapter, an added queue is removed and added again.
@@ -2146,6 +2145,7 @@ impl Adapter {
                         .with_schema(schema)
                         .with_reindex(reindex_config(&params)?),
                 )
+                .fetch_cooldown(Duration::from_millis(1))
                 .id(client_id)
                 .job_stuck_threshold(Duration::from_millis(100))
                 .maintenance(maintenance)
@@ -2153,7 +2153,6 @@ impl Adapter {
                 .queue(
                     queue,
                     QueueConfig::new(usize::try_from(max_workers)?)
-                        .with_fetch_cooldown(Duration::from_millis(1))
                         .with_fetch_poll_interval(fetch_poll_interval),
                 );
                 if poll_only {
@@ -2279,6 +2278,7 @@ impl Adapter {
                     PostgresDatabase::new(self.pool.clone())
                         .with_schema(schema_name(params.get("schema").and_then(Value::as_str))?),
                 )
+                .fetch_cooldown(Duration::from_millis(1))
                 .id(params
                     .get("client_id")
                     .and_then(Value::as_str)
@@ -2286,9 +2286,7 @@ impl Adapter {
                 .workers(workers)
                 .queue(
                     "default",
-                    QueueConfig::new(1)
-                        .with_fetch_cooldown(Duration::from_millis(1))
-                        .with_fetch_poll_interval(Duration::from_millis(10)),
+                    QueueConfig::new(1).with_fetch_poll_interval(Duration::from_millis(10)),
                 )
                 .build()?;
                 let mut handle = client.start()?;
@@ -2926,7 +2924,6 @@ impl SqliteAdapter {
                 let max_workers = optional_i64(&params, "max_workers").unwrap_or(1);
                 let name = required_string(&params, "name")?;
                 let config = QueueConfig::new(usize::try_from(max_workers)?)
-                    .with_fetch_cooldown(Duration::from_millis(1))
                     .with_fetch_poll_interval(Duration::from_millis(10));
                 // The contract adds or reconfigures a queue. Like Go's
                 // adapter, an added queue is removed and added again.
@@ -3048,6 +3045,7 @@ impl SqliteAdapter {
                 })?;
                 let maintenance = maintenance_config(&params)?;
                 let mut builder = Client::builder(SqliteDatabase::new(self.pool.clone()))
+                    .fetch_cooldown(Duration::from_millis(1))
                     .id(client_id)
                     .job_stuck_threshold(Duration::from_millis(100))
                     .maintenance(maintenance)
@@ -3055,7 +3053,6 @@ impl SqliteAdapter {
                     .queue(
                         queue,
                         QueueConfig::new(usize::try_from(max_workers)?)
-                            .with_fetch_cooldown(Duration::from_millis(1))
                             .with_fetch_poll_interval(fetch_poll_interval),
                     );
                 if poll_only {
@@ -3178,6 +3175,7 @@ impl SqliteAdapter {
                     probe: Arc::new(RuntimeProbe::default()),
                 })?;
                 let client = Client::builder(SqliteDatabase::new(self.pool.clone()))
+                    .fetch_cooldown(Duration::from_millis(1))
                     .id(params
                         .get("client_id")
                         .and_then(Value::as_str)
@@ -3185,9 +3183,7 @@ impl SqliteAdapter {
                     .workers(workers)
                     .queue(
                         "default",
-                        QueueConfig::new(1)
-                            .with_fetch_cooldown(Duration::from_millis(1))
-                            .with_fetch_poll_interval(Duration::from_millis(10)),
+                        QueueConfig::new(1).with_fetch_poll_interval(Duration::from_millis(10)),
                     )
                     .build()?;
                 let mut handle = client.start()?;

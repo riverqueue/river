@@ -198,6 +198,13 @@ an adapter whose implementation does not expose them; the Go reference is one.
   River Go does not expose (`elect_interval_ms`, `job_cleaner_interval_ms`,
   `queue_cleaner_interval_ms`, `rescuer_interval_ms`,
   `scheduler_interval_ms`) only shorten waits and may be ignored.
+- A client started by `start` or `work` uses a one-millisecond client fetch
+  cooldown, as the Go reference's does, and a queue added with `queue_add`
+  uses the client's. Like River Go, the cooldown also paces insert
+  notifications: a client sends at most one per queue per cooldown, whichever
+  insertion, transaction, or scheduler pass sends it. Requests made without a
+  running client must not have an insert notification withheld because of an
+  earlier request; the Go reference builds a new client for each.
 - `runtime_stats` exposes normalized hook, middleware, periodic, resumable,
   stuck-job, and event-subscription observations without exposing
   language-specific API shapes. `stuck_jobs` counts jobs the runtime reported

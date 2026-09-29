@@ -103,7 +103,7 @@ Exported fields of `river.Config`.
 | `config.CompletedJobRetentionPeriod` | protocol_visible | `maintenance_job_cleaner_retention` (TestMaintenanceConformance) | The job cleaner deletes completed rows after this period; deletion is visible to every implementation sharing the database. |
 | `config.DiscardedJobRetentionPeriod` | protocol_visible | `maintenance_job_cleaner_retention` (TestMaintenanceConformance) | The job cleaner deletes discarded rows after this period; deletion is visible to every implementation sharing the database. |
 | `config.ErrorHandler` | api_equivalent | `error_handler_cancel_override` (TestMixedConformance) | Language-native error/panic callback. Its persisted effect (overriding the outcome, e.g. cancel) is exercised through the adapter's error_handler_cancel start option. |
-| `config.FetchCooldown` | api_equivalent |  | Per-process minimum interval between fetches (a throughput throttle). Implementations expose an equivalent knob. It changes neither rows nor notifications, only how often one process claims, so it has no cross-process contract. |
+| `config.FetchCooldown` | api_equivalent |  | Per-client minimum interval between fetches (a throughput throttle), which also suppresses a client's repeated insert notification for a queue within the interval on every backend. Implementations expose an equivalent client-level knob with the same default and minimum. Rows are unaffected; the reference adapter's 1 ms setting keeps notification scenarios deterministic. |
 | `config.FetchPollInterval` | api_equivalent | `lost_notification_poll_recovery` (TestMixedConformance)<br>`notification_only_wakeups` (TestMixedConformance) | Per-process polling fallback interval. The adapter's fetch_poll_interval_ms option exercises both the polling fallback and notification-only wakeups with polling effectively disabled. |
 | `config.Hooks` | api_equivalent |  | Registration of global hooks in each language's idiom. Hook ordering semantics are exercised through plugin registration in extension_hook_middleware_order. |
 | `config.ID` | protocol_visible | `process_kill_restart_and_rescue` (TestMixedConformance)<br>`sqlite_runtime_attempted_by_ordering` (TestMixedSQLiteRuntimeConformance) | Persisted in attempted_by and used as leader_id; scenarios assert attempted_by client IDs across implementations. |
@@ -167,7 +167,7 @@ Exported fields of `river.QueueConfig`.
 
 | Item | Applicability | Scenarios (owner test) | Notes |
 |---|---|---|---|
-| `queue_config.FetchCooldown` | api_equivalent |  | Per-queue override of config.FetchCooldown; local throughput throttle. |
+| `queue_config.FetchCooldown` | api_equivalent |  | Per-queue override of config.FetchCooldown for fetching only; local throughput throttle. Insert notifications always use the client-level cooldown. |
 | `queue_config.FetchPollInterval` | api_equivalent |  | Per-queue override of config.FetchPollInterval; local polling fallback. |
 | `queue_config.MaxWorkers` | api_equivalent | `dynamic_queue_add_reconfigure_remove` (TestMixedConformance) | Local per-queue concurrency limit; the adapter's queue_add max_workers reconfigures it. |
 

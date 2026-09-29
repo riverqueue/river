@@ -23,6 +23,9 @@ use riverqueue::{
 use serde::{Deserialize, Serialize};
 use serde_json::value::RawValue;
 
+/// The fetch cooldown of clients whose insertions must each notify.
+const COOLDOWN: std::time::Duration = std::time::Duration::from_millis(1);
+
 #[derive(Clone, Debug, Deserialize, JobArgs, Serialize)]
 #[river(kind = "prepared_insertion")]
 struct PreparedArgs {
@@ -251,9 +254,12 @@ mod postgres {
     #[tokio::test(flavor = "multi_thread")]
     async fn prepared_insertions_notify_on_commit_only() {
         let schema = PostgresSchema::new("prepared_notify").await;
+        // Each insertion below waits out the fetch cooldown, within which a
+        // client skips a queue's repeated notification.
         let client = Client::builder(
             PostgresDatabase::new(schema.pool.clone()).with_schema(schema.schema.clone()),
         )
+        .fetch_cooldown(COOLDOWN)
         .build()
         .unwrap();
         let channel = format!("{}.river_insert", schema.schema.as_deref().unwrap());
@@ -298,6 +304,7 @@ mod postgres {
         );
         assert_eq!(notified().await, [r#"{"queue":"prepared"}"#]);
 
+        tokio::time::sleep(COOLDOWN * 2).await;
         let mut transaction = schema.pool.begin().await.unwrap();
         extension
             .insert_prepared(available_params())
@@ -309,6 +316,7 @@ mod postgres {
         assert_eq!(notified().await, [r#"{"queue":"prepared"}"#]);
         assert_eq!(count().await, 4);
 
+        tokio::time::sleep(COOLDOWN * 2).await;
         let mut transaction = schema.pool.begin().await.unwrap();
         extension
             .insert_prepared(available_params())
@@ -359,7 +367,12 @@ mod sqlite {
     #[tokio::test(flavor = "multi_thread")]
     async fn prepared_insertions_notify_on_commit_only() {
         let (pool, path) = sqlite_file_pool(4).await;
-        let client = Client::builder(pool.clone()).build().unwrap();
+        // Each insertion below waits out the fetch cooldown, within which a
+        // client skips a queue's repeated notification.
+        let client = Client::builder(pool.clone())
+            .fetch_cooldown(COOLDOWN)
+            .build()
+            .unwrap();
         let extension = ExtensionClient::new(&client);
         let counts = async || -> (i64, i64) {
             let jobs = sqlx::query_scalar("SELECT count(*) FROM river_job")
@@ -386,6 +399,7 @@ mod sqlite {
         );
         assert_eq!(counts().await, (2, 1));
 
+        tokio::time::sleep(COOLDOWN * 2).await;
         let mut transaction = pool.begin_with("BEGIN IMMEDIATE").await.unwrap();
         extension
             .insert_prepared(available_params())
@@ -395,6 +409,7 @@ mod sqlite {
         transaction.commit().await.unwrap();
         assert_eq!(counts().await, (4, 2));
 
+        tokio::time::sleep(COOLDOWN * 2).await;
         let mut transaction = pool.begin_with("BEGIN IMMEDIATE").await.unwrap();
         extension
             .insert_prepared(available_params())
