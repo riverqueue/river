@@ -40,8 +40,21 @@ func Exercise[TTx any](ctx context.Context, t *testing.T,
 	exerciseSchemaName(ctx, t, driverWithSchema)
 	exerciseJobInsert(ctx, t, driverWithSchema, executorWithTx)
 	exerciseJobRead(ctx, t, executorWithTx)
-	exerciseJobUpdate(ctx, t, executorWithTx)
 	exerciseJobDelete(ctx, t, executorWithTx)
+	ExerciseCore(ctx, t, executorWithTx)
+}
+
+// ExerciseCore exercises storage-independent job lifecycle, queue, and leader
+// behavior. Unlike Exercise, it does not require SQL migrations, SQL queries,
+// schema introspection, or nested transactions. Each setup must supply an
+// isolated executor whose mutations are visible to subsequent calls.
+func ExerciseCore[TTx any](ctx context.Context, t *testing.T,
+	executorWithTx func(ctx context.Context, t *testing.T) (riverdriver.Executor, riverdriver.Driver[TTx]),
+) {
+	t.Helper()
+
+	exerciseJobLifecycle(ctx, t, executorWithTx)
+	exerciseJobUpdate(ctx, t, executorWithTx)
 	exerciseLeader(ctx, t, executorWithTx)
 	exerciseQueue(ctx, t, executorWithTx)
 }

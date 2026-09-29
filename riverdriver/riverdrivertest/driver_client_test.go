@@ -1548,6 +1548,16 @@ func ExerciseClient[TTx any](ctx context.Context, t *testing.T,
 		require.Equal(t, queue2.Name, listRes.Queues[1].Name)
 	})
 
+	t.Run("Notifications", func(t *testing.T) {
+		t.Parallel()
+
+		_, bundle := setupConfig(t)
+		if !bundle.driver.SupportsListener() {
+			t.Skip("Driver does not support listener")
+		}
+		exerciseClientNotifications(ctx, t, bundle.driver, bundle.schema)
+	})
+
 	t.Run("QueuePauseAndResume", func(t *testing.T) {
 		t.Parallel()
 
@@ -1631,4 +1641,47 @@ func ExerciseClient[TTx any](ctx context.Context, t *testing.T,
 		require.NoError(t, err)
 		require.JSONEq(t, `{}`, string(fetchedQueue.Metadata))
 	})
+}
+
+// exerciseClientNotifications verifies cross-client wakeups with a fetch poll
+// interval longer than the entire test, including insertion while paused.
+func exerciseClientNotifications[TTx any](ctx context.Context, t *testing.T, driver riverdriver.Driver[TTx], schema string) {
+	t.Helper()
+
+	config := newTestConfig(t, schema)
+	config.FetchPollInterval = time.Hour
+
+	client, err := river.NewClient(driver, config)
+	require.NoError(t, err)
+
+	controller, err := river.NewClient(driver, &river.Config{FetchCooldown: config.FetchCooldown, Schema: schema})
+	require.NoError(t, err)
+
+	events := subscribe(t, client)
+	startClient(ctx, t, client)
+
+	// The pause event confirms that subscriptions are active before inserting.
+	require.NoError(t, controller.QueuePause(ctx, river.QueueDefault, nil))
+	require.Equal(t, river.EventKindQueuePaused, riversharedtest.WaitOrTimeout(t, events).Kind)
+
+	inserted, err := controller.Insert(ctx, &noOpArgs{}, nil)
+	require.NoError(t, err)
+
+	require.NoError(t, controller.QueueResume(ctx, river.QueueDefault, nil))
+	require.Equal(t, river.EventKindQueueResumed, riversharedtest.WaitOrTimeout(t, events).Kind)
+
+	event := riversharedtest.WaitOrTimeout(t, events)
+	require.Equal(t, river.EventKindJobCompleted, event.Kind)
+	require.Equal(t, inserted.Job.ID, event.Job.ID)
+
+	// Queue transitions have settled. This next job needs an insertion wakeup.
+	// Wait past the controller's notification limiter window.
+	time.Sleep(config.FetchCooldown * 2)
+
+	inserted, err = controller.Insert(ctx, &noOpArgs{}, nil)
+	require.NoError(t, err)
+
+	event = riversharedtest.WaitOrTimeout(t, events)
+	require.Equal(t, river.EventKindJobCompleted, event.Kind)
+	require.Equal(t, inserted.Job.ID, event.Job.ID)
 }

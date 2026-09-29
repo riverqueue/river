@@ -5,6 +5,7 @@ go 1.26.0
 toolchain go1.26.6
 
 require (
+	github.com/apple/foundationdb/bindings/go v0.0.0-20260416192139-3ea44ce1d900
 	github.com/davecgh/go-spew v1.1.1
 	github.com/jackc/pgerrcode v0.0.0-20240316143900-6e2875d9b438
 	github.com/jackc/pgx/v5 v5.11.0
@@ -12,6 +13,7 @@ require (
 	github.com/riverqueue/river v0.47.0
 	github.com/riverqueue/river/riverdriver v0.47.0
 	github.com/riverqueue/river/riverdriver/riverdatabasesql v0.47.0
+	github.com/riverqueue/river/riverdriver/riverfdb v0.0.0
 	github.com/riverqueue/river/riverdriver/riverpgxv5 v0.47.0
 	github.com/riverqueue/river/riverdriver/riversqlite v0.47.0
 	github.com/riverqueue/river/rivershared v0.47.0
@@ -24,6 +26,8 @@ require (
 	modernc.org/sqlite v1.59.0
 	turso.tech/database/tursogo v0.7.2
 )
+
+replace github.com/riverqueue/river/riverdriver/riverfdb => ../riverfdb
 
 require (
 	github.com/antlr4-go/antlr/v4 v4.13.0 // indirect

@@ -13,6 +13,16 @@ import (
 func exerciseSQLFragments[TTx any](ctx context.Context, t *testing.T, executorWithTx func(ctx context.Context, t *testing.T) (riverdriver.Executor, riverdriver.Driver[TTx])) {
 	t.Helper()
 
+	t.Run("QueryRow", func(t *testing.T) {
+		t.Parallel()
+
+		exec, _ := executorWithTx(ctx, t)
+
+		var value int
+		require.NoError(t, exec.QueryRow(ctx, "SELECT 1").Scan(&value))
+		require.Equal(t, 1, value)
+	})
+
 	t.Run("SQLFragmentColumnContainsAll", func(t *testing.T) {
 		t.Parallel()
 

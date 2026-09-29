@@ -1053,14 +1053,15 @@ func NewClient[TTx any](driver riverdriver.Driver[TTx], config *Config) (*Client
 			client.testSignals.queueCleaner = &queueCleaner.TestSignals
 		}
 
-		if driver.DatabaseName() == riverdriver.DatabaseNameSQLite {
-			sqliteNotificationCleaner := maintenance.NewSQLiteNotificationCleaner(archetype, &maintenance.SQLiteNotificationCleanerConfig{
+		if driver.DatabaseName() == riverdriver.DatabaseNameSQLite || driver.DatabaseName() == riverdriver.DatabaseNameFoundationDB {
+			notificationCleaner := maintenance.NewNotificationCleaner(archetype, &maintenance.NotificationCleanerConfig{
 				Schema: config.Schema,
 			}, driver.GetExecutor())
-			maintenanceServices = append(maintenanceServices, sqliteNotificationCleaner)
+			maintenanceServices = append(maintenanceServices, notificationCleaner)
 		}
 
-		{
+		// FoundationDB maintains its ordered keyspace without SQL indexes.
+		if driver.DatabaseName() != riverdriver.DatabaseNameFoundationDB {
 			var scheduleFunc func(time.Time) time.Time
 			if config.ReindexerSchedule != nil {
 				scheduleFunc = config.ReindexerSchedule.Next

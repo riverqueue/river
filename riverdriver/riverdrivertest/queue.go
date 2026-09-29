@@ -510,11 +510,6 @@ func exerciseQueue[TTx any](ctx context.Context, t *testing.T, executorWithTx fu
 
 			queue := testfactory.Queue(ctx, t, exec, &testfactory.QueueOpts{Metadata: []byte(`{"foo": "bar"}`)})
 
-			var myInt int
-			err := exec.QueryRow(ctx, "SELECT 1").Scan(&myInt)
-			require.NoError(t, err)
-			require.Equal(t, 1, myInt)
-
 			updatedQueue, err := exec.QueueUpdate(ctx, &riverdriver.QueueUpdateParams{
 				Metadata:         []byte(`{"baz": "qux"}`),
 				MetadataDoUpdate: false,

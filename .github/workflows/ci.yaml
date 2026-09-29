@@ -334,6 +334,106 @@ jobs:
       - run: river migrate-get --up --version 3 --database-url $SQLITE_DATABASE_URL
         shell: bash
 
+  foundationdb:
+    name: FoundationDB
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    env:
+      CGO_ENABLED: "1"
+      # Keep the native client and server aligned with riverfdb's Go bindings.
+      FDB_VERSION: "7.3.77"
+      GOTOOLCHAIN: local
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Setup Go
+        uses: actions/setup-go@v6
+        with:
+          go-version: "1.27"
+          cache-dependency-path: "**/go.sum"
+
+      - name: Install FoundationDB client and server
+        run: |
+          fdb_dir="$RUNNER_TEMP/foundationdb"
+          mkdir -p "$fdb_dir"
+          cd "$fdb_dir"
+
+          case "$(uname -m)" in
+            x86_64) package_arch=amd64 ;;
+            aarch64) package_arch=aarch64 ;;
+            *) echo "Unsupported FoundationDB architecture" >&2; exit 1 ;;
+          esac
+          for component in clients server; do
+            package="foundationdb-${component}_${FDB_VERSION}-1_${package_arch}.deb"
+            release_url="https://github.com/apple/foundationdb/releases/download/$FDB_VERSION"
+            curl --fail --location --retry 3 --output "$package" "$release_url/$package"
+            curl --fail --location --retry 3 --output "$package.sha256" "$release_url/$package.sha256"
+            sha256sum --check "$package.sha256"
+            # Extract without installing a system service; this job owns its cluster.
+            dpkg-deb --extract "$package" "$fdb_dir"
+          done
+
+          echo "$fdb_dir/usr/bin" >> "$GITHUB_PATH"
+          echo "$fdb_dir/usr/sbin" >> "$GITHUB_PATH"
+          echo "CGO_CFLAGS=-I$fdb_dir/usr/include" >> "$GITHUB_ENV"
+          echo "CGO_LDFLAGS=-L$fdb_dir/usr/lib" >> "$GITHUB_ENV"
+          echo "FDB_CLUSTER_FILE=$fdb_dir/fdb.cluster" >> "$GITHUB_ENV"
+          echo "LD_LIBRARY_PATH=$fdb_dir/usr/lib" >> "$GITHUB_ENV"
+
+      - name: Start FoundationDB
+        run: |
+          fdb_dir="$RUNNER_TEMP/foundationdb"
+          mkdir -p "$fdb_dir/data" "$fdb_dir/logs"
+          echo 'river:river@127.0.0.1:4500' > "$FDB_CLUSTER_FILE"
+          fdbserver --cluster-file "$FDB_CLUSTER_FILE" --public-address 127.0.0.1:4500 \
+            --datadir "$fdb_dir/data" --logdir "$fdb_dir/logs" \
+            --locality-machineid ci --locality-zoneid ci \
+            > "$fdb_dir/server.log" 2>&1 &
+          echo "$!" > "$fdb_dir/server.pid"
+
+          fdbcli --cluster-file "$FDB_CLUSTER_FILE" --timeout 30 --exec 'configure new single memory'
+          # A successful write confirms readiness; status alone can exit zero
+          # while the database is still unavailable.
+          fdbcli --cluster-file "$FDB_CLUSTER_FILE" --timeout 30 \
+            --exec 'writemode on; set river_ci_ready ready; clear river_ci_ready'
+
+      - name: Test FoundationDB with race detector
+        working-directory: riverdriver/riverdrivertest
+        # Select only the FDB suite, which needs no PostgreSQL service. Disable
+        # Go's test cache so every job exercises the newly started cluster.
+        run: go test -tags foundationdb -run '^TestFoundationDB$' -race -count=1 -timeout 2m -v ./...
+
+      - name: Show FoundationDB diagnostics
+        if: failure()
+        run: |
+          if command -v fdbcli > /dev/null && test -f "$FDB_CLUSTER_FILE"; then
+            fdbcli --cluster-file "$FDB_CLUSTER_FILE" --timeout 10 --exec 'status details' || true
+          fi
+          if test -f "$RUNNER_TEMP/foundationdb/server.log"; then
+            cat "$RUNNER_TEMP/foundationdb/server.log"
+          fi
+
+      - name: Stop FoundationDB
+        if: always()
+        run: |
+          if test -f "$RUNNER_TEMP/foundationdb/server.pid"; then
+            kill "$(cat "$RUNNER_TEMP/foundationdb/server.pid")" || true
+          fi
+
+      - name: Upload FoundationDB logs
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: foundationdb-logs
+          path: |
+            ${{ runner.temp }}/foundationdb/server.log
+            ${{ runner.temp }}/foundationdb/logs/
+          if-no-files-found: ignore
+          retention-days: 7
+
   golangci:
     name: lint
     runs-on: ubuntu-latest
