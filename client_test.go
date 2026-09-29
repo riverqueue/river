@@ -9963,6 +9963,40 @@ func TestInsertParamsFromJobArgsAndOptions(t *testing.T) {
 		require.EqualError(t, err, "UniqueOpts.ByPeriod should not be less than 1 second")
 		require.Nil(t, insertParams)
 	})
+
+	t.Run("UniqueOptsExcludeKindOnlyValidated", func(t *testing.T) {
+		t.Parallel()
+
+		insertParams, err := insertParamsFromConfigArgsAndOptions(
+			archetype,
+			config,
+			noOpArgs{},
+			&InsertOpts{UniqueOpts: UniqueOpts{ExcludeKind: true}},
+		)
+		require.EqualError(t, err, "UniqueOpts.ExcludeKind requires ByArgs, ByQueue, or ByPeriod")
+		require.Nil(t, insertParams)
+	})
+
+	t.Run("UniqueOptsExcludeKindRemovesKindFromKey", func(t *testing.T) {
+		t.Parallel()
+
+		argsKindA := JobArgsStaticKind{kind: "kind_a"}
+		argsKindB := JobArgsStaticKind{kind: "kind_b"}
+
+		// With ExcludeKind, two different kinds with identical encoded args share a key.
+		paramsA, err := insertParamsFromConfigArgsAndOptions(archetype, config, argsKindA, &InsertOpts{UniqueOpts: UniqueOpts{ByArgs: true, ExcludeKind: true}})
+		require.NoError(t, err)
+		paramsB, err := insertParamsFromConfigArgsAndOptions(archetype, config, argsKindB, &InsertOpts{UniqueOpts: UniqueOpts{ByArgs: true, ExcludeKind: true}})
+		require.NoError(t, err)
+		require.Equal(t, paramsA.UniqueKey, paramsB.UniqueKey, "unique keys should be identical across kinds with ExcludeKind")
+
+		paramsAWithKind, err := insertParamsFromConfigArgsAndOptions(archetype, config, argsKindA, &InsertOpts{UniqueOpts: UniqueOpts{ByArgs: true}})
+		require.NoError(t, err)
+		paramsBWithKind, err := insertParamsFromConfigArgsAndOptions(archetype, config, argsKindB, &InsertOpts{UniqueOpts: UniqueOpts{ByArgs: true}})
+		require.NoError(t, err)
+		require.NotEqual(t, paramsAWithKind.UniqueKey, paramsBWithKind.UniqueKey)
+		require.NotEqual(t, paramsA.UniqueKey, paramsAWithKind.UniqueKey)
+	})
 }
 
 func TestID(t *testing.T) {
