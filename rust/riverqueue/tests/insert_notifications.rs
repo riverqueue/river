@@ -23,6 +23,10 @@ fn queue(name: &str) -> InsertOpts {
     InsertOpts::default().with_queue(name)
 }
 
+fn unique() -> InsertOpts {
+    InsertOpts::default().with_unique(riverqueue::UniqueOpts::new().with_by_args(true))
+}
+
 fn batch(queues: &[&str]) -> InsertBatch {
     let mut batch = InsertBatch::new();
     for name in queues {
@@ -134,7 +138,7 @@ mod postgres {
     use sqlx::postgres::PgListener;
 
     use super::support::PostgresSchema;
-    use super::{NotificationArgs, batch, many, queue};
+    use super::{NotificationArgs, batch, many, queue, unique};
 
     /// Listens to a schema's insert channel.
     struct Notifications {
@@ -269,6 +273,33 @@ mod postgres {
         drop(notifications);
         schema.cleanup().await;
     }
+
+    /// Like Go, a job skipped as a unique duplicate still notifies its queue.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn unique_duplicates_notify_their_queue() {
+        let schema = PostgresSchema::new("insert_notify_duplicate").await;
+        let mut notifications = Notifications::listen(&schema).await;
+        let client = client(&schema, Duration::from_millis(1));
+
+        let first = client
+            .insert(NotificationArgs {})
+            .opts(unique())
+            .await
+            .unwrap();
+        assert!(!first.unique_skipped_as_duplicate);
+        assert_eq!(notifications.next(&schema).await, ["default"]);
+        tokio::time::sleep(Duration::from_millis(2)).await;
+        let duplicate = client
+            .insert(NotificationArgs {})
+            .opts(unique())
+            .await
+            .unwrap();
+        assert!(duplicate.unique_skipped_as_duplicate);
+        assert_eq!(notifications.next(&schema).await, ["default"]);
+        // The listener holds a pool connection, which closing the pool awaits.
+        drop(notifications);
+        schema.cleanup().await;
+    }
 }
 
 #[cfg(feature = "sqlite")]
@@ -279,7 +310,7 @@ mod sqlite {
     use sqlx::SqlitePool;
 
     use super::support::{sqlite_cleanup, sqlite_file_pool};
-    use super::{NotificationArgs, batch, many, queue};
+    use super::{NotificationArgs, batch, many, queue, unique};
 
     /// Reads the insert notifications written to the outbox.
     #[derive(Default)]
@@ -396,6 +427,31 @@ mod sqlite {
             .await
             .unwrap();
         assert_eq!(notifications.next(&pool).await, ["a"]);
+        sqlite_cleanup(pool, path).await;
+    }
+
+    /// Like Go, a job skipped as a unique duplicate still notifies its queue.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn unique_duplicates_notify_their_queue() {
+        let (pool, path) = sqlite_file_pool(4).await;
+        let mut notifications = Notifications::default();
+        let client = client(&pool, Duration::from_millis(1));
+
+        let first = client
+            .insert(NotificationArgs {})
+            .opts(unique())
+            .await
+            .unwrap();
+        assert!(!first.unique_skipped_as_duplicate);
+        assert_eq!(notifications.next(&pool).await, ["default"]);
+        tokio::time::sleep(Duration::from_millis(2)).await;
+        let duplicate = client
+            .insert(NotificationArgs {})
+            .opts(unique())
+            .await
+            .unwrap();
+        assert!(duplicate.unique_skipped_as_duplicate);
+        assert_eq!(notifications.next(&pool).await, ["default"]);
         sqlite_cleanup(pool, path).await;
     }
 }

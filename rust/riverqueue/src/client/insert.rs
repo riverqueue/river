@@ -656,7 +656,7 @@ impl Client {
     }
 
     /// Runs begin hooks and extension interception for each job, writes the
-    /// jobs, and notifies queues that gained available jobs.
+    /// jobs, and notifies the queues of jobs inserted as available.
     async fn persist_jobs(
         &self,
         mut connection: PilotDatabaseConnection<'_>,
@@ -694,6 +694,13 @@ impl Client {
             }
         }
 
+        // Like Go, every job requested as available notifies its queue,
+        // including one skipped as a unique duplicate.
+        let queues = jobs
+            .iter()
+            .filter(|job| job.state == JobState::Available)
+            .map(|job| job.opts.queue.clone())
+            .collect::<std::collections::BTreeSet<_>>();
         let mut rows = Vec::with_capacity(jobs.len());
         for job in jobs {
             rows.push(self.insert_row(connection.reborrow(), job).await?);
@@ -702,12 +709,11 @@ impl Client {
             self.after_jobs_inserted(connection.reborrow(), &rows)
                 .await?;
         }
-        let queues = rows
-            .iter()
-            .filter(|row| row.job.state == JobState::Available && !row.unique_skipped_as_duplicate)
-            .map(|row| row.job.queue.as_str())
-            .collect::<std::collections::BTreeSet<_>>();
-        self.notify_insert(connection.reborrow(), queues).await?;
+        self.notify_insert(
+            connection.reborrow(),
+            queues.iter().map(String::as_str).collect(),
+        )
+        .await?;
         Ok(InsertedJobs::Rows(rows))
     }
 
