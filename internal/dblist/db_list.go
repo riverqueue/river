@@ -63,14 +63,6 @@ func JobMakeDriverParams(ctx context.Context, params *JobListParams, sqlFragment
 		whereBuilder strings.Builder
 	)
 
-	orderBy := make([]JobListOrderBy, len(params.OrderBy))
-	for i, o := range params.OrderBy {
-		orderBy[i] = JobListOrderBy{
-			Expr:  o.Expr,
-			Order: o.Order,
-		}
-	}
-
 	// Writes an `AND` to connect SQL predicates as long as this isn't the first
 	// predicate.
 	writeAndAfterFirst := func() {
@@ -206,11 +198,20 @@ func JobMakeDriverParams(ctx context.Context, params *JobListParams, sqlFragment
 
 	for i, orderBy := range params.OrderBy {
 		orderByBuilder.WriteString(orderBy.Expr)
+		// Match Postgres's default null placement on every driver. Leave the
+		// non-null ID tie-breaker alone: SQLite otherwise adds a temporary sort
+		// even when an index supplies the requested order.
 		switch orderBy.Order {
 		case SortOrderAsc:
 			orderByBuilder.WriteString(" ASC")
+			if orderBy.Expr != "id" {
+				orderByBuilder.WriteString(" NULLS LAST")
+			}
 		case SortOrderDesc:
 			orderByBuilder.WriteString(" DESC")
+			if orderBy.Expr != "id" {
+				orderByBuilder.WriteString(" NULLS FIRST")
+			}
 		case SortOrderUnspecified:
 			return nil, errors.New("should not have gotten SortOrderUnspecified by this point before executing list (bug?)")
 		}
