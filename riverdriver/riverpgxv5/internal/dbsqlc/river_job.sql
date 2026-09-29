@@ -541,10 +541,13 @@ updated_job AS (
         )
     RETURNING river_job.*
 )
-SELECT *
-FROM /* TEMPLATE: schema */river_job
-WHERE id = @id::bigint
-    AND id NOT IN (SELECT id FROM updated_job)
+SELECT * FROM (
+    SELECT *
+    FROM /* TEMPLATE: schema */river_job
+    WHERE id = @id::bigint
+    FOR UPDATE
+) AS fallback_job
+WHERE fallback_job.id NOT IN (SELECT id FROM updated_job)
 UNION
 SELECT *
 FROM updated_job;
