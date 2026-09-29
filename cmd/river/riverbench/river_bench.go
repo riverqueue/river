@@ -347,7 +347,6 @@ func (b *Benchmarker[TTx]) insertJobs(
 		// We'll be reusing the same batch for all inserts because (1) we can
 		// get away with it, and (2) to avoid needless allocations.
 		insertParamsBatch = make([]river.InsertManyParams, insertBatchSize)
-		jobArgsBatch      = make([]BenchmarkArgs, insertBatchSize)
 
 		jobNum int
 	)
@@ -355,18 +354,13 @@ func (b *Benchmarker[TTx]) insertJobs(
 	var numInsertedThisRound int
 
 	for {
-		for _, jobArgs := range jobArgsBatch {
-			jobNum++
-			jobArgs.Num = jobNum
-		}
-
-		for i := range insertParamsBatch {
-			insertParamsBatch[i].Args = jobArgsBatch[i]
-		}
-
 		numLeft := numTotalJobs - numInsertedThisRound
 		if numLeft < insertBatchSize {
 			insertParamsBatch = insertParamsBatch[0:numLeft]
+		}
+		for i := range insertParamsBatch {
+			jobNum++
+			insertParamsBatch[i].Args = BenchmarkArgs{Num: jobNum}
 		}
 
 		start := time.Now()
@@ -411,7 +405,6 @@ func (b *Benchmarker[TTx]) insertJobsContinuously(
 		// We'll be reusing the same batch for all inserts because (1) we can
 		// get away with it, and (2) to avoid needless allocations.
 		insertParamsBatch = make([]river.InsertManyParams, insertBatchSize)
-		jobArgsBatch      = make([]BenchmarkArgs, insertBatchSize)
 
 		jobNum int
 	)
@@ -430,13 +423,9 @@ func (b *Benchmarker[TTx]) insertJobsContinuously(
 		var numInsertedThisRound int
 
 		for {
-			for _, jobArgs := range jobArgsBatch {
-				jobNum++
-				jobArgs.Num = jobNum
-			}
-
 			for i := range insertParamsBatch {
-				insertParamsBatch[i].Args = jobArgsBatch[i]
+				jobNum++
+				insertParamsBatch[i].Args = BenchmarkArgs{Num: jobNum}
 			}
 
 			if _, err := client.InsertMany(ctx, insertParamsBatch); err != nil {
