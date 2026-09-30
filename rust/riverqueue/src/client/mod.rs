@@ -112,6 +112,9 @@ pub(crate) struct ClientInner {
     /// window in which repeated insert notifications for a queue are
     /// skipped.
     pub(crate) fetch_cooldown: Duration,
+    /// Kinds claims are restricted to, including aliases, or `None` to claim
+    /// every kind.
+    pub(crate) fetch_kinds: Option<Arc<[String]>>,
     fetch_registration_windows: AtomicU64,
     pub(crate) hooks: Vec<Arc<dyn crate::extension::DynHook>>,
     pub(crate) id: String,
@@ -318,6 +321,7 @@ impl Client {
             default_max_attempts: MAX_ATTEMPTS_DEFAULT,
             error_handler: None,
             fetch_cooldown: FETCH_COOLDOWN_DEFAULT,
+            fetch_only_known_kinds: false,
             hooks: Vec::new(),
             id: default_client_id(),
             job_stuck_threshold: JOB_STUCK_THRESHOLD_DEFAULT,

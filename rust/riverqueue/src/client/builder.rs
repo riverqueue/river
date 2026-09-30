@@ -340,6 +340,7 @@ pub struct ClientBuilder {
     pub(super) default_max_attempts: i16,
     pub(super) error_handler: Option<Arc<dyn crate::extension::DynErrorHandler>>,
     pub(super) fetch_cooldown: Duration,
+    pub(super) fetch_only_known_kinds: bool,
     pub(super) hooks: Vec<Arc<dyn crate::extension::DynHook>>,
     pub(super) id: String,
     pub(super) job_stuck_threshold: Duration,
@@ -414,6 +415,25 @@ impl ClientBuilder {
     #[must_use]
     pub fn fetch_cooldown(mut self, cooldown: Duration) -> Self {
         self.fetch_cooldown = cooldown;
+        self
+    }
+
+    /// Restricts claims to the kinds of registered workers, including their
+    /// aliases, like River Go's `Config.FetchOnlyKnownKinds`. Jobs of other
+    /// kinds stay available without using attempts, so clients with
+    /// different workers can share a queue.
+    ///
+    /// It only affects claiming. A leader's rescuer still handles stuck jobs
+    /// in every queue and discards those whose kinds it doesn't know, so a
+    /// client with only some of the workers should also be built
+    /// [`without_leader_election`](Self::without_leader_election), with
+    /// another client that has every worker eligible to lead.
+    ///
+    /// Disabled by default, so a job of an unknown kind is claimed and fails
+    /// its attempt.
+    #[must_use]
+    pub const fn fetch_only_known_kinds(mut self, enabled: bool) -> Self {
+        self.fetch_only_known_kinds = enabled;
         self
     }
 
@@ -733,6 +753,13 @@ impl ClientBuilder {
         }
         let periodic_jobs =
             PeriodicJobs::from_jobs(self.periodic_jobs, self.leader_election_disabled)?;
+        let fetch_kinds = self.fetch_only_known_kinds.then(|| {
+            self.workers
+                .kinds()
+                .into_iter()
+                .map(str::to_owned)
+                .collect::<Arc<[String]>>()
+        });
         #[cfg(feature = "postgres")]
         let schema = self
             .database
@@ -751,6 +778,7 @@ impl ClientBuilder {
                 error_handler: self.error_handler,
                 events,
                 fetch_cooldown: self.fetch_cooldown,
+                fetch_kinds,
                 fetch_registration_windows: AtomicU64::new(0),
                 hooks: self.hooks,
                 id: self.id,

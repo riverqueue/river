@@ -871,6 +871,7 @@ async fn claim_through_session(
             client_id: &inner.id,
             claim_stop,
             database: &database,
+            kinds: inner.fetch_kinds.as_deref(),
             limit,
             queue,
         },
@@ -1008,6 +1009,7 @@ pub(crate) async fn standard_claim(
             queue,
             limit,
             &inner.id,
+            inner.fetch_kinds.as_deref(),
         )
         .await?
         .iter()
@@ -1017,6 +1019,7 @@ pub(crate) async fn standard_claim(
         PilotDatabaseConnection::Sqlite(connection) => {
             let params = crate::database::sqlite::ClaimJobs {
                 client_id: &inner.id,
+                kinds: inner.fetch_kinds.as_deref(),
                 limit,
                 max_attempted_by: ATTEMPTED_BY_MAX,
                 now: Utc::now(),
@@ -1037,6 +1040,7 @@ fn standard_claim_sql(inner: &ClientInner) -> String {
     format!(
         "WITH locked AS (\
             SELECT id FROM {table} WHERE state = 'available' AND queue = $1 AND scheduled_at <= now() \
+                AND ($5::text[] IS NULL OR kind = any($5::text[])) \
                 AND NOT EXISTS (SELECT 1 FROM {queue_table} WHERE name = $1 AND paused_at IS NOT NULL) \
             ORDER BY priority, scheduled_at, id LIMIT $2 FOR UPDATE SKIP LOCKED\
          ) UPDATE {table} AS job \
@@ -1101,6 +1105,7 @@ pub(super) async fn fetch_oss_records<'executor, E>(
     queue: &str,
     maximum: i32,
     client_id: &str,
+    kinds: Option<&[String]>,
 ) -> Result<Vec<PgRow>, sqlx::Error>
 where
     E: Executor<'executor, Database = Postgres>,
@@ -1110,6 +1115,7 @@ where
         .bind(maximum)
         .bind(client_id)
         .bind(ATTEMPTED_BY_MAX)
+        .bind(kinds)
         .fetch_all(executor)
         .await
 }

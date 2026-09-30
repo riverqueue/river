@@ -126,6 +126,9 @@ pub(crate) struct InsertedJob {
 #[derive(Clone, Debug)]
 pub(crate) struct ClaimJobs<'a> {
     pub client_id: &'a str,
+    /// Kinds to claim, or `None` for every kind. Ignored when claiming
+    /// selected IDs.
+    pub kinds: Option<&'a [String]>,
     pub limit: i32,
     pub max_attempted_by: i32,
     pub now: DateTime<Utc>,
@@ -531,7 +534,15 @@ pub(crate) async fn claim(
                   FROM river_queue
                   WHERE river_queue.name = river_job.queue
                     AND river_queue.paused_at IS NOT NULL
-              )
+              )"#,
+    );
+    if let Some(kinds) = params.kinds {
+        query.push(" AND kind IN (SELECT value FROM json_each(");
+        query.push_bind(serde_json::to_string(kinds)?);
+        query.push("))");
+    }
+    query.push(
+        r#"
             ORDER BY priority ASC, scheduled_at ASC, id ASC
             LIMIT "#,
     );
@@ -1890,6 +1901,7 @@ mod tests {
         queue_pause(&mut connection, "default", now).await.unwrap();
         let claim_params = ClaimJobs {
             client_id: "client-1",
+            kinds: None,
             limit: 10,
             max_attempted_by: 100,
             now,
@@ -2415,6 +2427,7 @@ mod tests {
                 &mut connection,
                 &ClaimJobs {
                     client_id,
+                    kinds: None,
                     limit: 1,
                     max_attempted_by: 3,
                     now,
@@ -2513,6 +2526,7 @@ mod tests {
             &mut connection,
             &ClaimJobs {
                 client_id: "client",
+                kinds: None,
                 limit: 10,
                 max_attempted_by: 100,
                 now,

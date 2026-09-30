@@ -206,6 +206,10 @@ pub struct ProducerClaimContext<'a> {
     pub claim_stop: &'a CancellationToken,
     /// The client's database.
     pub database: &'a PilotDatabase,
+    /// Kinds the claim is restricted to, including aliases, when the client
+    /// fetches only known kinds, or `None` to claim every kind. River's
+    /// standard claim applies it; a session's own claim must too.
+    pub kinds: Option<&'a [String]>,
     /// Most jobs the claim may return.
     pub limit: usize,
     /// The queue being claimed from.

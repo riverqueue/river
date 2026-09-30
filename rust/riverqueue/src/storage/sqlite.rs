@@ -155,6 +155,7 @@ impl Backend for SqliteBackend<'_> {
             self.connection,
             &sqlite::ClaimJobs {
                 client_id,
+                kinds: None,
                 limit: 1,
                 max_attempted_by,
                 now: Utc::now(),
