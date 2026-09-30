@@ -7,6 +7,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/jackc/puddle/v2"
@@ -186,111 +187,108 @@ func TestInlineJobCompleter_Subscribe(t *testing.T) {
 func TestInlineJobCompleter_Wait(t *testing.T) {
 	t.Parallel()
 
-	testCompleterWait(t, func(schema string, exec riverdriver.Executor, subscribeChan SubscribeChan) JobCompleter {
+	testCompleterWait(t, func(t *testing.T, exec riverdriver.Executor, subscribeChan SubscribeChan) JobCompleter {
+		t.Helper()
+
 		return NewInlineCompleter(riversharedtest.BaseServiceArchetype(t), "", exec, &riverpilot.StandardPilot{}, subscribeChan)
 	})
 }
 
-// TODO: Can we get rid of this test? It's pretty slow and it's not clear that
-// it's testing anything particularly useful compared to the more thorough
-// completer tests below.
 func TestAsyncJobCompleter_Complete(t *testing.T) {
 	t.Parallel()
 
-	ctx := context.Background()
+	synctest.Test(t, func(t *testing.T) {
+		ctx := context.Background()
 
-	type jobInput struct {
-		// TODO: Try to get rid of containing the context in struct. It'd be
-		// better to pass it forward instead.
-		ctx   context.Context //nolint:containedctx
-		jobID int64
-	}
-	inputCh := make(chan jobInput)
-	resultCh := make(chan error)
-
-	expectedErr := errors.New("an error from the completer")
-
-	go func() {
-		riversharedtest.WaitOrTimeout(t, inputCh)
-		resultCh <- expectedErr
-	}()
-
-	var (
-		dbPool   = riversharedtest.DBPool(ctx, t)
-		driver   = riverpgxv5.New(dbPool)
-		schema   = riverdbtest.TestSchema(ctx, t, driver, nil)
-		execMock = NewPartialExecutorMock(driver.GetExecutor())
-	)
-
-	execMock.JobSetStateIfRunningManyFunc = func(ctx context.Context, params *riverdriver.JobSetStateIfRunningManyParams) ([]*rivertype.JobRow, error) {
-		require.Len(t, params.ID, 1)
-		inputCh <- jobInput{ctx: ctx, jobID: params.ID[0]}
-		err := <-resultCh
-		if err != nil {
-			return nil, err
+		type jobInput struct {
+			// TODO: Try to get rid of containing the context in struct. It'd be
+			// better to pass it forward instead.
+			ctx   context.Context //nolint:containedctx
+			jobID int64
 		}
-		return []*rivertype.JobRow{{ID: params.ID[0], State: params.State[0]}}, nil
-	}
-	subscribeChan := make(chan []CompleterJobUpdated, 10)
-	completer := newAsyncCompleterWithConcurrency(riversharedtest.BaseServiceArchetype(t), schema, execMock, &riverpilot.StandardPilot{}, 2, subscribeChan)
-	completer.disableSleep = true
-	require.NoError(t, completer.Start(ctx))
-	t.Cleanup(completer.Stop)
+		inputCh := make(chan jobInput)
+		resultCh := make(chan error)
 
-	// launch 4 completions, only 2 can be inline due to the concurrency limit:
-	for i := range int64(2) {
-		if err := completer.JobSetStateIfRunning(ctx, &jobstats.JobStatistics{}, riverdriver.JobSetStateCompleted(i, time.Now(), nil)); err != nil {
-			t.Errorf("expected nil err, got %v", err)
+		expectedErr := errors.New("an error from the completer")
+
+		go func() {
+			riversharedtest.WaitOrTimeout(t, inputCh)
+			resultCh <- expectedErr
+		}()
+
+		execMock := &partialExecutorMock{}
+
+		execMock.JobSetStateIfRunningManyFunc = func(ctx context.Context, params *riverdriver.JobSetStateIfRunningManyParams) ([]*rivertype.JobRow, error) {
+			require.Len(t, params.ID, 1)
+			inputCh <- jobInput{ctx: ctx, jobID: params.ID[0]}
+			err := <-resultCh
+			if err != nil {
+				return nil, err
+			}
+			return []*rivertype.JobRow{{ID: params.ID[0], State: params.State[0]}}, nil
 		}
-	}
-	bgCompletionsStarted := make(chan struct{})
-	go func() {
-		for i := int64(2); i < 4; i++ {
+		subscribeChan := make(chan []CompleterJobUpdated, 10)
+		completer := newAsyncCompleterWithConcurrency(riversharedtest.BaseServiceArchetype(t), "", execMock, &riverpilot.StandardPilot{}, 2, subscribeChan)
+		completer.disableSleep = true
+		require.NoError(t, completer.Start(ctx))
+		t.Cleanup(completer.Stop)
+
+		// launch 4 completions, only 2 can be inline due to the concurrency limit:
+		for i := range int64(2) {
 			if err := completer.JobSetStateIfRunning(ctx, &jobstats.JobStatistics{}, riverdriver.JobSetStateCompleted(i, time.Now(), nil)); err != nil {
 				t.Errorf("expected nil err, got %v", err)
 			}
 		}
-		close(bgCompletionsStarted)
-	}()
+		bgCompletionsStarted := make(chan struct{})
+		go func() {
+			for i := int64(2); i < 4; i++ {
+				if err := completer.JobSetStateIfRunning(ctx, &jobstats.JobStatistics{}, riverdriver.JobSetStateCompleted(i, time.Now(), nil)); err != nil {
+					t.Errorf("expected nil err, got %v", err)
+				}
+			}
+			close(bgCompletionsStarted)
+		}()
 
-	expectCompletionInFlight := func() {
-		select {
-		case input := <-inputCh:
-			t.Logf("completion for %d in-flight", input.jobID)
-		case <-time.After(time.Second):
-			t.Fatalf("expected a completion to be in-flight")
+		expectCompletionInFlight := func() {
+			select {
+			case input := <-inputCh:
+				t.Logf("completion for %d in-flight", input.jobID)
+			case <-time.After(time.Second):
+				t.Fatalf("expected a completion to be in-flight")
+			}
 		}
-	}
-	expectNoCompletionInFlight := func() {
-		select {
-		case input := <-inputCh:
-			t.Fatalf("unexpected completion for %d in-flight", input.jobID)
-		case <-time.After(500 * time.Millisecond):
+		expectNoCompletionInFlight := func() {
+			synctest.Wait()
+			select {
+			case input := <-inputCh:
+				t.Fatalf("unexpected completion for %d in-flight", input.jobID)
+			default:
+			}
 		}
-	}
 
-	// two completions should be in-flight:
-	expectCompletionInFlight()
-	expectCompletionInFlight()
+		// two completions should be in-flight:
+		expectCompletionInFlight()
+		expectCompletionInFlight()
 
-	// A 3rd one shouldn't be in-flight due to the concurrency limit:
-	expectNoCompletionInFlight()
+		// A 3rd one shouldn't be in-flight due to the concurrency limit:
+		expectNoCompletionInFlight()
 
-	// Finish the first two completions:
-	resultCh <- nil
-	resultCh <- nil
+		// Finish the first two completions:
+		resultCh <- nil
+		resultCh <- nil
 
-	// The final two completions should now be in-flight:
-	<-bgCompletionsStarted
-	expectCompletionInFlight()
-	expectCompletionInFlight()
+		// The final two completions should now be in-flight:
+		<-bgCompletionsStarted
+		expectCompletionInFlight()
+		expectCompletionInFlight()
 
-	// A 5th one shouldn't be in-flight because we only started 4:
-	expectNoCompletionInFlight()
+		// A 5th one shouldn't be in-flight because we only started 4:
+		expectNoCompletionInFlight()
 
-	// Finish the final two completions:
-	resultCh <- nil
-	resultCh <- nil
+		// Finish the final two completions:
+		resultCh <- nil
+		resultCh <- nil
+	})
 }
 
 func TestAsyncJobCompleter_CompleteDeletedJob(t *testing.T) {
@@ -327,8 +325,10 @@ func TestAsyncJobCompleter_Subscribe(t *testing.T) {
 func TestAsyncJobCompleter_Wait(t *testing.T) {
 	t.Parallel()
 
-	testCompleterWait(t, func(schema string, exec riverdriver.Executor, subscribeChan SubscribeChan) JobCompleter {
-		return newAsyncCompleterWithConcurrency(riversharedtest.BaseServiceArchetype(t), schema, exec, &riverpilot.StandardPilot{}, 4, subscribeChan)
+	testCompleterWait(t, func(t *testing.T, exec riverdriver.Executor, subscribeChan SubscribeChan) JobCompleter {
+		t.Helper()
+
+		return newAsyncCompleterWithConcurrency(riversharedtest.BaseServiceArchetype(t), "", exec, &riverpilot.StandardPilot{}, 4, subscribeChan)
 	})
 }
 
@@ -379,75 +379,75 @@ func testCompleterSubscribe(t *testing.T, constructor func(schema string, exec r
 	}
 }
 
-func testCompleterWait(t *testing.T, constructor func(schema string, exec riverdriver.Executor, subscribeChan SubscribeChan) JobCompleter) {
+func testCompleterWait(t *testing.T, constructor func(t *testing.T, exec riverdriver.Executor, subscribeChan SubscribeChan) JobCompleter) {
 	t.Helper()
 
-	ctx := context.Background()
+	synctest.Test(t, func(t *testing.T) {
+		ctx := context.Background()
 
-	var (
-		dbPool   = riversharedtest.DBPool(ctx, t)
-		driver   = riverpgxv5.New(dbPool)
-		schema   = riverdbtest.TestSchema(ctx, t, driver, nil)
-		execMock = NewPartialExecutorMock(driver.GetExecutor())
-	)
+		execMock := &partialExecutorMock{}
 
-	resultCh := make(chan struct{})
-	completeStartedCh := make(chan struct{})
-	execMock.JobSetStateIfRunningManyFunc = func(ctx context.Context, params *riverdriver.JobSetStateIfRunningManyParams) ([]*rivertype.JobRow, error) {
-		completeStartedCh <- struct{}{}
-		<-resultCh
-		results := make([]*rivertype.JobRow, len(params.ID))
-		for i := range params.ID {
-			results[i] = &rivertype.JobRow{ID: params.ID[i], State: rivertype.JobStateCompleted}
+		resultCh := make(chan struct{})
+		completeStartedCh := make(chan struct{})
+		execMock.JobSetStateIfRunningManyFunc = func(ctx context.Context, params *riverdriver.JobSetStateIfRunningManyParams) ([]*rivertype.JobRow, error) {
+			completeStartedCh <- struct{}{}
+			<-resultCh
+			results := make([]*rivertype.JobRow, len(params.ID))
+			for i := range params.ID {
+				results[i] = &rivertype.JobRow{ID: params.ID[i], State: rivertype.JobStateCompleted}
+			}
+			return results, nil
 		}
-		return results, nil
-	}
-	subscribeCh := make(chan []CompleterJobUpdated, 100)
+		subscribeCh := make(chan []CompleterJobUpdated, 100)
 
-	completer := constructor(schema, execMock, subscribeCh)
-	require.NoError(t, completer.Start(ctx))
+		completer := constructor(t, execMock, subscribeCh)
+		require.NoError(t, completer.Start(ctx))
 
-	// launch 4 completions:
-	for i := range 4 {
+		// launch 4 completions:
+		for i := range 4 {
+			go func() {
+				require.NoError(t, completer.JobSetStateIfRunning(ctx, &jobstats.JobStatistics{}, riverdriver.JobSetStateCompleted(int64(i), time.Now(), nil)))
+			}()
+			<-completeStartedCh // wait for func to actually start
+		}
+
+		// Give one completion a signal to finish, there should be 3 remaining in-flight:
+		resultCh <- struct{}{}
+
+		waitDone := make(chan struct{})
 		go func() {
-			require.NoError(t, completer.JobSetStateIfRunning(ctx, &jobstats.JobStatistics{}, riverdriver.JobSetStateCompleted(int64(i), time.Now(), nil)))
+			completer.Stop()
+			close(waitDone)
 		}()
-		<-completeStartedCh // wait for func to actually start
-	}
 
-	// Give one completion a signal to finish, there should be 3 remaining in-flight:
-	resultCh <- struct{}{}
+		synctest.Wait()
+		select {
+		case <-waitDone:
+			t.Fatalf("expected Wait to block until all jobs are complete, but it returned when there should be three remaining")
+		default:
+		}
 
-	waitDone := make(chan struct{})
-	go func() {
-		completer.Stop()
-		close(waitDone)
-	}()
+		// Get us down to one in-flight completion:
+		resultCh <- struct{}{}
+		resultCh <- struct{}{}
 
-	select {
-	case <-waitDone:
-		t.Fatalf("expected Wait to block until all jobs are complete, but it returned when there should be three remaining")
-	case <-time.After(100 * time.Millisecond):
-	}
+		synctest.Wait()
+		select {
+		case <-waitDone:
+			t.Fatalf("expected Wait to block until all jobs are complete, but it returned when there should be one remaining")
+		default:
+		}
 
-	// Get us down to one in-flight completion:
-	resultCh <- struct{}{}
-	resultCh <- struct{}{}
+		// Finish the last one:
+		resultCh <- struct{}{}
 
-	select {
-	case <-waitDone:
-		t.Fatalf("expected Wait to block until all jobs are complete, but it returned when there should be one remaining")
-	case <-time.After(100 * time.Millisecond):
-	}
-
-	// Finish the last one:
-	resultCh <- struct{}{}
-
-	select {
-	case <-waitDone:
-	case <-time.After(100 * time.Millisecond):
-		t.Errorf("expected Wait to return after all jobs are complete")
-	}
+		synctest.Wait()
+		select {
+		case <-waitDone:
+		default:
+			t.Errorf("expected Wait to return after all jobs are complete")
+		}
+	})
 }
 
 func TestAsyncCompleter(t *testing.T) {

@@ -1,8 +1,10 @@
 package notifylimiter
 
 import (
+	"sync"
 	"sync/atomic"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/stretchr/testify/require"
@@ -13,21 +15,16 @@ import (
 func TestLimiter(t *testing.T) {
 	t.Parallel()
 
-	type testBundle struct{}
+	setup := func(t *testing.T) *Limiter {
+		t.Helper()
 
-	setup := func() (*Limiter, *testBundle) {
-		bundle := &testBundle{}
-
-		archetype := riversharedtest.BaseServiceArchetype(t)
-		limiter := NewLimiter(archetype, 10*time.Millisecond)
-
-		return limiter, bundle
+		return NewLimiter(riversharedtest.BaseServiceArchetype(t), 10*time.Millisecond)
 	}
 
 	t.Run("OnlySendsOncePerWaitDuration", func(t *testing.T) {
 		t.Parallel()
 
-		limiter, _ := setup()
+		limiter := setup(t)
 		now := time.Now()
 		limiter.Time.StubNow(now)
 
@@ -60,49 +57,42 @@ func TestLimiter(t *testing.T) {
 	t.Run("ConcurrentAccessStressTest", func(t *testing.T) {
 		t.Parallel()
 
-		doneCh := make(chan struct{})
-		t.Cleanup(func() { close(doneCh) })
+		synctest.Test(t, func(t *testing.T) {
+			limiter := setup(t)
 
-		limiter, _ := setup()
-		now := time.Now()
-		limiter.Time.StubNow(now)
+			counters := make(map[string]*atomic.Int64)
+			for _, topic := range []string{"a", "b", "c"} {
+				counters[topic] = &atomic.Int64{}
+			}
 
-		counters := make(map[string]*atomic.Int64)
-		for _, topic := range []string{"a", "b", "c"} {
-			counters[topic] = &atomic.Int64{}
-		}
-
-		signalContinuously := func(topic string) {
-			for {
-				select {
-				case <-doneCh:
-					return
-				default:
-					shouldTrigger := limiter.ShouldTrigger(topic)
-					if shouldTrigger {
-						counters[topic].Add(1)
+			// Bounded rounds exercise concurrent access without busy loops that
+			// would prevent the synctest clock from advancing.
+			signalConcurrentlyFunc := func() {
+				var wg sync.WaitGroup
+				for topic := range counters {
+					for range 10 {
+						wg.Go(func() {
+							for range 100 {
+								if limiter.ShouldTrigger(topic) {
+									counters[topic].Add(1)
+								}
+							}
+						})
 					}
 				}
+				wg.Wait()
 			}
-		}
-		go signalContinuously("a")
-		go signalContinuously("b")
-		go signalContinuously("c")
 
-		// Duration doesn't really matter here, just need time for these all to fire
-		// a bit:
-		<-time.After(100 * time.Millisecond)
+			signalConcurrentlyFunc()
+			for _, counter := range counters {
+				require.Equal(t, int64(1), counter.Load())
+			}
 
-		require.Equal(t, int64(1), counters["a"].Load())
-		require.Equal(t, int64(1), counters["b"].Load())
-		require.Equal(t, int64(1), counters["c"].Load())
-
-		limiter.Time.StubNow(now.Add(11 * time.Millisecond))
-
-		<-time.After(100 * time.Millisecond)
-
-		require.Equal(t, int64(2), counters["a"].Load())
-		require.Equal(t, int64(2), counters["b"].Load())
-		require.Equal(t, int64(2), counters["c"].Load())
+			time.Sleep(11 * time.Millisecond)
+			signalConcurrentlyFunc()
+			for _, counter := range counters {
+				require.Equal(t, int64(2), counter.Load())
+			}
+		})
 	})
 }
