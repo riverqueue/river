@@ -180,7 +180,8 @@ func verifyConcurrentUniqueConflicts(t *testing.T, observer *postgresObserver, g
 }
 
 // verifyBatchInsertion checks typed batch insertion results, ordering,
-// duplicate reporting, and atomic rejection outside a transaction.
+// duplicate reporting, invalid unique options, and atomic rejection
+// outside a transaction.
 func verifyBatchInsertion(t *testing.T, goAdapter, candidateAdapter *adapter) {
 	t.Helper()
 
@@ -254,6 +255,12 @@ func verifyBatchInsertion(t *testing.T, goAdapter, candidateAdapter *adapter) {
 		}
 		pair.observer.call(t, "list", map[string]any{"tags_all": []string{invalidTag}}, &invalidRows)
 		require.Empty(t, invalidRows.Jobs)
+
+		// Excluding the kind needs arguments, queue, or period in the key.
+		pair.actor.requireCallError(t, "insert", map[string]any{
+			"message": "unique without kind " + pair.actor.name,
+			"opts":    map[string]any{"unique": map[string]any{"exclude_kind": true}},
+		}, "rejected")
 	}
 }
 

@@ -820,6 +820,9 @@ impl UniqueOpts {
 
     /// Returns the options with the job kind excluded from the unique key,
     /// or not.
+    ///
+    /// Excluding the kind requires arguments, queue, or period in the key;
+    /// inserting with only the kind excluded fails.
     #[must_use]
     pub const fn with_exclude_kind(mut self, exclude_kind: bool) -> Self {
         self.exclude_kind = exclude_kind;
@@ -853,6 +856,14 @@ impl UniqueOpts {
             && period < Duration::from_secs(1)
         {
             return Err("unique period must be at least one second".to_owned());
+        }
+        // Without the kind, arguments, queue, or period, every job would
+        // share one key.
+        if self.exclude_kind && !self.by_args && !self.by_queue && self.by_period.is_none() {
+            return Err(
+                "excluding the kind from a unique key requires arguments, queue, or period"
+                    .to_owned(),
+            );
         }
         // Like Go, an empty custom set means the default states, which
         // include every required one.
@@ -902,6 +913,30 @@ mod tests {
             empty.state_bitmask(),
             UniqueOpts::new().with_by_args(true).state_bitmask()
         );
+    }
+
+    #[test]
+    fn excluding_the_kind_requires_another_dimension() {
+        let kind_only = UniqueOpts::new().with_exclude_kind(true);
+        assert!(!kind_only.is_empty());
+        assert_eq!(
+            kind_only.validate().unwrap_err(),
+            "excluding the kind from a unique key requires arguments, queue, or period"
+        );
+        assert!(
+            kind_only
+                .clone()
+                .with_by_state(JobState::UNIQUE_REQUIRED.iter().copied())
+                .validate()
+                .is_err()
+        );
+        for valid in [
+            kind_only.clone().with_by_args(true),
+            kind_only.clone().with_by_queue(true),
+            kind_only.with_by_period(Duration::from_secs(60)),
+        ] {
+            assert!(valid.validate().is_ok(), "{valid:?}");
+        }
     }
 
     #[test]
