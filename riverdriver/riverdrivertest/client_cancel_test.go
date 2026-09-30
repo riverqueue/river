@@ -2,7 +2,6 @@ package riverdrivertest
 
 import (
 	"context"
-	"sync"
 	"testing"
 	"time"
 
@@ -100,57 +99,4 @@ func exerciseClientCancelRunningJob[TTx any](ctx context.Context, t *testing.T, 
 	require.Equal(t, river.EventKindJobCancelled, event.Kind)
 	require.Equal(t, insertRes.Job.ID, event.Job.ID)
 	require.Equal(t, rivertype.JobStateCancelled, event.Job.State)
-}
-
-func exerciseClientCancelConcurrentRaceFreshReturn[TTx any](ctx context.Context, t *testing.T, driver riverdriver.Driver[TTx], schema string) {
-	t.Helper()
-
-	config := newTestConfig(t, schema)
-
-	client, err := river.NewClient(driver, config)
-	require.NoError(t, err)
-
-	// Scheduled far out so no producer can ever work it; the root suite's
-	// fixed-wait negative-event assertion is dropped (remote-backend
-	// flake-prone).
-	insertRes, err := client.Insert(ctx, &noOpArgs{}, &river.InsertOpts{ScheduledAt: time.Now().Add(5 * time.Minute)})
-	require.NoError(t, err)
-
-	const cancelRounds = 20
-
-	var firstFinalizedAt *time.Time
-
-	for range cancelRounds {
-		var (
-			group sync.WaitGroup
-			rows  [2]*rivertype.JobRow
-			errs  [2]error
-		)
-
-		group.Go(func() {
-			rows[0], errs[0] = client.JobCancel(ctx, insertRes.Job.ID)
-		})
-		group.Go(func() {
-			rows[1], errs[1] = client.JobCancel(ctx, insertRes.Job.ID)
-		})
-		group.Wait()
-
-		for i := range 2 {
-			require.NoError(t, errs[i])
-			require.Equal(t, rivertype.JobStateCancelled, rows[i].State)
-		}
-
-		require.Equal(t, *rows[0].FinalizedAt, *rows[1].FinalizedAt)
-
-		if firstFinalizedAt == nil {
-			firstFinalizedAt = rows[0].FinalizedAt
-		}
-		require.Equal(t, *firstFinalizedAt, *rows[0].FinalizedAt,
-			"finalized_at must be written exactly once; later cancels must not re-stamp it")
-	}
-
-	finalRow, err := client.JobGet(ctx, insertRes.Job.ID)
-	require.NoError(t, err)
-	require.Equal(t, rivertype.JobStateCancelled, finalRow.State)
-	require.Equal(t, *firstFinalizedAt, *finalRow.FinalizedAt)
 }

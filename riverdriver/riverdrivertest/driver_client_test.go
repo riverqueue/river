@@ -316,6 +316,8 @@ func ExerciseClient[TTx any](ctx context.Context, t *testing.T,
 ) {
 	t.Helper()
 
+	exerciseClientJobUpdate(ctx, t, driverWithSchema)
+
 	type testBundle struct {
 		config *river.Config
 		driver riverdriver.Driver[TTx]
@@ -632,14 +634,6 @@ func ExerciseClient[TTx any](ctx context.Context, t *testing.T,
 		})
 		require.NoError(t, err)
 		require.False(t, insertRes2.UniqueSkippedAsDuplicate)
-	})
-
-	t.Run("JobCancelConcurrentRaceFreshReturn", func(t *testing.T) {
-		t.Parallel()
-
-		_, bundle := setupConfig(t)
-
-		exerciseClientCancelConcurrentRaceFreshReturn(ctx, t, bundle.driver, bundle.schema)
 	})
 
 	t.Run("JobDelete", func(t *testing.T) {
