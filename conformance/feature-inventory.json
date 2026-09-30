@@ -671,9 +671,10 @@
       "area": "config",
       "detail": "bool",
       "id": "config.PollOnly",
-      "rationale": "Disables LISTEN in favor of polling. Implementations provide an equivalent notification-free mode.",
+      "rationale": "Disables LISTEN in favor of polling. Implementations provide an equivalent notification-free mode, which clients also enter on their own on a PostgreSQL server without LISTEN/NOTIFY, like YugabyteDB by default.",
       "scenarios": [
         "poll_only_remote_cancellation",
+        "simulated_yugabyte_polling",
         "sqlite_runtime_poll_only_recovery"
       ],
       "source": "client.go:river.Config.PollOnly"
@@ -1032,7 +1033,7 @@
       "area": "driver",
       "detail": "func(ctx context.Context) error",
       "id": "driver.Executor.InitDriver",
-      "rationale": "Go driver-seam method that detects server capabilities, such as YugabyteDB lacking LISTEN/NOTIFY and xmax, before a client starts.",
+      "rationale": "Go driver-seam method that detects server capabilities, such as YugabyteDB lacking LISTEN/NOTIFY and xmax, before a client starts; simulated_yugabyte_polling covers their effects across implementations.",
       "source": "riverdriver/river_driver_interface.go:riverdriver.Executor.InitDriver"
     },
     {
@@ -2444,8 +2445,9 @@
       "area": "metadata_key",
       "detail": "go:const",
       "id": "metadata_key.river:unique_nonce",
-      "rationale": "SQLite fast-insert nonce used to detect whether a unique insert was skipped as a duplicate.",
+      "rationale": "Unique insert nonce used to detect whether a unique insert was skipped as a duplicate where xmax is unavailable: always on SQLite, and on YugabyteDB.",
       "scenarios": [
+        "simulated_yugabyte_polling",
         "sqlite_insert_get_unique_cross_language"
       ],
       "source": "riverdriver/unique_insert.go:riverdriver.UniqueInsertMetadataKey"

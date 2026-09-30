@@ -31,6 +31,17 @@ the connections of another process of the same implementation, such as a
 restarted or multi-engine peer. An adapter that doesn't report the name is
 identified by its descriptor's shared `application_name` instead.
 
+A PostgreSQL URL may carry an `options` query parameter, which the adapter
+must pass to the server with its connections. `simulated_yugabyte_polling`
+starts a second pair of adapters whose URL sets `options=-c
+search_path=river_conformance_yugabyte,pg_catalog`. That schema shadows
+`version()`, `current_setting(text, boolean)`, and `pg_notify` so the server
+looks like YugabyteDB without `LISTEN`/`NOTIFY`, and River's tables live in it
+as the connections' current schema. Each implementation must detect this by
+itself, write unique jobs with a `river:unique_nonce` metadata value instead
+of relying on `xmax`, send no notifications, and, when started without
+`poll_only`, poll for cancellations of its running jobs every two seconds.
+
 The Go implementation is the reference side. By default the candidate is the
 Rust adapter described by [`candidates/rust.json`](candidates/rust.json). A
 JavaScript or future implementation can run the same suite by placing an object

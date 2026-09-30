@@ -121,6 +121,7 @@ var scenarioRegistry = map[string]scenarioBinding{ //nolint:gochecknoglobals // 
 	"resumable_validation":                                           {owner: scenarioOwnerMixed, tier: "runtime"},
 	"rolling_deployment_same_protocol":                               {owner: scenarioOwnerMixed, tier: "mixed"},
 	"shutdown_after_cancel_attempt":                                  {owner: scenarioOwnerResilience, tier: "runtime"},
+	"simulated_yugabyte_polling":                                     {owner: scenarioOwnerMixed, tier: "mixed"},
 	"single_implementation_worker_outcomes":                          {owner: scenarioOwnerMixed, tier: "runtime"},
 	"snooze_once_metadata_transition":                                {owner: scenarioOwnerMixed, tier: "runtime"},
 	"sqlite_batch_atomicity":                                         {owner: scenarioOwnerSQLiteStorage, profile: "portable-storage-v1", tier: "storage"},

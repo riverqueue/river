@@ -276,6 +276,11 @@ func TestMixedConformance(t *testing.T) {
 
 		pair.eachDirection(func(controller, worker *adapter) { verifyPollOnlyRemoteCancellation(t, controller, worker) })
 	})
+	t.Run("simulated_yugabyte_polling", func(t *testing.T) {
+		defer scenarios.record(t)
+
+		verifySimulatedYugabyte(t, observer, repositoryRoot, databaseURL, candidateSpec)
+	})
 	t.Run("cooperative_remote_cancellation", func(t *testing.T) {
 		defer scenarios.record(t)
 
