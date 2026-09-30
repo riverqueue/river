@@ -3,6 +3,7 @@
 
 use std::{sync::Arc, time::Duration};
 
+use chrono::{DateTime, Utc};
 use tokio::{sync::mpsc, task::JoinSet};
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, error};
@@ -11,8 +12,8 @@ use crate::database::DatabasePool;
 use crate::{Client, client::ClientInner};
 
 use super::{
-    Breakers, MaintenanceError, STAGGER_MAX, cleaner, elector::Term, exponential_backoff,
-    periodic_enqueuer, random_duration, rescuer, scheduler, sleep_cancellable,
+    Breakers, LeadershipWakeup, MaintenanceError, STAGGER_MAX, cleaner, elector::Term,
+    exponential_backoff, periodic_enqueuer, random_duration, rescuer, scheduler, sleep_cancellable,
 };
 
 /// Attempts to start the maintainer before requesting resignation (Go
@@ -37,13 +38,19 @@ impl ServiceContext {
 pub(super) struct Maintainer {
     breakers: Arc<Breakers>,
     inner: Arc<ClientInner>,
+    /// Asks this client's elector to resign a term.
+    resign: mpsc::UnboundedSender<LeadershipWakeup>,
 }
 
 impl Maintainer {
-    pub(super) fn new(inner: Arc<ClientInner>) -> Self {
+    pub(super) fn new(
+        inner: Arc<ClientInner>,
+        resign: mpsc::UnboundedSender<LeadershipWakeup>,
+    ) -> Self {
         Self {
             breakers: Arc::new(Breakers::new(inner.maintenance.batch_sizes)),
             inner,
+            resign,
         }
     }
 
@@ -73,6 +80,7 @@ impl Maintainer {
             previous = Some(tokio::spawn(run_term(
                 Arc::clone(&self.inner),
                 Arc::clone(&self.breakers),
+                self.resign.clone(),
                 term,
             )));
         }
@@ -90,12 +98,17 @@ async fn join_term(handle: tokio::task::JoinHandle<()>) {
 
 /// Starts the term's services, retrying start failures and requesting
 /// resignation once retries are exhausted, then waits for every service.
-async fn run_term(inner: Arc<ClientInner>, breakers: Arc<Breakers>, term: Term) {
+async fn run_term(
+    inner: Arc<ClientInner>,
+    breakers: Arc<Breakers>,
+    resign: mpsc::UnboundedSender<LeadershipWakeup>,
+    term: Term,
+) {
     let Term {
         elected_at,
         token: cancel,
     } = term;
-    if !start_or_resign(&inner, &cancel).await {
+    if !start_or_resign(&inner, &cancel, &resign, elected_at).await {
         return;
     }
 
@@ -174,10 +187,15 @@ async fn run_term(inner: Arc<ClientInner>, breakers: Arc<Breakers>, term: Term) 
     debug!("River maintenance services stopped");
 }
 
-/// Starts the term's maintenance, retrying start failures and requesting
-/// resignation once retries are exhausted. Returns whether the term's
-/// services should run.
-async fn start_or_resign(inner: &Arc<ClientInner>, cancel: &CancellationToken) -> bool {
+/// Starts the term's maintenance, retrying start failures and asking this
+/// client's elector to resign the term once retries are exhausted. Returns
+/// whether the term's services should run.
+async fn start_or_resign(
+    inner: &Arc<ClientInner>,
+    cancel: &CancellationToken,
+    resign: &mpsc::UnboundedSender<LeadershipWakeup>,
+    elected_at: DateTime<Utc>,
+) -> bool {
     for attempt in 1..=START_ATTEMPTS {
         match start(inner, cancel).await {
             Ok(()) => return true,
@@ -195,13 +213,11 @@ async fn start_or_resign(inner: &Arc<ClientInner>, cancel: &CancellationToken) -
     if cancel.is_cancelled() {
         return false;
     }
-    error!("River maintenance failed to start after all attempts; requesting leader resignation");
-    let client = Client {
-        inner: Arc::clone(inner),
-    };
-    if let Err(resign_error) = client.request_resign().await {
-        error!(error = %crate::error::Chain(&resign_error), "River could not request leader resignation");
-    }
+    // Resign locally rather than through a notification, which a client
+    // without notifications wouldn't hear. Naming the term keeps a late
+    // failure from resigning a newer one.
+    error!("River maintenance failed to start after all attempts; resigning leadership");
+    let _ = resign.send(LeadershipWakeup::ResignTerm(elected_at));
     false
 }
 

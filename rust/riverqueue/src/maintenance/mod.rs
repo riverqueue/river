@@ -75,7 +75,7 @@ pub(crate) async fn run_maintenance(
         inner.id.clone(),
         inner.maintenance.elect_interval,
     );
-    let maintainer = maintainer::Maintainer::new(Arc::clone(&inner));
+    let maintainer = maintainer::Maintainer::new(Arc::clone(&inner), wakeup_sender.clone());
     tokio::join!(
         forward_leadership_notifications(notifications, wakeup_sender, cancel.clone()),
         elector.run(cancel.clone(), wakeup_receiver, term_sender),
@@ -91,6 +91,10 @@ pub(crate) enum LeadershipWakeup {
     Changed,
     /// Some client asked the current leader to resign.
     RequestResign,
+    /// This client's maintenance asks it to resign the term elected at this
+    /// time, and no later one. It never passes through the database, so it
+    /// works without notifications.
+    ResignTerm(chrono::DateTime<chrono::Utc>),
 }
 
 /// Moves leadership notifications from the client's broadcast channel into

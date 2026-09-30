@@ -1013,6 +1013,14 @@ async fn periodic_start_hooks_and_run_on_start_follow_each_leadership_gain() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn maintenance_start_retries_then_requests_resignation() {
+    // The leader resigns without a notification, so a client without
+    // notifications resigns too.
+    for poll_only in [false, true] {
+        maintenance_start_retries_then_resigns(poll_only).await;
+    }
+}
+
+async fn maintenance_start_retries_then_resigns(poll_only: bool) {
     use crate::{Hook, PeriodicJobs};
 
     // Fails the first three start attempts of every client, like Go's
@@ -1034,13 +1042,15 @@ async fn maintenance_start_retries_then_requests_resignation() {
 
     let database = TestDatabase::new("rmt_start_retry").await;
     let attempts = Arc::new(AtomicUsize::new(0));
-    let client = database
+    let mut builder = database
         .client()
         .hook(FlakyHook(Arc::clone(&attempts)))
         .maintenance(MaintenanceConfig::default().with_elect_interval(Duration::from_millis(50)))
-        .queue("default", QueueConfig::new(1))
-        .build()
-        .unwrap();
+        .queue("default", QueueConfig::new(1));
+    if poll_only {
+        builder = builder.without_notifications();
+    }
+    let client = builder.build().unwrap();
     let elected_at = || {
         let pool = database.pool.clone();
         let table = database.table("river_leader");

@@ -263,7 +263,7 @@ impl Elector {
                 wakeup = wakeups.recv() => match wakeup {
                     None => return None,
                     // A follower ignores resignation requests.
-                    Some(LeadershipWakeup::RequestResign) => {}
+                    Some(LeadershipWakeup::RequestResign | LeadershipWakeup::ResignTerm(_)) => {}
                     Some(LeadershipWakeup::Changed) => {
                         // Somebody resigned; bid soon, but not all at once.
                         if !sleep_cancellable(
@@ -303,7 +303,13 @@ impl Elector {
                             info!(client_id = %self.client_id, "River leader received a resignation request");
                             return (StepDown::Resign { requested: true }, lease);
                         }
-                        Some(LeadershipWakeup::Changed) => {}
+                        Some(LeadershipWakeup::ResignTerm(elected_at)) if elected_at == lease.elected_at => {
+                            info!(client_id = %self.client_id, "River leader resigning at its maintenance's request");
+                            return (StepDown::Resign { requested: true }, lease);
+                        }
+                        // A request for an earlier term, or a change a leader
+                        // needn't act on.
+                        Some(LeadershipWakeup::ResignTerm(_) | LeadershipWakeup::Changed) => {}
                     },
                     () = &mut deadline => break,
                 }
@@ -678,6 +684,45 @@ mod unit_tests {
 
         // A request that arrives while the client leads is honored.
         wakeup_sender.send(LeadershipWakeup::RequestResign).unwrap();
+        term.token.cancelled().await;
+        cancel.cancel();
+        run.await.unwrap();
+        assert_eq!(store.resigned.lock().unwrap().first(), Some(&elected_at));
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn resigns_only_the_named_term() {
+        let elected_at = Utc::now();
+        let store = Arc::new(ScriptedStore {
+            elected_at,
+            reelect: Mutex::new(Vec::new()),
+            resigned: Mutex::new(Vec::new()),
+        });
+        let (wakeup_sender, wakeups) = mpsc::unbounded_channel();
+        let (terms_sender, mut terms) = mpsc::unbounded_channel();
+        let cancel = CancellationToken::new();
+        let elector = Elector::new(
+            Arc::clone(&store) as Arc<dyn LeaderStore>,
+            "term-resign".to_owned(),
+            Duration::from_millis(100),
+        );
+        let run = tokio::spawn(elector.run(cancel.clone(), wakeups, terms_sender));
+
+        let term = terms.recv().await.unwrap();
+        // A request for an earlier term, like one from a start that failed
+        // after that term ended, is ignored.
+        wakeup_sender
+            .send(LeadershipWakeup::ResignTerm(
+                elected_at - chrono::Duration::seconds(1),
+            ))
+            .unwrap();
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        assert!(!term.token.is_cancelled());
+        assert!(store.resigned.lock().unwrap().is_empty());
+
+        wakeup_sender
+            .send(LeadershipWakeup::ResignTerm(elected_at))
+            .unwrap();
         term.token.cancelled().await;
         cancel.cancel();
         run.await.unwrap();
