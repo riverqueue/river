@@ -634,6 +634,14 @@ func ExerciseClient[TTx any](ctx context.Context, t *testing.T,
 		require.False(t, insertRes2.UniqueSkippedAsDuplicate)
 	})
 
+	t.Run("JobCancelConcurrentRaceFreshReturn", func(t *testing.T) {
+		t.Parallel()
+
+		_, bundle := setupConfig(t)
+
+		exerciseClientCancelConcurrentRaceFreshReturn(ctx, t, bundle.driver, bundle.schema)
+	})
+
 	t.Run("JobDelete", func(t *testing.T) {
 		t.Parallel()
 
@@ -1142,6 +1150,148 @@ func ExerciseClient[TTx any](ctx context.Context, t *testing.T,
 		require.Equal(t, job.ID, listRes.Jobs[0].ID)
 	})
 
+	t.Run("JobListMixedStatePagination", func(t *testing.T) {
+		t.Parallel()
+
+		now := time.Date(2026, 9, 9, 12, 0, 0, 123000000, time.UTC)
+		timeAtFunc := func(offset time.Duration) *time.Time { return new(now.Add(offset)) }
+
+		// Time ordering uses the time field of the first state for every job, so
+		// cursors must too. Give jobs in the other state conflicting timestamps,
+		// including nulls, and page across every boundary. Equal timestamps also
+		// verify that ID breaks ties. Nulls sort last ascending and first
+		// descending.
+		type jobFixture struct {
+			name string
+			opts testfactory.JobOpts
+		}
+		for _, tt := range []struct {
+			name      string
+			jobs      []jobFixture
+			states    []rivertype.JobState
+			wantOrder []string
+		}{
+			{
+				name: "AttemptedAt",
+				jobs: []jobFixture{
+					{name: "runningAtTwoSeconds", opts: testfactory.JobOpts{AttemptedAt: timeAtFunc(2 * time.Second), State: new(rivertype.JobStateRunning)}},
+					{name: "availableWithoutAttempt", opts: testfactory.JobOpts{State: new(rivertype.JobStateAvailable)}},
+					{name: "runningAtOneSecond", opts: testfactory.JobOpts{AttemptedAt: timeAtFunc(time.Second), State: new(rivertype.JobStateRunning)}},
+					{name: "availableWithPastAttempt", opts: testfactory.JobOpts{AttemptedAt: timeAtFunc(-time.Hour), ScheduledAt: timeAtFunc(time.Hour), State: new(rivertype.JobStateAvailable)}},
+					{name: "runningAtOneSecondLaterID", opts: testfactory.JobOpts{AttemptedAt: timeAtFunc(time.Second), State: new(rivertype.JobStateRunning)}},
+					{name: "availableWithoutAttemptLaterID", opts: testfactory.JobOpts{State: new(rivertype.JobStateAvailable)}},
+				},
+				states: []rivertype.JobState{rivertype.JobStateRunning, rivertype.JobStateAvailable},
+				wantOrder: []string{
+					"availableWithPastAttempt",
+					"runningAtOneSecond",
+					"runningAtOneSecondLaterID",
+					"runningAtTwoSeconds",
+					"availableWithoutAttempt",
+					"availableWithoutAttemptLaterID",
+				},
+			},
+			{
+				name: "FinalizedAt",
+				jobs: []jobFixture{
+					{name: "availableWithoutFinalization", opts: testfactory.JobOpts{ScheduledAt: timeAtFunc(-2 * time.Hour), State: new(rivertype.JobStateAvailable)}},
+					{name: "completedAtOneSecond", opts: testfactory.JobOpts{FinalizedAt: timeAtFunc(time.Second), ScheduledAt: timeAtFunc(-3 * time.Hour), State: new(rivertype.JobStateCompleted)}},
+					{name: "completedAtReferenceTime", opts: testfactory.JobOpts{FinalizedAt: timeAtFunc(0), ScheduledAt: timeAtFunc(-time.Hour), State: new(rivertype.JobStateCompleted)}},
+					{name: "availableWithoutFinalizationLaterID", opts: testfactory.JobOpts{ScheduledAt: timeAtFunc(-4 * time.Hour), State: new(rivertype.JobStateAvailable)}},
+					{name: "completedAtOneSecondLaterID", opts: testfactory.JobOpts{FinalizedAt: timeAtFunc(time.Second), ScheduledAt: timeAtFunc(-5 * time.Hour), State: new(rivertype.JobStateCompleted)}},
+				},
+				states: []rivertype.JobState{rivertype.JobStateCompleted, rivertype.JobStateAvailable},
+				wantOrder: []string{
+					"completedAtReferenceTime",
+					"completedAtOneSecond",
+					"completedAtOneSecondLaterID",
+					"availableWithoutFinalization",
+					"availableWithoutFinalizationLaterID",
+				},
+			},
+			{
+				name: "ScheduledAt",
+				jobs: []jobFixture{
+					{name: "availableAtOneSecond", opts: testfactory.JobOpts{ScheduledAt: timeAtFunc(time.Second), State: new(rivertype.JobStateAvailable)}},
+					{name: "cancelledAtTwoSeconds", opts: testfactory.JobOpts{FinalizedAt: timeAtFunc(-time.Hour), ScheduledAt: timeAtFunc(2 * time.Second), State: new(rivertype.JobStateCancelled)}},
+					{name: "availableAtThreeSeconds", opts: testfactory.JobOpts{ScheduledAt: timeAtFunc(3 * time.Second), State: new(rivertype.JobStateAvailable)}},
+					{name: "cancelledAtTwoSecondsLaterID", opts: testfactory.JobOpts{FinalizedAt: timeAtFunc(time.Hour), ScheduledAt: timeAtFunc(2 * time.Second), State: new(rivertype.JobStateCancelled)}},
+					{name: "availableAtFourSeconds", opts: testfactory.JobOpts{ScheduledAt: timeAtFunc(4 * time.Second), State: new(rivertype.JobStateAvailable)}},
+				},
+				states: []rivertype.JobState{rivertype.JobStateAvailable, rivertype.JobStateCancelled},
+				wantOrder: []string{
+					"availableAtOneSecond",
+					"cancelledAtTwoSeconds",
+					"cancelledAtTwoSecondsLaterID",
+					"availableAtThreeSeconds",
+					"availableAtFourSeconds",
+				},
+			},
+		} {
+			for _, order := range []river.SortOrder{river.SortOrderAsc, river.SortOrderDesc} {
+				name := tt.name + "Asc"
+				if order == river.SortOrderDesc {
+					name = tt.name + "Desc"
+				}
+
+				t.Run(name, func(t *testing.T) {
+					t.Parallel()
+
+					client, bundle := setup(t)
+
+					jobIDs := make(map[string]int64, len(tt.jobs))
+					for _, fixture := range tt.jobs {
+						opts := fixture.opts
+						opts.Schema = bundle.schema
+						jobIDs[fixture.name] = testfactory.Job(ctx, t, bundle.exec, &opts).ID
+					}
+					wantIDs := sliceutil.Map(tt.wantOrder, func(name string) int64 {
+						id, ok := jobIDs[name]
+						require.True(t, ok, "unknown job fixture: %s", name)
+						return id
+					})
+					if order == river.SortOrderDesc {
+						slices.Reverse(wantIDs)
+					}
+
+					params := river.NewJobListParams().States(tt.states...).OrderBy(river.JobListOrderByTime, order)
+
+					listRes, err := client.JobList(ctx, params)
+					require.NoError(t, err)
+					require.Equal(t, wantIDs, sliceutil.Map(listRes.Jobs, func(job *rivertype.JobRow) int64 { return job.ID }))
+
+					// Page through one job at a time so every job is a cursor.
+					// Alternate serialized and job-derived cursors.
+					var (
+						gotIDs     []int64
+						pageParams = params.First(1)
+					)
+					for page := 0; ; page++ {
+						require.LessOrEqual(t, page, len(wantIDs), "too many pages; got IDs so far: %v", gotIDs)
+
+						listRes, err := client.JobList(ctx, pageParams)
+						require.NoError(t, err)
+						if len(listRes.Jobs) == 0 {
+							break
+						}
+						gotIDs = append(gotIDs, listRes.Jobs[0].ID)
+
+						if page%2 == 0 {
+							encoded, err := listRes.LastCursor.MarshalText()
+							require.NoError(t, err)
+							var cursor river.JobListCursor
+							require.NoError(t, cursor.UnmarshalText(encoded))
+							pageParams = params.First(1).After(&cursor)
+						} else {
+							pageParams = params.First(1).After(river.JobListCursorFromJob(listRes.Jobs[0]))
+						}
+					}
+					require.Equal(t, wantIDs, gotIDs)
+				})
+			}
+		}
+	})
+
 	t.Run("JobListScheduledPagination", func(t *testing.T) {
 		t.Parallel()
 
@@ -1194,6 +1344,7 @@ func ExerciseClient[TTx any](ctx context.Context, t *testing.T,
 		}{
 			{"Default", river.NewJobListParams(), []int{0, 1, 2, 3}},
 			{"ExplicitEmpty", river.NewJobListParams().States(), []int{0, 1, 2, 3}},
+			{"ExplicitEmptyByTime", river.NewJobListParams().States().OrderBy(river.JobListOrderByTime, river.SortOrderDesc), []int{0, 1, 2, 3}},
 			{"FinalizedDefaults", river.NewJobListParams().OrderBy(river.JobListOrderByFinalizedAt, river.SortOrderDesc), []int{1, 2, 3}},
 			{"Mixed", river.NewJobListParams().States(rivertype.JobStateCompleted, rivertype.JobStateAvailable).OrderBy(river.JobListOrderByTime, river.SortOrderDesc), []int{0, 2}},
 			{"NonFinalized", river.NewJobListParams().States(rivertype.JobStateAvailable).OrderBy(river.JobListOrderByTime, river.SortOrderDesc), []int{0}},
