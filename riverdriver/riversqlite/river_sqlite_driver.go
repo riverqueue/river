@@ -1688,17 +1688,19 @@ func sqliteJobInsertFullManyJobsParam(jobs []*riverdriver.JobInsertFullParams) (
 }
 
 // jobGetAvailableResultFromInternal decodes the job rows locked by
-// JobGetAvailable, separating out any that can't be decoded rather than
-// failing all of them, because they've all been moved to `running`.
+// JobGetAvailable, retaining every row and recording decode errors by job ID
+// because they've all been moved to `running`.
 func jobGetAvailableResultFromInternal(jobs []*dbsqlc.RiverJob) *riverdriver.JobGetAvailableResult {
-	res := &riverdriver.JobGetAvailableResult{Jobs: make([]*rivertype.JobRow, 0, len(jobs))}
-	for _, internal := range jobs {
+	res := &riverdriver.JobGetAvailableResult{Jobs: make([]*rivertype.JobRow, len(jobs))}
+	for i, internal := range jobs {
 		job, err := jobRowFromInternalPartial(internal)
+		res.Jobs[i] = job
 		if err != nil {
-			res.UndecodableJobs = append(res.UndecodableJobs, &riverdriver.UndecodableJob{DecodeErr: err, Job: job})
-			continue
+			if res.DecodeErrors == nil {
+				res.DecodeErrors = make(map[int64]error)
+			}
+			res.DecodeErrors[job.ID] = err
 		}
-		res.Jobs = append(res.Jobs, job)
 	}
 	return res
 }

@@ -249,7 +249,7 @@ func exerciseJobRead[TTx any](ctx context.Context, t *testing.T, executorWithTx 
 
 			res, err := exec.JobGetAvailable(ctx, params)
 			require.NoError(t, err)
-			require.Empty(t, res.UndecodableJobs)
+			require.Nil(t, res.DecodeErrors)
 			return res.Jobs
 		}
 
@@ -557,9 +557,9 @@ func exerciseJobRead[TTx any](ctx context.Context, t *testing.T, executorWithTx 
 			}, jobRows[0].Errors)
 		})
 
-		// A locked job whose row can't be decoded is returned separately so the
-		// caller can fail its attempt, and doesn't prevent returning the others.
-		t.Run("UndecodableJobsReturnedSeparately", func(t *testing.T) {
+		// Every locked job is returned, with decode errors keyed by job ID so
+		// the caller can fail only the attempts whose rows couldn't be decoded.
+		t.Run("UndecodableJobsReturnedWithDecodeErrors", func(t *testing.T) {
 			t.Parallel()
 
 			exec, bundle := setup(ctx, t)
@@ -570,9 +570,11 @@ func exerciseJobRead[TTx any](ctx context.Context, t *testing.T, executorWithTx 
 			job1 := testfactory.Job(ctx, t, exec, &testfactory.JobOpts{})
 			job2 := testfactory.Job(ctx, t, exec, &testfactory.JobOpts{Tags: []string{"tag"}})
 			job3 := testfactory.Job(ctx, t, exec, &testfactory.JobOpts{})
+			job4 := testfactory.Job(ctx, t, exec, &testfactory.JobOpts{})
 
 			sqliteSetJobJSONColumn(ctx, t, exec, job2.ID, "errors", `{"not":"an array"}`)
 			sqliteSetJobJSONColumn(ctx, t, exec, job2.ID, "tags", `{"not":"an array"}`)
+			sqliteSetJobJSONColumn(ctx, t, exec, job4.ID, "tags", `{"not":"an array"}`)
 
 			res, err := exec.JobGetAvailable(ctx, &riverdriver.JobGetAvailableParams{
 				ClientID:       testClientID,
@@ -581,22 +583,24 @@ func exerciseJobRead[TTx any](ctx context.Context, t *testing.T, executorWithTx 
 				Queue:          rivercommon.QueueDefault,
 			})
 			require.NoError(t, err)
-			require.Equal(t, []int64{job1.ID, job3.ID},
+			require.Equal(t, []int64{job1.ID, job2.ID, job3.ID, job4.ID},
 				sliceutil.Map(res.Jobs, func(j *rivertype.JobRow) int64 { return j.ID }))
 
-			require.Len(t, res.UndecodableJobs, 1)
-			undecodableJob := res.UndecodableJobs[0]
-			require.ErrorContains(t, undecodableJob.DecodeErr, "error unmarshaling `errors`")
-			require.ErrorContains(t, undecodableJob.DecodeErr, "error unmarshaling `tags`")
+			require.Len(t, res.DecodeErrors, 2)
+			require.ErrorContains(t, res.DecodeErrors[job2.ID], "error unmarshaling `errors`")
+			require.ErrorContains(t, res.DecodeErrors[job2.ID], "error unmarshaling `tags`")
+			require.ErrorContains(t, res.DecodeErrors[job4.ID], "error unmarshaling `tags`")
+			require.NotContains(t, res.DecodeErrors[job4.ID].Error(), "error unmarshaling `errors`")
 
 			// Fields that could be decoded are set, while the others are empty.
-			require.Equal(t, job2.ID, undecodableJob.Job.ID)
-			require.Equal(t, 1, undecodableJob.Job.Attempt)
-			require.Equal(t, []string{testClientID}, undecodableJob.Job.AttemptedBy)
-			require.Equal(t, job2.Kind, undecodableJob.Job.Kind)
-			require.Equal(t, rivertype.JobStateRunning, undecodableJob.Job.State)
-			require.Nil(t, undecodableJob.Job.Errors)
-			require.Nil(t, undecodableJob.Job.Tags)
+			undecodableJob := res.Jobs[1]
+			require.Equal(t, 1, undecodableJob.Attempt)
+			require.Equal(t, []string{testClientID}, undecodableJob.AttemptedBy)
+			require.Equal(t, job2.Kind, undecodableJob.Kind)
+			require.Equal(t, rivertype.JobStateRunning, undecodableJob.State)
+			require.Nil(t, undecodableJob.Errors)
+			require.Nil(t, undecodableJob.Tags)
+			require.Nil(t, res.Jobs[3].Tags)
 		})
 	})
 

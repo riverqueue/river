@@ -686,8 +686,8 @@ func (p *producer) innerFetchLoop(workCtx context.Context, fetchResultCh chan pr
 		case result := <-fetchResultCh:
 			if result.err != nil {
 				p.Logger.ErrorContext(workCtx, p.Name+": Error fetching jobs", slog.String("err", result.err.Error()), slog.String("queue", p.config.Queue))
-			} else if numLocked := len(result.jobs) + len(result.undecodableJobs); numLocked > 0 {
-				p.startNewExecutors(workCtx, result.jobs, result.undecodableJobs, pendingCancelJobs)
+			} else if numLocked := len(result.jobs); numLocked > 0 {
+				p.startNewExecutors(workCtx, result.jobs, result.decodeErrors, pendingCancelJobs)
 
 				if numLocked == limit {
 					// Fetch returned the maximum number of jobs that were requested,
@@ -911,13 +911,13 @@ func (p *producer) dispatchWork(workCtx context.Context, count int, fetchResultC
 		})
 		p.emitMetric(ctx, &rivertype.HookMetricEmitParams{
 			Metric: &rivertype.JobGetAvailableCountMetric{
-				Count: len(res.Jobs) + len(res.UndecodableJobs),
+				Count: len(res.Jobs),
 				Queue: p.config.Queue,
 			},
 		})
 	}
 
-	fetchResultCh <- producerFetchResult{jobs: res.Jobs, undecodableJobs: res.UndecodableJobs}
+	fetchResultCh <- producerFetchResult{decodeErrors: res.DecodeErrors, jobs: res.Jobs}
 }
 
 func (p *producer) emitMetric(ctx context.Context, params *rivertype.HookMetricEmitParams) {
@@ -966,10 +966,11 @@ func (p *producer) heartbeatLogLoop(ctx context.Context, wg *sync.WaitGroup) {
 // couldn't be decoded isn't worked, but it still gets an executor that fails
 // its attempt with the decode error, so that it's retried or discarded
 // through the normal error handling path instead of being left running.
-func (p *producer) startNewExecutors(workCtx context.Context, jobs []*rivertype.JobRow, undecodableJobs []*riverdriver.UndecodableJob, pendingCancelJobs map[int64]struct{}) {
+func (p *producer) startNewExecutors(workCtx context.Context, jobs []*rivertype.JobRow, decodeErrors map[int64]error, pendingCancelJobs map[int64]struct{}) {
 	defaultClientRetryPolicy := retrypolicy.NewDefault(p.Time)
 
-	startExecutor := func(job *rivertype.JobRow, decodeErr error) {
+	for _, job := range jobs {
+		decodeErr := decodeErrors[job.ID]
 		var workUnit workunit.WorkUnit
 		if decodeErr == nil {
 			if workInfo, ok := p.workers.workersMap[job.Kind]; ok {
@@ -1014,14 +1015,7 @@ func (p *producer) startNewExecutors(workCtx context.Context, jobs []*rivertype.
 		go executor.Execute(jobCtx)
 	}
 
-	for _, job := range jobs {
-		startExecutor(job, nil)
-	}
-	for _, undecodableJob := range undecodableJobs {
-		startExecutor(undecodableJob.Job, undecodableJob.DecodeErr)
-	}
-
-	p.Logger.DebugContext(workCtx, p.Name+": Distributed batch of jobs to executors", "num_jobs", len(jobs)+len(undecodableJobs))
+	p.Logger.DebugContext(workCtx, p.Name+": Distributed batch of jobs to executors", "num_jobs", len(jobs))
 
 	p.testSignals.StartedExecutors.Signal(struct{}{})
 }
@@ -1240,9 +1234,9 @@ func (p *producer) reportQueueStatusOnce(ctx context.Context) {
 }
 
 type producerFetchResult struct {
-	jobs            []*rivertype.JobRow
-	err             error
-	undecodableJobs []*riverdriver.UndecodableJob
+	decodeErrors map[int64]error
+	err          error
+	jobs         []*rivertype.JobRow
 }
 
 type errorHandlerAdapter struct {

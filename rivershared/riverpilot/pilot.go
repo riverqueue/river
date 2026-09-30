@@ -29,8 +29,8 @@ type Pilot interface {
 	JobCleanerQueuesExcluded() []string
 
 	// JobGetAvailable locks available jobs for work. Locked jobs whose rows
-	// couldn't be fully decoded are returned in the result's UndecodableJobs
-	// and should have their attempt failed by the caller.
+	// couldn't be fully decoded are included in Jobs with entries in
+	// DecodeErrors and should have their attempt failed by the caller.
 	JobGetAvailable(
 		ctx context.Context,
 		exec riverdriver.Executor,

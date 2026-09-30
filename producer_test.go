@@ -96,15 +96,14 @@ func (p *undecodableKindPilot) JobGetAvailable(
 		return nil, err
 	}
 
-	jobs := make([]*rivertype.JobRow, 0, len(res.Jobs))
 	for _, job := range res.Jobs {
 		if job.Kind == p.kind {
-			res.UndecodableJobs = append(res.UndecodableJobs, &riverdriver.UndecodableJob{DecodeErr: errors.New("fake decode error"), Job: job})
-			continue
+			if res.DecodeErrors == nil {
+				res.DecodeErrors = make(map[int64]error)
+			}
+			res.DecodeErrors[job.ID] = errors.New("fake decode error")
 		}
-		jobs = append(jobs, job)
 	}
-	res.Jobs = jobs
 
 	return res, nil
 }
@@ -223,6 +222,35 @@ func TestProducer_MetricEmitHook(t *testing.T) {
 		countMetric, countMetricFound := metricsByName[rivertype.MetricNameJobGetAvailableCount].(*rivertype.JobGetAvailableCountMetric)
 		require.True(t, countMetricFound)
 		require.Equal(t, bundle.queue, countMetric.Queue)
+		require.Equal(t, 2, countMetric.Count)
+	})
+
+	t.Run("EmitsMetricsForFetchWithDecodeErrors", func(t *testing.T) {
+		t.Parallel()
+
+		bundle := setup(t)
+
+		goodJob := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{Queue: new(bundle.queue), Schema: bundle.schema})
+		badJob := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{Kind: new("undecodable"), Queue: new(bundle.queue), Schema: bundle.schema})
+		bundle.producer.pilot = &undecodableKindPilot{Pilot: bundle.producer.pilot, kind: badJob.Kind}
+
+		fetchResultCh := make(chan producerFetchResult, 1)
+		bundle.producer.dispatchWork(ctx, 2, fetchResultCh)
+
+		fetchResult := riversharedtest.WaitOrTimeout(t, fetchResultCh)
+		require.NoError(t, fetchResult.err)
+		require.Len(t, fetchResult.jobs, 2)
+		require.ElementsMatch(t, []int64{goodJob.ID, badJob.ID}, []int64{fetchResult.jobs[0].ID, fetchResult.jobs[1].ID})
+		require.Len(t, fetchResult.decodeErrors, 1)
+		require.EqualError(t, fetchResult.decodeErrors[badJob.ID], "fake decode error")
+
+		var countMetric *rivertype.JobGetAvailableCountMetric
+		for _, metric := range riversharedtest.WaitOrTimeoutN(t, bundle.metrics, 2) {
+			if count, ok := metric.Metric.(*rivertype.JobGetAvailableCountMetric); ok {
+				countMetric = count
+			}
+		}
+		require.NotNil(t, countMetric)
 		require.Equal(t, 2, countMetric.Count)
 	})
 

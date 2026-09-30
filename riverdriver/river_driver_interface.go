@@ -243,9 +243,8 @@ type Executor interface {
 
 	// JobGetAvailable locks available jobs for work, moving them to `running`.
 	// A locked job whose row can't be fully decoded doesn't fail the call.
-	// It's instead returned in the result's UndecodableJobs so that the caller
-	// can fail the attempt, since it's been moved to `running` along with the
-	// others.
+	// It's included in Jobs with an entry in DecodeErrors so that the caller
+	// can fail its attempt instead of working the partial row.
 	JobGetAvailable(ctx context.Context, params *JobGetAvailableParams) (*JobGetAvailableResult, error)
 
 	JobGetByID(ctx context.Context, params *JobGetByIDParams) (*rivertype.JobRow, error)
@@ -475,13 +474,15 @@ type JobGetAvailableParams struct {
 
 // JobGetAvailableResult is the result of JobGetAvailable.
 type JobGetAvailableResult struct {
-	// Jobs are the locked jobs that were decoded successfully.
-	Jobs []*rivertype.JobRow
+	// DecodeErrors contains decode errors keyed by job ID. It's nil when all
+	// rows decoded successfully. Each entry corresponds to a row in Jobs whose
+	// attempt should be failed instead of worked.
+	DecodeErrors map[int64]error
 
-	// UndecodableJobs are locked jobs whose rows couldn't be fully decoded.
-	// They've been moved to `running` like Jobs, so the caller should fail
-	// their attempt rather than leave them for the rescuer.
-	UndecodableJobs []*UndecodableJob
+	// Jobs contains every locked job, including rows that couldn't be fully
+	// decoded. Fields that couldn't be decoded are left empty, with the error
+	// recorded in DecodeErrors. Every job has been moved to `running`.
+	Jobs []*rivertype.JobRow
 }
 
 type JobGetByIDParams struct {
@@ -1005,18 +1006,6 @@ type TableExistsParams struct {
 type TableTruncateParams struct {
 	Schema string
 	Table  []string
-}
-
-// UndecodableJob is a job that was locked by JobGetAvailable, but whose row
-// couldn't be fully decoded, like when one of its JSON columns has been
-// changed to a shape that doesn't match its JobRow field.
-type UndecodableJob struct {
-	// DecodeErr describes why the job row couldn't be decoded.
-	DecodeErr error
-
-	// Job is the job row with every field that could be decoded. Fields that
-	// couldn't be decoded are left empty.
-	Job *rivertype.JobRow
 }
 
 // MigrationLineMainTruncateTables is a shared helper that produces tables to
