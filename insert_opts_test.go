@@ -76,3 +76,19 @@ func TestUniqueOpts_validate(t *testing.T) {
 
 	require.NoError(t, (&UniqueOpts{ByState: rivertype.JobStates()}).validate())
 }
+
+func TestUniqueOpts_validateExcludeKind(t *testing.T) {
+	t.Parallel()
+
+	require.EqualError(t, (&UniqueOpts{ExcludeKind: true}).validate(),
+		"UniqueOpts.ExcludeKind requires ByArgs, ByQueue, or ByPeriod")
+
+	require.EqualError(t, (&UniqueOpts{ByState: rivertype.UniqueOptsByStateDefault(), ExcludeKind: true}).validate(),
+		"UniqueOpts.ExcludeKind requires ByArgs, ByQueue, or ByPeriod")
+
+	require.NoError(t, (&UniqueOpts{ByArgs: true, ExcludeKind: true}).validate())
+	require.NoError(t, (&UniqueOpts{ByQueue: true, ExcludeKind: true}).validate())
+	require.NoError(t, (&UniqueOpts{ByPeriod: 10 * time.Second, ExcludeKind: true}).validate())
+	require.NoError(t, (&UniqueOpts{ByArgs: true}).validate())
+	require.NoError(t, (&UniqueOpts{}).validate())
+}

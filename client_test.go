@@ -53,6 +53,7 @@ import (
 type clientJobCancelTestSignals struct {
 	ContinueWork testsignal.TestSignal[struct{}]
 	JobStarted   testsignal.TestSignal[int64]
+	PeerJobs     testsignal.TestSignal[[]*rivertype.JobRow]
 }
 
 func (s *clientJobCancelTestSignals) Init(tb testing.TB) {
@@ -60,7 +61,19 @@ func (s *clientJobCancelTestSignals) Init(tb testing.TB) {
 
 	s.ContinueWork.Init(tb)
 	s.JobStarted.Init(tb)
+	s.PeerJobs.Init(tb)
 }
+
+// clientMultiJobError lets a test worker return one result per claimed job.
+type clientMultiJobError struct {
+	errorsByID map[int64]error
+	jobs       []*rivertype.JobRow
+}
+
+func (e *clientMultiJobError) Error() string { return "multiple job results" }
+
+func (e *clientMultiJobError) ErrorsByID() map[int64]error { return e.errorsByID }
+func (e *clientMultiJobError) Jobs() []*rivertype.JobRow   { return e.jobs }
 
 type invalidKindArgs struct{}
 
@@ -1298,6 +1311,88 @@ func Test_Client_Common(t *testing.T) {
 		t.Parallel()
 
 		cancelRunningJobBeforeWorkReturnsTestHelper(t)
+	})
+
+	t.Run("CancelRunningJobWithPerJobResults", func(t *testing.T) {
+		t.Parallel()
+
+		// Cancel through a second client to verify that one worker invocation
+		// reports the leader and its peers promptly after notification.
+		config, bundle := setupConfig(t)
+		// Keep the client from fetching peers so this test can claim them as
+		// additional jobs handled by the same worker invocation.
+		config.Queues = map[string]QueueConfig{QueueDefault: {MaxWorkers: 1}}
+		config.RetryPolicy = &retrypolicytest.RetryPolicySlow{}
+		client := newTestClient(t, bundle.dbPool, config)
+
+		type JobArgs struct {
+			testutil.JobArgsReflectKind[JobArgs]
+		}
+
+		var signals clientJobCancelTestSignals
+		signals.Init(t)
+		AddWorker(client.config.Workers, WorkFunc(func(ctx context.Context, job *Job[JobArgs]) error {
+			signals.JobStarted.Signal(job.ID)
+			var peers []*rivertype.JobRow
+			select {
+			case peers = <-signals.PeerJobs.WaitC():
+			case <-ctx.Done():
+				return ctx.Err()
+			}
+			<-ctx.Done()
+			return &clientMultiJobError{
+				errorsByID: map[int64]error{
+					job.ID:      errors.New("leader error"),
+					peers[0].ID: errors.New("peer error 1"),
+					peers[1].ID: errors.New("peer error 2"),
+				},
+				jobs: append([]*rivertype.JobRow{job.JobRow}, peers...),
+			}
+		}))
+
+		subscribeChan := subscribe(t, client)
+		startClient(ctx, t, client)
+
+		leader, err := client.Insert(ctx, &JobArgs{}, nil)
+		require.NoError(t, err)
+		require.Equal(t, leader.Job.ID, signals.JobStarted.WaitOrTimeout())
+
+		for range 2 {
+			_, err := client.Insert(ctx, &JobArgs{}, nil)
+			require.NoError(t, err)
+		}
+		now := time.Now().UTC()
+		peers, err := bundle.driver.GetExecutor().JobGetAvailable(ctx, &riverdriver.JobGetAvailableParams{
+			MaxToLock: 2,
+			Now:       &now,
+			Queue:     QueueDefault,
+			Schema:    bundle.schema,
+		})
+		require.NoError(t, err)
+		require.Len(t, peers, 2)
+		signals.PeerJobs.Signal(peers)
+
+		cancelClient := newTestClient(t, bundle.dbPool, newTestConfig(t, bundle.schema))
+		cancelled, err := cancelClient.JobCancel(ctx, leader.Job.ID)
+		require.NoError(t, err)
+		require.Equal(t, rivertype.JobStateRunning, cancelled.State)
+
+		// Wait for all three results before reading their persisted states.
+		riversharedtest.WaitOrTimeoutN(t, subscribeChan, 3)
+
+		gotLeader, err := client.JobGet(ctx, leader.Job.ID)
+		require.NoError(t, err)
+		require.Equal(t, rivertype.JobStateCancelled, gotLeader.State)
+		require.Len(t, gotLeader.Errors, 1)
+		require.Equal(t, rivertype.ErrJobCancelledRemotely.Error(), gotLeader.Errors[0].Error)
+
+		for i, peer := range peers {
+			gotPeer, err := client.JobGet(ctx, peer.ID)
+			require.NoError(t, err)
+			require.Equal(t, rivertype.JobStateRetryable, gotPeer.State)
+			require.Len(t, gotPeer.Errors, 1)
+			require.Equal(t, fmt.Sprintf("peer error %d", i+1), gotPeer.Errors[0].Error)
+		}
 	})
 
 	t.Run("CancelRunningJobWithLongPollInterval", func(t *testing.T) {
@@ -9962,6 +10057,40 @@ func TestInsertParamsFromJobArgsAndOptions(t *testing.T) {
 		)
 		require.EqualError(t, err, "UniqueOpts.ByPeriod should not be less than 1 second")
 		require.Nil(t, insertParams)
+	})
+
+	t.Run("UniqueOptsExcludeKindOnlyValidated", func(t *testing.T) {
+		t.Parallel()
+
+		insertParams, err := insertParamsFromConfigArgsAndOptions(
+			archetype,
+			config,
+			noOpArgs{},
+			&InsertOpts{UniqueOpts: UniqueOpts{ExcludeKind: true}},
+		)
+		require.EqualError(t, err, "UniqueOpts.ExcludeKind requires ByArgs, ByQueue, or ByPeriod")
+		require.Nil(t, insertParams)
+	})
+
+	t.Run("UniqueOptsExcludeKindRemovesKindFromKey", func(t *testing.T) {
+		t.Parallel()
+
+		argsKindA := JobArgsStaticKind{kind: "kind_a"}
+		argsKindB := JobArgsStaticKind{kind: "kind_b"}
+
+		// With ExcludeKind, two different kinds with identical encoded args share a key.
+		paramsA, err := insertParamsFromConfigArgsAndOptions(archetype, config, argsKindA, &InsertOpts{UniqueOpts: UniqueOpts{ByArgs: true, ExcludeKind: true}})
+		require.NoError(t, err)
+		paramsB, err := insertParamsFromConfigArgsAndOptions(archetype, config, argsKindB, &InsertOpts{UniqueOpts: UniqueOpts{ByArgs: true, ExcludeKind: true}})
+		require.NoError(t, err)
+		require.Equal(t, paramsA.UniqueKey, paramsB.UniqueKey, "unique keys should be identical across kinds with ExcludeKind")
+
+		paramsAWithKind, err := insertParamsFromConfigArgsAndOptions(archetype, config, argsKindA, &InsertOpts{UniqueOpts: UniqueOpts{ByArgs: true}})
+		require.NoError(t, err)
+		paramsBWithKind, err := insertParamsFromConfigArgsAndOptions(archetype, config, argsKindB, &InsertOpts{UniqueOpts: UniqueOpts{ByArgs: true}})
+		require.NoError(t, err)
+		require.NotEqual(t, paramsAWithKind.UniqueKey, paramsBWithKind.UniqueKey)
+		require.NotEqual(t, paramsA.UniqueKey, paramsAWithKind.UniqueKey)
 	})
 }
 
