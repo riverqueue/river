@@ -16,7 +16,9 @@ use tokio_util::sync::CancellationToken;
 use tracing::{debug, error, warn};
 
 use crate::__private::DatabaseConnection as PilotDatabaseConnection;
-use crate::client::attempts::{FetchRegistrationGuard, register_running_attempt};
+use crate::client::attempts::{
+    FetchRegistrationGuard, register_running_attempt, signal_running_attempt,
+};
 use crate::client::backoff::exponential_backoff;
 use crate::client::completer::CompletionUpdate;
 use crate::client::executor::{AbortOnDrop, execute_job};
@@ -54,6 +56,15 @@ pub(super) async fn run_dynamic_queues(
     mut changes: watch::Receiver<u64>,
     queues_ready: oneshot::Sender<()>,
 ) -> Result<(), Error> {
+    // Without a notifier, running jobs learn of cancellation requests by
+    // polling until every producer has drained. A SQLite client's outbox
+    // poller delivers them like a PostgreSQL listener.
+    let _cancellation_poll = inner.poll_only.then(|| {
+        AbortOnDrop(tokio::spawn(poll_job_cancellations(
+            Arc::clone(&inner),
+            fetch_cancel.clone(),
+        )))
+    });
     let (registered_sender, mut registered) = mpsc::unbounded_channel();
     let mut producers = Producers {
         active: HashMap::new(),
@@ -115,6 +126,63 @@ pub(super) async fn run_dynamic_queues(
     }
     producers.inner.live_queues.send_replace(HashSet::new());
     producers.fatal.map_or(Ok(()), Err)
+}
+
+/// Most running job IDs checked for cancellation requests in one query,
+/// which also bounds SQLite's parameter count.
+const JOB_CANCEL_POLL_BATCH_SIZE: usize = 1000;
+
+/// How long one check for cancellation requests may take.
+const JOB_CANCEL_POLL_TIMEOUT: Duration = Duration::from_secs(10);
+
+/// Cancels this client's running attempts whose jobs have a cancellation
+/// request, checking every [`QUEUE_CONFIG_POLL_INTERVAL`], like River Go's
+/// producers without a notifier. It keeps checking after `stopping` fires, so
+/// jobs can still be cancelled while producers drain; the caller aborts it
+/// once they have.
+async fn poll_job_cancellations(inner: Arc<ClientInner>, stopping: CancellationToken) {
+    let mut poll = tokio::time::interval(QUEUE_CONFIG_POLL_INTERVAL);
+    poll.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+    // The first tick completes at once; running jobs start later.
+    poll.tick().await;
+    loop {
+        poll.tick().await;
+        let mut ids = inner
+            .running
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .keys()
+            .copied()
+            .collect::<Vec<_>>();
+        ids.sort_unstable();
+        for batch in ids.chunks(JOB_CANCEL_POLL_BATCH_SIZE) {
+            let requested = tokio::time::timeout(
+                JOB_CANCEL_POLL_TIMEOUT,
+                crate::storage::job_cancel_requested(&inner, batch),
+            )
+            .await
+            .map_err(|_| Error::runtime_context("job cancellation poll", "timed out"))
+            .and_then(|requested| requested);
+            match requested {
+                Ok(requested) => {
+                    for id in requested {
+                        signal_running_attempt(
+                            &inner.running,
+                            &inner.pending_cancellations,
+                            &inner.fetch_registration_windows,
+                            id,
+                        );
+                    }
+                }
+                Err(poll_error) => {
+                    if !stopping.is_cancelled() {
+                        error!(error = %crate::error::Chain(&poll_error), "River failed to check for job cancellation requests");
+                    }
+                    break;
+                }
+            }
+        }
+    }
 }
 
 type ProducerOutcome = (String, u64, CancellationToken, Result<(), Error>);

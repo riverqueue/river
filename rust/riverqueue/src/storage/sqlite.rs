@@ -79,6 +79,23 @@ impl Backend for SqliteBackend<'_> {
         Ok(Some(row))
     }
 
+    async fn job_cancel_requested(&mut self, ids: &[i64]) -> Result<Vec<i64>, Error> {
+        let ids = format!(
+            "[{}]",
+            ids.iter().map(i64::to_string).collect::<Vec<_>>().join(",")
+        );
+        Ok(sqlx::query_scalar(
+            "SELECT id FROM river_job \
+             WHERE id IN (SELECT value FROM json_each(?)) \
+               AND (metadata -> 'cancel_attempted_at') IS NOT NULL \
+               AND state = 'running' \
+             ORDER BY id",
+        )
+        .bind(ids)
+        .fetch_all(&mut *self.connection)
+        .await?)
+    }
+
     async fn job_complete(
         &mut self,
         id: i64,

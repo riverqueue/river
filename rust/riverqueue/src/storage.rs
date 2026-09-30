@@ -48,6 +48,10 @@ pub(crate) trait Backend {
     /// current row. `None` means the job doesn't exist.
     async fn job_cancel(&mut self, id: i64) -> Result<Option<JobRow>, Error>;
 
+    /// Returns the IDs among `ids` of running jobs with a cancellation
+    /// request, in ascending order.
+    async fn job_cancel_requested(&mut self, ids: &[i64]) -> Result<Vec<i64>, Error>;
+
     /// Completes a running job, merging metadata updates.
     async fn job_complete(
         &mut self,
@@ -137,6 +141,10 @@ impl Backend for AnyBackend<'_> {
 
     async fn job_cancel(&mut self, id: i64) -> Result<Option<JobRow>, Error> {
         dispatch!(self, backend => backend.job_cancel(id).await)
+    }
+
+    async fn job_cancel_requested(&mut self, ids: &[i64]) -> Result<Vec<i64>, Error> {
+        dispatch!(self, backend => backend.job_cancel_requested(ids).await)
     }
 
     async fn job_complete(
@@ -663,6 +671,19 @@ async fn execute_savepoint_statement(
 pub(crate) async fn touch_queue(inner: &ClientInner, name: &str) -> Result<Queue, Error> {
     let mut session = Session::begin(&inner.database, Access::Autocommit).await?;
     session.storage(inner).queue_touch(name).await
+}
+
+/// Returns the IDs among `ids` of running jobs with a cancellation request.
+pub(crate) async fn job_cancel_requested(
+    inner: &ClientInner,
+    ids: &[i64],
+) -> Result<Vec<i64>, Error> {
+    let mut session = Session::begin(&inner.database, Access::Autocommit).await?;
+    session
+        .storage(inner)
+        .backend
+        .job_cancel_requested(ids)
+        .await
 }
 
 /// Loads a queue record, if one exists.

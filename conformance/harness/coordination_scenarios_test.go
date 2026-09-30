@@ -173,6 +173,35 @@ func verifyRemoteCancelNotification(t *testing.T, controller, worker *adapter) {
 	worker.call(t, "stop", map[string]any{}, nil)
 }
 
+// verifyPollOnlyRemoteCancellation cancels a running job from the other
+// implementation while the worker runs without notifications. The worker
+// polls its running jobs for cancellation requests every two seconds, so
+// the job is cancelled without a control notification reaching it.
+func verifyPollOnlyRemoteCancellation(t *testing.T, controller, worker *adapter) {
+	t.Helper()
+
+	worker.call(t, "reset", map[string]any{}, nil)
+	worker.call(t, "start", map[string]any{
+		"client_id": worker.name + "-poll-only-cancel", "fetch_poll_interval_ms": 100,
+		"max_workers": 1, "poll_only": true,
+	}, nil)
+	var cancellable normalizedJob
+	controller.call(t, "insert", map[string]any{
+		"behavior": "cooperative_cancel", "message": "poll-only cancel",
+	}, &cancellable)
+	worker.call(t, "wait", map[string]any{
+		"id": cancellable.ID, "states": []string{"running"},
+	}, &cancellable)
+	startedAt := time.Now()
+	controller.call(t, "cancel", map[string]any{"id": cancellable.ID}, nil)
+	worker.call(t, "wait", map[string]any{"id": cancellable.ID}, &cancellable)
+	require.Equal(t, "cancelled", cancellable.State)
+	require.Len(t, cancellable.Errors, 1)
+	require.Equal(t, "JobCancelError: job cancelled remotely", cancellable.Errors[0].Error)
+	require.Less(t, time.Since(startedAt), 6*time.Second)
+	worker.call(t, "stop", map[string]any{}, nil)
+}
+
 // verifyCooperativeRemoteCancellation checks the canonical persisted outcome
 // and event of a worker that honors a remote cancellation.
 func verifyCooperativeRemoteCancellation(t *testing.T, controller, worker *adapter) {

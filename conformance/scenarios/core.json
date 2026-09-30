@@ -70,6 +70,7 @@
     { "evidence": [{ "path": "conformance/harness/maintenance_test.go", "symbol": "verifyPeriodicDueJobAvailable" }], "name": "periodic_due_job_available", "tier": "runtime" },
     { "evidence": [{ "path": "conformance/harness/runtime_scenarios_test.go", "symbol": "verifyPeriodicRunOnStart" }], "name": "periodic_run_on_start", "tier": "runtime" },
     { "evidence": [{ "path": "conformance/harness/interop_scenarios_test.go", "symbol": "verifyUniquePeriodicJob" }], "name": "periodic_unique_cross_engine", "tier": "runtime" },
+    { "evidence": [{ "path": "conformance/harness/coordination_scenarios_test.go", "symbol": "verifyPollOnlyRemoteCancellation" }], "name": "poll_only_remote_cancellation", "tier": "mixed" },
     { "evidence": [{ "path": "conformance/harness/lifecycle_scenarios_test.go", "symbol": "verifyPoolPressure" }], "name": "pool_pressure_completion", "tier": "performance" },
     { "evidence": [{ "path": "conformance/harness/coordination_scenarios_test.go", "symbol": "verifyProcessKillRestartAndRescue" }], "name": "process_kill_restart_and_rescue", "tier": "chaos" },
     { "evidence": [{ "path": "conformance/harness/maintenance_test.go", "symbol": "TestMaintenanceConformance" }], "name": "queue_names_and_unknown_queue_control", "tier": "storage" },

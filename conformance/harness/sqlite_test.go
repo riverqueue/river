@@ -164,6 +164,7 @@ func TestMixedSQLiteRuntimeConformance(t *testing.T) {
 		pair.eachDirection(func(controller, worker *adapter) {
 			verifyRemoteCancelNotification(t, controller, worker)
 			verifyCooperativeRemoteCancellation(t, controller, worker)
+			verifyPollOnlyRemoteCancellation(t, controller, worker)
 		})
 		verifySQLiteCancelNotifications(t, goAdapter, candidateAdapter)
 	})

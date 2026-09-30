@@ -271,6 +271,11 @@ func TestMixedConformance(t *testing.T) {
 
 		pair.eachDirection(func(controller, worker *adapter) { verifyRemoteCancelNotification(t, controller, worker) })
 	})
+	t.Run("poll_only_remote_cancellation", func(t *testing.T) {
+		defer scenarios.record(t)
+
+		pair.eachDirection(func(controller, worker *adapter) { verifyPollOnlyRemoteCancellation(t, controller, worker) })
+	})
 	t.Run("cooperative_remote_cancellation", func(t *testing.T) {
 		defer scenarios.record(t)
 

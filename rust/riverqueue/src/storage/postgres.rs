@@ -54,6 +54,19 @@ impl Backend for PostgresBackend<'_> {
             .transpose()
     }
 
+    async fn job_cancel_requested(&mut self, ids: &[i64]) -> Result<Vec<i64>, Error> {
+        let table = self.schema.qualify("river_job");
+        let sql = format!(
+            "SELECT id FROM {table} \
+             WHERE id = any($1) AND metadata ? 'cancel_attempted_at' AND state = 'running' \
+             ORDER BY id"
+        );
+        Ok(sqlx::query_scalar(AssertSqlSafe(sql))
+            .bind(ids)
+            .fetch_all(&mut *self.connection)
+            .await?)
+    }
+
     async fn job_complete(
         &mut self,
         id: i64,
