@@ -88,12 +88,46 @@ type Notifier struct {
 	testSignals       notifierTestSignals
 	waitInterruptChan chan func()
 
-	mu            sync.RWMutex
-	isConnected   bool
-	isStarted     bool
-	isWaiting     bool
-	subscriptions map[NotificationTopic][]*Subscription
-	waitCancel    context.CancelFunc
+	mu                 sync.RWMutex
+	isConnected        bool
+	isStarted          bool
+	isWaiting          bool
+	listenerReadyFuncs map[*ListenerReadySubscription]ListenerReadyFunc
+	subscriptions      map[NotificationTopic][]*Subscription
+	waitCancel         context.CancelFunc
+}
+
+// ListenerReadyFunc is invoked each time the notifier establishes healthy
+// listening on all of its currently subscribed topics. This includes the
+// very first connect as well as every subsequent reconnect that follows a
+// connection loss, so callers whose work is only meaningful after a genuine
+// reconnect (as opposed to the initial connect) should make that check
+// themselves.
+type ListenerReadyFunc func()
+
+// ListenerReadySubscription is a handle to a func registered with
+// RegisterListenerReadyFunc. Call Unregister to stop receiving invocations.
+type ListenerReadySubscription struct {
+	notifier *Notifier
+}
+
+func (s *ListenerReadySubscription) Unregister() {
+	s.notifier.mu.Lock()
+	defer s.notifier.mu.Unlock()
+	delete(s.notifier.listenerReadyFuncs, s)
+}
+
+// RegisterListenerReadyFunc registers a function to be invoked every time the
+// notifier (re)establishes healthy listening on all of its subscribed topics.
+// It's used to let callers reconcile any state that could have missed a
+// notification while the notifier was disconnected/reconnecting.
+func (n *Notifier) RegisterListenerReadyFunc(listenerReadyFunc ListenerReadyFunc) *ListenerReadySubscription {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+
+	sub := &ListenerReadySubscription{notifier: n}
+	n.listenerReadyFuncs[sub] = listenerReadyFunc
+	return sub
 }
 
 func New(archetype *baseservice.Archetype, listener riverdriver.Listener) *Notifier {
@@ -102,7 +136,8 @@ func New(archetype *baseservice.Archetype, listener riverdriver.Listener) *Notif
 		notificationBuf:   make(chan *riverdriver.Notification, 1000),
 		waitInterruptChan: make(chan func(), 10),
 
-		subscriptions: make(map[NotificationTopic][]*Subscription),
+		listenerReadyFuncs: make(map[*ListenerReadySubscription]ListenerReadyFunc),
+		subscriptions:      make(map[NotificationTopic][]*Subscription),
 	})
 	return notifier
 }
@@ -211,6 +246,16 @@ func (n *Notifier) listenAndWait(ctx context.Context) error {
 
 	n.testSignals.ListeningBegin.Signal(struct{}{})
 	defer n.testSignals.ListeningEnd.Signal(struct{}{})
+
+	listenerReadyFuncs := func() []ListenerReadyFunc {
+		n.mu.RLock()
+		defer n.mu.RUnlock()
+
+		return maputil.Values(n.listenerReadyFuncs)
+	}()
+	for _, listenerReadyFunc := range listenerReadyFuncs {
+		listenerReadyFunc()
+	}
 
 	drainInterrupts := func() {
 		for {
