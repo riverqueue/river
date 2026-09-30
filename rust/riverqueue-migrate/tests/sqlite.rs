@@ -150,7 +150,7 @@ async fn latest_schema_and_json_survive_version_seven_round_trip() {
     migrator.migrate_up().await.unwrap();
     assert_eq!(
         migrator.existing_versions().await.unwrap(),
-        (1..=7).collect::<Vec<_>>()
+        (1..=MIGRATION_VERSION_LATEST).collect::<Vec<_>>()
     );
     assert_eq!(
         column_default(&pool, "river_job", "max_attempts")
@@ -210,6 +210,94 @@ async fn latest_schema_and_json_survive_version_seven_round_trip() {
 }
 
 #[tokio::test]
+async fn job_ids_are_not_reused_after_version_eight() {
+    let pool = sqlite_pool().await;
+    let migrator = SqliteMigrator::new(pool.clone());
+    migrate_to(&migrator, 7).await;
+    let before_upgrade = insert_job(&pool).await;
+
+    migrator.migrate_up().await.unwrap();
+    let kept: i64 = sqlx::query_scalar("SELECT id FROM river_job WHERE id = ?1")
+        .bind(before_upgrade)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(kept, before_upgrade);
+
+    sqlx::query("DELETE FROM river_job WHERE id = ?1")
+        .bind(before_upgrade)
+        .execute(&pool)
+        .await
+        .unwrap();
+    let after_delete = insert_job(&pool).await;
+    assert!(after_delete > before_upgrade);
+
+    pool.close().await;
+}
+
+#[tokio::test]
+async fn version_eight_refuses_to_rebuild_extended_job_tables() {
+    for (object, sql) in [
+        (
+            "river_job_workflow_scheduling",
+            "CREATE INDEX river_job_workflow_scheduling ON river_job (state)",
+        ),
+        (
+            "river_job_sequence",
+            "CREATE TABLE river_job_sequence (id integer PRIMARY KEY, key text)",
+        ),
+        (
+            "river_workflow",
+            "CREATE TABLE river_workflow (id text PRIMARY KEY)",
+        ),
+    ] {
+        for direction in [Direction::Up, Direction::Down] {
+            let version = if direction == Direction::Up { 7 } else { 8 };
+            let pool = sqlite_pool().await;
+            let migrator = SqliteMigrator::new(pool.clone());
+            migrate_to(&migrator, version).await;
+            let job_id = insert_job(&pool).await;
+            sqlx::query(sql).execute(&pool).await.unwrap();
+            sqlx::query("ALTER TABLE river_job ADD COLUMN partition_key text")
+                .execute(&pool)
+                .await
+                .unwrap();
+
+            let error = migrator
+                .migrate(direction, MigrateOpts::new().with_max_steps(1))
+                .await
+                .unwrap_err();
+            assert!(
+                error
+                    .to_string()
+                    .contains("River SQLite migration 008 cannot run"),
+                "{object} {direction:?}: {error}"
+            );
+
+            assert_eq!(
+                migrator.existing_versions().await.unwrap(),
+                (1..=version).collect::<Vec<_>>(),
+                "{object} {direction:?}"
+            );
+            let partition_key_columns: i64 = sqlx::query_scalar(
+                "SELECT count(*) FROM pragma_table_info('river_job') WHERE name = 'partition_key'",
+            )
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+            assert_eq!(partition_key_columns, 1, "{object} {direction:?}");
+            let kept: i64 = sqlx::query_scalar("SELECT id FROM river_job WHERE id = ?1")
+                .bind(job_id)
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+            assert_eq!(kept, job_id, "{object} {direction:?}");
+            pool.close().await;
+        }
+    }
+}
+
+#[tokio::test]
 async fn migrates_up_from_every_historical_version() {
     let expected = schema_at(MIGRATION_VERSION_LATEST).await;
 
@@ -232,7 +320,7 @@ async fn migrates_up_from_every_historical_version() {
 #[tokio::test]
 async fn migrates_down_to_every_historical_version_and_empty() {
     for target in 1..MIGRATION_VERSION_LATEST {
-        let expected = schema_at(target).await;
+        let expected = schema_structure_at(target).await;
         let pool = sqlite_pool().await;
         let migrator = SqliteMigrator::new(pool.clone());
         migrator.migrate_up().await.unwrap();
@@ -247,7 +335,7 @@ async fn migrates_down_to_every_historical_version_and_empty() {
             migrator.existing_versions().await.unwrap(),
             (1..=target).collect::<Vec<_>>()
         );
-        assert_eq!(schema_snapshot(&pool).await, expected, "version {target}");
+        assert_eq!(schema_structure(&pool).await, expected, "version {target}");
         pool.close().await;
     }
 
@@ -301,6 +389,58 @@ async fn schema_at(version: i64) -> Vec<(String, String, String, String)> {
     let snapshot = schema_snapshot(&pool).await;
     pool.close().await;
     snapshot
+}
+
+async fn schema_structure_at(version: i64) -> Vec<(String, String, String, String)> {
+    let pool = sqlite_pool().await;
+    let migrator = SqliteMigrator::new(pool.clone());
+    migrate_to(&migrator, version).await;
+    let structure = schema_structure(&pool).await;
+    pool.close().await;
+    structure
+}
+
+/// Like `schema_snapshot`, but describes each table by its columns in name
+/// order instead of its `CREATE TABLE` text. Version 8's down migration
+/// rebuilds `river_job` with its columns in declaration order, while
+/// migrating up to version 7 leaves `max_attempts` where `ALTER TABLE`
+/// appended it.
+async fn schema_structure(pool: &SqlitePool) -> Vec<(String, String, String, String)> {
+    let mut structure = schema_snapshot(pool).await;
+    for (object_type, name, _, sql) in &mut structure {
+        if object_type != "table" {
+            continue;
+        }
+        let columns = sqlx::query(
+            "SELECT name, type, \"notnull\", coalesce(dflt_value, '') AS dflt_value, pk \
+             FROM pragma_table_xinfo(?1) ORDER BY name",
+        )
+        .bind(&*name)
+        .fetch_all(pool)
+        .await
+        .unwrap()
+        .into_iter()
+        .map(|row| {
+            format!(
+                "{} {} notnull={} default={} pk={}",
+                row.get::<String, _>("name"),
+                row.get::<String, _>("type"),
+                row.get::<i64, _>("notnull"),
+                row.get::<String, _>("dflt_value"),
+                row.get::<i64, _>("pk"),
+            )
+        })
+        .collect::<Vec<_>>();
+        *sql = columns.join("\n");
+    }
+    structure
+}
+
+async fn insert_job(pool: &SqlitePool) -> i64 {
+    sqlx::query_scalar("INSERT INTO river_job (kind) VALUES ('sqlite_migration_test') RETURNING id")
+        .fetch_one(pool)
+        .await
+        .unwrap()
 }
 
 async fn schema_snapshot(pool: &SqlitePool) -> Vec<(String, String, String, String)> {

@@ -47,15 +47,23 @@
     },
     {
       "path": "riverdriver/riversqlite/migration/main/006_bulk_unique.up.sql",
-      "sha256": "ea4cc3b27dd0b98951f04ea08441ad906cff1f4d34f2425d9934d8d8dd1eae00"
+      "sha256": "96713f4832bcf9343df30b62c6c35b03daca23aa9a02adbd7eb0091556df3659"
     },
     {
       "path": "riverdriver/riversqlite/migration/main/007_notification_outbox_sqlite_jsonb_and_sql_cleanup.down.sql",
-      "sha256": "3adbfaf2319c588ed4baf52b5a63d2c8db7e3622f5d200db96bb077af9e4af15"
+      "sha256": "55bffeb528b40dffc0cbec2f22d1463aef37a8b3d7977f83729cc505bb77c745"
     },
     {
       "path": "riverdriver/riversqlite/migration/main/007_notification_outbox_sqlite_jsonb_and_sql_cleanup.up.sql",
-      "sha256": "213cd4c251016c3b18b54aff3d95009db029986a8fdb3bbf633e5297804779e1"
+      "sha256": "441a05e1d9aa4f151877ccf725b0b0a86f27013442297d4b621c05676270d0b0"
+    },
+    {
+      "path": "riverdriver/riversqlite/migration/main/008_job_id_autoincrement.down.sql",
+      "sha256": "04871283fe5d4cab4ac70da28d8509aa7ba765994d528c2dcc7ebe0ee596710c"
+    },
+    {
+      "path": "riverdriver/riversqlite/migration/main/008_job_id_autoincrement.up.sql",
+      "sha256": "049c9bf615f24a326bcc31ddc87b46f76e3de11e3eea3b2b9e1358131b3f3bed"
     }
   ],
   "line": "main"

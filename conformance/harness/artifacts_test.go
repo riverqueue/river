@@ -241,6 +241,12 @@ func TestCompatibilityArtifacts(t *testing.T) {
 			} `json:"files"`
 			Line string `json:"line"`
 		}
+		var manifest struct {
+			Migration struct {
+				Latest int `json:"latest"`
+			} `json:"migration"`
+		}
+		readJSON(t, "conformance/manifest.json", &manifest)
 		for path, database := range map[string]string{
 			"conformance/migrations.json":        "postgres",
 			"conformance/migrations-sqlite.json": "sqlite",
@@ -249,7 +255,8 @@ func TestCompatibilityArtifacts(t *testing.T) {
 			readJSON(t, path, &migrations)
 			require.Equal(t, database, migrations.Database)
 			require.Equal(t, "main", migrations.Line)
-			require.Len(t, migrations.Files, 14)
+			// An up and a down file for each version.
+			require.Len(t, migrations.Files, 2*manifest.Migration.Latest)
 			for _, file := range migrations.Files {
 				require.Len(t, file.SHA256, 64)
 				require.True(t, strings.HasSuffix(file.Path, ".sql"))

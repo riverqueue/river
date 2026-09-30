@@ -49,7 +49,7 @@
     }
   },
   "migration": {
-    "latest": 7,
+    "latest": 8,
     "line": "main"
   },
   "protocol_revision": 1

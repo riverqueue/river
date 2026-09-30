@@ -56,6 +56,14 @@
     {
       "path": "riverdriver/riverpgxv5/migration/main/007_notification_outbox_sqlite_jsonb_and_sql_cleanup.up.sql",
       "sha256": "47ec8031b88e69004de2def5bc3109d969f71ee4c33a1e7dac2fb8c9dd19182d"
+    },
+    {
+      "path": "riverdriver/riverpgxv5/migration/main/008_job_id_autoincrement.down.sql",
+      "sha256": "0c3750a947d6494db07d56f5d3735a5e49a2cbfa1f7a09771227c31c8147bf70"
+    },
+    {
+      "path": "riverdriver/riverpgxv5/migration/main/008_job_id_autoincrement.up.sql",
+      "sha256": "0c3750a947d6494db07d56f5d3735a5e49a2cbfa1f7a09771227c31c8147bf70"
     }
   ],
   "line": "main"

@@ -45,7 +45,7 @@ func TestMixedSQLiteConformance(t *testing.T) {
 	t.Run("sqlite_migration_cross_language", func(t *testing.T) {
 		defer scenarios.record(t)
 
-		verifySQLiteMigrations(t, goAdapter, candidateAdapter)
+		verifySQLiteMigrations(t, readManifest(t, repositoryRoot).Migration.Latest, goAdapter, candidateAdapter)
 	})
 	t.Run("sqlite_insert_get_unique_cross_language", func(t *testing.T) {
 		defer scenarios.record(t)
@@ -716,7 +716,7 @@ func verifySQLiteCrossLanguageInsertion(t *testing.T, goAdapter, candidateAdapte
 	}
 }
 
-func verifySQLiteMigrations(t *testing.T, goAdapter, candidateAdapter *adapter) {
+func verifySQLiteMigrations(t *testing.T, latest int, goAdapter, candidateAdapter *adapter) {
 	t.Helper()
 
 	type migrationResult struct {
@@ -724,7 +724,10 @@ func verifySQLiteMigrations(t *testing.T, goAdapter, candidateAdapter *adapter) 
 		Existing []int `json:"existing"`
 		Valid    bool  `json:"valid"`
 	}
-	expectedLatest := []int{1, 2, 3, 4, 5, 6, 7}
+	expectedLatest := make([]int, latest)
+	for index := range latest {
+		expectedLatest[index] = index + 1
+	}
 	for initializerIndex, initializer := range []*adapter{goAdapter, candidateAdapter} {
 		observer := []*adapter{candidateAdapter, goAdapter}[initializerIndex]
 		for version := 1; version <= len(expectedLatest); version++ {

@@ -41,7 +41,7 @@ const TEMPLATE_SCHEMA: &str = "/* TEMPLATE: schema */";
 pub const MIGRATION_LINE_MAIN: &str = "main";
 
 /// Latest migration version bundled with this release.
-pub const MIGRATION_VERSION_LATEST: i64 = 7;
+pub const MIGRATION_VERSION_LATEST: i64 = 8;
 
 #[cfg(feature = "postgres")]
 macro_rules! migration {
@@ -195,7 +195,7 @@ impl std::fmt::Display for ValidateResult {
 
 /// Canonical PostgreSQL migration bundle.
 #[cfg(feature = "postgres")]
-pub const POSTGRES_MIGRATIONS: [Migration; 7] = [
+pub const POSTGRES_MIGRATIONS: [Migration; 8] = [
     migration!(1, "create_river_migration", "001_create_river_migration"),
     migration!(2, "initial_schema", "002_initial_schema"),
     migration!(3, "river_job_tags_non_null", "003_river_job_tags_non_null"),
@@ -207,6 +207,7 @@ pub const POSTGRES_MIGRATIONS: [Migration; 7] = [
         "notification_outbox_sqlite_jsonb_and_sql_cleanup",
         "007_notification_outbox_sqlite_jsonb_and_sql_cleanup"
     ),
+    migration!(8, "job_id_autoincrement", "008_job_id_autoincrement"),
 ];
 
 /// River migration failure.

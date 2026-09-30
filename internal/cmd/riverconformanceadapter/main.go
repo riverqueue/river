@@ -989,6 +989,17 @@ func (p insertOptsParams) opts() (*river.InsertOpts, error) {
 	return opts, nil
 }
 
+// latestMigrationVersion returns the newest main-line migration River bundles
+// for driver.
+func latestMigrationVersion[TTx any](driver riverdriver.Driver[TTx]) (int, error) {
+	migrator, err := rivermigrate.New(driver, &rivermigrate.Config{Logger: adapterLogger()})
+	if err != nil {
+		return 0, err
+	}
+	versions := migrator.AllVersions()
+	return versions[len(versions)-1].Version, nil
+}
+
 func handleUniqueKey(rawParams json.RawMessage) (any, error) {
 	var params uniqueKeyParams
 	if err := decodeParams(rawParams, &params); err != nil {
@@ -1240,6 +1251,10 @@ func (s *adapterState) handle(ctx context.Context, req *request) (any, error) {
 	}
 	switch req.Method {
 	case "handshake":
+		latest, err := latestMigrationVersion(riverpgxv5.New(s.pool))
+		if err != nil {
+			return nil, err
+		}
 		return map[string]any{
 			"adapter_version":        adapterVersion,
 			"application_name":       s.applicationName,
@@ -1248,7 +1263,7 @@ func (s *adapterState) handle(ctx context.Context, req *request) (any, error) {
 			"implementation":         "go",
 			"implementation_version": implementationVersion,
 			"methods":                methods,
-			"migration_lines":        map[string]int{"main": 7},
+			"migration_lines":        map[string]int{"main": latest},
 			"profile":                s.profile,
 			"protocol_revision":      protocolRevision,
 		}, nil
@@ -2381,6 +2396,10 @@ func (s *sqliteAdapterState) handle(ctx context.Context, req *request) (any, err
 	}
 	switch req.Method {
 	case "handshake":
+		latest, err := latestMigrationVersion(riversqlite.New(s.pool))
+		if err != nil {
+			return nil, err
+		}
 		return map[string]any{
 			"adapter_version":        adapterVersion,
 			"backend":                "sqlite",
@@ -2388,7 +2407,7 @@ func (s *sqliteAdapterState) handle(ctx context.Context, req *request) (any, err
 			"implementation":         "go",
 			"implementation_version": implementationVersion,
 			"methods":                methods,
-			"migration_lines":        map[string]int{"main": 7},
+			"migration_lines":        map[string]int{"main": latest},
 			"profile":                s.profile,
 			"protocol_revision":      protocolRevision,
 		}, nil

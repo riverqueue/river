@@ -19,7 +19,7 @@ macro_rules! sqlite_migration {
 }
 
 /// Canonical SQLite migration bundle.
-pub const SQLITE_MIGRATIONS: [Migration; 7] = [
+pub const SQLITE_MIGRATIONS: [Migration; 8] = [
     sqlite_migration!(1, "create_river_migration", "001_create_river_migration"),
     sqlite_migration!(2, "initial_schema", "002_initial_schema"),
     sqlite_migration!(3, "river_job_tags_non_null", "003_river_job_tags_non_null"),
@@ -31,6 +31,7 @@ pub const SQLITE_MIGRATIONS: [Migration; 7] = [
         "notification_outbox_sqlite_jsonb_and_sql_cleanup",
         "007_notification_outbox_sqlite_jsonb_and_sql_cleanup"
     ),
+    sqlite_migration!(8, "job_id_autoincrement", "008_job_id_autoincrement"),
 ];
 
 /// Applies and validates River's SQLite migration history.
