@@ -1,8 +1,8 @@
 use chrono::{DateTime, Duration, SubsecRound, Utc};
 use riverqueue::{
-    Client, Error, InsertBatch, JobArgs, JobDeleteManyParams, JobListCursor, JobListOrderBy,
-    JobListParams, JobState, JobUpdateParams, QueueListParams, QueueSelector, QueueUpdateParams,
-    SortDirection,
+    Client, Error, InsertBatch, InsertOpts, JobArgs, JobDeleteManyParams, JobListCursor,
+    JobListOrderBy, JobListParams, JobState, JobUpdateParams, QueueListParams, QueueSelector,
+    QueueUpdateParams, SortDirection, UniqueOpts,
 };
 use riverqueue_migrate::SqliteMigrator;
 use serde::{Deserialize, Serialize};
@@ -116,6 +116,55 @@ async fn empty_batches_are_rejected_before_database_work() {
         .unwrap_err();
     assert_eq!(empty_batch_tx.to_string(), "invalid job: no jobs to insert");
     transaction.commit().await.unwrap();
+
+    pool.close().await;
+}
+
+/// Like River Go, a batch may not repeat a unique key among jobs whose
+/// state it covers, and rejecting it writes nothing. Uniqueness without the
+/// kind needs another dimension.
+#[tokio::test]
+async fn batches_repeating_a_unique_key_fail_without_inserting() {
+    let (client, pool) = setup().await;
+    let unique = InsertOpts::default().with_unique(UniqueOpts::new().with_by_args(true));
+
+    let error = client
+        .insert_many([
+            (EmptyBatchArgs { value: 1 }, unique.clone()),
+            (EmptyBatchArgs { value: 2 }, unique.clone()),
+            (EmptyBatchArgs { value: 1 }, unique.clone()),
+        ])
+        .await
+        .unwrap_err();
+    assert_eq!(
+        error.to_string(),
+        "invalid job: unique key appears more than once in batch"
+    );
+    let count: i64 = sqlx::query_scalar("SELECT count(*) FROM river_job")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(count, 0);
+
+    let inserted = client
+        .insert_many([
+            (EmptyBatchArgs { value: 1 }, unique.clone()),
+            (EmptyBatchArgs { value: 2 }, unique),
+        ])
+        .await
+        .unwrap();
+    assert!(
+        inserted
+            .iter()
+            .all(|result| !result.unique_skipped_as_duplicate)
+    );
+
+    let error = client
+        .insert(EmptyBatchArgs { value: 3 })
+        .opts(InsertOpts::default().with_unique(UniqueOpts::new().with_exclude_kind(true)))
+        .await
+        .unwrap_err();
+    assert!(matches!(error, Error::InvalidJob(_)), "{error:?}");
 
     pool.close().await;
 }

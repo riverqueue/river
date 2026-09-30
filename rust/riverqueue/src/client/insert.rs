@@ -694,6 +694,22 @@ impl Client {
             }
         }
 
+        // A unique key may appear only once among the batch's jobs whose
+        // state it covers. PostgreSQL rejects River Go's single upsert that
+        // would affect the same row twice, and River Go checks SQLite
+        // batches the same way.
+        let mut unique_keys = std::collections::HashSet::new();
+        for job in &jobs {
+            if let (Some(key), Some(states)) = (&job.unique_key, job.unique_states)
+                && states & job.state.unique_bit() != 0
+                && !unique_keys.insert(key.as_slice())
+            {
+                return Err(Error::invalid_job(
+                    "unique key appears more than once in batch".to_owned(),
+                ));
+            }
+        }
+
         // Like Go, every job requested as available notifies its queue,
         // including one skipped as a unique duplicate.
         let queues = jobs
@@ -900,10 +916,7 @@ impl Client {
     /// container keeps its hostname and PID), so it's eight random bytes in
     /// lowercase hex, the format of River Go's `randutil.Hex(8)`.
     ///
-    /// Unlike Go, which draws one nonce per insertion call and writes it to
-    /// every row of the batch, River draws one per row. Two rows of one batch
-    /// with the same unique key are therefore reported as a duplicate here,
-    /// while Go reports neither as skipped.
+    /// Like Go, every row gets its own nonce.
     #[cfg(feature = "sqlite")]
     fn unique_insert_nonce() -> String {
         format!("{:016x}", rand::random::<u64>())

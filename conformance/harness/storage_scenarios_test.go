@@ -180,8 +180,8 @@ func verifyConcurrentUniqueConflicts(t *testing.T, observer *postgresObserver, g
 }
 
 // verifyBatchInsertion checks typed batch insertion results, ordering,
-// duplicate reporting, invalid unique options, and atomic rejection
-// outside a transaction.
+// duplicate reporting, repeated unique keys, invalid unique options, and
+// atomic rejection outside a transaction.
 func verifyBatchInsertion(t *testing.T, goAdapter, candidateAdapter *adapter) {
 	t.Helper()
 
@@ -255,6 +255,27 @@ func verifyBatchInsertion(t *testing.T, goAdapter, candidateAdapter *adapter) {
 		}
 		pair.observer.call(t, "list", map[string]any{"tags_all": []string{invalidTag}}, &invalidRows)
 		require.Empty(t, invalidRows.Jobs)
+
+		// A unique key may appear only once in a batch among jobs whose state
+		// it covers. PostgreSQL reports a database error and SQLite a
+		// rejection, so only the failure and its atomicity are compared.
+		repeatedTag := "repeated_key_batch_" + pair.actor.name
+		repeated := map[string]any{
+			"message": "repeated unique key " + pair.actor.name,
+			"opts": map[string]any{
+				"tags":   []string{repeatedTag},
+				"unique": map[string]any{"by_args": true},
+			},
+		}
+		response := pair.actor.callResponse(t, "insert_many", map[string]any{
+			"jobs": []map[string]any{repeated, repeated},
+		})
+		require.NotNil(t, response.Error, "%s adapter inserted a batch repeating a unique key", pair.actor.name)
+		var repeatedRows struct {
+			Jobs []normalizedJob `json:"jobs"`
+		}
+		pair.observer.call(t, "list", map[string]any{"tags_all": []string{repeatedTag}}, &repeatedRows)
+		require.Empty(t, repeatedRows.Jobs)
 
 		// Excluding the kind needs arguments, queue, or period in the key.
 		pair.actor.requireCallError(t, "insert", map[string]any{

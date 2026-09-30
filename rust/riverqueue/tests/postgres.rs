@@ -939,8 +939,10 @@ async fn insert_many_variants_preserve_order_and_transactionality() {
         Err(riverqueue::Error::InvalidJob(_))
     ));
 
+    // Like River Go, whose single upsert PostgreSQL refuses, a batch may not
+    // repeat a unique key, and nothing of it is written.
     let unique_opts = InsertOpts::default().with_unique(UniqueOpts::new().with_by_args(true));
-    let unique = client
+    let repeated = client
         .insert_many([
             (
                 EchoArgs {
@@ -956,10 +958,39 @@ async fn insert_many_variants_preserve_order_and_transactionality() {
             ),
         ])
         .await
+        .unwrap_err();
+    assert!(
+        matches!(repeated, riverqueue::Error::InvalidJob(_)),
+        "{repeated:?}"
+    );
+    let unique = client
+        .insert_many([
+            (
+                EchoArgs {
+                    message: "unique-batch".to_owned(),
+                },
+                unique_opts.clone(),
+            ),
+            (
+                EchoArgs {
+                    message: "unique-batch-other".to_owned(),
+                },
+                unique_opts.clone(),
+            ),
+        ])
+        .await
         .unwrap();
-    assert_eq!(unique[0].job.row.id, unique[1].job.row.id);
     assert!(!unique[0].unique_skipped_as_duplicate);
-    assert!(unique[1].unique_skipped_as_duplicate);
+    assert!(!unique[1].unique_skipped_as_duplicate);
+    let duplicate = client
+        .insert(EchoArgs {
+            message: "unique-batch".to_owned(),
+        })
+        .opts(unique_opts.clone())
+        .await
+        .unwrap();
+    assert_eq!(duplicate.job.row.id, unique[0].job.row.id);
+    assert!(duplicate.unique_skipped_as_duplicate);
 
     let mut transaction = pool.begin().await.unwrap();
     let rolled_back = client
