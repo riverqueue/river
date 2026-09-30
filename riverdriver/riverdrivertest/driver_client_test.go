@@ -634,6 +634,14 @@ func ExerciseClient[TTx any](ctx context.Context, t *testing.T,
 		require.False(t, insertRes2.UniqueSkippedAsDuplicate)
 	})
 
+	t.Run("JobCancelConcurrentRaceFreshReturn", func(t *testing.T) {
+		t.Parallel()
+
+		_, bundle := setupConfig(t)
+
+		exerciseClientCancelConcurrentRaceFreshReturn(ctx, t, bundle.driver, bundle.schema)
+	})
+
 	t.Run("JobDelete", func(t *testing.T) {
 		t.Parallel()
 
