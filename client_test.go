@@ -5773,31 +5773,8 @@ func Test_Client_JobRetry(t *testing.T) {
 		require.Nil(t, job)
 	})
 
-	// Forces the interleaving deterministically: the winner's retryTx is held
-	// open while the loser's retry parks on the row lock (observed via
-	// pg_stat_activity). RED without a locking fallback read.
-
-	// JobRetryTx contract: "A retried job isn't visible to be worked until the
-	// transaction commits, and if the transaction rolls back, so too is the
-	// retried job" — a caller that waits for that transaction must therefore
-	// observe the committed outcome, not a pre-commit snapshot.
-	//
-	// The retry CTE (river_job.sql) serializes concurrent retries on a
-	// `SELECT ... FOR UPDATE`. When two retries race over one finalized row, the
-	// loser's update correctly matches zero rows (EvalPlanQual re-checks the
-	// "already available with a prior scheduled_at" guard against the winner's
-	// committed version), but the query's fallback UNION arm — `id NOT IN
-	// (SELECT id FROM updated_job)` — is a plain, non-locking re-read. It runs
-	// on the loser's statement snapshot, which predates the winner's commit, so
-	// the loser is handed back the stale pre-commit row: still `cancelled`,
-	// `finalized_at` still set, even though the retry it waited for is
-	// committed and the row is `available`.
-	//
-	// Unlike a wall-clock race, this interleaving is forced deterministically
-	// here: the winner retries inside an open transaction, the loser is parked
-	// on the row lock (confirmed via pg_stat_activity before proceeding), and
-	// only then does the winner commit. Red without a locking (or otherwise
-	// post-EPQ) read in the fallback arm.
+	// The loser of the race condition parks on the row lock (pg_stat_activity)
+	// while the winner's retry commits; RED without a locking fallback read.
 	t.Run("ConcurrentRetryLoserSeesWinnersCommitNotStaleSnapshot", func(t *testing.T) {
 		t.Parallel()
 
@@ -5832,7 +5809,9 @@ func Test_Client_JobRetry(t *testing.T) {
 		}
 		loserDone := make(chan retryResult, 1)
 		go func() {
-			row, err := client.JobRetryTx(ctx, loserTx, insertRes.Job.ID)
+			retryCtx, cancel := context.WithTimeout(ctx, riversharedtest.WaitTimeout())
+			defer cancel()
+			row, err := client.JobRetryTx(retryCtx, loserTx, insertRes.Job.ID)
 			loserDone <- retryResult{row, err}
 		}()
 
@@ -5842,17 +5821,19 @@ func Test_Client_JobRetry(t *testing.T) {
 				"SELECT COALESCE(wait_event_type, '') FROM pg_stat_activity WHERE pid = $1", loserPID).
 				Scan(&waitEventType)
 			return err == nil && waitEventType == "Lock"
-		}, 5*time.Second, 10*time.Millisecond, "loser retry never entered a lock wait on the job row")
+		}, riversharedtest.WaitTimeout(), 10*time.Millisecond, "the loser of the race condition never entered a lock wait on the job row")
 
-		require.NoError(t, winnerTx.Commit(ctx))
+		commitCtx, commitCancel := context.WithTimeout(ctx, riversharedtest.WaitTimeout())
+		defer commitCancel()
+		require.NoError(t, winnerTx.Commit(commitCtx))
 
-		loser := <-loserDone
+		loser := riversharedtest.WaitOrTimeout(t, loserDone)
 		require.NoError(t, loser.err)
 
 		require.Equal(t, rivertype.JobStateAvailable, loser.row.State,
 			"loser of a retry race returned a stale pre-commit row; its fallback read must see the winner's commit")
 		require.Nil(t, loser.row.FinalizedAt,
-			"loser must observe the winner's finalization clear, not its own snapshot's")
+			"the loser of the race condition must observe the winner's finalization clear, not its own snapshot's")
 		finalRow, err := client.JobGet(ctx, insertRes.Job.ID)
 		require.NoError(t, err)
 		require.Equal(t, rivertype.JobStateAvailable, finalRow.State)
