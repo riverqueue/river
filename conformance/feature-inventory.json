@@ -514,6 +514,14 @@
     {
       "applicability": "api_equivalent",
       "area": "config",
+      "detail": "bool",
+      "id": "config.FetchOnlyKnownKinds",
+      "rationale": "Restricts a client's claims to the kinds of its registered workers, including aliases, so jobs of other kinds stay available without using attempts. The filter is local to the claiming client; implementations expose an equivalent option, and the jobs it leaves are ordinary available rows any client may work.",
+      "source": "client.go:river.Config.FetchOnlyKnownKinds"
+    },
+    {
+      "applicability": "api_equivalent",
+      "area": "config",
       "detail": "time.Duration",
       "id": "config.FetchPollInterval",
       "rationale": "Per-process polling fallback interval. The adapter's fetch_poll_interval_ms option exercises both the polling fallback and notification-only wakeups with polling effectively disabled.",
@@ -665,6 +673,7 @@
       "id": "config.PollOnly",
       "rationale": "Disables LISTEN in favor of polling. Implementations provide an equivalent notification-free mode.",
       "scenarios": [
+        "poll_only_remote_cancellation",
         "sqlite_runtime_poll_only_recovery"
       ],
       "source": "client.go:river.Config.PollOnly"
@@ -1021,6 +1030,14 @@
     {
       "applicability": "driver_specific",
       "area": "driver",
+      "detail": "func(ctx context.Context) error",
+      "id": "driver.Executor.InitDriver",
+      "rationale": "Go driver-seam method that detects server capabilities, such as YugabyteDB lacking LISTEN/NOTIFY and xmax, before a client starts.",
+      "source": "riverdriver/river_driver_interface.go:riverdriver.Executor.InitDriver"
+    },
+    {
+      "applicability": "driver_specific",
+      "area": "driver",
       "detail": "func(ctx context.Context, params *JobCancelParams) (*rivertype.JobRow, error)",
       "id": "driver.Executor.JobCancel",
       "rationale": "Go driver-seam method for job queries; their persisted effects are covered by the client, job_state, and metadata_key items.",
@@ -1105,6 +1122,14 @@
       "id": "driver.Executor.JobGetByKindMany",
       "rationale": "Go driver-seam method for job queries; their persisted effects are covered by the client, job_state, and metadata_key items.",
       "source": "riverdriver/river_driver_interface.go:riverdriver.Executor.JobGetByKindMany"
+    },
+    {
+      "applicability": "driver_specific",
+      "area": "driver",
+      "detail": "func(ctx context.Context, params *JobGetCancelRequestedParams) ([]int64, error)",
+      "id": "driver.Executor.JobGetCancelRequested",
+      "rationale": "Go driver-seam query through which clients without a notifier poll their running jobs for cancellation requests; the resulting cancellation is covered by poll_only_remote_cancellation.",
+      "source": "riverdriver/river_driver_interface.go:riverdriver.Executor.JobGetCancelRequested"
     },
     {
       "applicability": "driver_specific",
@@ -1329,6 +1354,14 @@
       "id": "driver.Executor.PGAdvisoryXactLock",
       "rationale": "Go driver-seam method for PostgreSQL advisory lock helper.",
       "source": "riverdriver/river_driver_interface.go:riverdriver.Executor.PGAdvisoryXactLock"
+    },
+    {
+      "applicability": "driver_specific",
+      "area": "driver",
+      "detail": "func(ctx context.Context) error",
+      "id": "driver.Executor.Ping",
+      "rationale": "Go driver-seam connectivity check made when a client starts.",
+      "source": "riverdriver/river_driver_interface.go:riverdriver.Executor.Ping"
     },
     {
       "applicability": "driver_specific",
@@ -2409,13 +2442,13 @@
     {
       "applicability": "protocol_visible",
       "area": "metadata_key",
-      "detail": "go:const, go:gjson.GetBytes, go:sjson.SetBytes",
+      "detail": "go:const",
       "id": "metadata_key.river:unique_nonce",
       "rationale": "SQLite fast-insert nonce used to detect whether a unique insert was skipped as a duplicate.",
       "scenarios": [
         "sqlite_insert_get_unique_cross_language"
       ],
-      "source": "internal/rivercommon/river_common.go:rivercommon.MetadataKeyUniqueNonce, riverdriver/riversqlite/river_sqlite_driver.go:riversqlite.Executor.JobInsertFastMany, riverdriver/riversqlite/river_sqlite_driver.go:riversqlite.sqliteJobInsertFastManyJobsParam"
+      "source": "riverdriver/unique_insert.go:riverdriver.UniqueInsertMetadataKey"
     },
     {
       "applicability": "protocol_visible",
@@ -2531,6 +2564,19 @@
     {
       "applicability": "protocol_visible",
       "area": "migration",
+      "detail": "job_id_autoincrement up:0c3750a947d6 down:0c3750a947d6",
+      "id": "migration.postgres.008",
+      "rationale": "Main-line PostgreSQL schema version.",
+      "scenarios": [
+        "candidate_migrator_reference_runtime",
+        "historical_migration_down_up",
+        "reference_migrator_candidate_runtime"
+      ],
+      "source": "riverdriver/riverpgxv5/migration/main/008_job_id_autoincrement.{up,down}.sql"
+    },
+    {
+      "applicability": "protocol_visible",
+      "area": "migration",
       "detail": "create_river_migration up:d15597cb0bb8 down:34c87dc594bf",
       "id": "migration.sqlite.001",
       "rationale": "Main-line SQLite schema version.",
@@ -2586,7 +2632,7 @@
     {
       "applicability": "protocol_visible",
       "area": "migration",
-      "detail": "bulk_unique up:ea4cc3b27dd0 down:b9e778134d15",
+      "detail": "bulk_unique up:96713f4832bc down:b9e778134d15",
       "id": "migration.sqlite.006",
       "rationale": "Main-line SQLite schema version.",
       "scenarios": [
@@ -2597,13 +2643,24 @@
     {
       "applicability": "protocol_visible",
       "area": "migration",
-      "detail": "notification_outbox_sqlite_jsonb_and_sql_cleanup up:213cd4c25101 down:3adbfaf2319c",
+      "detail": "notification_outbox_sqlite_jsonb_and_sql_cleanup up:441a05e1d9aa down:55bffeb528b4",
       "id": "migration.sqlite.007",
       "rationale": "Main-line SQLite schema version.",
       "scenarios": [
         "sqlite_migration_cross_language"
       ],
       "source": "riverdriver/riversqlite/migration/main/007_notification_outbox_sqlite_jsonb_and_sql_cleanup.{up,down}.sql"
+    },
+    {
+      "applicability": "protocol_visible",
+      "area": "migration",
+      "detail": "job_id_autoincrement up:049c9bf615f2 down:04871283fe5d",
+      "id": "migration.sqlite.008",
+      "rationale": "Main-line SQLite schema version.",
+      "scenarios": [
+        "sqlite_migration_cross_language"
+      ],
+      "source": "riverdriver/riversqlite/migration/main/008_job_id_autoincrement.{up,down}.sql"
     },
     {
       "applicability": "protocol_visible",

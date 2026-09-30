@@ -74,7 +74,7 @@ stale.
 
 | Area | `protocol_visible` | `api_equivalent` | `driver_specific` | `internal` | `not_applicable` | `unclassified` | Total |
 |---|---:|---:|---:|---:|---:|---:|---:|
-| [`config`](#config) | 14 | 14 | 0 | 2 | 5 | 0 | 35 |
+| [`config`](#config) | 14 | 15 | 0 | 2 | 5 | 0 | 36 |
 | [`insert_opts`](#insert_opts) | 8 | 0 | 0 | 0 | 0 | 0 | 8 |
 | [`unique_opts`](#unique_opts) | 5 | 0 | 0 | 0 | 0 | 0 | 5 |
 | [`queue_config`](#queue_config) | 0 | 3 | 0 | 0 | 0 | 0 | 3 |
@@ -88,9 +88,9 @@ stale.
 | [`metadata_key`](#metadata_key) | 10 | 0 | 0 | 1 | 0 | 0 | 11 |
 | [`notification_topic`](#notification_topic) | 3 | 0 | 0 | 0 | 0 | 0 | 3 |
 | [`notification_payload`](#notification_payload) | 11 | 0 | 0 | 0 | 0 | 0 | 11 |
-| [`driver`](#driver) | 0 | 0 | 92 | 0 | 0 | 0 | 92 |
+| [`driver`](#driver) | 0 | 0 | 95 | 0 | 0 | 0 | 95 |
 | [`extension`](#extension) | 0 | 6 | 0 | 19 | 11 | 0 | 36 |
-| [`migration`](#migration) | 14 | 0 | 0 | 0 | 0 | 0 | 14 |
+| [`migration`](#migration) | 16 | 0 | 0 | 0 | 0 | 0 | 16 |
 
 ## config
 
@@ -104,6 +104,7 @@ Exported fields of `river.Config`.
 | `config.DiscardedJobRetentionPeriod` | protocol_visible | `maintenance_job_cleaner_retention` (TestMaintenanceConformance) | The job cleaner deletes discarded rows after this period; deletion is visible to every implementation sharing the database. |
 | `config.ErrorHandler` | api_equivalent | `error_handler_cancel_override` (TestMixedConformance) | Language-native error/panic callback. Its persisted effect (overriding the outcome, e.g. cancel) is exercised through the adapter's error_handler_cancel start option. |
 | `config.FetchCooldown` | api_equivalent |  | Per-client minimum interval between fetches (a throughput throttle), which also suppresses a client's repeated insert notification for a queue within the interval on every backend. Implementations expose an equivalent client-level knob with the same default and minimum. Rows are unaffected; the reference adapter's 1 ms setting keeps notification scenarios deterministic. |
+| `config.FetchOnlyKnownKinds` | api_equivalent |  | Restricts a client's claims to the kinds of its registered workers, including aliases, so jobs of other kinds stay available without using attempts. The filter is local to the claiming client; implementations expose an equivalent option, and the jobs it leaves are ordinary available rows any client may work. |
 | `config.FetchPollInterval` | api_equivalent | `lost_notification_poll_recovery` (TestMixedConformance)<br>`notification_only_wakeups` (TestMixedConformance) | Per-process polling fallback interval. The adapter's fetch_poll_interval_ms option exercises both the polling fallback and notification-only wakeups with polling effectively disabled. |
 | `config.Hooks` | api_equivalent |  | Registration of global hooks in each language's idiom. Hook ordering semantics are exercised through plugin registration in extension_hook_middleware_order. |
 | `config.ID` | protocol_visible | `process_kill_restart_and_rescue` (TestMixedConformance)<br>`sqlite_runtime_attempted_by_ordering` (TestMixedSQLiteRuntimeConformance) | Persisted in attempted_by and used as leader_id; scenarios assert attempted_by client IDs across implementations. |
@@ -118,7 +119,7 @@ Exported fields of `river.Config`.
 | `config.Middleware` | api_equivalent |  | Registration of global middleware in each language's idiom. Middleware ordering semantics are exercised through plugin registration in extension_hook_middleware_order. |
 | `config.PeriodicJobs` | protocol_visible | `mixed_leader_death_failover_both_directions` (TestMixedConformance)<br>`periodic_due_job_available` (TestMaintenanceConformance)<br>`periodic_run_on_start` (TestMixedConformance)<br>`sqlite_runtime_periodic_scheduler` (TestMixedSQLiteRuntimeConformance) | Only the elected leader enqueues periodic jobs, tagging them with reserved metadata; duplicate or missing enqueues are visible across implementations. |
 | `config.Plugins` | api_equivalent | `extension_hook_middleware_order` (TestMixedConformance) | Language-native plugin registration; the adapter's instrumented option installs a plugin and the scenario checks hook and middleware ordering. |
-| `config.PollOnly` | api_equivalent | `sqlite_runtime_poll_only_recovery` (TestMixedSQLiteRuntimeConformance) | Disables LISTEN in favor of polling. Implementations provide an equivalent notification-free mode. |
+| `config.PollOnly` | api_equivalent | `poll_only_remote_cancellation` (TestMixedConformance)<br>`sqlite_runtime_poll_only_recovery` (TestMixedSQLiteRuntimeConformance) | Disables LISTEN in favor of polling. Implementations provide an equivalent notification-free mode. |
 | `config.Queues` | protocol_visible | `differential_queue_crud` (TestMixedConformance)<br>`dynamic_queue_add_reconfigure_remove` (TestMixedConformance) | Queues a client works are persisted as river_queue rows and determine which jobs it fetches. |
 | `config.ReindexerIndexNames` | protocol_visible | `maintenance_reindexer_skips_artifacts` (TestMaintenanceConformance) | Determines which River indexes the leader reindexes. |
 | `config.ReindexerSchedule` | protocol_visible | `maintenance_reindexer_skips_artifacts` (TestMaintenanceConformance) | Determines when the leader reindexes River indexes (midnight UTC by default). |
@@ -378,6 +379,7 @@ Methods of the exported `riverdriver` interfaces.
 | `driver.Executor.IndexReindex` | driver_specific |  | Go driver-seam method for index introspection and maintenance used by the reindexer and tests. |
 | `driver.Executor.IndexReindexArtifacts` | driver_specific |  | Go driver-seam method for index introspection and maintenance used by the reindexer and tests. |
 | `driver.Executor.IndexesExist` | driver_specific |  | Go driver-seam method for index introspection and maintenance used by the reindexer and tests. |
+| `driver.Executor.InitDriver` | driver_specific |  | Go driver-seam method that detects server capabilities, such as YugabyteDB lacking LISTEN/NOTIFY and xmax, before a client starts. |
 | `driver.Executor.JobCancel` | driver_specific |  | Go driver-seam method for job queries; their persisted effects are covered by the client, job_state, and metadata_key items. |
 | `driver.Executor.JobCountByAllStates` | driver_specific |  | Go driver-seam method for job queries; their persisted effects are covered by the client, job_state, and metadata_key items. |
 | `driver.Executor.JobCountByQueueAndState` | driver_specific |  | Go driver-seam method for job queries; their persisted effects are covered by the client, job_state, and metadata_key items. |
@@ -389,6 +391,7 @@ Methods of the exported `riverdriver` interfaces.
 | `driver.Executor.JobGetByID` | driver_specific |  | Go driver-seam method for job queries; their persisted effects are covered by the client, job_state, and metadata_key items. |
 | `driver.Executor.JobGetByIDMany` | driver_specific |  | Go driver-seam method for job queries; their persisted effects are covered by the client, job_state, and metadata_key items. |
 | `driver.Executor.JobGetByKindMany` | driver_specific |  | Go driver-seam method for job queries; their persisted effects are covered by the client, job_state, and metadata_key items. |
+| `driver.Executor.JobGetCancelRequested` | driver_specific |  | Go driver-seam query through which clients without a notifier poll their running jobs for cancellation requests; the resulting cancellation is covered by poll_only_remote_cancellation. |
 | `driver.Executor.JobGetStuck` | driver_specific |  | Go driver-seam method for job queries; their persisted effects are covered by the client, job_state, and metadata_key items. |
 | `driver.Executor.JobInsertFastMany` | driver_specific |  | Go driver-seam method for job queries; their persisted effects are covered by the client, job_state, and metadata_key items. |
 | `driver.Executor.JobInsertFastManyNoReturning` | driver_specific |  | Go driver-seam method for job queries; their persisted effects are covered by the client, job_state, and metadata_key items. |
@@ -417,6 +420,7 @@ Methods of the exported `riverdriver` interfaces.
 | `driver.Executor.NotificationDeleteBefore` | driver_specific |  | Go driver-seam method for notification queries; notification behavior is covered by the notification items. |
 | `driver.Executor.NotifyMany` | driver_specific |  | Go driver-seam method for notification queries; notification behavior is covered by the notification items. |
 | `driver.Executor.PGAdvisoryXactLock` | driver_specific |  | Go driver-seam method for PostgreSQL advisory lock helper. |
+| `driver.Executor.Ping` | driver_specific |  | Go driver-seam connectivity check made when a client starts. |
 | `driver.Executor.QueryRow` | driver_specific |  | Go driver-seam primitive for raw statement execution or transactions. |
 | `driver.Executor.QueueCreateOrSetUpdatedAt` | driver_specific |  | Go driver-seam method for queue queries; their persisted effects are covered by the client queue items. |
 | `driver.Executor.QueueDeleteExpired` | driver_specific |  | Go driver-seam method for queue queries; their persisted effects are covered by the client queue items. |
@@ -501,6 +505,7 @@ Main-line migrations for PostgreSQL and SQLite.
 | `migration.postgres.005` | protocol_visible | `candidate_migrator_reference_runtime` (TestMixedConformance)<br>`historical_migration_down_up` (TestMixedConformance)<br>`reference_migrator_candidate_runtime` (TestMixedConformance) | Main-line PostgreSQL schema version. |
 | `migration.postgres.006` | protocol_visible | `candidate_migrator_reference_runtime` (TestMixedConformance)<br>`historical_migration_down_up` (TestMixedConformance)<br>`reference_migrator_candidate_runtime` (TestMixedConformance) | Main-line PostgreSQL schema version. |
 | `migration.postgres.007` | protocol_visible | `candidate_migrator_reference_runtime` (TestMixedConformance)<br>`historical_migration_down_up` (TestMixedConformance)<br>`reference_migrator_candidate_runtime` (TestMixedConformance) | Main-line PostgreSQL schema version. |
+| `migration.postgres.008` | protocol_visible | `candidate_migrator_reference_runtime` (TestMixedConformance)<br>`historical_migration_down_up` (TestMixedConformance)<br>`reference_migrator_candidate_runtime` (TestMixedConformance) | Main-line PostgreSQL schema version. |
 | `migration.sqlite.001` | protocol_visible | `sqlite_migration_cross_language` (TestMixedSQLiteConformance) | Main-line SQLite schema version. |
 | `migration.sqlite.002` | protocol_visible | `sqlite_migration_cross_language` (TestMixedSQLiteConformance) | Main-line SQLite schema version. |
 | `migration.sqlite.003` | protocol_visible | `sqlite_migration_cross_language` (TestMixedSQLiteConformance) | Main-line SQLite schema version. |
@@ -508,3 +513,4 @@ Main-line migrations for PostgreSQL and SQLite.
 | `migration.sqlite.005` | protocol_visible | `sqlite_migration_cross_language` (TestMixedSQLiteConformance) | Main-line SQLite schema version. |
 | `migration.sqlite.006` | protocol_visible | `sqlite_migration_cross_language` (TestMixedSQLiteConformance) | Main-line SQLite schema version. |
 | `migration.sqlite.007` | protocol_visible | `sqlite_migration_cross_language` (TestMixedSQLiteConformance) | Main-line SQLite schema version. |
+| `migration.sqlite.008` | protocol_visible | `sqlite_migration_cross_language` (TestMixedSQLiteConformance) | Main-line SQLite schema version. |
