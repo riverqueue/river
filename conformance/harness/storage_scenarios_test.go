@@ -643,14 +643,6 @@ func verifyJobListCursorInterchange(t *testing.T, first, second *adapter) {
 						require.Contains(t, cursor, "-", description)
 					}
 
-					// River Go decodes cursors with the standard Base64
-					// alphabet although it encodes them URL-safe, so it
-					// rejects cursor text containing `-` or `_` until the
-					// upstream fix lands.
-					if pair.reader.spec.Implementation == referenceSpec().Implementation &&
-						strings.ContainsAny(cursor, "-_") {
-						continue
-					}
 					var resumed jobPage
 					pair.reader.call(t, "list", params(&cursor), &resumed)
 					require.Equal(t, expected[2:], jobIDs(resumed.Jobs), description)

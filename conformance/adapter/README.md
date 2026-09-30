@@ -262,9 +262,7 @@ with trailing fractional zeros trimmed. `job_list_cursor_interchange` and its
 SQLite and multi-engine variants compare cursor text for every sort field and
 resume each engine from the other's cursor, including a
 `raw_insert_no_notify` kind (`conformance_cursor<>&~~~`) that Go escapes and
-whose cursor text always contains `-`. River Go currently decodes only
-standard Base64, so the reference skips resuming from cursor text with `-`
-or `_` until its decoder is fixed.
+whose cursor text always contains `-`.
 
 ## Fault injection
 
