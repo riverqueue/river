@@ -1573,6 +1573,14 @@ func ExerciseClient[TTx any](ctx context.Context, t *testing.T,
 		require.Equal(t, job.ID, listRes.Jobs[0].ID)
 	})
 
+	t.Run("JobRetryRaceLoserSeesWinnerCommit", func(t *testing.T) {
+		t.Parallel()
+
+		_, bundle := setupConfig(t)
+
+		exerciseClientRetryRaceLoserSeesWinnerCommit(ctx, t, bundle.driver, bundle.schema)
+	})
+
 	t.Run("LeaderElectionDisabled", func(t *testing.T) {
 		t.Parallel()
 
