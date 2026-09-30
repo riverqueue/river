@@ -1661,6 +1661,7 @@ func ExerciseClient[TTx any](ctx context.Context, t *testing.T,
 		require.Equal(t, river.EventKindJobCompleted, event.Kind)
 		require.Equal(t, job.ID, event.Job.ID)
 		require.Len(t, event.Job.Errors, 1)
+		require.Zero(t, event.Job.Errors[0].At)
 		require.Equal(t, 1, event.Job.Errors[0].Attempt)
 		require.JSONEq(t, `{"message":"boom"}`, event.Job.Errors[0].Error)
 	})

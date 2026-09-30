@@ -1735,7 +1735,7 @@ func jobRowFromInternalPartial(internal *dbsqlc.RiverJob) (*rivertype.JobRow, er
 
 	attemptErrors := make([]rivertype.AttemptError, 0)
 	if internal.Errors != nil {
-		if err := json.Unmarshal(internal.Errors, &attemptErrors); err != nil {
+		if err := riverdriver.UnmarshalAttemptErrors(internal.Errors, &attemptErrors); err != nil {
 			decodeErrs = append(decodeErrs, fmt.Errorf("error unmarshaling `errors`: %w", err))
 			attemptErrors = nil
 		}

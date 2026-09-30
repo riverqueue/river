@@ -9,7 +9,6 @@ import (
 	"cmp"
 	"context"
 	"embed"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io/fs"
@@ -1374,7 +1373,7 @@ func jobRowFromInternalPartial(internal *dbsqlc.RiverJob) (*rivertype.JobRow, er
 	var decodeErr error
 	errors := make([]rivertype.AttemptError, len(internal.Errors))
 	for i, rawError := range internal.Errors {
-		if err := json.Unmarshal(rawError, &errors[i]); err != nil {
+		if err := riverdriver.UnmarshalAttemptError(rawError, &errors[i]); err != nil {
 			decodeErr = fmt.Errorf("error unmarshaling `errors`: %w", err)
 			errors = nil
 			break
