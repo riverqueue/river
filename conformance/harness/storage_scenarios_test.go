@@ -561,10 +561,9 @@ const jobListCursorKind = "conformance_cursor<>&~~~"
 // verifyJobListCursorInterchange checks that job-list cursors are
 // interchangeable for each sort field: both engines emit byte-identical
 // cursor text for the same page, and each resumes from the other's cursor
-// to the same next page, in both directions.
-//
-// Mixed-state time ordering is not covered: River Go takes each job's own
-// state field for its cursor, while candidates use the list's field.
+// to the same next page, in both directions. Time ordering over mixed states
+// uses the first listed state's field for every job and its cursor, with
+// nulls last ascending and first descending.
 func verifyJobListCursorInterchange(t *testing.T, first, second *adapter) {
 	t.Helper()
 
@@ -575,7 +574,10 @@ func verifyJobListCursorInterchange(t *testing.T, first, second *adapter) {
 	type listCase struct {
 		kind    string
 		orderBy string
-		states  []string
+		// order lists the kind's jobs by insertion index in ascending list
+		// order, or nil for insertion order.
+		order  []int
+		states []string
 	}
 	const echoKind = "conformance_echo"
 	for _, pair := range []struct {
@@ -613,6 +615,12 @@ func verifyJobListCursorInterchange(t *testing.T, first, second *adapter) {
 					description := fmt.Sprintf("%s -> %s: kind %s ordered by %s %s",
 						pair.writer.name, pair.reader.name, current.kind, current.orderBy, direction)
 					expected := slices.Clone(idsByKind[current.kind])
+					if current.order != nil {
+						expected = expected[:0]
+						for _, index := range current.order {
+							expected = append(expected, idsByKind[current.kind][index])
+						}
+					}
 					if direction == "desc" {
 						slices.Reverse(expected)
 					}
@@ -666,6 +674,23 @@ func verifyJobListCursorInterchange(t *testing.T, first, second *adapter) {
 			{kind: echoKind, orderBy: "time", states: []string{"cancelled"}},
 			{kind: jobListCursorKind, orderBy: "finalized_at", states: []string{"cancelled"}},
 			{kind: jobListCursorKind, orderBy: "time", states: []string{"cancelled"}},
+		})
+
+		// Retrying the middle job makes it available again, scheduled now and
+		// without a finalized time. Listed with cancelled jobs, every job is
+		// ordered by the first state's field, so a page can end on a job of
+		// the other state, and the retried job's null `finalized_at` sorts
+		// last ascending.
+		echoIDs := idsByKind[echoKind]
+		pair.writer.call(t, "retry", map[string]any{"id": echoIDs[1]}, nil)
+		verifyCases([]listCase{
+			{kind: echoKind, orderBy: "time", order: []int{0, 2, 1}, states: []string{"cancelled", "available"}},
+			{kind: echoKind, orderBy: "time", order: []int{1, 0, 2}, states: []string{"available", "cancelled"}},
+		})
+		// With the last job retried too, pages end on a null `finalized_at`.
+		pair.writer.call(t, "retry", map[string]any{"id": echoIDs[2]}, nil)
+		verifyCases([]listCase{
+			{kind: echoKind, orderBy: "time", order: []int{0, 1, 2}, states: []string{"cancelled", "available"}},
 		})
 	}
 }
