@@ -557,6 +557,65 @@ func exerciseJobRead[TTx any](ctx context.Context, t *testing.T, executorWithTx 
 			}, jobRows[0].Errors)
 		})
 
+		// SQLite only: a locked job with a JSON column that holds invalid JSON
+		// doesn't fail the fetch. It's returned as undecodable with the bad
+		// value left in place, and doesn't prevent returning the others.
+		t.Run("InvalidJSONJobsReturnedWithDecodeErrors", func(t *testing.T) {
+			t.Parallel()
+
+			exec, bundle := setup(ctx, t)
+			if bundle.driver.DatabaseName() != riverdriver.DatabaseNameSQLite {
+				t.Skip("only SQLite's JSON columns can hold invalid JSON")
+			}
+
+			goodJob1 := testfactory.Job(ctx, t, exec, &testfactory.JobOpts{})
+			expectedJobIDs := make([]int64, 0, len(sqliteJobJSONColumns)+2)
+			expectedJobIDs = append(expectedJobIDs, goodJob1.ID)
+
+			invalidJobIDs := make(map[string]int64, len(sqliteJobJSONColumns))
+			for _, column := range sqliteJobJSONColumns {
+				job := testfactory.Job(ctx, t, exec, &testfactory.JobOpts{})
+				sqliteSetJobColumnMalformed(ctx, t, exec, job.ID, column)
+				invalidJobIDs[column] = job.ID
+				expectedJobIDs = append(expectedJobIDs, job.ID)
+			}
+
+			goodJob2 := testfactory.Job(ctx, t, exec, &testfactory.JobOpts{})
+			expectedJobIDs = append(expectedJobIDs, goodJob2.ID)
+
+			res, err := exec.JobGetAvailable(ctx, &riverdriver.JobGetAvailableParams{
+				ClientID:       testClientID,
+				MaxAttemptedBy: maxAttemptedBy,
+				MaxToLock:      maxToLock,
+				Queue:          rivercommon.QueueDefault,
+			})
+			require.NoError(t, err)
+			require.Equal(t, expectedJobIDs,
+				sliceutil.Map(res.Jobs, func(j *rivertype.JobRow) int64 { return j.ID }))
+			for _, job := range res.Jobs {
+				require.Equal(t, rivertype.JobStateRunning, job.State)
+			}
+
+			require.Len(t, res.DecodeErrors, len(sqliteJobJSONColumns))
+			jobsByID := sliceutil.KeyBy(res.Jobs, func(j *rivertype.JobRow) (int64, *rivertype.JobRow) {
+				return j.ID, j
+			})
+			for _, jobID := range []int64{goodJob1.ID, goodJob2.ID} {
+				require.NotContains(t, res.DecodeErrors, jobID)
+				require.Equal(t, []string{testClientID}, jobsByID[jobID].AttemptedBy)
+			}
+			for _, column := range sqliteJobJSONColumns {
+				undecodableJob := jobsByID[invalidJobIDs[column]]
+				require.NotNil(t, undecodableJob, "expected job with invalid %s to be undecodable", column)
+				require.ErrorContains(t, res.DecodeErrors[undecodableJob.ID], "`"+column+"`")
+				require.Equal(t, 1, undecodableJob.Attempt)
+				require.Equal(t, rivertype.JobStateRunning, undecodableJob.State)
+
+				// The invalid value is left in place.
+				require.Equal(t, sqliteMalformedValue, sqliteJobColumnText(ctx, t, exec, invalidJobIDs[column], column))
+			}
+		})
+
 		// Every locked job is returned, with decode errors keyed by job ID so
 		// the caller can fail only the attempts whose rows couldn't be decoded.
 		t.Run("UndecodableJobsReturnedWithDecodeErrors", func(t *testing.T) {
@@ -726,6 +785,31 @@ func exerciseJobRead[TTx any](ctx context.Context, t *testing.T, executorWithTx 
 			require.NoError(t, err)
 			require.Empty(t, ids)
 		})
+
+		// A malformed metadata value on one running job must not prevent
+		// cancellation requests for other jobs from being found.
+		t.Run("InvalidJSONMetadataIgnored", func(t *testing.T) {
+			t.Parallel()
+
+			exec, bundle := setup(ctx, t)
+			if bundle.driver.DatabaseName() != riverdriver.DatabaseNameSQLite {
+				t.Skip("only SQLite's JSON columns can hold invalid JSON")
+			}
+
+			cancelRequestedJob := testfactory.Job(ctx, t, exec, &testfactory.JobOpts{
+				Metadata: []byte(`{"cancel_attempted_at":"2026-09-28T00:00:00Z"}`),
+				State:    new(rivertype.JobStateRunning),
+			})
+			invalidJob := testfactory.Job(ctx, t, exec, &testfactory.JobOpts{State: new(rivertype.JobStateRunning)})
+			sqliteSetJobColumnMalformed(ctx, t, exec, invalidJob.ID, "metadata")
+
+			ids, err := exec.JobGetCancelRequested(ctx, &riverdriver.JobGetCancelRequestedParams{
+				ID: []int64{cancelRequestedJob.ID, invalidJob.ID},
+			})
+			require.NoError(t, err)
+			require.Equal(t, []int64{cancelRequestedJob.ID}, ids)
+			require.Equal(t, sqliteMalformedValue, sqliteJobColumnText(ctx, t, exec, invalidJob.ID, "metadata"))
+		})
 	})
 
 	t.Run("JobGetStuck", func(t *testing.T) {
@@ -777,6 +861,39 @@ func exerciseJobRead[TTx any](ctx context.Context, t *testing.T, executorWithTx 
 			require.NoError(t, err)
 			require.Equal(t, []int64{stuckJob3.ID},
 				sliceutil.Map(stuckJobs, func(j *rivertype.JobRow) int64 { return j.ID }))
+		})
+
+		// SQLite only: a stuck job with JSON columns that hold invalid JSON is
+		// still returned so that it can be rescued.
+		t.Run("InvalidJSONJobReturned", func(t *testing.T) {
+			t.Parallel()
+
+			exec, bundle := setup(ctx, t)
+			if bundle.driver.DatabaseName() != riverdriver.DatabaseNameSQLite {
+				t.Skip("only SQLite's JSON columns can hold invalid JSON")
+			}
+
+			var (
+				horizon       = time.Now().UTC()
+				beforeHorizon = horizon.Add(-1 * time.Minute)
+			)
+
+			stuckJob1 := testfactory.Job(ctx, t, exec, &testfactory.JobOpts{AttemptedAt: &beforeHorizon, State: new(rivertype.JobStateRunning)})
+			stuckJob2 := testfactory.Job(ctx, t, exec, &testfactory.JobOpts{AttemptedAt: &beforeHorizon, State: new(rivertype.JobStateRunning)})
+
+			for _, column := range sqliteJobJSONColumns {
+				sqliteSetJobColumnMalformed(ctx, t, exec, stuckJob1.ID, column)
+			}
+
+			stuckJobs, err := exec.JobGetStuck(ctx, &riverdriver.JobGetStuckParams{
+				Max:          10,
+				StuckHorizon: horizon,
+			})
+			require.NoError(t, err)
+			require.Equal(t, []int64{stuckJob1.ID, stuckJob2.ID},
+				sliceutil.Map(stuckJobs, func(j *rivertype.JobRow) int64 { return j.ID }))
+			require.Equal(t, stuckJob1.Kind, stuckJobs[0].Kind)
+			require.Nil(t, stuckJobs[0].Tags)
 		})
 
 		// A stuck job whose row can't be fully decoded is still returned so that
