@@ -243,6 +243,16 @@ func exerciseJobRead[TTx any](ctx context.Context, t *testing.T, executorWithTx 
 			maxToLock      = 100
 		)
 
+		// Gets available jobs, requiring that all of them were decoded.
+		getAvailable := func(t *testing.T, exec riverdriver.Executor, params *riverdriver.JobGetAvailableParams) []*rivertype.JobRow {
+			t.Helper()
+
+			res, err := exec.JobGetAvailable(ctx, params)
+			require.NoError(t, err)
+			require.Nil(t, res.DecodeErrors)
+			return res.Jobs
+		}
+
 		t.Run("Success", func(t *testing.T) {
 			t.Parallel()
 
@@ -250,13 +260,12 @@ func exerciseJobRead[TTx any](ctx context.Context, t *testing.T, executorWithTx 
 
 			_ = testfactory.Job(ctx, t, exec, &testfactory.JobOpts{})
 
-			jobRows, err := exec.JobGetAvailable(ctx, &riverdriver.JobGetAvailableParams{
+			jobRows := getAvailable(t, exec, &riverdriver.JobGetAvailableParams{
 				ClientID:       testClientID,
 				MaxAttemptedBy: maxAttemptedBy,
 				MaxToLock:      maxToLock,
 				Queue:          rivercommon.QueueDefault,
 			})
-			require.NoError(t, err)
 			require.Len(t, jobRows, 1)
 
 			jobRow := jobRows[0]
@@ -276,14 +285,13 @@ func exerciseJobRead[TTx any](ctx context.Context, t *testing.T, executorWithTx 
 			// Filtering precedes the limit: the earlier, higher priority unknown
 			// job must not prevent either known kind from being claimed.
 			for _, expected := range []*rivertype.JobRow{known1, known2} {
-				jobs, err := exec.JobGetAvailable(ctx, &riverdriver.JobGetAvailableParams{
+				jobs := getAvailable(t, exec, &riverdriver.JobGetAvailableParams{
 					ClientID:       testClientID,
 					Kind:           []string{"known1", "known2"},
 					MaxAttemptedBy: maxAttemptedBy,
 					MaxToLock:      1,
 					Queue:          rivercommon.QueueDefault,
 				})
-				require.NoError(t, err)
 				require.Len(t, jobs, 1)
 				require.Equal(t, expected.ID, jobs[0].ID)
 				require.Equal(t, expected.Attempt+1, jobs[0].Attempt)
@@ -303,14 +311,13 @@ func exerciseJobRead[TTx any](ctx context.Context, t *testing.T, executorWithTx 
 			exec, _ := setup(ctx, t)
 
 			job := testfactory.Job(ctx, t, exec, &testfactory.JobOpts{})
-			jobs, err := exec.JobGetAvailable(ctx, &riverdriver.JobGetAvailableParams{
+			jobs := getAvailable(t, exec, &riverdriver.JobGetAvailableParams{
 				ClientID:       testClientID,
 				Kind:           []string{},
 				MaxAttemptedBy: maxAttemptedBy,
 				MaxToLock:      maxToLock,
 				Queue:          rivercommon.QueueDefault,
 			})
-			require.NoError(t, err)
 			require.Empty(t, jobs)
 
 			jobAfter, err := exec.JobGetByID(ctx, &riverdriver.JobGetByIDParams{ID: job.ID})
@@ -327,13 +334,12 @@ func exerciseJobRead[TTx any](ctx context.Context, t *testing.T, executorWithTx 
 			_ = testfactory.Job(ctx, t, exec, &testfactory.JobOpts{})
 
 			// Two rows inserted but only one found because of the added limit.
-			jobRows, err := exec.JobGetAvailable(ctx, &riverdriver.JobGetAvailableParams{
+			jobRows := getAvailable(t, exec, &riverdriver.JobGetAvailableParams{
 				ClientID:       testClientID,
 				MaxAttemptedBy: maxAttemptedBy,
 				MaxToLock:      1,
 				Queue:          rivercommon.QueueDefault,
 			})
-			require.NoError(t, err)
 			require.Len(t, jobRows, 1)
 		})
 
@@ -347,13 +353,12 @@ func exerciseJobRead[TTx any](ctx context.Context, t *testing.T, executorWithTx 
 			})
 
 			// Job is in a non-default queue so it's not found.
-			jobRows, err := exec.JobGetAvailable(ctx, &riverdriver.JobGetAvailableParams{
+			jobRows := getAvailable(t, exec, &riverdriver.JobGetAvailableParams{
 				ClientID:       testClientID,
 				MaxAttemptedBy: maxAttemptedBy,
 				MaxToLock:      maxToLock,
 				Queue:          rivercommon.QueueDefault,
 			})
-			require.NoError(t, err)
 			require.Empty(t, jobRows)
 		})
 
@@ -369,14 +374,13 @@ func exerciseJobRead[TTx any](ctx context.Context, t *testing.T, executorWithTx 
 			})
 
 			// Job is scheduled a while from now so it's not found.
-			jobRows, err := exec.JobGetAvailable(ctx, &riverdriver.JobGetAvailableParams{
+			jobRows := getAvailable(t, exec, &riverdriver.JobGetAvailableParams{
 				ClientID:       testClientID,
 				MaxAttemptedBy: maxAttemptedBy,
 				MaxToLock:      maxToLock,
 				Now:            &now,
 				Queue:          rivercommon.QueueDefault,
 			})
-			require.NoError(t, err)
 			require.Empty(t, jobRows)
 		})
 
@@ -395,14 +399,13 @@ func exerciseJobRead[TTx any](ctx context.Context, t *testing.T, executorWithTx 
 				ScheduledAt: new(now.Add(-1 * time.Microsecond)),
 			})
 
-			jobRows, err := exec.JobGetAvailable(ctx, &riverdriver.JobGetAvailableParams{
+			jobRows := getAvailable(t, exec, &riverdriver.JobGetAvailableParams{
 				ClientID:       testClientID,
 				MaxAttemptedBy: maxAttemptedBy,
 				MaxToLock:      maxToLock,
 				Now:            new(now),
 				Queue:          rivercommon.QueueDefault,
 			})
-			require.NoError(t, err)
 			require.Len(t, jobRows, 1)
 			require.Equal(t, job2.ID, jobRows[0].ID)
 		})
@@ -419,13 +422,12 @@ func exerciseJobRead[TTx any](ctx context.Context, t *testing.T, executorWithTx 
 				})
 			}
 
-			jobRows, err := exec.JobGetAvailable(ctx, &riverdriver.JobGetAvailableParams{
+			jobRows := getAvailable(t, exec, &riverdriver.JobGetAvailableParams{
 				ClientID:       testClientID,
 				MaxAttemptedBy: maxAttemptedBy,
 				MaxToLock:      2,
 				Queue:          rivercommon.QueueDefault,
 			})
-			require.NoError(t, err)
 			require.Len(t, jobRows, 2, "expected to fetch exactly 2 jobs")
 
 			// Because the jobs are ordered within the fetch query's CTE but *not* within
@@ -439,14 +441,12 @@ func exerciseJobRead[TTx any](ctx context.Context, t *testing.T, executorWithTx 
 			require.Equal(t, 2, jobRows[1].Priority, "expected second job to have priority 2")
 
 			// Should fetch the one remaining job on the next attempt:
-			jobRows, err = exec.JobGetAvailable(ctx, &riverdriver.JobGetAvailableParams{
+			jobRows = getAvailable(t, exec, &riverdriver.JobGetAvailableParams{
 				ClientID:       testClientID,
 				MaxAttemptedBy: maxAttemptedBy,
 				MaxToLock:      1,
 				Queue:          rivercommon.QueueDefault,
 			})
-			require.NoError(t, err)
-			require.NoError(t, err)
 			require.Len(t, jobRows, 1, "expected to fetch exactly 1 job")
 			require.Equal(t, 3, jobRows[0].Priority, "expected final job to have priority 3")
 		})
@@ -466,13 +466,12 @@ func exerciseJobRead[TTx any](ctx context.Context, t *testing.T, executorWithTx 
 			})
 
 			// Job is in a non-default queue so it's not found.
-			jobRows, err := exec.JobGetAvailable(ctx, &riverdriver.JobGetAvailableParams{
+			jobRows := getAvailable(t, exec, &riverdriver.JobGetAvailableParams{
 				ClientID:       testClientID,
 				MaxAttemptedBy: maxAttemptedBy,
 				MaxToLock:      maxToLock,
 				Queue:          rivercommon.QueueDefault,
 			})
-			require.NoError(t, err)
 			require.Len(t, jobRows, 1)
 
 			jobRow := jobRows[0]
@@ -502,13 +501,12 @@ func exerciseJobRead[TTx any](ctx context.Context, t *testing.T, executorWithTx 
 			})
 
 			// Job is in a non-default queue so it's not found.
-			jobRows, err := exec.JobGetAvailable(ctx, &riverdriver.JobGetAvailableParams{
+			jobRows := getAvailable(t, exec, &riverdriver.JobGetAvailableParams{
 				ClientID:       testClientID,
 				MaxAttemptedBy: maxAttemptedBy,
 				MaxToLock:      maxToLock,
 				Queue:          rivercommon.QueueDefault,
 			})
-			require.NoError(t, err)
 			require.Len(t, jobRows, 1)
 
 			jobRow := jobRows[0]
@@ -517,6 +515,92 @@ func exerciseJobRead[TTx any](ctx context.Context, t *testing.T, executorWithTx 
 				testClientID,
 			), jobRow.AttemptedBy)
 			require.Len(t, jobRow.AttemptedBy, maxAttemptedBy)
+		})
+
+		// Attempt errors written by something other than River may not have the
+		// shape River expects. They're decoded leniently so that the job (and
+		// every other job locked alongside it) can still be worked.
+		t.Run("ErrorsWithUnexpectedShapesDecoded", func(t *testing.T) {
+			t.Parallel()
+
+			exec, _ := setup(ctx, t)
+
+			job1 := testfactory.Job(ctx, t, exec, &testfactory.JobOpts{
+				Errors: [][]byte{
+					[]byte(`{"at":"2024-01-02 03:04:05+00","attempt":"1","error":{"message":"boom"},"trace":["frame1","frame2"]}`),
+					[]byte(`{"at":"2024-01-02T03:04:05Z","attempt":"2","error":"next"}`),
+					[]byte(`42`),
+				},
+			})
+			job2 := testfactory.Job(ctx, t, exec, &testfactory.JobOpts{})
+
+			jobRows := getAvailable(t, exec, &riverdriver.JobGetAvailableParams{
+				ClientID:       testClientID,
+				MaxAttemptedBy: maxAttemptedBy,
+				MaxToLock:      maxToLock,
+				Queue:          rivercommon.QueueDefault,
+			})
+
+			// Result order isn't guaranteed by every driver.
+			sort.Slice(jobRows, func(i, j int) bool { return jobRows[i].ID < jobRows[j].ID })
+			require.Equal(t, []int64{job1.ID, job2.ID},
+				sliceutil.Map(jobRows, func(j *rivertype.JobRow) int64 { return j.ID }))
+
+			require.Equal(t, []rivertype.AttemptError{
+				{
+					Attempt: 1,
+					Error:   `{"message":"boom"}`,
+					Trace:   `["frame1","frame2"]`,
+				},
+				{At: time.Date(2024, 1, 2, 3, 4, 5, 0, time.UTC), Attempt: 2, Error: "next"},
+				{Error: "42"},
+			}, jobRows[0].Errors)
+		})
+
+		// Every locked job is returned, with decode errors keyed by job ID so
+		// the caller can fail only the attempts whose rows couldn't be decoded.
+		t.Run("UndecodableJobsReturnedWithDecodeErrors", func(t *testing.T) {
+			t.Parallel()
+
+			exec, bundle := setup(ctx, t)
+			if bundle.driver.DatabaseName() != riverdriver.DatabaseNameSQLite {
+				t.Skip("only SQLite's JSON columns can hold values that don't decode")
+			}
+
+			job1 := testfactory.Job(ctx, t, exec, &testfactory.JobOpts{})
+			job2 := testfactory.Job(ctx, t, exec, &testfactory.JobOpts{Tags: []string{"tag"}})
+			job3 := testfactory.Job(ctx, t, exec, &testfactory.JobOpts{})
+			job4 := testfactory.Job(ctx, t, exec, &testfactory.JobOpts{})
+
+			sqliteSetJobJSONColumn(ctx, t, exec, job2.ID, "errors", `{"not":"an array"}`)
+			sqliteSetJobJSONColumn(ctx, t, exec, job2.ID, "tags", `{"not":"an array"}`)
+			sqliteSetJobJSONColumn(ctx, t, exec, job4.ID, "tags", `{"not":"an array"}`)
+
+			res, err := exec.JobGetAvailable(ctx, &riverdriver.JobGetAvailableParams{
+				ClientID:       testClientID,
+				MaxAttemptedBy: maxAttemptedBy,
+				MaxToLock:      maxToLock,
+				Queue:          rivercommon.QueueDefault,
+			})
+			require.NoError(t, err)
+			require.Equal(t, []int64{job1.ID, job2.ID, job3.ID, job4.ID},
+				sliceutil.Map(res.Jobs, func(j *rivertype.JobRow) int64 { return j.ID }))
+
+			require.Len(t, res.DecodeErrors, 2)
+			require.ErrorContains(t, res.DecodeErrors[job2.ID], "error unmarshaling `errors`")
+			require.ErrorContains(t, res.DecodeErrors[job2.ID], "error unmarshaling `tags`")
+			require.ErrorContains(t, res.DecodeErrors[job4.ID], "error unmarshaling `tags`")
+			require.NotContains(t, res.DecodeErrors[job4.ID].Error(), "error unmarshaling `errors`")
+
+			// Fields that could be decoded are set, while the others are empty.
+			undecodableJob := res.Jobs[1]
+			require.Equal(t, 1, undecodableJob.Attempt)
+			require.Equal(t, []string{testClientID}, undecodableJob.AttemptedBy)
+			require.Equal(t, job2.Kind, undecodableJob.Kind)
+			require.Equal(t, rivertype.JobStateRunning, undecodableJob.State)
+			require.Nil(t, undecodableJob.Errors)
+			require.Nil(t, undecodableJob.Tags)
+			require.Nil(t, res.Jobs[3].Tags)
 		})
 	})
 
@@ -647,49 +731,83 @@ func exerciseJobRead[TTx any](ctx context.Context, t *testing.T, executorWithTx 
 	t.Run("JobGetStuck", func(t *testing.T) {
 		t.Parallel()
 
-		exec, _ := setup(ctx, t)
+		t.Run("Success", func(t *testing.T) {
+			t.Parallel()
 
-		var (
-			horizon       = time.Now().UTC()
-			beforeHorizon = horizon.Add(-1 * time.Minute)
-			afterHorizon  = horizon.Add(1 * time.Minute)
-		)
+			exec, _ := setup(ctx, t)
 
-		stuckJob1 := testfactory.Job(ctx, t, exec, &testfactory.JobOpts{AttemptedAt: &beforeHorizon, State: new(rivertype.JobStateRunning)})
-		stuckJob2 := testfactory.Job(ctx, t, exec, &testfactory.JobOpts{AttemptedAt: &beforeHorizon, State: new(rivertype.JobStateRunning)})
+			var (
+				horizon       = time.Now().UTC()
+				beforeHorizon = horizon.Add(-1 * time.Minute)
+				afterHorizon  = horizon.Add(1 * time.Minute)
+			)
 
-		t.Logf("horizon   = %s", horizon)
-		t.Logf("stuckJob1 = %s", stuckJob1.AttemptedAt)
-		t.Logf("stuckJob2 = %s", stuckJob2.AttemptedAt)
+			stuckJob1 := testfactory.Job(ctx, t, exec, &testfactory.JobOpts{AttemptedAt: &beforeHorizon, State: new(rivertype.JobStateRunning)})
+			stuckJob2 := testfactory.Job(ctx, t, exec, &testfactory.JobOpts{AttemptedAt: &beforeHorizon, State: new(rivertype.JobStateRunning)})
 
-		t.Logf("stuckJob1 full = %s", spew.Sdump(stuckJob1))
+			t.Logf("horizon   = %s", horizon)
+			t.Logf("stuckJob1 = %s", stuckJob1.AttemptedAt)
+			t.Logf("stuckJob2 = %s", stuckJob2.AttemptedAt)
 
-		// Not returned on the first page because we put a maximum of two.
-		stuckJob3 := testfactory.Job(ctx, t, exec, &testfactory.JobOpts{AttemptedAt: &beforeHorizon, State: new(rivertype.JobStateRunning)})
+			t.Logf("stuckJob1 full = %s", spew.Sdump(stuckJob1))
 
-		// Not stuck because not in running state.
-		_ = testfactory.Job(ctx, t, exec, &testfactory.JobOpts{State: new(rivertype.JobStateAvailable)})
+			// Not returned on the first page because we put a maximum of two.
+			stuckJob3 := testfactory.Job(ctx, t, exec, &testfactory.JobOpts{AttemptedAt: &beforeHorizon, State: new(rivertype.JobStateRunning)})
 
-		// Not stuck because after queried horizon.
-		_ = testfactory.Job(ctx, t, exec, &testfactory.JobOpts{AttemptedAt: &afterHorizon, State: new(rivertype.JobStateRunning)})
+			// Not stuck because not in running state.
+			_ = testfactory.Job(ctx, t, exec, &testfactory.JobOpts{State: new(rivertype.JobStateAvailable)})
 
-		// Max two stuck
-		stuckJobs, err := exec.JobGetStuck(ctx, &riverdriver.JobGetStuckParams{
-			Max:          2,
-			StuckHorizon: horizon,
+			// Not stuck because after queried horizon.
+			_ = testfactory.Job(ctx, t, exec, &testfactory.JobOpts{AttemptedAt: &afterHorizon, State: new(rivertype.JobStateRunning)})
+
+			// Max two stuck
+			stuckJobs, err := exec.JobGetStuck(ctx, &riverdriver.JobGetStuckParams{
+				Max:          2,
+				StuckHorizon: horizon,
+			})
+			require.NoError(t, err)
+			require.Equal(t, []int64{stuckJob1.ID, stuckJob2.ID},
+				sliceutil.Map(stuckJobs, func(j *rivertype.JobRow) int64 { return j.ID }))
+
+			stuckJobs, err = exec.JobGetStuck(ctx, &riverdriver.JobGetStuckParams{
+				AfterID:      stuckJob2.ID,
+				Max:          2,
+				StuckHorizon: horizon,
+			})
+			require.NoError(t, err)
+			require.Equal(t, []int64{stuckJob3.ID},
+				sliceutil.Map(stuckJobs, func(j *rivertype.JobRow) int64 { return j.ID }))
 		})
-		require.NoError(t, err)
-		require.Equal(t, []int64{stuckJob1.ID, stuckJob2.ID},
-			sliceutil.Map(stuckJobs, func(j *rivertype.JobRow) int64 { return j.ID }))
 
-		stuckJobs, err = exec.JobGetStuck(ctx, &riverdriver.JobGetStuckParams{
-			AfterID:      stuckJob2.ID,
-			Max:          2,
-			StuckHorizon: horizon,
+		// A stuck job whose row can't be fully decoded is still returned so that
+		// it can be rescued.
+		t.Run("UndecodableJobReturned", func(t *testing.T) {
+			t.Parallel()
+
+			exec, bundle := setup(ctx, t)
+			if bundle.driver.DatabaseName() != riverdriver.DatabaseNameSQLite {
+				t.Skip("only SQLite's JSON columns can hold values that don't decode")
+			}
+
+			var (
+				horizon       = time.Now().UTC()
+				beforeHorizon = horizon.Add(-1 * time.Minute)
+			)
+
+			stuckJob1 := testfactory.Job(ctx, t, exec, &testfactory.JobOpts{AttemptedAt: &beforeHorizon, State: new(rivertype.JobStateRunning)})
+			stuckJob2 := testfactory.Job(ctx, t, exec, &testfactory.JobOpts{AttemptedAt: &beforeHorizon, State: new(rivertype.JobStateRunning)})
+
+			sqliteSetJobJSONColumn(ctx, t, exec, stuckJob1.ID, "tags", `{"not":"an array"}`)
+
+			stuckJobs, err := exec.JobGetStuck(ctx, &riverdriver.JobGetStuckParams{
+				Max:          10,
+				StuckHorizon: horizon,
+			})
+			require.NoError(t, err)
+			require.Equal(t, []int64{stuckJob1.ID, stuckJob2.ID},
+				sliceutil.Map(stuckJobs, func(j *rivertype.JobRow) int64 { return j.ID }))
+			require.Nil(t, stuckJobs[0].Tags)
 		})
-		require.NoError(t, err)
-		require.Equal(t, []int64{stuckJob3.ID},
-			sliceutil.Map(stuckJobs, func(j *rivertype.JobRow) int64 { return j.ID }))
 	})
 
 	t.Run("JobKindList", func(t *testing.T) {

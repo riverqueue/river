@@ -546,7 +546,7 @@ var jobGetAvailableAttemptedBySQL = strings.TrimSpace(`
     ))
 `)
 
-func (e *Executor) JobGetAvailable(ctx context.Context, params *riverdriver.JobGetAvailableParams) ([]*rivertype.JobRow, error) {
+func (e *Executor) JobGetAvailable(ctx context.Context, params *riverdriver.JobGetAvailableParams) (*riverdriver.JobGetAvailableResult, error) {
 	kindsJSON, err := json.Marshal(params.Kind)
 	if err != nil {
 		return nil, err
@@ -572,7 +572,7 @@ func (e *Executor) JobGetAvailable(ctx context.Context, params *riverdriver.JobG
 	if err != nil {
 		return nil, interpretError(err)
 	}
-	return sliceutil.MapError(jobs, jobRowFromInternal)
+	return jobGetAvailableResultFromInternal(jobs), nil
 }
 
 func (e *Executor) JobGetByID(ctx context.Context, params *riverdriver.JobGetByIDParams) (*rivertype.JobRow, error) {
@@ -613,7 +613,7 @@ func (e *Executor) JobGetStuck(ctx context.Context, params *riverdriver.JobGetSt
 	if err != nil {
 		return nil, interpretError(err)
 	}
-	return sliceutil.MapError(jobs, jobRowFromInternal)
+	return jobRowsFromInternalPartial(jobs), nil
 }
 
 func (e *Executor) JobInsertFastMany(ctx context.Context, params *riverdriver.JobInsertFastManyParams) ([]*riverdriver.JobInsertFastResult, error) {
@@ -878,6 +878,15 @@ func (e *Executor) JobSchedule(ctx context.Context, params *riverdriver.JobSched
 			scheduledResMap = make(map[int64]*riverdriver.JobScheduleResult)
 		)
 
+		// A job whose row can't be fully decoded is still returned (with the
+		// undecodable fields left empty) so that it doesn't fail scheduling
+		// for every other job. A job whose attempt fails because its row
+		// can't be decoded is retried, so its row comes through here.
+		scheduledJobRow := func(internal *dbsqlc.RiverJob) *rivertype.JobRow {
+			job, _ := jobRowFromInternalPartial(internal)
+			return job
+		}
+
 		for _, eligibleJob := range eligibleJobs {
 			if eligibleJob.UniqueKey == nil {
 				nonUniqueIDs = append(nonUniqueIDs, eligibleJob.ID)
@@ -906,10 +915,7 @@ func (e *Executor) JobSchedule(ctx context.Context, params *riverdriver.JobSched
 			if err != nil {
 				return nil, interpretError(err)
 			}
-			updatedJob, err := jobRowFromInternal(updatedJobs[0])
-			if err != nil {
-				return nil, err
-			}
+			updatedJob := scheduledJobRow(updatedJobs[0])
 			scheduledResMap[updatedJob.ID] = &riverdriver.JobScheduleResult{Job: *updatedJob}
 		}
 
@@ -923,10 +929,7 @@ func (e *Executor) JobSchedule(ctx context.Context, params *riverdriver.JobSched
 			}
 
 			for _, internal := range updatedJobs {
-				updatedJob, err := jobRowFromInternal(internal)
-				if err != nil {
-					return nil, err
-				}
+				updatedJob := scheduledJobRow(internal)
 				scheduledResMap[updatedJob.ID] = &riverdriver.JobScheduleResult{ConflictDiscarded: true, Job: *updatedJob}
 			}
 		}
@@ -938,10 +941,7 @@ func (e *Executor) JobSchedule(ctx context.Context, params *riverdriver.JobSched
 			}
 
 			for _, internal := range updatedJobs {
-				updatedJob, err := jobRowFromInternal(internal)
-				if err != nil {
-					return nil, err
-				}
+				updatedJob := scheduledJobRow(internal)
 				scheduledResMap[updatedJob.ID] = &riverdriver.JobScheduleResult{Job: *updatedJob}
 			}
 		}
@@ -1010,10 +1010,10 @@ func (e *Executor) JobSetStateIfRunningMany(ctx context.Context, params *riverdr
 					return fmt.Errorf("error setting job state: %w", err)
 				}
 			}
-			jobRow, err := jobRowFromInternal(job)
-			if err != nil {
-				return err
-			}
+			// A job whose row can't be fully decoded is still returned (with
+			// the undecodable fields left empty) so that it doesn't roll back
+			// the state change for every other job in the batch.
+			jobRow, _ := jobRowFromInternalPartial(job)
 			setRes = append(setRes, jobRow)
 		}
 
@@ -1687,7 +1687,40 @@ func sqliteJobInsertFullManyJobsParam(jobs []*riverdriver.JobInsertFullParams) (
 	return json.Marshal(jobsParam)
 }
 
+// jobGetAvailableResultFromInternal decodes the job rows locked by
+// JobGetAvailable, retaining every row and recording decode errors by job ID
+// because they've all been moved to `running`.
+func jobGetAvailableResultFromInternal(jobs []*dbsqlc.RiverJob) *riverdriver.JobGetAvailableResult {
+	res := &riverdriver.JobGetAvailableResult{Jobs: make([]*rivertype.JobRow, len(jobs))}
+	for i, internal := range jobs {
+		job, err := jobRowFromInternalPartial(internal)
+		res.Jobs[i] = job
+		if err != nil {
+			if res.DecodeErrors == nil {
+				res.DecodeErrors = make(map[int64]error)
+			}
+			res.DecodeErrors[job.ID] = err
+		}
+	}
+	return res
+}
+
+// jobRowFromInternal decodes a job row, returning an error if any of its
+// fields can't be decoded.
 func jobRowFromInternal(internal *dbsqlc.RiverJob) (*rivertype.JobRow, error) {
+	job, err := jobRowFromInternalPartial(internal)
+	if err != nil {
+		return nil, err
+	}
+	return job, nil
+}
+
+// jobRowFromInternalPartial decodes a job row. A row is always returned, even
+// along with an error, in which case the fields that couldn't be decoded are
+// left empty.
+func jobRowFromInternalPartial(internal *dbsqlc.RiverJob) (*rivertype.JobRow, error) {
+	var decodeErrs []error
+
 	var attemptedAt *time.Time
 	if internal.AttemptedAt != nil {
 		t := internal.AttemptedAt.UTC()
@@ -1697,14 +1730,16 @@ func jobRowFromInternal(internal *dbsqlc.RiverJob) (*rivertype.JobRow, error) {
 	var attemptedBy []string
 	if internal.AttemptedBy != nil {
 		if err := json.Unmarshal(internal.AttemptedBy, &attemptedBy); err != nil {
-			return nil, fmt.Errorf("error unmarshaling `attempted_by`: %w", err)
+			decodeErrs = append(decodeErrs, fmt.Errorf("error unmarshaling `attempted_by`: %w", err))
+			attemptedBy = nil
 		}
 	}
 
-	errors := make([]rivertype.AttemptError, 0)
+	attemptErrors := make([]rivertype.AttemptError, 0)
 	if internal.Errors != nil {
-		if err := json.Unmarshal(internal.Errors, &errors); err != nil {
-			return nil, fmt.Errorf("error unmarshaling `errors`: %w", err)
+		if err := riverdriver.UnmarshalAttemptErrors(internal.Errors, &attemptErrors); err != nil {
+			decodeErrs = append(decodeErrs, fmt.Errorf("error unmarshaling `errors`: %w", err))
+			attemptErrors = nil
 		}
 	}
 
@@ -1716,15 +1751,17 @@ func jobRowFromInternal(internal *dbsqlc.RiverJob) (*rivertype.JobRow, error) {
 
 	var tags []string
 	if err := json.Unmarshal(internal.Tags, &tags); err != nil {
-		return nil, fmt.Errorf("error unmarshaling `tags`: %w", err)
+		decodeErrs = append(decodeErrs, fmt.Errorf("error unmarshaling `tags`: %w", err))
+		tags = nil
 	}
 
 	var uniqueStatesByte byte
 	if internal.UniqueStates != nil {
 		if *internal.UniqueStates < 0 || *internal.UniqueStates > 255 {
-			return nil, fmt.Errorf("value out of range for byte: %d", *internal.UniqueStates)
+			decodeErrs = append(decodeErrs, fmt.Errorf("value out of range for byte: %d", *internal.UniqueStates))
+		} else {
+			uniqueStatesByte = byte(*internal.UniqueStates)
 		}
-		uniqueStatesByte = byte(*internal.UniqueStates)
 	}
 
 	return &rivertype.JobRow{
@@ -1734,7 +1771,7 @@ func jobRowFromInternal(internal *dbsqlc.RiverJob) (*rivertype.JobRow, error) {
 		AttemptedBy:  attemptedBy,
 		CreatedAt:    internal.CreatedAt.UTC(),
 		EncodedArgs:  internal.Args,
-		Errors:       errors,
+		Errors:       attemptErrors,
 		FinalizedAt:  finalizedAt,
 		Kind:         internal.Kind,
 		MaxAttempts:  max(int(internal.MaxAttempts), 0),
@@ -1746,7 +1783,17 @@ func jobRowFromInternal(internal *dbsqlc.RiverJob) (*rivertype.JobRow, error) {
 		Tags:         tags,
 		UniqueKey:    internal.UniqueKey,
 		UniqueStates: uniquestates.UniqueBitmaskToStates(uniqueStatesByte),
-	}, nil
+	}, errors.Join(decodeErrs...)
+}
+
+// jobRowsFromInternalPartial decodes job rows with jobRowFromInternalPartial,
+// ignoring decode errors so that one bad row doesn't prevent returning the
+// others.
+func jobRowsFromInternalPartial(jobs []*dbsqlc.RiverJob) []*rivertype.JobRow {
+	return sliceutil.Map(jobs, func(internal *dbsqlc.RiverJob) *rivertype.JobRow {
+		job, _ := jobRowFromInternalPartial(internal)
+		return job
+	})
 }
 
 func leaderFromInternal(internal *dbsqlc.RiverLeader) *riverdriver.Leader {

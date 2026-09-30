@@ -3,6 +3,7 @@ package river
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"slices"
 	"sync/atomic"
@@ -38,7 +39,7 @@ const testClientID = "test-client-id"
 type afterJobGetAvailablePilot struct {
 	riverpilot.Pilot
 
-	afterJobGetAvailableFunc func(jobs []*rivertype.JobRow, err error)
+	afterJobGetAvailableFunc func(res *riverdriver.JobGetAvailableResult, err error)
 }
 
 func (p *afterJobGetAvailablePilot) JobGetAvailable(
@@ -46,12 +47,12 @@ func (p *afterJobGetAvailablePilot) JobGetAvailable(
 	exec riverdriver.Executor,
 	state riverpilot.ProducerState,
 	params *riverdriver.JobGetAvailableParams,
-) ([]*rivertype.JobRow, error) {
-	jobs, err := p.Pilot.JobGetAvailable(ctx, exec, state, params)
+) (*riverdriver.JobGetAvailableResult, error) {
+	res, err := p.Pilot.JobGetAvailable(ctx, exec, state, params)
 	if p.afterJobGetAvailableFunc != nil {
-		p.afterJobGetAvailableFunc(jobs, err)
+		p.afterJobGetAvailableFunc(res, err)
 	}
-	return jobs, err
+	return res, err
 }
 
 // beforeJobGetAvailablePilot calls a hook before delegating JobGetAvailable to
@@ -67,12 +68,44 @@ func (p *beforeJobGetAvailablePilot) JobGetAvailable(
 	exec riverdriver.Executor,
 	state riverpilot.ProducerState,
 	params *riverdriver.JobGetAvailableParams,
-) ([]*rivertype.JobRow, error) {
+) (*riverdriver.JobGetAvailableResult, error) {
 	if p.beforeJobGetAvailableFunc != nil {
 		p.beforeJobGetAvailableFunc(params)
 	}
 
 	return p.Pilot.JobGetAvailable(ctx, exec, state, params)
+}
+
+// undecodableKindPilot reports locked jobs of one kind as undecodable. Postgres'
+// column types don't allow a job row that can't be decoded, so this simulates
+// one.
+type undecodableKindPilot struct {
+	riverpilot.Pilot
+
+	kind string
+}
+
+func (p *undecodableKindPilot) JobGetAvailable(
+	ctx context.Context,
+	exec riverdriver.Executor,
+	state riverpilot.ProducerState,
+	params *riverdriver.JobGetAvailableParams,
+) (*riverdriver.JobGetAvailableResult, error) {
+	res, err := p.Pilot.JobGetAvailable(ctx, exec, state, params)
+	if err != nil {
+		return nil, err
+	}
+
+	for _, job := range res.Jobs {
+		if job.Kind == p.kind {
+			if res.DecodeErrors == nil {
+				res.DecodeErrors = make(map[int64]error)
+			}
+			res.DecodeErrors[job.ID] = errors.New("fake decode error")
+		}
+	}
+
+	return res, nil
 }
 
 func TestProducer_MetricEmitHook(t *testing.T) {
@@ -189,6 +222,35 @@ func TestProducer_MetricEmitHook(t *testing.T) {
 		countMetric, countMetricFound := metricsByName[rivertype.MetricNameJobGetAvailableCount].(*rivertype.JobGetAvailableCountMetric)
 		require.True(t, countMetricFound)
 		require.Equal(t, bundle.queue, countMetric.Queue)
+		require.Equal(t, 2, countMetric.Count)
+	})
+
+	t.Run("EmitsMetricsForFetchWithDecodeErrors", func(t *testing.T) {
+		t.Parallel()
+
+		bundle := setup(t)
+
+		goodJob := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{Queue: new(bundle.queue), Schema: bundle.schema})
+		badJob := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{Kind: new("undecodable"), Queue: new(bundle.queue), Schema: bundle.schema})
+		bundle.producer.pilot = &undecodableKindPilot{Pilot: bundle.producer.pilot, kind: badJob.Kind}
+
+		fetchResultCh := make(chan producerFetchResult, 1)
+		bundle.producer.dispatchWork(ctx, 2, fetchResultCh)
+
+		fetchResult := riversharedtest.WaitOrTimeout(t, fetchResultCh)
+		require.NoError(t, fetchResult.err)
+		require.Len(t, fetchResult.jobs, 2)
+		require.ElementsMatch(t, []int64{goodJob.ID, badJob.ID}, []int64{fetchResult.jobs[0].ID, fetchResult.jobs[1].ID})
+		require.Len(t, fetchResult.decodeErrors, 1)
+		require.EqualError(t, fetchResult.decodeErrors[badJob.ID], "fake decode error")
+
+		var countMetric *rivertype.JobGetAvailableCountMetric
+		for _, metric := range riversharedtest.WaitOrTimeoutN(t, bundle.metrics, 2) {
+			if count, ok := metric.Metric.(*rivertype.JobGetAvailableCountMetric); ok {
+				countMetric = count
+			}
+		}
+		require.NotNil(t, countMetric)
 		require.Equal(t, 2, countMetric.Count)
 	})
 
@@ -548,6 +610,50 @@ func testProducer(t *testing.T, makeProducer func(ctx context.Context, t *testin
 		}
 	})
 
+	// A locked job whose row can't be decoded isn't worked. Its attempt fails
+	// with the decode error, and the other jobs locked with it are worked
+	// normally.
+	t.Run("UndecodableJob", func(t *testing.T) {
+		t.Parallel()
+
+		producer, bundle := setup(t)
+
+		type JobArgs struct {
+			testutil.JobArgsReflectKind[JobArgs]
+		}
+
+		AddWorker(bundle.workers, &noOpWorker{})
+		AddWorker(bundle.workers, WorkFunc(func(ctx context.Context, job *Job[JobArgs]) error {
+			t.Error("undecodable job shouldn't be worked") // not FailNow because this runs outside the test goroutine
+			return nil
+		}))
+
+		producer.pilot = &undecodableKindPilot{
+			Pilot: producer.pilot,
+			kind:  (&JobArgs{}).Kind(),
+		}
+
+		mustInsert(ctx, t, producer, bundle, &noOpArgs{})
+		mustInsert(ctx, t, producer, bundle, &JobArgs{})
+		mustInsert(ctx, t, producer, bundle, &noOpArgs{})
+
+		startProducer(t, ctx, ctx, producer)
+
+		updates := riversharedtest.WaitOrTimeoutN(t, bundle.jobUpdates, 3)
+
+		for _, update := range updates {
+			if update.Job.Kind == (&JobArgs{}).Kind() {
+				require.Equal(t, rivertype.JobStateRetryable, update.Job.State)
+				require.Len(t, update.Job.Errors, 1)
+				require.Equal(t, 1, update.Job.Errors[0].Attempt)
+				require.Equal(t, "job row couldn't be decoded: fake decode error", update.Job.Errors[0].Error)
+				continue
+			}
+
+			require.Equal(t, rivertype.JobStateCompleted, update.Job.State)
+		}
+	})
+
 	t.Run("CancelledWorkContextCancelsJob", func(t *testing.T) {
 		t.Parallel()
 
@@ -596,12 +702,12 @@ func testProducer(t *testing.T, makeProducer func(ctx context.Context, t *testin
 		workerErr.Init(t)
 		producer.pilot = &afterJobGetAvailablePilot{
 			Pilot: producer.pilot,
-			afterJobGetAvailableFunc: func(jobs []*rivertype.JobRow, err error) {
-				if err != nil || len(jobs) == 0 {
+			afterJobGetAvailableFunc: func(res *riverdriver.JobGetAvailableResult, err error) {
+				if err != nil || res == nil || len(res.Jobs) == 0 {
 					fetchReturned.Signal(0)
 					return
 				}
-				fetchReturned.Signal(jobs[0].ID)
+				fetchReturned.Signal(res.Jobs[0].ID)
 				<-releaseFetch.WaitC()
 			},
 		}

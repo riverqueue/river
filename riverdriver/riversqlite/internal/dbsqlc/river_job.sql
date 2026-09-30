@@ -498,7 +498,9 @@ LIMIT @max;
 -- name: JobRescue :exec
 UPDATE /* TEMPLATE: schema */river_job
 SET
-    errors = jsonb(json_insert(json(coalesce(errors, jsonb('[]'))), '$[#]', json(@error))),
+    errors = CASE WHEN coalesce(json_type(errors), 'array') <> 'array'
+                  THEN jsonb(json_array(json(errors), json(@error)))
+                  ELSE jsonb(json_insert(json(coalesce(errors, jsonb('[]'))), '$[#]', json(@error))) END,
     finalized_at = cast(sqlc.narg('finalized_at') as text),
     scheduled_at = cast(@scheduled_at AS text),
     metadata = jsonb_set(
@@ -613,7 +615,12 @@ SET
     attempt      = CASE WHEN /* NOT should_cancel */(cast(@state AS text) <> 'available' AND @state <> 'retryable' AND @state <> 'scheduled' OR (metadata -> 'cancel_attempted_at') IS NULL) AND cast(@attempt_do_update AS boolean)
                         THEN @attempt
                         ELSE attempt END,
-    errors       = CASE WHEN cast(@errors_do_update AS boolean)
+    -- The errors column is always an array unless it's been changed out of
+    -- band. If it has, wrap its value in an array so that the new error is
+    -- still appended without losing it.
+    errors       = CASE WHEN cast(@errors_do_update AS boolean) AND coalesce(json_type(errors), 'array') <> 'array'
+                        THEN jsonb(json_array(json(errors), json(@error)))
+                        WHEN cast(@errors_do_update AS boolean)
                         THEN jsonb(json_insert(json(coalesce(errors, jsonb('[]'))), '$[#]', json(@error)))
                         ELSE errors END,
     finalized_at = CASE WHEN /* should_cancel */((@state = 'available' OR @state = 'retryable' OR @state = 'scheduled') AND (metadata -> 'cancel_attempted_at') IS NOT NULL)

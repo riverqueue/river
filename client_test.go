@@ -1362,13 +1362,14 @@ func Test_Client_Common(t *testing.T) {
 			require.NoError(t, err)
 		}
 		now := time.Now().UTC()
-		peers, err := bundle.driver.GetExecutor().JobGetAvailable(ctx, &riverdriver.JobGetAvailableParams{
+		res, err := bundle.driver.GetExecutor().JobGetAvailable(ctx, &riverdriver.JobGetAvailableParams{
 			MaxToLock: 2,
 			Now:       &now,
 			Queue:     QueueDefault,
 			Schema:    bundle.schema,
 		})
 		require.NoError(t, err)
+		peers := res.Jobs
 		require.Len(t, peers, 2)
 		signals.PeerJobs.Signal(peers)
 
