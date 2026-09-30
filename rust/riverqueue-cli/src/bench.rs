@@ -57,7 +57,7 @@ The two stopping options are mutually exclusive.
 #[derive(Clone, Debug, Deserialize, JobArgs, Serialize)]
 #[river(kind = "benchmark")]
 struct BenchmarkArgs {
-    number: u64,
+    num: u64,
 }
 
 struct BenchmarkWorker;
@@ -530,12 +530,7 @@ async fn insert_jobs(
         let jobs = (0..current_batch)
             .map(|_| {
                 *next_number = next_number.wrapping_add(1);
-                (
-                    BenchmarkArgs {
-                        number: *next_number,
-                    },
-                    InsertOpts::default(),
-                )
+                (BenchmarkArgs { num: *next_number }, InsertOpts::default())
             })
             .collect::<Vec<_>>();
         let count = u64::try_from(client.insert_many(jobs).await?.len()).unwrap_or(u64::MAX);
