@@ -132,7 +132,9 @@ impl MigrateOpts {
         self
     }
 
-    /// Migrates toward a target schema version. `-1` removes River.
+    /// Migrates toward a target schema version. `-1` removes River. An up
+    /// migration whose target is already applied does nothing, even if later
+    /// versions are pending.
     #[must_use]
     pub const fn with_target_version(mut self, version: i64) -> Self {
         self.target_version = Some(version);
@@ -518,6 +520,13 @@ fn select_migrations(
             .collect::<Vec<_>>(),
     };
 
+    // An up migration whose target is already applied does nothing, even
+    // when later versions are pending. Check before the step limit trims
+    // the list, which can also drop a pending target.
+    let target_was_pending = opts
+        .target_version
+        .is_some_and(|target| selected.iter().any(|migration| migration.version == target));
+
     // Go limits steps before locating the target, so a target outside the
     // step window is not reached.
     let maximum = opts
@@ -542,10 +551,10 @@ fn select_migrations(
             None if direction == Direction::Down => {
                 return Err(Error::TargetNotSelected { version: target });
             }
-            // An up target that is already applied is a no-op. Unlike Go,
-            // which then applies every remaining migration despite
-            // documenting a no-op, versions past the target stay unapplied.
-            None => selected.retain(|migration| migration.version <= target),
+            // A pending up target beyond the step limit keeps the trimmed
+            // list; an applied one is a no-op.
+            None if target_was_pending => {}
+            None => selected.clear(),
         }
     }
     Ok(selected)
@@ -616,6 +625,30 @@ mod tests {
                 .map(|migration| migration.version)
                 .collect()
         })
+    }
+
+    #[test]
+    fn applied_up_targets_are_no_ops() {
+        // Like Go, even with a gap below the target or later versions
+        // pending, with or without a step limit.
+        assert!(
+            versions(
+                Direction::Up,
+                MigrateOpts::new().with_target_version(3),
+                &[1, 3]
+            )
+            .unwrap()
+            .is_empty()
+        );
+        assert!(
+            versions(
+                Direction::Up,
+                MigrateOpts::new().with_target_version(3).with_max_steps(1),
+                &[1, 2, 3]
+            )
+            .unwrap()
+            .is_empty()
+        );
     }
 
     #[test]
