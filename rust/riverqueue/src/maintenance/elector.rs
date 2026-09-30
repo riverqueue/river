@@ -537,15 +537,20 @@ impl LeaderStore for DatabaseLeaderStore {
             }
             #[cfg(feature = "postgres")]
             DatabasePool::Postgres(pool) => {
+                let notify = self
+                    .inner
+                    .postgres_capabilities(pool)
+                    .await?
+                    .supports_listen_notify;
                 let table = self.inner.schema.qualify("river_leader");
                 let result = sqlx::query(AssertSqlSafe(format!(
                     "WITH currently_held_leaders AS (\
                         SELECT * FROM {table} WHERE elected_at = $1 AND leader_id = $2 FOR UPDATE\
                      ), notified_resignations AS (\
-                        SELECT pg_notify(\
+                        SELECT CASE WHEN $5::boolean THEN pg_notify(\
                             concat(coalesce($3::text, current_schema()), '.', $4::text), \
                             json_build_object('leader_id', leader_id, 'action', 'resigned')::text\
-                        ) FROM currently_held_leaders\
+                        ) END FROM currently_held_leaders\
                      ) \
                      DELETE FROM {table} USING notified_resignations"
                 )))
@@ -553,6 +558,7 @@ impl LeaderStore for DatabaseLeaderStore {
                 .bind(&self.inner.id)
                 .bind(self.inner.schema.as_deref())
                 .bind(crate::NOTIFICATION_TOPIC_LEADERSHIP)
+                .bind(notify)
                 .execute(pool)
                 .await?;
                 Ok(result.rows_affected() > 0)

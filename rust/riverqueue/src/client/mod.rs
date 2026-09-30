@@ -189,11 +189,35 @@ impl ClientInner {
         &self.database
     }
 
+    /// Returns the PostgreSQL server's capabilities, detecting them with
+    /// `executor` the first time.
+    #[cfg(feature = "postgres")]
+    pub(crate) async fn postgres_capabilities<'e>(
+        &self,
+        executor: impl sqlx::PgExecutor<'e>,
+    ) -> Result<crate::database::postgres_capabilities::PostgresCapabilities, Error> {
+        Ok(
+            crate::database::postgres_capabilities::CapabilitiesCache::load_or_detect(
+                self.database.postgres_capabilities(),
+                executor,
+            )
+            .await?,
+        )
+    }
+
+    /// Whether this client hears committed notifications through a notifier,
+    /// a PostgreSQL listener or SQLite outbox poller, like River Go's client
+    /// notifier. A poll-only client has none, and neither does a client of a
+    /// PostgreSQL server without `LISTEN`/`NOTIFY` once that's detected.
+    pub(crate) fn has_notifier(&self) -> bool {
+        !self.poll_only && self.database.delivers_notifications()
+    }
+
     /// Whether this client receives notifications from other clients, which
     /// needs a backend listener and a client that isn't poll-only. When it
     /// doesn't, it wakes its own runtime directly after committing a change,
     /// like Go's `notifyProducerWithoutListener*` helpers.
-    pub(crate) const fn listens_for_notifications(&self) -> bool {
+    pub(crate) fn listens_for_notifications(&self) -> bool {
         self.database.supports_listener() && !self.poll_only
     }
 

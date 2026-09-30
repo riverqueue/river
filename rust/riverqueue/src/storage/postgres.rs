@@ -7,13 +7,28 @@ use sqlx::{AssertSqlSafe, FromRow, PgConnection, Postgres, types::Json};
 use super::Backend;
 use crate::__private::DatabaseConnection;
 use crate::client::{JobRecord, go_time_json, job_projection};
+use crate::database::postgres_capabilities::CapabilitiesCache;
 use crate::query::{JobListSqlPart, JobListTimeField};
 use crate::{Error, JobListParams, JobRow, JobState, Queue, SchemaName};
 
 /// PostgreSQL storage bound to one connection.
 pub(super) struct PostgresBackend<'c> {
+    /// The database's detected server capabilities, or `None` to detect
+    /// them for each statement that needs them.
+    pub(super) capabilities: Option<&'c CapabilitiesCache>,
     pub(super) connection: &'c mut PgConnection,
     pub(super) schema: &'c SchemaName,
+}
+
+impl PostgresBackend<'_> {
+    /// Whether `pg_notify` reaches listeners on this server.
+    async fn supports_listen_notify(&mut self) -> Result<bool, Error> {
+        Ok(
+            CapabilitiesCache::load_or_detect(self.capabilities, &mut *self.connection)
+                .await?
+                .supports_listen_notify,
+        )
+    }
 }
 
 impl Backend for PostgresBackend<'_> {
@@ -22,12 +37,13 @@ impl Backend for PostgresBackend<'_> {
     }
 
     async fn job_cancel(&mut self, id: i64) -> Result<Option<JobRow>, Error> {
+        let notify = self.supports_listen_notify().await?;
         let table = self.schema.qualify("river_job");
         let sql = format!(
             "WITH locked AS (\
                 SELECT id, queue, state, finalized_at FROM {table} WHERE id = $1 FOR UPDATE\
              ), notified AS (\
-                SELECT id, pg_notify(concat(coalesce($2::text, current_schema()), '.', $3::text), json_build_object('action', 'cancel', 'job_id', id, 'queue', queue)::text)\
+                SELECT id, CASE WHEN $5::boolean THEN pg_notify(concat(coalesce($2::text, current_schema()), '.', $3::text), json_build_object('action', 'cancel', 'job_id', id, 'queue', queue)::text) END \
                 FROM locked WHERE state NOT IN ('cancelled', 'completed', 'discarded') AND finalized_at IS NULL\
              ), updated AS (\
                 UPDATE {table} AS job SET \
@@ -48,6 +64,7 @@ impl Backend for PostgresBackend<'_> {
             .bind(self.schema.as_deref())
             .bind(crate::NOTIFICATION_TOPIC_CONTROL)
             .bind(go_time_json(Utc::now()))
+            .bind(notify)
             .fetch_optional(&mut *self.connection)
             .await?
             .map(JobRecord::into_job_row)
@@ -257,6 +274,9 @@ impl Backend for PostgresBackend<'_> {
     }
 
     async fn notify(&mut self, topic: &str, payload: &str) -> Result<(), Error> {
+        if !self.supports_listen_notify().await? {
+            return Ok(());
+        }
         sqlx::query(
             "SELECT pg_notify(concat(coalesce($1::text, current_schema()), '.', $2::text), $3::text)",
         )

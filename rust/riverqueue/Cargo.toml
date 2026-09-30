@@ -20,7 +20,7 @@ default = ["postgres"]
 # prefixes from a bundled time zone database.
 chrono-tz = ["dep:chrono-tz"]
 postgres = ["riverqueue-migrate/postgres", "sqlx/postgres"]
-sqlite = ["dep:rand", "riverqueue-migrate/sqlite", "sqlx/sqlite"]
+sqlite = ["riverqueue-migrate/sqlite", "sqlx/sqlite"]
 
 [dependencies]
 async-trait.workspace = true
@@ -30,7 +30,7 @@ chrono-tz = { version = "0.10.4", optional = true }
 futures-util.workspace = true
 riverqueue-migrate = { path = "../riverqueue-migrate", version = "=0.47.0-alpha.1", default-features = false }
 riverqueue-macros = { path = "../riverqueue-macros", version = "=0.47.0-alpha.1" }
-rand = { workspace = true, optional = true }
+rand = { workspace = true }
 serde.workspace = true
 serde_json.workspace = true
 sha2.workspace = true

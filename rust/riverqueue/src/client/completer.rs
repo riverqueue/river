@@ -516,6 +516,14 @@ async fn notify_interrupted_jobs(inner: &ClientInner, batch: &[CompletionUpdate]
         DatabasePool::Sqlite(_) => {}
         #[cfg(feature = "postgres")]
         DatabasePool::Postgres(pool) => {
+            match inner.postgres_capabilities(pool).await {
+                Ok(capabilities) if capabilities.supports_listen_notify => {}
+                Ok(_) => return,
+                Err(error) => {
+                    debug!(error = %crate::error::Chain(&error), "could not notify peers about interrupted River jobs");
+                    return;
+                }
+            }
             for queue in queues {
                 if let Err(error) = sqlx::query(
                     "SELECT pg_notify(concat(coalesce($1::text, current_schema()), '.', $2::text), json_build_object('queue', $3::text)::text)",

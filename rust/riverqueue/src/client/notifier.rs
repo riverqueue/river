@@ -16,6 +16,8 @@ use serde::Deserialize;
 use sqlx::postgres::PgListener;
 use tokio::sync::{broadcast, oneshot};
 use tokio_util::sync::CancellationToken;
+#[cfg(feature = "postgres")]
+use tracing::info;
 use tracing::{debug, error, warn};
 
 use crate::Error;
@@ -201,6 +203,34 @@ pub(super) async fn run_notifications(
     }
 }
 
+/// On a server without `LISTEN`/`NOTIFY`, like YugabyteDB by default,
+/// reports the notifier ready and idles until cancelled, returning `true`,
+/// so the client polls as without notifications. Detects the server the
+/// first time.
+#[cfg(feature = "postgres")]
+async fn idles_without_listen_notify(
+    inner: &ClientInner,
+    pool: &sqlx::PgPool,
+    cancel: &CancellationToken,
+    ready: &ReadySlot,
+) -> Result<bool, Error> {
+    let capabilities = tokio::time::timeout(LISTENER_TIMEOUT, inner.postgres_capabilities(pool))
+        .await
+        .map_err(|_| {
+            Error::runtime_context(
+                "notification listener",
+                "timed out detecting database capabilities".to_owned(),
+            )
+        })??;
+    if capabilities.supports_listen_notify {
+        return Ok(false);
+    }
+    info!("River's database does not support LISTEN/NOTIFY; polling instead");
+    report_ready(ready);
+    cancel.cancelled().await;
+    Ok(true)
+}
+
 /// Connects, subscribes, and dispatches notifications until the connection
 /// fails. Returns `Ok` only when cancelled.
 #[cfg(feature = "postgres")]
@@ -218,6 +248,9 @@ async fn listen_until_error(
     attempt: &mut u32,
     missed_notifications: bool,
 ) -> Result<(), Error> {
+    if idles_without_listen_notify(inner, pool, cancel, ready).await? {
+        return Ok(());
+    }
     let schema = if let Some(schema) = schema {
         schema.clone()
     } else {

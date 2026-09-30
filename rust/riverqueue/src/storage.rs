@@ -233,6 +233,7 @@ impl<'c> Storage<'c> {
             #[cfg(feature = "postgres")]
             DatabaseConnection::Postgres(connection) => {
                 AnyBackend::Postgres(postgres::PostgresBackend {
+                    capabilities: inner.database.postgres_capabilities(),
                     connection,
                     schema: &inner.schema,
                 })

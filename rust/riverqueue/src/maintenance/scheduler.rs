@@ -10,6 +10,8 @@ use sqlx::{AssertSqlSafe, Row};
 #[cfg(feature = "sqlite")]
 use crate::client::InsertNotifyLimiter;
 use crate::database::DatabasePool;
+#[cfg(feature = "postgres")]
+use crate::database::postgres_capabilities::CapabilitiesCache;
 #[cfg(feature = "sqlite")]
 use crate::database::sqlite;
 
@@ -157,7 +159,7 @@ async fn schedule_batch_postgres(
         .inner
         .insert_notify_limiter
         .due(notified.iter().map(String::as_str));
-    if !queues.is_empty() {
+    if !queues.is_empty() && delivers_notifications(context, pool, &mut transaction).await? {
         cancellable(
             pool,
             backend_pid,
@@ -181,6 +183,28 @@ async fn schedule_batch_postgres(
     }
     transaction.commit(pool, &context.cancel).await?;
     Ok(count)
+}
+
+/// Whether the server delivers notifications, detected on the batch's
+/// transaction. A server without `LISTEN`/`NOTIFY` gets none.
+#[cfg(feature = "postgres")]
+async fn delivers_notifications(
+    context: &ServiceContext,
+    pool: &sqlx::PgPool,
+    transaction: &mut super::postgres::MaintenanceTransaction,
+) -> Result<bool, MaintenanceError> {
+    Ok(super::postgres::cancellable(
+        pool,
+        transaction.backend_pid,
+        &context.cancel,
+        TIMEOUT_DEFAULT,
+        CapabilitiesCache::load_or_detect(
+            context.inner.database.postgres_capabilities(),
+            &mut *transaction.transaction,
+        ),
+    )
+    .await?
+    .supports_listen_notify)
 }
 
 #[cfg(feature = "sqlite")]

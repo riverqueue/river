@@ -59,13 +59,47 @@ impl Database {
     /// Whether the backend delivers notifications to listeners when a
     /// transaction commits, like Go's `SupportsListener`. SQLite clients poll
     /// a notification outbox instead, so operations River commits itself also
-    /// wake the local client directly.
-    pub(crate) const fn supports_listener(&self) -> bool {
+    /// wake the local client directly. A PostgreSQL-compatible server without
+    /// `LISTEN`/`NOTIFY`, like YugabyteDB by default, has no listener once
+    /// detected.
+    pub(crate) fn supports_listener(&self) -> bool {
         match &self.inner {
             #[cfg(feature = "postgres")]
-            DatabaseInner::Postgres(_) => true,
+            DatabaseInner::Postgres(source) => source.capabilities().supports_listen_notify(),
             #[cfg(feature = "sqlite")]
             DatabaseInner::Sqlite(_) => false,
+        }
+    }
+
+    /// Whether committed notifications reach other clients: through
+    /// `LISTEN`/`NOTIFY` on PostgreSQL, assumed until a server without it is
+    /// detected, and through the notification outbox on SQLite.
+    pub(crate) fn delivers_notifications(&self) -> bool {
+        match &self.inner {
+            #[cfg(feature = "postgres")]
+            DatabaseInner::Postgres(source) => source.capabilities().supports_listen_notify(),
+            #[cfg(feature = "sqlite")]
+            DatabaseInner::Sqlite(_) => true,
+        }
+    }
+
+    /// Returns the PostgreSQL server capabilities cache, or `None` for
+    /// another backend.
+    #[cfg(feature = "postgres")]
+    #[cfg_attr(
+        not(feature = "sqlite"),
+        expect(
+            clippy::unnecessary_wraps,
+            reason = "another backend may be compiled in"
+        )
+    )]
+    pub(crate) const fn postgres_capabilities(
+        &self,
+    ) -> Option<&super::postgres_capabilities::CapabilitiesCache> {
+        match &self.inner {
+            DatabaseInner::Postgres(source) => Some(source.capabilities()),
+            #[cfg(feature = "sqlite")]
+            DatabaseInner::Sqlite(_) => None,
         }
     }
 

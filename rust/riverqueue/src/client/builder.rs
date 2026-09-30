@@ -515,6 +515,12 @@ impl ClientBuilder {
 
     /// Disables the backend notification channel or outbox poller while
     /// retaining queue fetch polling.
+    ///
+    /// The client then polls for new jobs every queue's fetch poll interval,
+    /// and every two seconds for queue changes and for cancellations of its
+    /// running jobs requested by other clients. A client using a PostgreSQL
+    /// server without `LISTEN`/`NOTIFY`, like YugabyteDB by default, runs
+    /// this way on its own.
     #[must_use]
     pub fn without_notifications(mut self) -> Self {
         self.poll_only = true;

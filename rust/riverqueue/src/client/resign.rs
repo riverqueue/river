@@ -37,10 +37,11 @@ request_type! {
     /// A leadership resignation request, returned by
     /// [`Client::request_resign`]. Await it to send the request.
     ///
-    /// A poll-only client doesn't read notifications, so it hears its own
-    /// request directly once the request commits. If the request is dropped
-    /// while that commit is in flight, the request may commit without being
-    /// heard, and a poll-only leader then keeps its term.
+    /// A client without notifications, poll-only or using a PostgreSQL
+    /// server without `LISTEN`/`NOTIFY`, hears its own request directly once
+    /// the request commits, and no other client hears it. If the request is
+    /// dropped while that commit is in flight, the request may commit without
+    /// being heard, and such a leader then keeps its term.
     write ResignRequest {} -> ()
 }
 
@@ -51,11 +52,11 @@ impl ResignRequest<'_> {
         let mut session = self.target.session(inner, Access::Transaction).await?;
         session.storage(inner).leader_request_resign().await?;
         session.commit().await?;
-        // A poll-only client reads neither a listener nor the notification
-        // outbox, so it learns of its own request directly. Any other client
-        // receives the committed notification like every other client does;
-        // also signalling it locally would deliver the request twice.
-        if own_transaction && inner.poll_only {
+        // A client without a notifier, poll-only or on a server without
+        // `LISTEN`/`NOTIFY`, learns of its own request directly. Any other
+        // client receives the committed notification like every other client
+        // does; also signalling it locally would deliver the request twice.
+        if own_transaction && !inner.has_notifier() {
             let _ = inner
                 .leadership_wakeups
                 .send(LeadershipWakeup::RequestResign);

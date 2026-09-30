@@ -12,6 +12,8 @@
 //!    per queue that gained available jobs.
 //! 4. Decode hooks run on returned rows.
 
+#[cfg(feature = "postgres")]
+use std::borrow::Cow;
 use std::{
     fmt,
     future::{Future, IntoFuture},
@@ -19,6 +21,8 @@ use std::{
 };
 
 use chrono::{DateTime, Utc};
+#[cfg(feature = "postgres")]
+use serde_json::Value;
 use serde_json::value::RawValue;
 #[cfg(feature = "postgres")]
 use sqlx::AssertSqlSafe;
@@ -35,6 +39,8 @@ use crate::client::sqlite_backend_error;
 use crate::client::validate::validate_insert_parts;
 #[cfg(feature = "postgres")]
 use crate::client::{JobRecord, job_projection};
+#[cfg(feature = "postgres")]
+use crate::database::postgres_capabilities::UniqueInsertMode;
 use crate::database::{DatabasePool, DatabaseTransactionExecutor};
 use crate::extension::{InsertEndpoint, InsertNext, InsertedJob, InsertedJobs};
 use crate::periodic::PeriodicInsert;
@@ -43,6 +49,8 @@ use crate::{
     Client, Error, InsertBatch, InsertBatchResult, InsertContext, InsertOpts, InsertParams,
     InsertResult, Job, JobArgs, JobRow, JobState,
 };
+#[cfg(feature = "postgres")]
+use crate::{JobMetadata, METADATA_KEY_UNIQUE_NONCE};
 
 /// One job of a homogeneous [`Client::insert_many`] batch: arguments plus
 /// options that override the job type's defaults.
@@ -778,6 +786,14 @@ impl Client {
         match connection {
             #[cfg(feature = "postgres")]
             PilotDatabaseConnection::Postgres(connection) => {
+                if !self
+                    .inner
+                    .postgres_capabilities(&mut *connection)
+                    .await?
+                    .supports_listen_notify
+                {
+                    return Ok(());
+                }
                 let payloads = queues
                     .into_iter()
                     .map(crate::protocol::insert_notification_payload)
@@ -834,6 +850,12 @@ impl Client {
                 let table = self.inner.schema.qualify("river_job");
                 let state_type = self.inner.schema.qualify("river_job_state");
                 let state_function = self.inner.schema.qualify("river_job_state_in_bitmask");
+                let mode = self
+                    .inner
+                    .postgres_capabilities(&mut *connection)
+                    .await?
+                    .unique_insert_mode;
+                let (metadata, nonce) = with_unique_nonce(mode, &opts.metadata)?;
                 // The no-op update is intentional and matches River Go. `DO
                 // NOTHING` followed by a select cannot see a conflicting row
                 // that committed after the statement's snapshot was taken.
@@ -843,9 +865,10 @@ impl Client {
                         VALUES ($1, coalesce($2, now()), $3, $4, $5, $6, $7, coalesce($8, now()), $9::text::{state_type}, $10, $11, $12::integer::bit(8)) \
                         ON CONFLICT (unique_key) WHERE unique_key IS NOT NULL AND unique_states IS NOT NULL AND {state_function}(unique_states, state) \
                         DO UPDATE SET kind = EXCLUDED.kind \
-                        RETURNING *, (xmax != 0) AS unique_skipped_as_duplicate\
+                        RETURNING *, {} AS unique_skipped_as_duplicate\
                      ) \
                      SELECT {}, job.unique_skipped_as_duplicate FROM inserted AS job",
+                    mode.sql(),
                     job_projection("job")
                 );
                 let record = sqlx::query_as::<_, JobRecord>(AssertSqlSafe(sql))
@@ -853,7 +876,7 @@ impl Client {
                     .bind(created_at)
                     .bind(&kind)
                     .bind(opts.max_attempts)
-                    .bind(Json(&opts.metadata))
+                    .bind(Json(&*metadata))
                     .bind(opts.priority)
                     .bind(&opts.queue)
                     .bind(opts.scheduled_at)
@@ -867,13 +890,15 @@ impl Client {
                         Error::invalid_job("unique insert found no conflicting row".to_owned())
                     })?;
                 let duplicate = record.unique_skipped_as_duplicate;
-                Ok(InsertedJob::new(record.into_job_row()?, duplicate))
+                let row = record.into_job_row()?;
+                let duplicate = nonce.map_or(duplicate, |nonce| lacks_nonce(&row, &nonce));
+                Ok(InsertedJob::new(row, duplicate))
             }
             #[cfg(feature = "sqlite")]
             PilotDatabaseConnection::Sqlite(connection) => {
                 // Like Go's SQLite driver, every inserted row carries a nonce,
                 // and times left unset are filled in by SQLite's own clock.
-                let nonce = Self::unique_insert_nonce();
+                let nonce = unique_insert_nonce();
                 let inserted = crate::database::sqlite::insert(
                     connection,
                     &crate::database::sqlite::InsertJob {
@@ -907,20 +932,6 @@ impl Client {
             }
         }
     }
-
-    /// Returns a nonce that marks a SQLite insert as this call's own.
-    ///
-    /// SQLite reports a skipped unique duplicate by checking whether the
-    /// returned row carries the nonce the insert wrote. The nonce must not
-    /// repeat across processes: client IDs and counters can (a restarted
-    /// container keeps its hostname and PID), so it's eight random bytes in
-    /// lowercase hex, the format of River Go's `randutil.Hex(8)`.
-    ///
-    /// Like Go, every row gets its own nonce.
-    #[cfg(feature = "sqlite")]
-    fn unique_insert_nonce() -> String {
-        format!("{:016x}", rand::random::<u64>())
-    }
 }
 
 /// Exposes the mutable fields of each job to an extension's insert hook.
@@ -944,4 +955,46 @@ fn extension_insert_params(jobs: &mut [InsertContext]) -> Vec<PilotJobInsertPara
             }
         })
         .collect()
+}
+
+/// Returns a nonce that marks an insert as this call's own.
+///
+/// A database without `xmax`, like SQLite or YugabyteDB, reports a skipped
+/// unique duplicate by checking whether the returned row carries the nonce
+/// the insert wrote. The nonce must not
+/// repeat across processes: client IDs and counters can (a restarted
+/// container keeps its hostname and PID), so it's eight random bytes in
+/// lowercase hex, the format of River Go's `randutil.Hex(8)`.
+///
+/// Like Go, every row gets its own nonce.
+fn unique_insert_nonce() -> String {
+    format!("{:016x}", rand::random::<u64>())
+}
+
+/// Returns `metadata` with a new unique insert nonce, and the nonce, when
+/// `mode` detects duplicates by one. Without `xmax`, as on YugabyteDB, a row
+/// carries a nonce like SQLite's, and a returned row without it existed.
+#[cfg(feature = "postgres")]
+fn with_unique_nonce(
+    mode: UniqueInsertMode,
+    metadata: &JobMetadata,
+) -> Result<(Cow<'_, JobMetadata>, Option<String>), Error> {
+    if mode != UniqueInsertMode::MetadataNonce {
+        return Ok((Cow::Borrowed(metadata), None));
+    }
+    let nonce = unique_insert_nonce();
+    let mut metadata = metadata.clone();
+    metadata.insert(METADATA_KEY_UNIQUE_NONCE, Value::String(nonce.clone()))?;
+    Ok((Cow::Owned(metadata), Some(nonce)))
+}
+
+/// Whether a row returned by a unique insert lacks the nonce the insert
+/// wrote, so it existed already.
+#[cfg(feature = "postgres")]
+fn lacks_nonce(row: &JobRow, nonce: &str) -> bool {
+    row.metadata
+        .get::<String>(METADATA_KEY_UNIQUE_NONCE)
+        .ok()
+        .flatten()
+        .is_none_or(|stored| stored != nonce)
 }

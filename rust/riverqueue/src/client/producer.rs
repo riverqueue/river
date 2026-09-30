@@ -57,14 +57,13 @@ pub(super) async fn run_dynamic_queues(
     queues_ready: oneshot::Sender<()>,
 ) -> Result<(), Error> {
     // Without a notifier, running jobs learn of cancellation requests by
-    // polling until every producer has drained. A SQLite client's outbox
-    // poller delivers them like a PostgreSQL listener.
-    let _cancellation_poll = inner.poll_only.then(|| {
-        AbortOnDrop(tokio::spawn(poll_job_cancellations(
-            Arc::clone(&inner),
-            fetch_cancel.clone(),
-        )))
-    });
+    // polling until every producer has drained. Whether the client has one is
+    // known only once a PostgreSQL server's capabilities are detected, so the
+    // poll checks each time.
+    let _cancellation_poll = AbortOnDrop(tokio::spawn(poll_job_cancellations(
+        Arc::clone(&inner),
+        fetch_cancel.clone(),
+    )));
     let (registered_sender, mut registered) = mpsc::unbounded_channel();
     let mut producers = Producers {
         active: HashMap::new(),
@@ -136,10 +135,12 @@ const JOB_CANCEL_POLL_BATCH_SIZE: usize = 1000;
 const JOB_CANCEL_POLL_TIMEOUT: Duration = Duration::from_secs(10);
 
 /// Cancels this client's running attempts whose jobs have a cancellation
-/// request, checking every [`QUEUE_CONFIG_POLL_INTERVAL`], like River Go's
-/// producers without a notifier. It keeps checking after `stopping` fires, so
-/// jobs can still be cancelled while producers drain; the caller aborts it
-/// once they have.
+/// request, checking every [`QUEUE_CONFIG_POLL_INTERVAL`] while the client
+/// has no notifier, like River Go's producers without one. That's checked
+/// each time, since a PostgreSQL server's lack of `LISTEN`/`NOTIFY` is
+/// detected only once the client runs.
+/// It keeps checking after `stopping` fires, so jobs can still be cancelled
+/// while producers drain; the caller aborts it once they have.
 async fn poll_job_cancellations(inner: Arc<ClientInner>, stopping: CancellationToken) {
     let mut poll = tokio::time::interval(QUEUE_CONFIG_POLL_INTERVAL);
     poll.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
@@ -147,6 +148,9 @@ async fn poll_job_cancellations(inner: Arc<ClientInner>, stopping: CancellationT
     poll.tick().await;
     loop {
         poll.tick().await;
+        if inner.has_notifier() {
+            continue;
+        }
         let mut ids = inner
             .running
             .lock()

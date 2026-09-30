@@ -111,6 +111,8 @@ async fn run_to_completion<T: Send + 'static>(
 }
 
 pub(crate) mod erased;
+#[cfg(feature = "postgres")]
+pub(crate) mod postgres_capabilities;
 #[cfg(feature = "sqlite")]
 pub(crate) mod sqlite;
 
@@ -144,9 +146,27 @@ impl fmt::Display for DatabaseKind {
 }
 
 /// A PostgreSQL source and its backend-specific River options.
+///
+/// River detects what the server supports the first time it needs to know
+/// and remembers it for this value and its clones. On PostgreSQL 18 and
+/// later, a unique insert tells a new row from an existing one with
+/// `RETURNING OLD`, and with `xmax` before that.
+///
+/// YugabyteDB works as a PostgreSQL server. It has no `xmax`, so a unique
+/// insert marks its row with a random `river:unique_nonce` metadata value,
+/// as on SQLite. Unless its `yb_enable_listen_notify` setting is on, it has
+/// no `LISTEN`/`NOTIFY` either: River then sends no notifications, and a
+/// client polls for new jobs every fetch poll interval, and for queue
+/// changes and cancellations of its running jobs every two seconds, as if
+/// built [`without_notifications`](crate::ClientBuilder::without_notifications).
+/// Yugabyte's notifications need version 2025.2.3 or later with
+/// `ysql_yb_enable_listen_notify=true` on both masters and tservers. Since
+/// the detection is remembered, enabling them takes effect for a new
+/// `PostgresDatabase`, such as after a restart.
 #[cfg(feature = "postgres")]
 #[derive(Clone)]
 pub struct PostgresDatabase {
+    capabilities: postgres_capabilities::CapabilitiesCache,
     pool: PgPool,
     reindex: PostgresReindexConfig,
     schema: SchemaName,
@@ -158,6 +178,7 @@ impl PostgresDatabase {
     #[must_use]
     pub fn new(pool: PgPool) -> Self {
         Self {
+            capabilities: postgres_capabilities::CapabilitiesCache::default(),
             pool,
             reindex: PostgresReindexConfig::default(),
             schema: SchemaName::current(),
@@ -168,6 +189,12 @@ impl PostgresDatabase {
     #[must_use]
     pub const fn pool(&self) -> &PgPool {
         &self.pool
+    }
+
+    /// Returns the server capabilities detected for this database, shared
+    /// by its clones.
+    pub(crate) const fn capabilities(&self) -> &postgres_capabilities::CapabilitiesCache {
+        &self.capabilities
     }
 
     /// Returns the database with PostgreSQL's periodic concurrent index

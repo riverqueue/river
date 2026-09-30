@@ -269,9 +269,12 @@ impl fmt::Display for NotificationTopic {
 ///
 /// PostgreSQL issues `pg_notify` on the schema-qualified channel
 /// (`<schema>.<topic>`, using `current_schema()` when no schema is
-/// configured), so delivery happens only when the transaction commits. SQLite
-/// appends rows to the durable `river_notification` outbox that River clients
-/// poll. An empty payload list does nothing.
+/// configured), so delivery happens only when the transaction commits. A
+/// server without `LISTEN`/`NOTIFY`, like YugabyteDB by default, gets no
+/// notifications; the configuration carries no detected capabilities, so
+/// each call checks the server. SQLite appends rows to the durable
+/// `river_notification` outbox that River clients poll. An empty payload list
+/// does nothing.
 ///
 /// # Errors
 ///
@@ -290,6 +293,14 @@ pub async fn notify_many(
     match (connection, database) {
         #[cfg(feature = "postgres")]
         (DatabaseConnection::Postgres(connection), DatabaseConfig::Postgres { schema }) => {
+            if !crate::database::postgres_capabilities::PostgresCapabilities::detect(
+                &mut *connection,
+            )
+            .await?
+            .supports_listen_notify
+            {
+                return Ok(());
+            }
             sqlx::query(
                 "SELECT pg_notify(concat(coalesce($1::text, current_schema()), '.', $2::text), payload) \
                  FROM unnest($3::text[]) AS payload",
