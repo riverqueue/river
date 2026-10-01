@@ -40,7 +40,7 @@ import (
 
 const (
 	adapterVersion        = 18
-	implementationVersion = "0.47.0"
+	implementationVersion = "0.48.0"
 	protocolRevision      = 1
 )
 

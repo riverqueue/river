@@ -58,7 +58,7 @@ repository and setting `RIVER_CONFORMANCE_CANDIDATE_FILE` to its path:
   },
   "profiles": ["portable-storage-v1", "postgres-full-v1", "sqlite-runtime-v1"],
   "start_options": ["elect_interval_ms", "rescuer_interval_ms", "scheduler_interval_ms"],
-  "version": "0.47.0-alpha.1"
+  "version": "0.48.0-alpha.1"
 }
 ```
 
