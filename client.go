@@ -2406,7 +2406,7 @@ func (c *Client[TTx]) producerRemove(ctx context.Context, queueName string) erro
 	return nil
 }
 
-var nameRegex = regexp.MustCompile(`^(?:[a-z0-9])+(?:[_|\-]?[a-z0-9]+)*$`)
+var nameRegex = regexp.MustCompile(`^(?:[a-z0-9])+(?:[_\-]?[a-z0-9]+)*$`)
 
 func validateQueueName(queueName string) error {
 	if queueName == "" {

@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- Queue names containing a pipe (`|`) are now rejected. The queue name regex listed `|` inside a character class, where it's a literal rather than an alternation, so names like `a|b` were accepted despite the error message describing names as letters and numbers separated by underscores or hyphens. **Warning:** A queue whose name contains `|` will fail validation after upgrading. [PR #TBD](https://github.com/riverqueue/river/pull/TBD).
+
 ## [0.48.0] - 2026-09-30
 
 ⚠️ This release contains a new database migration, version 8, but it only affects SQLite:

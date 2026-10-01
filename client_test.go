@@ -9522,6 +9522,13 @@ func Test_NewClient_Validations(t *testing.T) {
 			wantErr: errors.New("queue name is invalid, expected letters and numbers separated by underscores or hyphens: \"no*hyphens\""),
 		},
 		{
+			name: "Queues queue names can't have pipes",
+			configFunc: func(config *Config) {
+				config.Queues = map[string]QueueConfig{"no|pipes": {MaxWorkers: 1}}
+			},
+			wantErr: errors.New("queue name is invalid, expected letters and numbers separated by underscores or hyphens: \"no|pipes\""),
+		},
+		{
 			name: "Queues queue names can be letters and numbers joined by underscores",
 			configFunc: func(config *Config) {
 				config.Queues = map[string]QueueConfig{"some_awesome_3rd_queue_namezzz": {MaxWorkers: 1}}
