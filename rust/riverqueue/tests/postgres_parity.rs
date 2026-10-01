@@ -109,6 +109,88 @@ async fn insert_raw_job(
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn concurrent_cancels_return_the_committed_row() {
+    let database = PostgresSchema::new("rpp_cancel_race").await;
+    let client = insert_only_client(&database);
+    let id = insert_raw_job(&database, "scheduled", None).await;
+
+    // Like Go's `JobCancelConcurrentRaceFreshReturn`: the loser of each race
+    // must return the winner's committed row, not its own snapshot's.
+    let mut first_finalized_at = None;
+    for _ in 0..20 {
+        let (first, second) = tokio::join!(client.jobs().cancel(id), client.jobs().cancel(id));
+        let (first, second) = (first.unwrap(), second.unwrap());
+        assert_eq!(first.state, JobState::Cancelled);
+        assert_eq!(second.state, JobState::Cancelled);
+        assert_eq!(first.finalized_at, second.finalized_at);
+        let finalized_at = *first_finalized_at.get_or_insert(first.finalized_at);
+        assert_eq!(
+            first.finalized_at, finalized_at,
+            "later cancels must not change finalized_at"
+        );
+    }
+
+    database.cleanup().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn concurrent_retry_loser_returns_the_committed_row() {
+    let database = PostgresSchema::new("rpp_retry_race").await;
+    let client = insert_only_client(&database);
+    let id = insert_raw_job(&database, "cancelled", Some(1)).await;
+
+    // The winner retries in an open transaction, holding the row lock until
+    // the loser waits on it, so the loser's statement snapshot predates the
+    // winner's commit.
+    let mut winner = riverqueue::database::begin_postgres(&database.pool)
+        .await
+        .unwrap();
+    let retried = client.jobs().retry(id).tx(&mut winner).await.unwrap();
+    assert_eq!(retried.state, JobState::Available);
+
+    let mut loser = riverqueue::database::begin_postgres(&database.pool)
+        .await
+        .unwrap();
+    let loser_pid: i32 = sqlx::query_scalar("SELECT pg_backend_pid()")
+        .fetch_one(&mut *loser)
+        .await
+        .unwrap();
+    let loser_client = client.clone();
+    let loser_retry = tokio::spawn(async move {
+        let row = loser_client.jobs().retry(id).tx(&mut loser).await;
+        loser.rollback().await.unwrap();
+        row
+    });
+    tokio::time::timeout(Duration::from_secs(10), async {
+        loop {
+            let wait_event_type: Option<String> =
+                sqlx::query_scalar("SELECT wait_event_type FROM pg_stat_activity WHERE pid = $1")
+                    .bind(loser_pid)
+                    .fetch_one(&database.pool)
+                    .await
+                    .unwrap();
+            if wait_event_type.as_deref() == Some("Lock") {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("the losing retry should wait on the winner's row lock");
+    winner.commit().await.unwrap();
+
+    let loser = tokio::time::timeout(Duration::from_secs(10), loser_retry)
+        .await
+        .expect("the losing retry should finish once the winner commits")
+        .unwrap()
+        .unwrap();
+    assert_eq!(loser.state, JobState::Available);
+    assert_eq!(loser.finalized_at, None);
+
+    database.cleanup().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn job_delete_many() {
     let database = PostgresSchema::new("rpp_delete_many").await;
     let client = insert_only_client(&database);

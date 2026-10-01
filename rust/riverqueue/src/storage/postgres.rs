@@ -36,6 +36,10 @@ impl Backend for PostgresBackend<'_> {
         DatabaseConnection::Postgres(self.connection)
     }
 
+    // The fallback arm of `job_cancel` and `job_retry` returns the row when the
+    // update matched nothing, as when a concurrent cancel or retry won. Like
+    // River Go, it locks the row so it reads the winner's committed version
+    // rather than this statement's older snapshot.
     async fn job_cancel(&mut self, id: i64) -> Result<Option<JobRow>, Error> {
         let notify = self.supports_listen_notify().await?;
         let table = self.schema.qualify("river_job");
@@ -54,8 +58,9 @@ impl Backend for PostgresBackend<'_> {
              ) \
              SELECT {}, false AS unique_skipped_as_duplicate FROM updated AS job \
              UNION ALL \
-             SELECT {}, false AS unique_skipped_as_duplicate FROM {table} AS job \
-             WHERE id = $1 AND NOT EXISTS (SELECT 1 FROM updated) LIMIT 1",
+             SELECT {}, false AS unique_skipped_as_duplicate \
+             FROM (SELECT * FROM {table} WHERE id = $1 FOR UPDATE) AS job \
+             WHERE NOT EXISTS (SELECT 1 FROM updated) LIMIT 1",
             job_projection("job"),
             job_projection("job")
         );
@@ -238,8 +243,9 @@ impl Backend for PostgresBackend<'_> {
                  FROM locked WHERE job.id = locked.id AND job.state != 'running' \
                    AND NOT (job.state = 'available' AND job.scheduled_at < now()) RETURNING job.*) \
              SELECT {}, false AS unique_skipped_as_duplicate FROM updated AS job \
-             UNION ALL SELECT {}, false AS unique_skipped_as_duplicate FROM {table} AS job \
-                 WHERE id = $1 AND NOT EXISTS (SELECT 1 FROM updated) LIMIT 1",
+             UNION ALL SELECT {}, false AS unique_skipped_as_duplicate \
+                 FROM (SELECT * FROM {table} WHERE id = $1 FOR UPDATE) AS job \
+                 WHERE NOT EXISTS (SELECT 1 FROM updated) LIMIT 1",
             job_projection("job"),
             job_projection("job")
         );
