@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed `rivertest.Worker` to honor a configured `Config.JobStuckThreshold` for stuck job detection. Previously, it always used an internal 5 second threshold, so the `Job appears to be stuck` log line was emitted at a different time than it would be under a real client. [PR #1418](https://github.com/riverqueue/river/pull/1418).
+
 ## [0.48.0] - 2026-09-30
 
 ⚠️ This release contains a new database migration, version 8, but it only affects SQLite:

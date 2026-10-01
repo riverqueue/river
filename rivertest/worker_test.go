@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"log/slog"
+	"sync"
 	"testing"
 	"time"
 
@@ -331,6 +332,31 @@ func TestWorker_Work(t *testing.T) {
 		require.NoError(t, err)
 		require.Equal(t, river.EventKindJobCompleted, res.EventKind)
 		require.WithinDuration(t, hourFromNow, *res.Job.FinalizedAt, time.Millisecond)
+	})
+
+	t.Run("UsesJobStuckThreshold", func(t *testing.T) {
+		t.Parallel()
+
+		bundle := setup(t)
+
+		// Stuck detection has no callback in the test worker, so the stuck
+		// warning written to the log is the only signal available.
+		stuckLogged := make(chan struct{})
+		bundle.config.JobStuckThreshold = time.Millisecond
+		bundle.config.JobTimeout = 10 * time.Millisecond
+		bundle.config.Logger = slog.New(slog.NewTextHandler(&stuckLogWriter{stuckLogged: stuckLogged}, &slog.HandlerOptions{
+			Level: slog.LevelWarn,
+		}))
+
+		worker := river.WorkFunc(func(ctx context.Context, job *river.Job[testArgs]) error {
+			riversharedtest.WaitOrTimeout(t, stuckLogged)
+			return nil
+		})
+		tw := NewWorker(t, bundle.driver, bundle.config, worker)
+
+		res, err := tw.Work(ctx, t, bundle.tx, testArgs{Value: "test"}, nil)
+		require.NoError(t, err)
+		require.Equal(t, river.EventKindJobCompleted, res.EventKind)
 	})
 
 	t.Run("ErrorFromWorker", func(t *testing.T) {
@@ -660,4 +686,18 @@ func TestWorker_WorkJob(t *testing.T) {
 		require.NoError(t, err)
 		require.Equal(t, river.EventKindJobCompleted, res.EventKind)
 	})
+}
+
+// stuckLogWriter closes stuckLogged the first time a stuck job warning is
+// written to it.
+type stuckLogWriter struct {
+	once        sync.Once
+	stuckLogged chan struct{}
+}
+
+func (w *stuckLogWriter) Write(p []byte) (int, error) {
+	if bytes.Contains(p, []byte("Job appears to be stuck")) {
+		w.once.Do(func() { close(w.stuckLogged) })
+	}
+	return len(p), nil
 }

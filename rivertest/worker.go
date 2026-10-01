@@ -216,8 +216,9 @@ func (w *Worker[T, TTx]) workJob(ctx context.Context, tb testing.TB, tx TTx, job
 			Stuck:   func(ctx context.Context, jobRow *rivertype.JobRow) {},
 			Unstuck: func() {},
 		},
-		SchedulerInterval: maintenance.JobSchedulerIntervalDefault,
-		WorkUnit:          workUnit,
+		SchedulerInterval:      maintenance.JobSchedulerIntervalDefault,
+		StuckThresholdOverride: w.config.JobStuckThreshold,
+		WorkUnit:               workUnit,
 	})
 
 	executor.Execute(jobCtx)
