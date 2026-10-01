@@ -650,6 +650,8 @@ func exerciseJobUpdate[TTx any](ctx context.Context, t *testing.T, executorWithT
 		t.Parallel()
 
 		t.Run("BasicScheduling", func(t *testing.T) {
+			t.Parallel()
+
 			exec, _ := setup(ctx, t)
 
 			var (
@@ -678,10 +680,13 @@ func exerciseJobUpdate[TTx any](ctx context.Context, t *testing.T, executorWithT
 			})
 			require.NoError(t, err)
 			require.Len(t, result, 2)
-			require.Equal(t, job1.ID, result[0].Job.ID)
-			require.False(t, result[0].ConflictDiscarded)
-			require.Equal(t, job2.ID, result[1].Job.ID)
-			require.False(t, result[1].ConflictDiscarded)
+			// The batch is selected in priority/scheduled_at/ID order, but the
+			// Postgres query doesn't guarantee the order of returned rows.
+			require.ElementsMatch(t, []int64{job1.ID, job2.ID},
+				sliceutil.Map(result, func(r *riverdriver.JobScheduleResult) int64 { return r.Job.ID }))
+			for _, scheduled := range result {
+				require.False(t, scheduled.ConflictDiscarded)
+			}
 
 			// And then job3 scheduled.
 			result, err = exec.JobSchedule(ctx, &riverdriver.JobScheduleParams{
