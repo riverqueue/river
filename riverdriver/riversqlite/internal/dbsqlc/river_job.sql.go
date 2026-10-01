@@ -215,34 +215,25 @@ func (q *Queries) JobDelete(ctx context.Context, db DBTX, id int64) (*RiverJob, 
 
 const jobDeleteBefore = `-- name: JobDeleteBefore :execresult
 DELETE FROM /* TEMPLATE: schema */river_job
-WHERE
-    id IN (
-        SELECT id
-        FROM /* TEMPLATE: schema */river_job
-        WHERE
+WHERE id IN (
+    SELECT id
+    FROM /* TEMPLATE: schema */river_job
+    WHERE (
             (state = 'cancelled' AND cast(?1 AS boolean) AND finalized_at < cast(?2 AS text)) OR
             (state = 'completed' AND cast(?3 AS boolean) AND finalized_at < cast(?4 AS text)) OR
             (state = 'discarded' AND cast(?5 AS boolean) AND finalized_at < cast(?6 AS text))
-        ORDER BY id
-        LIMIT ?7
-    )
-    -- This is really awful, but unless the ` + "`" + `sqlc.slice` + "`" + ` appears as the very
-    -- last parameter in the query things will fail if it includes more than one
-    -- element. The sqlc SQLite driver uses position-based placeholders (?1) for
-    -- most parameters, but unnamed ones with ` + "`" + `sqlc.slice` + "`" + ` (?), and when
-    -- positional parameters follow unnamed parameters great confusion is the
-    -- result. Making sure ` + "`" + `sqlc.slice` + "`" + ` is last is the only workaround I could
-    -- find, but it stops working if there are multiple clauses that need a
-    -- positional placeholder plus ` + "`" + `sqlc.slice` + "`" + ` like this one (the Postgres
-    -- driver supports a ` + "`" + `queues_included` + "`" + ` parameter that I couldn't support
-    -- here). The non-workaround version is (unfortunately) to never, ever use
-    -- the sqlc driver for SQLite -- it's not a little buggy, it's off the
-    -- charts buggy, and there's little interest from the maintainers in fixing
-    -- any of it. We already started using it though, so plough on.
-    AND (
-        cast(?8 AS boolean)
-        OR river_job.queue NOT IN (/*SLICE:queues_excluded*/?)
-    )
+        )
+        AND (
+            cast(?7 AS boolean)
+            OR queue NOT IN (SELECT value FROM json_each(cast(?8 AS blob)))
+        )
+        AND (
+            NOT cast(?9 AS boolean)
+            OR queue IN (SELECT value FROM json_each(cast(?10 AS blob)))
+        )
+    ORDER BY id
+    LIMIT ?11
+)
 `
 
 type JobDeleteBeforeParams struct {
@@ -252,31 +243,27 @@ type JobDeleteBeforeParams struct {
 	CompletedFinalizedAtHorizon string
 	DiscardedDoDelete           bool
 	DiscardedFinalizedAtHorizon string
-	Max                         int64
 	QueuesExcludedEmpty         bool
-	QueuesExcluded              []string
+	QueuesExcluded              []byte
+	QueuesIncludedFilter        bool
+	QueuesIncluded              []byte
+	Max                         int64
 }
 
 func (q *Queries) JobDeleteBefore(ctx context.Context, db DBTX, arg *JobDeleteBeforeParams) (sql.Result, error) {
-	query := jobDeleteBefore
-	var queryParams []interface{}
-	queryParams = append(queryParams, arg.CancelledDoDelete)
-	queryParams = append(queryParams, arg.CancelledFinalizedAtHorizon)
-	queryParams = append(queryParams, arg.CompletedDoDelete)
-	queryParams = append(queryParams, arg.CompletedFinalizedAtHorizon)
-	queryParams = append(queryParams, arg.DiscardedDoDelete)
-	queryParams = append(queryParams, arg.DiscardedFinalizedAtHorizon)
-	queryParams = append(queryParams, arg.Max)
-	queryParams = append(queryParams, arg.QueuesExcludedEmpty)
-	if len(arg.QueuesExcluded) > 0 {
-		for _, v := range arg.QueuesExcluded {
-			queryParams = append(queryParams, v)
-		}
-		query = strings.Replace(query, "/*SLICE:queues_excluded*/?", strings.Repeat(",?", len(arg.QueuesExcluded))[1:], 1)
-	} else {
-		query = strings.Replace(query, "/*SLICE:queues_excluded*/?", "NULL", 1)
-	}
-	return db.ExecContext(ctx, query, queryParams...)
+	return db.ExecContext(ctx, jobDeleteBefore,
+		arg.CancelledDoDelete,
+		arg.CancelledFinalizedAtHorizon,
+		arg.CompletedDoDelete,
+		arg.CompletedFinalizedAtHorizon,
+		arg.DiscardedDoDelete,
+		arg.DiscardedFinalizedAtHorizon,
+		arg.QueuesExcludedEmpty,
+		arg.QueuesExcluded,
+		arg.QueuesIncludedFilter,
+		arg.QueuesIncluded,
+		arg.Max,
+	)
 }
 
 const jobDeleteMany = `-- name: JobDeleteMany :many
