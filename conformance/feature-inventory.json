@@ -86,6 +86,7 @@
       "id": "client.JobCancel",
       "rationale": "Each implementation provides JobCancel in its own idiom; exercised through the corresponding adapter method.",
       "scenarios": [
+        "cross_language_cancel_retry_race",
         "differential_job_crud",
         "remote_cancel_notification"
       ],
@@ -197,6 +198,7 @@
       "id": "client.JobRetry",
       "rationale": "Each implementation provides JobRetry in its own idiom; exercised through the corresponding adapter method.",
       "scenarios": [
+        "cross_language_cancel_retry_race",
         "differential_job_crud"
       ],
       "source": "client.go:river.Client.JobRetry"

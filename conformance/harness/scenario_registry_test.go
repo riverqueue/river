@@ -41,6 +41,7 @@ var scenarioRegistry = map[string]scenarioBinding{ //nolint:gochecknoglobals // 
 	"completion_transient_failure_retry":                             {owner: scenarioOwnerResilience, tier: "chaos"},
 	"cooperative_remote_cancellation":                                {owner: scenarioOwnerMixed, tier: "runtime"},
 	"cron_schedule_goldens":                                          {owner: scenarioOwnerMaintenance, tier: "codec"},
+	"cross_language_cancel_retry_race":                               {owner: scenarioOwnerMixed, tier: "mixed"},
 	"cross_language_unique_conflict":                                 {owner: scenarioOwnerMixed, tier: "codec"},
 	"custom_schema_candidate_migrate_reference_work":                 {owner: scenarioOwnerMixed, tier: "mixed"},
 	"custom_schema_reference_migrate_candidate_work":                 {owner: scenarioOwnerMixed, tier: "mixed"},

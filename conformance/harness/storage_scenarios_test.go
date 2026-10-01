@@ -179,6 +179,77 @@ func verifyConcurrentUniqueConflicts(t *testing.T, observer *postgresObserver, g
 	require.Equal(t, uniqueGo, uniqueCandidate)
 }
 
+// verifyConcurrentCancelRetryRace races a cancel, then a retry, between the
+// implementations. The winner holds the job's row lock in an open
+// transaction until the loser's request is observed waiting on it, so the
+// loser's statement starts before the winner commits. Its update then
+// matches nothing, and it must return the winner's committed row rather than
+// the row as its statement first saw it.
+func verifyConcurrentCancelRetryRace(t *testing.T, observer *postgresObserver, goAdapter, candidateAdapter *adapter) {
+	t.Helper()
+
+	for _, direction := range []struct {
+		loser  *adapter
+		winner *adapter
+	}{
+		{loser: candidateAdapter, winner: goAdapter},
+		{loser: goAdapter, winner: candidateAdapter},
+	} {
+		loser, winner := direction.loser, direction.winner
+		goAdapter.call(t, "reset", map[string]any{}, nil)
+
+		race := func(t *testing.T, operation string, id int64) {
+			t.Helper()
+
+			handle := fmt.Sprintf("%s-%s-winner", operation, winner.name)
+			winner.call(t, "tx_begin", map[string]any{"handle": handle}, nil)
+			var winnerJob normalizedJob
+			winner.call(t, "tx_"+operation, map[string]any{"handle": handle, "id": id}, &winnerJob)
+
+			type loserResult struct {
+				err error
+				job normalizedJob
+			}
+			resultCh := make(chan loserResult, 1)
+			go func() {
+				var job normalizedJob
+				err := loser.callWithoutTest(operation, map[string]any{"id": id}, &job)
+				resultCh <- loserResult{err: err, job: job}
+			}()
+
+			observer.waitForLockWait(t, loser.applicationName)
+			select {
+			case result := <-resultCh:
+				t.Fatalf("%s %s returned while %s's was uncommitted: %+v", loser.name, operation, winner.name, result)
+			default:
+			}
+			winner.call(t, "tx_commit", map[string]any{"handle": handle}, nil)
+
+			var result loserResult
+			select {
+			case result = <-resultCh:
+			case <-time.After(5 * time.Second):
+				t.Fatalf("%s %s remained blocked after %s committed", loser.name, operation, winner.name)
+			}
+			require.NoError(t, result.err)
+			require.Equal(t, winnerJob, result.job,
+				"%s lost a %s race to %s and must return the committed row", loser.name, operation, winner.name)
+
+			var committed normalizedJob
+			goAdapter.call(t, "get", map[string]any{"id": id}, &committed)
+			require.Equal(t, winnerJob, committed)
+		}
+
+		var job normalizedJob
+		goAdapter.call(t, "insert", map[string]any{
+			"message": "cancel and retry race",
+			"opts":    map[string]any{"scheduled_at": time.Now().Add(time.Hour).UTC().Format(time.RFC3339Nano)},
+		}, &job)
+		race(t, "cancel", job.ID)
+		race(t, "retry", job.ID)
+	}
+}
+
 // verifyBatchInsertion checks typed batch insertion results, ordering,
 // duplicate reporting, repeated unique keys, invalid unique options, and
 // atomic rejection outside a transaction.

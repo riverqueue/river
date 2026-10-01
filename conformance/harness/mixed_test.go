@@ -96,6 +96,11 @@ func TestMixedConformance(t *testing.T) {
 
 		verifyConcurrentUniqueConflicts(t, observer, goAdapter, candidateAdapter)
 	})
+	t.Run("cross_language_cancel_retry_race", func(t *testing.T) {
+		defer scenarios.record(t)
+
+		verifyConcurrentCancelRetryRace(t, observer, goAdapter, candidateAdapter)
+	})
 	t.Run("unique_column_bytes", func(t *testing.T) {
 		defer scenarios.record(t)
 
