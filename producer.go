@@ -17,6 +17,7 @@ import (
 
 	"github.com/riverqueue/river/internal/jobcompleter"
 	"github.com/riverqueue/river/internal/jobexecutor"
+	"github.com/riverqueue/river/internal/jobstats"
 	"github.com/riverqueue/river/internal/notifier"
 	"github.com/riverqueue/river/internal/pluginlookup"
 	"github.com/riverqueue/river/internal/retrypolicy"
@@ -38,6 +39,7 @@ import (
 
 const (
 	jobCancelPollBatchSize        = 1000
+	producerJobAbandonedError     = "job abandoned because River client StopAbandonTimeout elapsed"
 	producerReportIntervalDefault = 30 * time.Second
 	queuePollIntervalDefault      = 2 * time.Second
 	queueReportIntervalDefault    = 10 * time.Minute
@@ -97,6 +99,7 @@ type producerConfig struct {
 	JobStuckCount      *atomic.Int32
 	JobStuckThreshold  time.Duration
 	JobTimeout         time.Duration
+	JobUpdateCallback  func(ctx context.Context, updates []jobcompleter.CompleterJobUpdated)
 	MaxWorkers         int
 
 	// Notifier is a notifier for subscribing to new job inserts and job
@@ -199,10 +202,12 @@ type producer struct {
 	startstop.BaseStartStop
 
 	// Jobs which are currently being worked. The polling goroutine snapshots
-	// their IDs; only the main goroutine accesses the executors themselves.
+	// their IDs; the main goroutine manages the entries, each of which
+	// coordinates finalization with its worker.
 	activeJobsMu sync.Mutex
-	activeJobs   map[int64]*jobexecutor.JobExecutor
+	activeJobs   map[int64]*producerActiveJob
 
+	abandonCh       chan struct{} // signals that remaining running jobs should be abandoned and set to errored
 	completer       jobcompleter.JobCompleter
 	config          *producerConfig
 	id              atomic.Int64 // atomic because it's written at startup and read during shutdown
@@ -224,9 +229,15 @@ type producer struct {
 	// goroutine.
 	fetchWhenSlotsAreAvailable bool
 
+	// Coalesces completion notifications so shutdown can retry an
+	// abandonment pass that encountered a busy finalization mutex. This channel
+	// survives restarts: stale notifications are harmless because shutdown only
+	// reads it after abandonment has been requested.
+	finalizationCh chan struct{}
+
 	// Receives completed jobs from workers. Written by completed workers, only
 	// read from main goroutine.
-	jobResultCh chan *rivertype.JobRow
+	jobResultCh chan *jobexecutor.JobExecutor
 
 	jobTimeout time.Duration
 
@@ -237,6 +248,7 @@ type producer struct {
 
 	numJobsRan atomic.Uint64
 	paused     bool
+
 	// Receives control messages from the notifier goroutine. Written by notifier
 	// goroutine, only read from main goroutine.
 	queueControlCh chan *controlEventPayload
@@ -258,13 +270,15 @@ func newProducer(archetype *baseservice.Archetype, exec riverdriver.Executor, pi
 	}
 
 	producer := baseservice.Init(archetype, &producer{
-		activeJobs:     make(map[int64]*jobexecutor.JobExecutor),
+		abandonCh:      make(chan struct{}, 1),
+		activeJobs:     make(map[int64]*producerActiveJob),
 		cancelCh:       make(chan int64, 1000),
 		completer:      config.Completer,
 		config:         config.mustValidate(),
 		exec:           exec,
 		errorHandler:   errorHandler,
-		jobResultCh:    make(chan *rivertype.JobRow, config.MaxWorkers),
+		finalizationCh: make(chan struct{}, 1),
+		jobResultCh:    make(chan *jobexecutor.JobExecutor, config.MaxWorkers),
 		jobTimeout:     config.JobTimeout,
 		pilot:          pilot,
 		queueControlCh: make(chan *controlEventPayload, 100),
@@ -306,6 +320,8 @@ func (p *producer) StartWorkContext(fetchCtx, workCtx context.Context) error {
 	if !shouldStart {
 		return nil
 	}
+
+	p.abandonCh = make(chan struct{}, 1)
 
 	// Workers can be registered after the client is constructed, so capture
 	// kinds at startup. Keep an empty registry non-nil to avoid fetching all kinds.
@@ -454,7 +470,7 @@ func (p *producer) StartWorkContext(fetchCtx, workCtx context.Context) error {
 
 		p.fetchAndRunLoop(fetchCtx, workCtx)
 		p.Logger.DebugContext(workCtx, p.Name+": Entering shutdown loop", slog.String("queue", p.config.Queue), slog.Int64("id", p.id.Load()))
-		p.executorShutdownLoop(workCtx)
+		p.executorShutdownLoop(context.WithoutCancel(fetchCtx))
 
 		p.Logger.DebugContext(workCtx, p.Name+": Shutdown loop exited, awaiting subroutines", slog.String("queue", p.config.Queue), slog.Int64("id", p.id.Load()))
 		cancelSubroutines(fmt.Errorf("producer stopped: %w", startstop.ErrStop))
@@ -713,6 +729,7 @@ func (p *producer) executorShutdownLoop(ctx context.Context) {
 
 	// No more jobs will be fetched or executed. However, we must wait for all
 	// in-progress jobs to complete.
+	abandonCh := p.abandonCh
 	for {
 		p.activeJobsMu.Lock()
 		numActiveJobs := len(p.activeJobs)
@@ -726,6 +743,23 @@ func (p *producer) executorShutdownLoop(ctx context.Context) {
 			p.maybeCancelJob(ctx, jobID)
 		case result := <-p.jobResultCh:
 			p.removeActiveJob(result)
+		case <-abandonCh:
+			// After the timeout, retry whenever a worker releases a finalization
+			// mutex that may have prevented abandonment on the previous pass.
+			abandonCh = p.finalizationCh
+			p.drainJobResults()
+			p.abandonActiveJobs(ctx)
+		}
+	}
+}
+
+func (p *producer) drainJobResults() {
+	for {
+		select {
+		case result := <-p.jobResultCh:
+			p.removeActiveJob(result)
+		default:
+			return
 		}
 	}
 }
@@ -783,25 +817,158 @@ func (p *producer) finalizeShutdown(ctx context.Context) {
 func (p *producer) addActiveJob(id int64, executor *jobexecutor.JobExecutor) {
 	p.numJobsActive.Add(1)
 	p.activeJobsMu.Lock()
-	p.activeJobs[id] = executor
+	p.activeJobs[id] = newProducerActiveJob(p, executor)
 	p.activeJobsMu.Unlock()
 }
 
-func (p *producer) removeActiveJob(job *rivertype.JobRow) {
+func (p *producer) abandon() {
+	select {
+	case p.abandonCh <- struct{}{}:
+	default:
+	}
+}
+
+func (p *producer) abandonActiveJobs(ctx context.Context) {
 	p.activeJobsMu.Lock()
-	executor := p.activeJobs[job.ID]
-	delete(p.activeJobs, job.ID)
+	if len(p.activeJobs) == 0 {
+		p.activeJobsMu.Unlock()
+		return
+	}
+
+	abandonedActiveJobs := make(map[int64]*producerActiveJob, len(p.activeJobs))
+	for id, activeJob := range p.activeJobs {
+		if activeJob.tryAbandon() {
+			p.clearStuckJob(activeJob)
+			abandonedActiveJobs[id] = activeJob
+		}
+	}
 	p.activeJobsMu.Unlock()
-	if executor == nil || executor.TryCloseSlot() {
+
+	now := p.Time.Now()
+	params := riverdriver.NewJobSetStateIfRunningManyParams(p.config.Schema, len(abandonedActiveJobs))
+	params.Now = &now
+
+	for _, activeJob := range abandonedActiveJobs {
+		// A leader submitted before a later peer blocked must still be
+		// detached, but its pending or persisted result belongs to the completer.
+		if activeJob.leaderFinalizationSubmitted {
+			continue
+		}
+		job := activeJob.executor.JobRow
+		// A partially decoded row may lack the timestamp needed to identify
+		// its execution attempt. Detach it without risking an unguarded update.
+		if job.AttemptedAt == nil {
+			continue
+		}
+		errData, err := json.Marshal(rivertype.AttemptError{
+			At:      now,
+			Attempt: job.Attempt,
+			Error:   producerJobAbandonedError,
+		})
+		if err != nil {
+			panic(fmt.Errorf("error serializing job abandonment error: %w", err))
+		}
+
+		var setStateParams *riverdriver.JobSetStateIfRunningParams
+		if job.Attempt >= job.MaxAttempts {
+			setStateParams = riverdriver.JobSetStateDiscarded(job.ID, now, errData, nil)
+		} else {
+			setStateParams = riverdriver.JobSetStateErrorAvailable(job.ID, now, errData, nil)
+		}
+
+		setStateParams.ExpectedAttempt = &job.Attempt
+		setStateParams.ExpectedAttemptedAt = job.AttemptedAt
+		params.Append(setStateParams)
+	}
+
+	if len(params.ID) > 0 {
+		completeStart := p.Time.Now()
+		jobs, err := jobcompleter.WithRetries(ctx, &p.BaseService, func(ctx context.Context) ([]*rivertype.JobRow, error) {
+			return p.pilot.JobSetStateIfRunningMany(ctx, p.exec, params)
+		})
+		completeDuration := p.Time.Now().Sub(completeStart)
+		if err != nil {
+			p.Logger.ErrorContext(ctx, p.Name+": Error setting abandoned jobs to errored", slog.String("err", err.Error()), slog.Int("num_jobs", len(params.ID)), slog.String("queue", p.config.Queue))
+		} else {
+			var numAbandonedJobs int
+			updates := make([]jobcompleter.CompleterJobUpdated, 0, len(jobs))
+			for _, job := range jobs {
+				if len(job.Errors) < 1 {
+					continue
+				}
+				lastError := job.Errors[len(job.Errors)-1]
+				jobBefore := abandonedActiveJobs[job.ID].executor.JobRow
+				if !lastError.At.Equal(now) || lastError.Attempt != jobBefore.Attempt || lastError.Error != producerJobAbandonedError {
+					continue
+				}
+				numAbandonedJobs++
+
+				stats := &jobstats.JobStatistics{
+					CompleteDuration:  completeDuration,
+					QueueWaitDuration: jobBefore.AttemptedAt.Sub(jobBefore.ScheduledAt),
+					RunDuration:       now.Sub(*jobBefore.AttemptedAt),
+				}
+				if update, ok := jobcompleter.CompleterJobUpdatedFromStateAndReason(job, stats, riverdriver.JobSetStateReasonFailed); ok {
+					updates = append(updates, update)
+				}
+			}
+
+			p.Logger.WarnContext(ctx, p.Name+": Abandoned running jobs", slog.Int("num_jobs", numAbandonedJobs), slog.String("queue", p.config.Queue))
+			if p.config.JobUpdateCallback != nil && len(updates) > 0 {
+				p.config.JobUpdateCallback(ctx, updates)
+			}
+		}
+	}
+
+	for _, activeJob := range abandonedActiveJobs {
+		p.removeActiveJob(activeJob.executor)
+	}
+}
+
+// clearStuckJob removes an executor from stuck-job accounting at most once.
+// The caller must hold activeJobsMu.
+func (p *producer) clearStuckJob(activeJob *producerActiveJob) {
+	if activeJob.stuck {
+		activeJob.stuck = false
+		p.numJobsStuck.Add(-1)
+		p.config.JobStuckCount.Add(-1)
+	}
+}
+
+func (p *producer) removeActiveJob(executor *jobexecutor.JobExecutor) {
+	// Ignore stale results from executors abandoned out of active tracking.
+	p.activeJobsMu.Lock()
+	activeJob := p.activeJobs[executor.JobRow.ID]
+	if activeJob == nil || activeJob.executor != executor {
+		p.activeJobsMu.Unlock()
+		return
+	}
+
+	p.clearStuckJob(activeJob)
+	delete(p.activeJobs, executor.JobRow.ID)
+	p.activeJobsMu.Unlock()
+	if executor.TryCloseSlot() {
 		p.numJobsActive.Add(-1)
 	}
-	p.numJobsRan.Add(1)
-	p.state.JobFinish(job)
+	if !executor.IsAbandoned() || activeJob.leaderFinalizationSubmitted {
+		p.numJobsRan.Add(1)
+	}
+	if p.state != nil {
+		p.state.JobFinish(executor.JobRow)
+	}
 }
 
 func (p *producer) handleWorkerStuck(ctx context.Context, executor *jobexecutor.JobExecutor, job *rivertype.JobRow) {
+	p.activeJobsMu.Lock()
+	activeJob := p.activeJobs[job.ID]
+	if activeJob == nil || activeJob.executor != executor || executor.IsAbandoned() || activeJob.stuck {
+		p.activeJobsMu.Unlock()
+		return
+	}
+	activeJob.stuck = true
 	p.numJobsStuck.Add(1)
 	totalStuckJobs := int(p.config.JobStuckCount.Add(1))
+	p.activeJobsMu.Unlock()
 
 	if p.config.JobStuckHandler == nil {
 		return
@@ -813,7 +980,15 @@ func (p *producer) handleWorkerStuck(ctx context.Context, executor *jobexecutor.
 		Queue:          job.Queue,
 		TotalStuckJobs: totalStuckJobs,
 	})
-	if !result.AddWorkerSlot || !executor.TryCloseSlot() {
+	if !result.AddWorkerSlot {
+		return
+	}
+
+	// The handler may have outlived abandonment or even a client restart.
+	// Only the executor still tracked for this attempt may free its slot.
+	p.activeJobsMu.Lock()
+	defer p.activeJobsMu.Unlock()
+	if p.activeJobs[job.ID] != activeJob || executor.IsAbandoned() || !executor.TryCloseSlot() {
 		return
 	}
 
@@ -823,19 +998,22 @@ func (p *producer) handleWorkerStuck(ctx context.Context, executor *jobexecutor.
 	}
 }
 
-func (p *producer) handleWorkerUnstuck() {
-	p.numJobsStuck.Add(-1)
-	p.config.JobStuckCount.Add(-1)
+func (p *producer) handleWorkerUnstuck(executor *jobexecutor.JobExecutor) {
+	p.activeJobsMu.Lock()
+	defer p.activeJobsMu.Unlock()
+	if activeJob := p.activeJobs[executor.JobRow.ID]; activeJob != nil && activeJob.executor == executor {
+		p.clearStuckJob(activeJob)
+	}
 }
 
 func (p *producer) maybeCancelJob(ctx context.Context, id int64) bool {
 	p.activeJobsMu.Lock()
-	executor, ok := p.activeJobs[id]
+	activeJob, ok := p.activeJobs[id]
 	p.activeJobsMu.Unlock()
 	if !ok {
 		return false
 	}
-	executor.Cancel(ctx)
+	activeJob.executor.Cancel(ctx)
 	return true
 }
 
@@ -998,9 +1176,9 @@ func (p *producer) startNewExecutors(workCtx context.Context, jobs []*rivertype.
 				Stuck   func(ctx context.Context, jobRow *rivertype.JobRow)
 				Unstuck func()
 			}{
-				JobDone: p.handleWorkerDone,
+				JobDone: func(*rivertype.JobRow) { p.handleWorkerDone(executor) },
 				Stuck:   func(ctx context.Context, jobRow *rivertype.JobRow) { p.handleWorkerStuck(ctx, executor, jobRow) },
-				Unstuck: p.handleWorkerUnstuck,
+				Unstuck: func() { p.handleWorkerUnstuck(executor) },
 			},
 			SchedulerInterval:      p.config.SchedulerInterval,
 			StuckThresholdOverride: p.config.JobStuckThreshold,
@@ -1024,8 +1202,16 @@ func (p *producer) maxJobsToFetch() int {
 	return p.config.MaxWorkers - int(p.numJobsActive.Load())
 }
 
-func (p *producer) handleWorkerDone(job *rivertype.JobRow) {
-	p.jobResultCh <- job
+func (p *producer) handleWorkerDone(executor *jobexecutor.JobExecutor) {
+	if executor.IsAbandoned() {
+		return
+	}
+
+	select {
+	case <-executor.AbandonContext.Done():
+		// Abandonment can race this send and stop the channel's receiver.
+	case p.jobResultCh <- executor:
+	}
 }
 
 // Cancellation polling is independent of fetching: saturated and paused producers
@@ -1231,6 +1417,79 @@ func (p *producer) reportQueueStatusOnce(ctx context.Context) {
 		return
 	}
 	p.testSignals.ReportedQueueStatus.Signal(struct{}{})
+}
+
+type producerActiveJob struct {
+	abandonFunc                 context.CancelFunc
+	executor                    *jobexecutor.JobExecutor
+	finalizationMu              sync.Mutex
+	leaderFinalizationSubmitted bool
+	producer                    *producer
+	stuck                       bool // guarded by producer.activeJobsMu
+}
+
+func newProducerActiveJob(producer *producer, executor *jobexecutor.JobExecutor) *producerActiveJob {
+	abandonCtx, abandonFunc := context.WithCancel(context.Background())
+	activeJob := &producerActiveJob{
+		abandonFunc: abandonFunc,
+		executor:    executor,
+		producer:    producer,
+	}
+	executor.AbandonContext = abandonCtx
+	executor.JobSetStateIfRunningFunc = activeJob.jobSetStateIfRunning
+	return activeJob
+}
+
+func (j *producerActiveJob) jobSetStateIfRunning(ctx context.Context, jobRow *rivertype.JobRow, stats *jobstats.JobStatistics, params *riverdriver.JobSetStateIfRunningParams) error {
+	j.finalizationMu.Lock()
+	if j.executor.IsAbandoned() {
+		j.finalizationMu.Unlock()
+		if params.ID == j.executor.JobRow.ID {
+			return nil
+		}
+
+		// Only the leader was abandoned. Complete peers synchronously because
+		// the usual completer may have stopped, but never update a newer attempt.
+		if jobRow.AttemptedAt == nil {
+			return nil // The original attempt can't be identified safely.
+		}
+		params.ExpectedAttempt = new(jobRow.Attempt)
+		params.ExpectedAttemptedAt = jobRow.AttemptedAt
+		completer := jobcompleter.NewInlineCompleter(&j.producer.Archetype, j.producer.config.Schema, j.producer.exec, j.producer.pilot, nil)
+		return completer.JobSetStateIfRunning(ctx, stats, params)
+	}
+	defer func() {
+		j.finalizationMu.Unlock()
+		// Shutdown may have skipped this executor while the mutex was held.
+		// Notify after every completion, including a leader followed by peers.
+		select {
+		case j.producer.finalizationCh <- struct{}{}:
+		default:
+		}
+	}()
+
+	// The completer owns a successfully submitted leader result, even if it
+	// hasn't flushed yet. Shutdown may detach the executor while later peers
+	// are blocked, but must leave this result to the completer.
+	err := j.executor.Completer.JobSetStateIfRunning(ctx, stats, params)
+	if err == nil && params.ID == j.executor.JobRow.ID {
+		j.leaderFinalizationSubmitted = true
+	}
+	return err
+}
+
+func (j *producerActiveJob) tryAbandon() bool {
+	if !j.finalizationMu.TryLock() {
+		return false
+	}
+	defer j.finalizationMu.Unlock()
+
+	if j.executor.IsAbandoned() {
+		return false
+	}
+
+	j.abandonFunc()
+	return true
 }
 
 type producerFetchResult struct {

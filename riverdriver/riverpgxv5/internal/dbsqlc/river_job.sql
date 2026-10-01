@@ -639,17 +639,20 @@ JOIN updated_jobs ON river_job.id = updated_jobs.id;
 -- name: JobSetStateIfRunningMany :many
 WITH job_input AS (
     SELECT
-        unnest(@ids::bigint[])                     AS id,
-        unnest(@attempt_do_update::boolean[])      AS attempt_do_update,
-        unnest(@attempt::int[])                    AS attempt,
-        unnest(@errors_do_update::boolean[])       AS errors_do_update,
-        unnest(@errors::jsonb[])                   AS errors,
-        unnest(@finalized_at_do_update::boolean[]) AS finalized_at_do_update,
-        unnest(@finalized_at::timestamptz[])       AS finalized_at,
-        unnest(@metadata_do_merge::boolean[])      AS metadata_do_merge,
-        unnest(@metadata_updates::jsonb[])         AS metadata_updates,
-        unnest(@scheduled_at_do_update::boolean[]) AS scheduled_at_do_update,
-        unnest(@scheduled_at::timestamptz[])       AS scheduled_at,
+        unnest(@ids::bigint[])                       AS id,
+        unnest(@attempt_do_update::boolean[])        AS attempt_do_update,
+        unnest(@attempt::int[])                      AS attempt,
+        unnest(@errors_do_update::boolean[])         AS errors_do_update,
+        unnest(@errors::jsonb[])                     AS errors,
+        unnest(@expected_attempt::int[])             AS expected_attempt,
+        unnest(@expected_attempt_do_check::boolean[]) AS expected_attempt_do_check,
+        unnest(@expected_attempted_at::timestamptz[]) AS expected_attempted_at,
+        unnest(@finalized_at_do_update::boolean[])   AS finalized_at_do_update,
+        unnest(@finalized_at::timestamptz[])          AS finalized_at,
+        unnest(@metadata_do_merge::boolean[])        AS metadata_do_merge,
+        unnest(@metadata_updates::jsonb[])           AS metadata_updates,
+        unnest(@scheduled_at_do_update::boolean[])   AS scheduled_at_do_update,
+        unnest(@scheduled_at::timestamptz[])          AS scheduled_at,
         -- To avoid requiring pgx users to register the OID of the river_job_state[]
         -- type, we cast the array to text[] and then to river_job_state.
         unnest(@state::text[])::/* TEMPLATE: schema */river_job_state AS state
@@ -702,6 +705,10 @@ updated AS (
     FROM job_input
     WHERE river_job.id = job_input.id
       AND (river_job.state = 'running' OR job_input.metadata_do_merge)
+      AND (NOT coalesce(job_input.expected_attempt_do_check, false) OR (
+          river_job.attempt = job_input.expected_attempt
+          AND river_job.attempted_at = job_input.expected_attempted_at
+      ))
     RETURNING river_job.*
 )
 SELECT river_job.*
@@ -712,6 +719,10 @@ WHERE NOT EXISTS (
     FROM updated
     WHERE updated.id = river_job.id
 )
+AND (NOT coalesce(job_input.expected_attempt_do_check, false) OR (
+    river_job.attempt = job_input.expected_attempt
+    AND river_job.attempted_at = job_input.expected_attempted_at
+))
 UNION ALL
 SELECT *
 FROM updated
@@ -730,6 +741,11 @@ SET
 FROM
     locked_job
 WHERE river_job.id = locked_job.id
+    AND (NOT @expected_attempt_do_check::boolean OR (
+        river_job.state = 'running'
+        AND river_job.attempt = @expected_attempt::bigint
+        AND river_job.attempted_at = sqlc.narg('expected_attempted_at')::timestamptz
+    ))
 RETURNING river_job.*;
 
 -- A generalized update for any property on a job. This brings in a large number

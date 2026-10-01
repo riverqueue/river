@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"time"
 
 	"github.com/riverqueue/river/internal/execution"
 	"github.com/riverqueue/river/internal/jobexecutor"
@@ -29,7 +28,8 @@ import (
 // precedence. the job remains completed and a resulting subscribe event has
 // kind EventKindJobCompleted. The error has no effect.
 //
-// Returns the updated, completed job.
+// Returns the updated, completed job, or ErrNotFound if the execution attempt
+// is no longer current or the job can no longer be completed.
 func JobCompleteTx[TDriver riverdriver.Driver[TTx], TTx any, TArgs JobArgs](ctx context.Context, tx TTx, job *Job[TArgs]) (*Job[TArgs], error) {
 	if job.State != rivertype.JobStateRunning {
 		return nil, errors.New("job must be running")
@@ -38,6 +38,10 @@ func JobCompleteTx[TDriver riverdriver.Driver[TTx], TTx any, TArgs JobArgs](ctx 
 	client := ClientFromContext[TTx](ctx)
 	if client == nil {
 		return nil, errors.New("client not found in context, can only work within a River worker")
+	}
+
+	if job.AttemptedAt == nil {
+		return nil, errors.New("job must have been attempted")
 	}
 
 	driver := client.Driver()
@@ -58,26 +62,27 @@ func JobCompleteTx[TDriver riverdriver.Driver[TTx], TTx any, TArgs JobArgs](ctx 
 	}
 
 	execTx := driver.UnwrapExecutor(tx)
-	params := riverdriver.JobSetStateCompleted(job.ID, client.baseService.Time.Now(), nil)
-	rows, err := pilot.JobSetStateIfRunningMany(ctx, execTx, &riverdriver.JobSetStateIfRunningManyParams{
-		ID:              []int64{params.ID},
-		Attempt:         []*int{params.Attempt},
-		ErrData:         [][]byte{params.ErrData},
-		FinalizedAt:     []*time.Time{params.FinalizedAt},
-		MetadataDoMerge: []bool{hasMetadataUpdates},
-		MetadataUpdates: [][]byte{metadataUpdatesBytes},
-		ScheduledAt:     []*time.Time{params.ScheduledAt},
-		Schema:          client.config.Schema,
-		State:           []rivertype.JobState{params.State},
-	})
+	params := riverdriver.JobSetStateCompleted(job.ID, client.baseService.Time.Now(), metadataUpdatesBytes)
+	params.ExpectedAttempt = &job.Attempt
+	params.ExpectedAttemptedAt = job.AttemptedAt
+	manyParams := riverdriver.NewJobSetStateIfRunningManyParams(client.config.Schema, 1)
+	manyParams.Append(params)
+	rows, err := pilot.JobSetStateIfRunningMany(ctx, execTx, manyParams)
 	if err != nil {
 		return nil, err
 	}
 	if len(rows) == 0 {
 		if _, isInsideTestWorker := ctx.Value(execution.ContextKeyInsideTestWorker{}).(bool); isInsideTestWorker {
-			panic("to use JobCompleteTx in a rivertest.Worker, the job must be inserted into the database first")
+			if _, err := execTx.JobGetByID(ctx, &riverdriver.JobGetByIDParams{ID: job.ID, Schema: client.config.Schema}); errors.Is(err, rivertype.ErrNotFound) {
+				panic("to use JobCompleteTx in a rivertest.Worker, the job must be inserted into the database first")
+			} else if err != nil {
+				return nil, err
+			}
 		}
 
+		return nil, rivertype.ErrNotFound
+	}
+	if rows[0].State != rivertype.JobStateCompleted {
 		return nil, rivertype.ErrNotFound
 	}
 	updatedJob := &Job[TArgs]{JobRow: rows[0]}

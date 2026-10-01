@@ -38,35 +38,9 @@ func exerciseJobUpdate[TTx any](ctx context.Context, t *testing.T, executorWithT
 	}
 
 	setStateManyParams := func(params ...*riverdriver.JobSetStateIfRunningParams) *riverdriver.JobSetStateIfRunningManyParams {
-		batchParams := &riverdriver.JobSetStateIfRunningManyParams{}
+		batchParams := riverdriver.NewJobSetStateIfRunningManyParams("", len(params))
 		for _, param := range params {
-			var (
-				attempt     *int
-				errData     []byte
-				finalizedAt *time.Time
-				scheduledAt *time.Time
-			)
-			if param.Attempt != nil {
-				attempt = param.Attempt
-			}
-			if param.ErrData != nil {
-				errData = param.ErrData
-			}
-			if param.FinalizedAt != nil {
-				finalizedAt = param.FinalizedAt
-			}
-			if param.ScheduledAt != nil {
-				scheduledAt = param.ScheduledAt
-			}
-
-			batchParams.ID = append(batchParams.ID, param.ID)
-			batchParams.Attempt = append(batchParams.Attempt, attempt)
-			batchParams.ErrData = append(batchParams.ErrData, errData)
-			batchParams.FinalizedAt = append(batchParams.FinalizedAt, finalizedAt)
-			batchParams.MetadataDoMerge = append(batchParams.MetadataDoMerge, param.MetadataDoMerge)
-			batchParams.MetadataUpdates = append(batchParams.MetadataUpdates, param.MetadataUpdates)
-			batchParams.ScheduledAt = append(batchParams.ScheduledAt, scheduledAt)
-			batchParams.State = append(batchParams.State, param.State)
+			batchParams.Append(param)
 		}
 
 		return batchParams
@@ -972,6 +946,61 @@ func exerciseJobUpdate[TTx any](ctx context.Context, t *testing.T, executorWithT
 		require.NoError(t, err)
 		return errPayload
 	}
+
+	t.Run("JobSetStateIfRunningMany_ExpectedAttempt", func(t *testing.T) {
+		t.Parallel()
+
+		for _, testCase := range []struct {
+			attemptDiff int
+			name        string
+			state       rivertype.JobState
+			timeDiff    time.Duration
+		}{
+			{name: "Matching", state: rivertype.JobStateRunning},
+			{attemptDiff: 1, name: "StaleAttempt", state: rivertype.JobStateRunning},
+			{attemptDiff: 1, name: "StaleFinalizedJobMetadata", state: rivertype.JobStateCompleted},
+			{name: "StaleTimestamp", state: rivertype.JobStateRunning, timeDiff: time.Second},
+		} {
+			t.Run(testCase.name, func(t *testing.T) {
+				t.Parallel()
+
+				exec, _ := setup(ctx, t)
+
+				job := testfactory.Job(ctx, t, exec, &testfactory.JobOpts{
+					Attempt:     new(2),
+					AttemptedAt: &precisionTestTime,
+					Metadata:    []byte(`{"original":true}`),
+					State:       &testCase.state,
+				})
+				unguardedJob := testfactory.Job(ctx, t, exec, &testfactory.JobOpts{
+					Attempt: new(2), State: new(rivertype.JobStateRunning),
+				})
+				guardedParams := riverdriver.JobSetStateErrorAvailable(job.ID, precisionTestTime, makeErrPayload(t, precisionTestTime), []byte(`{"abandoned":true}`))
+				guardedParams.ExpectedAttempt = new(job.Attempt - testCase.attemptDiff)
+				guardedParams.ExpectedAttemptedAt = new(job.AttemptedAt.Add(-testCase.timeDiff))
+				params := setStateManyParams(guardedParams, riverdriver.JobSetStateCompleted(unguardedJob.ID, precisionTestTime, nil))
+				jobs, err := exec.JobSetStateIfRunningMany(ctx, params)
+				require.NoError(t, err)
+				jobAfter, err := exec.JobGetByID(ctx, &riverdriver.JobGetByIDParams{ID: job.ID})
+				require.NoError(t, err)
+
+				unguardedJobAfter, err := exec.JobGetByID(ctx, &riverdriver.JobGetByIDParams{ID: unguardedJob.ID})
+				require.NoError(t, err)
+				require.Equal(t, rivertype.JobStateCompleted, unguardedJobAfter.State, "an ordinary update must still work alongside a guarded update")
+
+				if testCase.name == "Matching" {
+					require.Len(t, jobs, 2)
+					require.Equal(t, rivertype.JobStateAvailable, jobAfter.State)
+					require.Len(t, jobAfter.Errors, 1)
+					require.JSONEq(t, `{"original":true,"abandoned":true}`, string(jobAfter.Metadata))
+				} else {
+					require.Len(t, jobs, 1)
+					require.Equal(t, unguardedJob.ID, jobs[0].ID)
+					require.Equal(t, job, jobAfter, "a stale attempt must not change any fields")
+				}
+			})
+		}
+	})
 
 	t.Run("JobSetStateIfRunningMany_JobSetStateCompleted", func(t *testing.T) {
 		t.Parallel()

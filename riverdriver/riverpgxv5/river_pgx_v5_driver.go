@@ -679,19 +679,28 @@ func (e *Executor) JobSchedule(ctx context.Context, params *riverdriver.JobSched
 
 func (e *Executor) JobSetStateIfRunningMany(ctx context.Context, params *riverdriver.JobSetStateIfRunningManyParams) ([]*rivertype.JobRow, error) {
 	setStateParams := &dbsqlc.JobSetStateIfRunningManyParams{
-		IDs:                 params.ID,
-		Attempt:             make([]int32, len(params.ID)),
-		AttemptDoUpdate:     make([]bool, len(params.ID)),
-		Errors:              params.ErrData,
-		ErrorsDoUpdate:      make([]bool, len(params.ID)),
-		FinalizedAt:         make([]time.Time, len(params.ID)),
-		FinalizedAtDoUpdate: make([]bool, len(params.ID)),
-		MetadataDoMerge:     make([]bool, len(params.ID)),
-		MetadataUpdates:     make([][]byte, len(params.ID)),
-		Now:                 params.Now,
-		ScheduledAt:         make([]time.Time, len(params.ID)),
-		ScheduledAtDoUpdate: make([]bool, len(params.ID)),
-		State:               make([]string, len(params.ID)),
+		IDs:                    params.ID,
+		Attempt:                make([]int32, len(params.ID)),
+		AttemptDoUpdate:        make([]bool, len(params.ID)),
+		Errors:                 params.ErrData,
+		ErrorsDoUpdate:         make([]bool, len(params.ID)),
+		ExpectedAttemptDoCheck: params.ExpectedAttemptDoCheck,
+		ExpectedAttemptedAt:    params.ExpectedAttemptedAt,
+		FinalizedAt:            make([]time.Time, len(params.ID)),
+		FinalizedAtDoUpdate:    make([]bool, len(params.ID)),
+		MetadataDoMerge:        make([]bool, len(params.ID)),
+		MetadataUpdates:        make([][]byte, len(params.ID)),
+		Now:                    params.Now,
+		ScheduledAt:            make([]time.Time, len(params.ID)),
+		ScheduledAtDoUpdate:    make([]bool, len(params.ID)),
+		State:                  make([]string, len(params.ID)),
+	}
+
+	if params.ExpectedAttempt != nil {
+		setStateParams.ExpectedAttempt = make([]int32, len(params.ExpectedAttempt))
+		for i, attempt := range params.ExpectedAttempt {
+			setStateParams.ExpectedAttempt[i] = int32(attempt) //nolint:gosec
+		}
 	}
 
 	for i := range len(params.ID) {
@@ -731,9 +740,12 @@ func (e *Executor) JobUpdate(ctx context.Context, params *riverdriver.JobUpdateP
 	}
 
 	job, err := dbsqlc.New().JobUpdate(schemaTemplateParam(ctx, params.Schema), e.dbtx, &dbsqlc.JobUpdateParams{
-		ID:              params.ID,
-		MetadataDoMerge: params.MetadataDoMerge,
-		Metadata:        metadata,
+		ID:                     params.ID,
+		ExpectedAttempt:        int64(ptrutil.ValOrDefault(params.ExpectedAttempt, 0)),
+		ExpectedAttemptDoCheck: params.ExpectedAttempt != nil,
+		ExpectedAttemptedAt:    params.ExpectedAttemptedAt,
+		MetadataDoMerge:        params.MetadataDoMerge,
+		Metadata:               metadata,
 	})
 	if err != nil {
 		return nil, interpretError(err)

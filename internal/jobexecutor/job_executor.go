@@ -106,6 +106,11 @@ func (r *jobExecutorResult) ErrorStr() string {
 type JobExecutor struct {
 	baseservice.BaseService
 
+	// AbandonContext is cancelled when the producer detaches this executor. It
+	// stops stuck-job monitoring and suppresses late results for the leader.
+	// Set before Execute; nil disables abandonment.
+	AbandonContext context.Context //nolint:containedctx // Holds only lifetime state; request values come from Execute's context.
+
 	CancelFunc               context.CancelCauseFunc
 	ClientJobTimeout         time.Duration
 	Completer                jobcompleter.JobCompleter
@@ -123,6 +128,10 @@ type JobExecutor struct {
 	// other failed attempt.
 	JobRowDecodeErr error
 
+	// JobSetStateIfRunningFunc lets the producer coordinate finalization with
+	// abandonment, including the original attempt of a batch peer.
+	JobSetStateIfRunningFunc func(context.Context, *rivertype.JobRow, *jobstats.JobStatistics, *riverdriver.JobSetStateIfRunningParams) error
+
 	ProducerCallbacks struct {
 		JobDone func(jobRow *rivertype.JobRow)
 		Stuck   func(ctx context.Context, jobRow *rivertype.JobRow)
@@ -137,14 +146,6 @@ type JobExecutor struct {
 	slotClosed atomic.Bool
 	start      time.Time
 	stats      *jobstats.JobStatistics // initialized by the executor, and handed off to completer
-}
-
-// TryCloseSlot marks this executor's producer slot as closed. A closed slot
-// means the producer has already stopped counting this executor against its
-// active worker capacity, although the executor goroutine may still be running.
-// It returns true only the first time the slot is closed.
-func (e *JobExecutor) TryCloseSlot() bool {
-	return e.slotClosed.CompareAndSwap(false, true)
 }
 
 func (e *JobExecutor) Cancel(ctx context.Context) {
@@ -164,6 +165,19 @@ func (e *JobExecutor) Execute(ctx context.Context) {
 	res := e.execute(ctx)
 	e.reportResults(ctx, res)
 	e.ProducerCallbacks.JobDone(e.JobRow)
+}
+
+// IsAbandoned reports whether the producer has detached this executor.
+func (e *JobExecutor) IsAbandoned() bool {
+	return e.AbandonContext != nil && e.AbandonContext.Err() != nil
+}
+
+// TryCloseSlot marks this executor's producer slot as closed. A closed slot
+// means the producer has already stopped counting this executor against its
+// active worker capacity, although the executor goroutine may still be running.
+// It returns true only the first time the slot is closed.
+func (e *JobExecutor) TryCloseSlot() bool {
+	return e.slotClosed.CompareAndSwap(false, true)
 }
 
 func (e *JobExecutor) reportResults(ctx context.Context, res *jobExecutorResult) {
@@ -326,18 +340,26 @@ func (e *JobExecutor) execute(ctx context.Context) (res *jobExecutorResult) {
 // handlers.
 func (e *JobExecutor) watchStuck(ctx context.Context, jobTimeout time.Duration) context.CancelFunc {
 	// We add a WithoutCancel here so that this inner goroutine becomes
-	// immune to all context cancellations _except_ the one where it's
-	// cancelled because we leave JobExecutor.execute.
+	// immune to work context cancellation. Monitoring ends when execution
+	// finishes or the producer abandons this executor.
 	ctx, cancel := context.WithCancel(context.WithoutCancel(ctx))
 
 	go func() {
+		defer cancel()
+		if e.AbandonContext != nil {
+			stopAbandonFunc := context.AfterFunc(e.AbandonContext, cancel) //nolint:contextcheck // Abandonment independently cancels monitoring while preserving its work context values.
+			defer stopAbandonFunc()
+		}
 		const stuckThresholdDefault = 5 * time.Second
 
 		select {
 		case <-ctx.Done():
-			// context cancelled as we leave JobExecutor.execute
+			// Execution finished or the executor was abandoned.
 
 		case <-time.After(jobTimeout + cmp.Or(e.StuckThresholdOverride, stuckThresholdDefault)):
+			if ctx.Err() != nil || e.IsAbandoned() {
+				return
+			}
 			e.ProducerCallbacks.Stuck(ctx, e.JobRow)
 
 			e.Logger.WarnContext(ctx, e.Name+": Job appears to be stuck",
@@ -346,14 +368,15 @@ func (e *JobExecutor) watchStuck(ctx context.Context, jobTimeout time.Duration) 
 				slog.Duration("timeout", jobTimeout),
 			)
 
-			// context cancelled as we leave JobExecutor.execute
-			<-ctx.Done()
-
-			// In case the executor ever becomes unstuck, inform the
-			// producer. However, if we got all the way here there's a good
-			// chance this will never happen (the worker is really stuck and
-			// will never return).
+			// Balance the stuck callback. The producer ignores this if
+			// abandonment already removed the executor from its accounting.
 			defer e.ProducerCallbacks.Unstuck()
+
+			// Execution finished or the executor was abandoned.
+			<-ctx.Done()
+			if e.IsAbandoned() {
+				return
+			}
 
 			defer func() {
 				e.Logger.InfoContext(ctx, e.Name+": Job became unstuck",
@@ -399,6 +422,12 @@ func (e *JobExecutor) invokeErrorHandler(ctx context.Context, jobRow *rivertype.
 }
 
 func (e *JobExecutor) reportResult(ctx context.Context, jobRow *rivertype.JobRow, res *jobExecutorResult) {
+	// An abandoned leader must not overwrite a later attempt, but its worker
+	// may also return results for peers that the producer never abandoned.
+	if jobRow.ID == e.JobRow.ID && e.IsAbandoned() {
+		return
+	}
+
 	var snoozeErr *rivertype.JobSnoozeError
 
 	marshalMetadataUpdates := func(metadataUpdates map[string]any) ([]byte, error) {
@@ -447,7 +476,7 @@ func (e *JobExecutor) reportResult(ctx context.Context, jobRow *rivertype.JobRow
 		} else {
 			params = riverdriver.JobSetStateSnoozed(jobRow.ID, nextAttemptScheduledAt, jobRow.Attempt-1, metadataUpdatesBytes)
 		}
-		if err := e.Completer.JobSetStateIfRunning(ctx, e.stats, params); err != nil {
+		if err := e.setStateIfRunning(ctx, jobRow, params); err != nil {
 			e.Logger.ErrorContext(ctx, e.Name+": Error snoozing job",
 				slog.Int64("job_id", jobRow.ID),
 			)
@@ -466,7 +495,7 @@ func (e *JobExecutor) reportResult(ctx context.Context, jobRow *rivertype.JobRow
 		return
 	}
 
-	if err := e.Completer.JobSetStateIfRunning(ctx, e.stats, riverdriver.JobSetStateCompleted(jobRow.ID, e.Time.Now(), metadataUpdatesBytes)); err != nil {
+	if err := e.setStateIfRunning(ctx, jobRow, riverdriver.JobSetStateCompleted(jobRow.ID, e.Time.Now(), metadataUpdatesBytes)); err != nil {
 		e.Logger.ErrorContext(ctx, e.Name+": Error completing job",
 			slog.String("err", err.Error()),
 			slog.Int64("job_id", jobRow.ID),
@@ -513,7 +542,7 @@ func (e *JobExecutor) reportError(ctx context.Context, jobRow *rivertype.JobRow,
 
 	if softStopped {
 		params := riverdriver.JobSetStateInterrupted(jobRow.ID, now, max(jobRow.Attempt-1, 0), metadataUpdates)
-		if err := e.Completer.JobSetStateIfRunning(ctx, e.stats, params); err != nil {
+		if err := e.setStateIfRunning(ctx, jobRow, params); err != nil {
 			e.Logger.ErrorContext(ctx, e.Name+": Failed to make soft-stopped job available", logAttrs...)
 		}
 		return
@@ -533,14 +562,14 @@ func (e *JobExecutor) reportError(ctx context.Context, jobRow *rivertype.JobRow,
 	}
 
 	if cancelJob {
-		if err := e.Completer.JobSetStateIfRunning(ctx, e.stats, riverdriver.JobSetStateCancelled(jobRow.ID, now, errData, metadataUpdates)); err != nil {
+		if err := e.setStateIfRunning(ctx, jobRow, riverdriver.JobSetStateCancelled(jobRow.ID, now, errData, metadataUpdates)); err != nil {
 			e.Logger.ErrorContext(ctx, e.Name+": Failed to cancel job and report error", logAttrs...)
 		}
 		return
 	}
 
 	if jobRow.Attempt >= jobRow.MaxAttempts {
-		if err := e.Completer.JobSetStateIfRunning(ctx, e.stats, riverdriver.JobSetStateDiscarded(jobRow.ID, now, errData, metadataUpdates)); err != nil {
+		if err := e.setStateIfRunning(ctx, jobRow, riverdriver.JobSetStateDiscarded(jobRow.ID, now, errData, metadataUpdates)); err != nil {
 			e.Logger.ErrorContext(ctx, e.Name+": Failed to discard job and report error", logAttrs...)
 		}
 		return
@@ -575,9 +604,16 @@ func (e *JobExecutor) reportError(ctx context.Context, jobRow *rivertype.JobRow,
 	} else {
 		params = riverdriver.JobSetStateErrorRetryable(jobRow.ID, nextRetryScheduledAt, errData, metadataUpdates)
 	}
-	if err := e.Completer.JobSetStateIfRunning(ctx, e.stats, params); err != nil {
+	if err := e.setStateIfRunning(ctx, jobRow, params); err != nil {
 		e.Logger.ErrorContext(ctx, e.Name+": Failed to report error for job", logAttrs...)
 	}
+}
+
+func (e *JobExecutor) setStateIfRunning(ctx context.Context, jobRow *rivertype.JobRow, params *riverdriver.JobSetStateIfRunningParams) error {
+	if e.JobSetStateIfRunningFunc != nil {
+		return e.JobSetStateIfRunningFunc(ctx, jobRow, e.stats, params)
+	}
+	return e.Completer.JobSetStateIfRunning(ctx, e.stats, params)
 }
 
 // isSoftStopCancelError reports whether a worker returned because the client

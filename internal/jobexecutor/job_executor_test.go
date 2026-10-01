@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"strings"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/stretchr/testify/require"
@@ -209,6 +210,57 @@ func TestJobExecutor_Execute(t *testing.T) {
 
 		return executor, bundle
 	}
+
+	t.Run("SkipsReportingAbandonedJob", func(t *testing.T) {
+		t.Parallel()
+
+		for _, result := range []string{"Error", "MultipleJobs", "Success"} {
+			t.Run(result, func(t *testing.T) {
+				t.Parallel()
+
+				executor, bundle := setup(t)
+
+				jobs := []*rivertype.JobRow{bundle.jobRow}
+				var workErr error
+				switch result {
+				case "Error":
+					workErr = errors.New("job failed")
+				case "MultipleJobs":
+					jobs = append(jobs, testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{State: new(rivertype.JobStateRunning)}))
+					workErr = &errorBundle{
+						errorsByID: map[int64]error{bundle.jobRow.ID: errors.New("job failed")},
+						jobs:       jobs,
+					}
+				}
+
+				executor.WorkUnit = newWorkUnitFactoryWithCustomRetry(func() error { return workErr }, nil).MakeUnit(bundle.jobRow)
+				abandonCtx, abandon := context.WithCancel(ctx)
+				executor.AbandonContext = abandonCtx
+				abandon()
+				var numJobDone int
+				executor.ProducerCallbacks.JobDone = func(job *rivertype.JobRow) {
+					require.Equal(t, bundle.jobRow.ID, job.ID)
+					numJobDone++
+				}
+
+				executor.Execute(ctx)
+
+				require.Equal(t, 1, numJobDone)
+				require.Len(t, bundle.updateCh, len(jobs)-1)
+				require.False(t, bundle.errorHandler.HandleErrorCalled)
+				for _, job := range jobs {
+					jobAfter, err := bundle.exec.JobGetByID(ctx, &riverdriver.JobGetByIDParams{ID: job.ID})
+					require.NoError(t, err)
+					if job.ID == bundle.jobRow.ID {
+						require.Equal(t, rivertype.JobStateRunning, jobAfter.State)
+					} else {
+						require.Equal(t, rivertype.JobStateCompleted, jobAfter.State)
+					}
+					require.Empty(t, jobAfter.Errors)
+				}
+			})
+		}
+	})
 
 	t.Run("Success", func(t *testing.T) {
 		t.Parallel()
@@ -1478,6 +1530,63 @@ func TestJobExecutor_Execute(t *testing.T) {
 		require.True(t, workEnd1Called)
 		require.True(t, workEnd2Called)
 	})
+}
+
+func TestJobExecutor_WatchStuckAbandoned(t *testing.T) {
+	t.Parallel()
+
+	for _, when := range []string{"AfterTimeout", "BeforeTimeout", "BeforeWatching", "DuringCallback"} {
+		t.Run(when, func(t *testing.T) {
+			t.Parallel()
+
+			synctest.Test(t, func(t *testing.T) {
+				var numStuck, numUnstuck int
+				abandonCtx, abandon := context.WithCancel(context.Background())
+				defer abandon()
+				executor := baseservice.Init(riversharedtest.BaseServiceArchetype(t), &JobExecutor{
+					AbandonContext:         abandonCtx,
+					JobRow:                 &rivertype.JobRow{ID: 1, Kind: "test"},
+					StuckThresholdOverride: time.Second,
+					start:                  time.Now(),
+				})
+				executor.ProducerCallbacks.Stuck = func(ctx context.Context, _ *rivertype.JobRow) {
+					numStuck++
+					if when == "DuringCallback" {
+						<-ctx.Done()
+					}
+				}
+				executor.ProducerCallbacks.Unstuck = func() { numUnstuck++ }
+
+				if when == "BeforeWatching" {
+					abandon()
+				}
+				cancel := executor.watchStuck(t.Context(), time.Second)
+				defer cancel()
+				synctest.Wait()
+
+				expectedCalls := 0
+				if when == "AfterTimeout" || when == "DuringCallback" {
+					time.Sleep(2 * time.Second)
+					synctest.Wait()
+					expectedCalls = 1
+				}
+				require.Equal(t, expectedCalls, numStuck)
+				require.Zero(t, numUnstuck)
+
+				abandon()
+				synctest.Wait()
+				require.Equal(t, expectedCalls, numUnstuck)
+
+				// A later worker exit or another stop must not duplicate callbacks.
+				cancel()
+				abandon()
+				time.Sleep(time.Hour)
+				synctest.Wait()
+				require.Equal(t, expectedCalls, numStuck)
+				require.Equal(t, expectedCalls, numUnstuck)
+			})
+		})
+	}
 }
 
 //

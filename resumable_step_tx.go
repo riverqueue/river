@@ -24,7 +24,8 @@ import (
 // the cost of an extra database operation.
 //
 // Must be called from within a ResumableStep or ResumableStepCursor callback.
-// The current step name to persist is read from context.
+// The current step name to persist is read from context. Returns ErrNotFound if
+// this execution attempt is no longer running.
 func ResumableSetStepTx[TDriver riverdriver.Driver[TTx], TTx any, TArgs JobArgs](ctx context.Context, tx TTx, job *Job[TArgs]) (*Job[TArgs], error) {
 	return resumableSetStepTx(ctx, tx, job, nil)
 }
@@ -41,7 +42,8 @@ func ResumableSetStepTx[TDriver riverdriver.Driver[TTx], TTx any, TArgs JobArgs]
 // the cost of an extra database operation.
 //
 // Must be called from within a ResumableStepCursor callback. The current step
-// name to persist is read from context.
+// name to persist is read from context. Returns ErrNotFound if this execution
+// attempt is no longer running.
 func ResumableSetStepCursorTx[TDriver riverdriver.Driver[TTx], TTx any, TArgs JobArgs, TCursor any](ctx context.Context, tx TTx, job *Job[TArgs], cursor TCursor) (*Job[TArgs], error) {
 	cursorBytes, err := json.Marshal(cursor)
 	if err != nil {
@@ -69,6 +71,10 @@ func resumableSetStepTx[TTx any, TArgs JobArgs](ctx context.Context, tx TTx, job
 	client := ClientFromContext[TTx](ctx)
 	if client == nil {
 		return nil, errors.New("client not found in context, can only work within a River worker")
+	}
+
+	if job.AttemptedAt == nil {
+		return nil, errors.New("job must have been attempted")
 	}
 
 	metadataUpdates := map[string]any{
@@ -99,16 +105,23 @@ func resumableSetStepTx[TTx any, TArgs JobArgs](ctx context.Context, tx TTx, job
 		return nil, err
 	}
 
-	updatedJob, err := client.Driver().UnwrapExecutor(tx).JobUpdate(ctx, &riverdriver.JobUpdateParams{
-		ID:              job.ID,
-		MetadataDoMerge: true,
-		Metadata:        metadataUpdatesBytes,
-		Schema:          client.config.Schema,
+	execTx := client.Driver().UnwrapExecutor(tx)
+	updatedJob, err := execTx.JobUpdate(ctx, &riverdriver.JobUpdateParams{
+		ID:                  job.ID,
+		ExpectedAttempt:     &job.Attempt,
+		ExpectedAttemptedAt: job.AttemptedAt,
+		MetadataDoMerge:     true,
+		Metadata:            metadataUpdatesBytes,
+		Schema:              client.config.Schema,
 	})
 	if err != nil {
 		if errors.Is(err, rivertype.ErrNotFound) {
 			if _, isInsideTestWorker := ctx.Value(execution.ContextKeyInsideTestWorker{}).(bool); isInsideTestWorker {
-				panic("to use ResumableSetStepTx or ResumableSetStepCursorTx in a rivertest.Worker, the job must be inserted into the database first")
+				if _, err := execTx.JobGetByID(ctx, &riverdriver.JobGetByIDParams{ID: job.ID, Schema: client.config.Schema}); errors.Is(err, rivertype.ErrNotFound) {
+					panic("to use ResumableSetStepTx or ResumableSetStepCursorTx in a rivertest.Worker, the job must be inserted into the database first")
+				} else if err != nil {
+					return nil, err
+				}
 			}
 		}
 

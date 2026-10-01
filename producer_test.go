@@ -6,13 +6,18 @@ import (
 	"errors"
 	"fmt"
 	"slices"
+	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/stretchr/testify/require"
 
 	"github.com/riverqueue/river/internal/jobcompleter"
+	"github.com/riverqueue/river/internal/jobexecutor"
+	"github.com/riverqueue/river/internal/jobstats"
 	"github.com/riverqueue/river/internal/notifier"
 	"github.com/riverqueue/river/internal/pluginlookup"
 	"github.com/riverqueue/river/internal/rivercommon"
@@ -76,6 +81,51 @@ func (p *beforeJobGetAvailablePilot) JobGetAvailable(
 	return p.Pilot.JobGetAvailable(ctx, exec, state, params)
 }
 
+type blockingJobCompleter struct {
+	jobcompleter.JobCompleter
+
+	releaseCh chan struct{}
+	startedCh chan struct{}
+}
+
+func (c *blockingJobCompleter) JobSetStateIfRunning(ctx context.Context, stats *jobstats.JobStatistics, params *riverdriver.JobSetStateIfRunningParams) error {
+	close(c.startedCh)
+	<-c.releaseCh
+	return nil
+}
+
+type jobSetStateIfRunningManyFuncPilot struct {
+	riverpilot.Pilot
+
+	jobSetStateIfRunningManyFunc func(context.Context, riverdriver.Executor, *riverdriver.JobSetStateIfRunningManyParams) ([]*rivertype.JobRow, error)
+}
+
+func (p *jobSetStateIfRunningManyFuncPilot) JobSetStateIfRunningMany(ctx context.Context, exec riverdriver.Executor, params *riverdriver.JobSetStateIfRunningManyParams) ([]*rivertype.JobRow, error) {
+	return p.jobSetStateIfRunningManyFunc(ctx, exec, params)
+}
+
+type jobSetStateIfRunningManyRecordingPilot struct {
+	riverpilot.Pilot
+
+	paramsCh chan *riverdriver.JobSetStateIfRunningManyParams
+}
+
+func (p *jobSetStateIfRunningManyRecordingPilot) JobSetStateIfRunningMany(ctx context.Context, exec riverdriver.Executor, params *riverdriver.JobSetStateIfRunningManyParams) ([]*rivertype.JobRow, error) {
+	p.paramsCh <- params
+	return p.Pilot.JobSetStateIfRunningMany(ctx, exec, params)
+}
+
+type recordingJobCompleter struct {
+	jobcompleter.JobCompleter
+
+	paramsCh chan *riverdriver.JobSetStateIfRunningParams
+}
+
+func (c *recordingJobCompleter) JobSetStateIfRunning(ctx context.Context, stats *jobstats.JobStatistics, params *riverdriver.JobSetStateIfRunningParams) error {
+	c.paramsCh <- params
+	return nil
+}
+
 // undecodableKindPilot reports locked jobs of one kind as undecodable. Postgres'
 // column types don't allow a job row that can't be decoded, so this simulates
 // one.
@@ -106,6 +156,647 @@ func (p *undecodableKindPilot) JobGetAvailable(
 	}
 
 	return res, nil
+}
+
+func TestProducer_AbandonActiveJobs(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+
+	type testBundle struct {
+		exec       riverdriver.Executor
+		jobUpdates chan []jobcompleter.CompleterJobUpdated
+		producer   *producer
+		schema     string
+	}
+
+	setup := func(t *testing.T, pilot riverpilot.Pilot) *testBundle {
+		t.Helper()
+
+		var (
+			archetype = riversharedtest.BaseServiceArchetype(t)
+			driver    = riverpgxv5.New(riversharedtest.DBPool(ctx, t))
+			exec      = driver.GetExecutor()
+			schema    = riverdbtest.TestSchema(ctx, t, driver, nil)
+		)
+		if pilot == nil {
+			pilot = &riverpilot.StandardPilot{}
+		}
+
+		jobUpdates := make(chan []jobcompleter.CompleterJobUpdated, 1)
+		completer := jobcompleter.NewInlineCompleter(archetype, schema, exec, pilot, make(chan []jobcompleter.CompleterJobUpdated, 10))
+		producer := newProducer(archetype, exec, pilot, &producerConfig{
+			ClientID:                     testClientID,
+			Completer:                    completer,
+			ErrorHandler:                 newTestErrorHandler(),
+			FetchCooldown:                FetchCooldownDefault,
+			FetchPollInterval:            FetchPollIntervalDefault,
+			JobTimeout:                   JobTimeoutDefault,
+			JobUpdateCallback:            func(ctx context.Context, updates []jobcompleter.CompleterJobUpdated) { jobUpdates <- updates },
+			MaxWorkers:                   10,
+			PluginLookupByJob:            pluginlookup.NewJobPluginLookup(nil),
+			PluginLookupGlobal:           pluginlookup.NewPluginLookup(nil),
+			Queue:                        rivercommon.QueueDefault,
+			QueuePollInterval:            queuePollIntervalDefault,
+			QueueReportInterval:          queueReportIntervalDefault,
+			RetryPolicy:                  &DefaultClientRetryPolicy{},
+			SchedulerInterval:            riverinternaltest.SchedulerShortInterval,
+			Schema:                       schema,
+			StaleProducerRetentionPeriod: time.Minute,
+			Workers:                      NewWorkers(),
+		})
+
+		return &testBundle{exec: exec, jobUpdates: jobUpdates, producer: producer, schema: schema}
+	}
+
+	t.Run("AbandonWaitsForWorkerFinalization", func(t *testing.T) {
+		t.Parallel()
+
+		finalizationReleaseCh := make(chan struct{})
+		releaseFinalization := sync.OnceFunc(func() { close(finalizationReleaseCh) })
+		t.Cleanup(releaseFinalization)
+		finalizationStartedCh := make(chan struct{})
+		executor := &jobexecutor.JobExecutor{
+			Completer: &blockingJobCompleter{
+				releaseCh: finalizationReleaseCh,
+				startedCh: finalizationStartedCh,
+			},
+			JobRow: &rivertype.JobRow{ID: 1},
+		}
+		activeJob := newProducerActiveJob(&producer{}, executor)
+
+		finalizationResultCh := make(chan error, 1)
+		go func() {
+			finalizationResultCh <- executor.JobSetStateIfRunningFunc(ctx, executor.JobRow, &jobstats.JobStatistics{}, riverdriver.JobSetStateCompleted(1, time.Now(), nil))
+		}()
+
+		riversharedtest.WaitOrTimeout(t, finalizationStartedCh)
+		require.False(t, activeJob.tryAbandon())
+
+		releaseFinalization()
+		require.NoError(t, riversharedtest.WaitOrTimeout(t, finalizationResultCh))
+		require.False(t, activeJob.executor.IsAbandoned())
+	})
+
+	t.Run("AbandonWinsBeforeWorkerFinalizationStarts", func(t *testing.T) {
+		t.Parallel()
+
+		paramsCh := make(chan *riverdriver.JobSetStateIfRunningParams, 1)
+		executor := &jobexecutor.JobExecutor{
+			Completer: &recordingJobCompleter{paramsCh: paramsCh},
+			JobRow:    &rivertype.JobRow{ID: 1},
+		}
+		activeJob := newProducerActiveJob(&producer{}, executor)
+
+		require.True(t, activeJob.tryAbandon())
+		require.NoError(t, executor.JobSetStateIfRunningFunc(ctx, executor.JobRow, &jobstats.JobStatistics{}, riverdriver.JobSetStateCompleted(1, time.Now(), nil)))
+		require.Empty(t, paramsCh)
+		require.False(t, activeJob.tryAbandon())
+		require.True(t, executor.IsAbandoned())
+	})
+
+	t.Run("DatabaseErrorAbandonsExecutor", func(t *testing.T) {
+		t.Parallel()
+
+		bundle := setup(t, &jobSetStateIfRunningManyFuncPilot{
+			jobSetStateIfRunningManyFunc: func(context.Context, riverdriver.Executor, *riverdriver.JobSetStateIfRunningManyParams) ([]*rivertype.JobRow, error) {
+				return nil, riverdriver.ErrClosedPool
+			},
+		})
+
+		runningState := rivertype.JobStateRunning
+		job := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{
+			Attempt:     new(1),
+			MaxAttempts: new(3),
+			Schema:      bundle.schema,
+			State:       &runningState,
+		})
+		executor := &jobexecutor.JobExecutor{JobRow: job}
+		bundle.producer.addActiveJob(job.ID, executor)
+		activeJob := bundle.producer.activeJobs[job.ID]
+
+		bundle.producer.abandon()
+		bundle.producer.executorShutdownLoop(ctx)
+
+		require.Empty(t, bundle.producer.activeJobs)
+		require.Zero(t, bundle.producer.numJobsActive.Load())
+		require.Empty(t, bundle.jobUpdates)
+		require.True(t, activeJob.executor.IsAbandoned())
+		require.False(t, activeJob.tryAbandon())
+
+		jobAfter, err := bundle.exec.JobGetByID(ctx, &riverdriver.JobGetByIDParams{ID: job.ID, Schema: bundle.schema})
+		require.NoError(t, err)
+		require.Equal(t, rivertype.JobStateRunning, jobAfter.State)
+		require.Empty(t, jobAfter.Errors)
+	})
+
+	t.Run("DatabaseErrorRetried", func(t *testing.T) {
+		t.Parallel()
+
+		for _, failure := range []string{"AfterCommit", "BeforeCommit"} {
+			t.Run(failure, func(t *testing.T) {
+				t.Parallel()
+
+				var numCalls int
+				var firstParams *riverdriver.JobSetStateIfRunningManyParams
+				bundle := setup(t, &jobSetStateIfRunningManyFuncPilot{
+					jobSetStateIfRunningManyFunc: func(ctx context.Context, exec riverdriver.Executor, params *riverdriver.JobSetStateIfRunningManyParams) ([]*rivertype.JobRow, error) {
+						numCalls++
+						snapshot := &riverdriver.JobSetStateIfRunningManyParams{
+							ID:                     slices.Clone(params.ID),
+							ErrData:                [][]byte{slices.Clone(params.ErrData[0])},
+							ExpectedAttempt:        slices.Clone(params.ExpectedAttempt),
+							ExpectedAttemptDoCheck: slices.Clone(params.ExpectedAttemptDoCheck),
+							ExpectedAttemptedAt:    slices.Clone(params.ExpectedAttemptedAt),
+							Now:                    new(*params.Now),
+							State:                  slices.Clone(params.State),
+						}
+						if numCalls == 1 {
+							firstParams = snapshot
+							if failure == "AfterCommit" {
+								_, err := exec.JobSetStateIfRunningMany(ctx, params)
+								require.NoError(t, err)
+							}
+							return nil, errors.New("transient database error")
+						}
+						require.Equal(t, firstParams, snapshot, "retries must preserve the attempt guards and error timestamp")
+						return exec.JobSetStateIfRunningMany(ctx, params)
+					},
+				})
+				job := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{
+					Attempt: new(1), MaxAttempts: new(3), Schema: bundle.schema, State: new(rivertype.JobStateRunning),
+				})
+				bundle.producer.addActiveJob(job.ID, &jobexecutor.JobExecutor{JobRow: job})
+
+				bundle.producer.abandonActiveJobs(ctx)
+
+				require.Equal(t, 2, numCalls)
+				require.Empty(t, bundle.producer.activeJobs)
+				require.Zero(t, bundle.producer.numJobsActive.Load())
+				jobAfter, err := bundle.exec.JobGetByID(ctx, &riverdriver.JobGetByIDParams{ID: job.ID, Schema: bundle.schema})
+				require.NoError(t, err)
+				require.Equal(t, rivertype.JobStateAvailable, jobAfter.State)
+				require.Len(t, jobAfter.Errors, 1, "a committed update must not append its error again on retry")
+				require.Equal(t, producerJobAbandonedError, jobAfter.Errors[0].Error)
+				updates := riversharedtest.WaitOrTimeout(t, bundle.jobUpdates)
+				require.Len(t, updates, 1)
+				require.Equal(t, job.ID, updates[0].Job.ID)
+				require.Equal(t, riverdriver.JobSetStateReasonFailed, updates[0].Reason)
+				require.Empty(t, bundle.jobUpdates)
+			})
+		}
+	})
+
+	t.Run("DetachesStuckCallbacks", func(t *testing.T) {
+		t.Parallel()
+
+		for _, state := range []string{"AlreadyStuck", "NotYetStuck"} {
+			t.Run(state, func(t *testing.T) {
+				t.Parallel()
+
+				bundle := setup(t, nil)
+
+				job := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{
+					Attempt: new(1),
+					Schema:  bundle.schema,
+					State:   new(rivertype.JobStateRunning),
+				})
+				executor := &jobexecutor.JobExecutor{JobRow: job}
+				bundle.producer.addActiveJob(job.ID, executor)
+
+				var numHandlerCalls int
+				bundle.producer.config.JobStuckHandler = func(context.Context, JobStuckHandlerParams) JobStuckHandlerResult {
+					numHandlerCalls++
+					return JobStuckHandlerResult{}
+				}
+				if state == "AlreadyStuck" {
+					bundle.producer.handleWorkerStuck(ctx, executor, job)
+					require.Equal(t, int32(1), bundle.producer.numJobsStuck.Load())
+					require.Equal(t, int32(1), bundle.producer.config.JobStuckCount.Load())
+				}
+				callsBeforeAbandonment := numHandlerCalls
+
+				bundle.producer.abandonActiveJobs(ctx)
+				require.Zero(t, bundle.producer.numJobsStuck.Load())
+				require.Zero(t, bundle.producer.config.JobStuckCount.Load())
+				bundle.producer.handleWorkerStuck(ctx, executor, job)
+				bundle.producer.handleWorkerUnstuck(executor)
+				require.Equal(t, callsBeforeAbandonment, numHandlerCalls)
+				require.Zero(t, bundle.producer.numJobsStuck.Load())
+				require.Zero(t, bundle.producer.config.JobStuckCount.Load())
+
+				// A retry of the same job must not be affected by old callbacks.
+				retryExecutor := &jobexecutor.JobExecutor{JobRow: job}
+				bundle.producer.addActiveJob(job.ID, retryExecutor)
+				bundle.producer.handleWorkerStuck(ctx, retryExecutor, job)
+				bundle.producer.handleWorkerStuck(ctx, executor, job)
+				bundle.producer.handleWorkerUnstuck(executor)
+				require.Equal(t, callsBeforeAbandonment+1, numHandlerCalls)
+				require.Equal(t, int32(1), bundle.producer.numJobsStuck.Load())
+				require.Equal(t, int32(1), bundle.producer.config.JobStuckCount.Load())
+
+				// Completion can arrive before the asynchronous unstuck callback.
+				bundle.producer.removeActiveJob(retryExecutor)
+				bundle.producer.handleWorkerUnstuck(retryExecutor)
+				require.Zero(t, bundle.producer.numJobsStuck.Load())
+				require.Zero(t, bundle.producer.config.JobStuckCount.Load())
+			})
+		}
+	})
+
+	t.Run("MissingAttemptedAtDetachesExecutor", func(t *testing.T) {
+		t.Parallel()
+
+		bundle := setup(t, nil)
+
+		job := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{
+			Attempt: new(1),
+			Schema:  bundle.schema,
+			State:   new(rivertype.JobStateRunning),
+		})
+		partiallyDecodedJob := *job
+		partiallyDecodedJob.AttemptedAt = nil
+		bundle.producer.addActiveJob(job.ID, &jobexecutor.JobExecutor{JobRow: &partiallyDecodedJob})
+		activeJob := bundle.producer.activeJobs[job.ID]
+
+		bundle.producer.abandonActiveJobs(ctx)
+
+		require.True(t, activeJob.executor.IsAbandoned())
+		require.Empty(t, bundle.producer.activeJobs)
+		require.Zero(t, bundle.producer.numJobsActive.Load())
+		require.Empty(t, bundle.jobUpdates)
+		jobAfter, err := bundle.exec.JobGetByID(ctx, &riverdriver.JobGetByIDParams{ID: job.ID, Schema: bundle.schema})
+		require.NoError(t, err)
+		require.Equal(t, job, jobAfter, "a missing timestamp must not result in an unguarded update")
+	})
+
+	t.Run("MissingAttemptedAtSkipsPeerFinalization", func(t *testing.T) {
+		t.Parallel()
+
+		executor := &jobexecutor.JobExecutor{JobRow: &rivertype.JobRow{ID: 1}}
+		activeJob := newProducerActiveJob(&producer{}, executor)
+		peer := &rivertype.JobRow{ID: 2}
+
+		require.True(t, activeJob.tryAbandon())
+		// An unconfigured producer also proves that an unidentified attempt
+		// never reaches the database for an unguarded completion.
+		require.NoError(t, activeJob.jobSetStateIfRunning(ctx, peer, &jobstats.JobStatistics{}, riverdriver.JobSetStateCompleted(peer.ID, time.Now(), nil)))
+	})
+
+	t.Run("PeerFinalizationKeepsExecutorActive", func(t *testing.T) {
+		t.Parallel()
+
+		producer := &producer{
+			activeJobs:     make(map[int64]*producerActiveJob),
+			finalizationCh: make(chan struct{}, 1),
+		}
+		executor := &jobexecutor.JobExecutor{
+			Completer: &recordingJobCompleter{paramsCh: make(chan *riverdriver.JobSetStateIfRunningParams, 1)},
+			JobRow:    &rivertype.JobRow{ID: 1},
+		}
+		producer.addActiveJob(executor.JobRow.ID, executor)
+
+		peer := &rivertype.JobRow{ID: 2}
+		require.NoError(t, executor.JobSetStateIfRunningFunc(ctx, peer, &jobstats.JobStatistics{},
+			riverdriver.JobSetStateCompleted(peer.ID, time.Now(), nil)))
+		require.Len(t, producer.finalizationCh, 1)
+		require.Same(t, executor, producer.activeJobs[executor.JobRow.ID].executor)
+		require.False(t, executor.IsAbandoned())
+		require.Equal(t, int32(1), producer.numJobsActive.Load())
+	})
+
+	t.Run("StuckHandlerFinishesAfterAbandonment", func(t *testing.T) {
+		t.Parallel()
+
+		bundle := setup(t, nil)
+
+		job := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{
+			Attempt: new(1),
+			Schema:  bundle.schema,
+			State:   new(rivertype.JobStateRunning),
+		})
+		executor := &jobexecutor.JobExecutor{JobRow: job}
+		bundle.producer.addActiveJob(job.ID, executor)
+
+		var handlerStarted, handlerFinished testsignal.TestSignal[struct{}]
+		handlerStarted.Init(t)
+		handlerFinished.Init(t)
+		// This channel deliberately keeps a user callback in flight across
+		// abandonment, and cleanup releases it even if an assertion fails.
+		releaseHandler := make(chan struct{})
+		release := sync.OnceFunc(func() { close(releaseHandler) })
+		t.Cleanup(release)
+		bundle.producer.config.JobStuckHandler = func(context.Context, JobStuckHandlerParams) JobStuckHandlerResult {
+			handlerStarted.Signal(struct{}{})
+			<-releaseHandler
+			return JobStuckHandlerResult{AddWorkerSlot: true}
+		}
+		go func() {
+			bundle.producer.handleWorkerStuck(ctx, executor, job)
+			handlerFinished.Signal(struct{}{})
+		}()
+		handlerStarted.WaitOrTimeout()
+
+		bundle.producer.abandonActiveJobs(ctx)
+		retryExecutor := &jobexecutor.JobExecutor{JobRow: job}
+		bundle.producer.addActiveJob(job.ID, retryExecutor)
+		release()
+		handlerFinished.WaitOrTimeout()
+		bundle.producer.handleWorkerUnstuck(executor)
+
+		require.Zero(t, bundle.producer.numJobsStuck.Load())
+		require.Zero(t, bundle.producer.config.JobStuckCount.Load())
+		require.Equal(t, int32(1), bundle.producer.numJobsActive.Load())
+		require.Same(t, retryExecutor, bundle.producer.activeJobs[job.ID].executor)
+	})
+
+	t.Run("UpdatesJobsInSingleBatchAndEmitsEvents", func(t *testing.T) {
+		t.Parallel()
+
+		recordingPilot := &jobSetStateIfRunningManyRecordingPilot{
+			Pilot:    &riverpilot.StandardPilot{},
+			paramsCh: make(chan *riverdriver.JobSetStateIfRunningManyParams, 10),
+		}
+		bundle := setup(t, recordingPilot)
+
+		availableState := rivertype.JobStateAvailable
+		runningState := rivertype.JobStateRunning
+		alreadyAvailableJob := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{
+			Attempt:     new(1),
+			AttemptedAt: new(time.Now().UTC()),
+			MaxAttempts: new(3),
+			Schema:      bundle.schema,
+			State:       &availableState,
+		})
+		retryableJob := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{
+			Attempt:     new(1),
+			MaxAttempts: new(3),
+			Schema:      bundle.schema,
+			State:       &runningState,
+		})
+		discardedJob := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{
+			Attempt:     new(3),
+			MaxAttempts: new(3),
+			Schema:      bundle.schema,
+			State:       &runningState,
+		})
+
+		bundle.producer.addActiveJob(alreadyAvailableJob.ID, &jobexecutor.JobExecutor{JobRow: alreadyAvailableJob})
+		bundle.producer.addActiveJob(retryableJob.ID, &jobexecutor.JobExecutor{JobRow: retryableJob})
+		bundle.producer.addActiveJob(discardedJob.ID, &jobexecutor.JobExecutor{JobRow: discardedJob})
+
+		bundle.producer.abandon()
+		bundle.producer.executorShutdownLoop(ctx)
+
+		require.Empty(t, bundle.producer.activeJobs)
+		require.Zero(t, bundle.producer.numJobsActive.Load())
+		batchParams := riversharedtest.WaitOrTimeout(t, recordingPilot.paramsCh)
+		require.ElementsMatch(t, []int64{alreadyAvailableJob.ID, retryableJob.ID, discardedJob.ID}, batchParams.ID)
+		require.Empty(t, recordingPilot.paramsCh)
+
+		updates := riversharedtest.WaitOrTimeout(t, bundle.jobUpdates)
+		require.Len(t, updates, 2)
+		require.ElementsMatch(t, []int64{retryableJob.ID, discardedJob.ID}, []int64{updates[0].Job.ID, updates[1].Job.ID})
+		for _, update := range updates {
+			require.NotNil(t, update.JobStats)
+			require.Equal(t, riverdriver.JobSetStateReasonFailed, update.Reason)
+		}
+		require.Empty(t, bundle.jobUpdates)
+
+		alreadyAvailableJobAfter, err := bundle.exec.JobGetByID(ctx, &riverdriver.JobGetByIDParams{ID: alreadyAvailableJob.ID, Schema: bundle.schema})
+		require.NoError(t, err)
+		require.Equal(t, rivertype.JobStateAvailable, alreadyAvailableJobAfter.State)
+		require.Empty(t, alreadyAvailableJobAfter.Errors)
+
+		retryableJobAfter, err := bundle.exec.JobGetByID(ctx, &riverdriver.JobGetByIDParams{ID: retryableJob.ID, Schema: bundle.schema})
+		require.NoError(t, err)
+		require.Equal(t, rivertype.JobStateAvailable, retryableJobAfter.State)
+		require.Len(t, retryableJobAfter.Errors, 1)
+		require.Equal(t, producerJobAbandonedError, retryableJobAfter.Errors[0].Error)
+		require.Equal(t, retryableJob.Attempt, retryableJobAfter.Errors[0].Attempt)
+		require.Empty(t, retryableJobAfter.Errors[0].Trace)
+		require.Nil(t, retryableJobAfter.FinalizedAt)
+
+		discardedJobAfter, err := bundle.exec.JobGetByID(ctx, &riverdriver.JobGetByIDParams{ID: discardedJob.ID, Schema: bundle.schema})
+		require.NoError(t, err)
+		require.Equal(t, rivertype.JobStateDiscarded, discardedJobAfter.State)
+		require.Len(t, discardedJobAfter.Errors, 1)
+		require.Equal(t, producerJobAbandonedError, discardedJobAfter.Errors[0].Error)
+		require.Equal(t, discardedJob.Attempt, discardedJobAfter.Errors[0].Attempt)
+		require.Empty(t, discardedJobAfter.Errors[0].Trace)
+		require.NotNil(t, discardedJobAfter.FinalizedAt)
+	})
+}
+
+func TestProducer_AbandonActiveJobsRetries(t *testing.T) {
+	t.Parallel()
+
+	for _, failure := range []string{"ClosedPool", "TimeoutThenSuccess", "TimeoutsExhausted", "TransientErrorsExhausted"} {
+		t.Run(failure, func(t *testing.T) {
+			t.Parallel()
+
+			synctest.Test(t, func(t *testing.T) {
+				producer := baseservice.Init(riversharedtest.BaseServiceArchetype(t), &producer{
+					abandonCh:  make(chan struct{}, 1),
+					activeJobs: make(map[int64]*producerActiveJob),
+					config:     &producerConfig{},
+				})
+				var numCalls int
+				producer.pilot = &jobSetStateIfRunningManyFuncPilot{
+					jobSetStateIfRunningManyFunc: func(ctx context.Context, _ riverdriver.Executor, params *riverdriver.JobSetStateIfRunningManyParams) ([]*rivertype.JobRow, error) {
+						numCalls++
+						require.Contains(t, producer.activeJobs, int64(1), "detach only after retries finish")
+						deadline, ok := ctx.Deadline()
+						require.True(t, ok)
+						require.Equal(t, rivercommon.HotOperationTimeout, time.Until(deadline))
+						switch failure {
+						case "ClosedPool":
+							return nil, riverdriver.ErrClosedPool
+						case "TimeoutThenSuccess":
+							if numCalls == 2 {
+								return nil, nil
+							}
+						case "TransientErrorsExhausted":
+							return nil, errors.New("database unavailable")
+						}
+						<-ctx.Done()
+						return nil, ctx.Err()
+					},
+				}
+				job := &rivertype.JobRow{ID: 1, Attempt: 1, AttemptedAt: new(time.Now()), MaxAttempts: 3}
+				executor := &jobexecutor.JobExecutor{JobRow: job}
+				producer.addActiveJob(job.ID, executor)
+
+				start := time.Now()
+				producer.abandonActiveJobs(context.Background())
+
+				switch failure {
+				case "ClosedPool":
+					require.Equal(t, 1, numCalls)
+					require.Zero(t, time.Since(start))
+				case "TimeoutThenSuccess":
+					require.Equal(t, 2, numCalls)
+				default:
+					require.Equal(t, 3, numCalls)
+				}
+				require.Less(t, time.Since(start), 4*rivercommon.HotOperationTimeout, "retries must not hold shutdown indefinitely")
+				require.Empty(t, producer.activeJobs)
+				require.Zero(t, producer.numJobsActive.Load())
+				require.True(t, executor.IsAbandoned())
+			})
+		})
+	}
+}
+
+func TestProducer_ExecutorShutdownLoop(t *testing.T) {
+	t.Parallel()
+
+	for _, finalizingJob := range []string{"LeaderAfterTimeout", "LeaderBeforeTimeout", "PeerAfterTimeout", "PeerBeforeTimeout"} {
+		t.Run(finalizingJob, func(t *testing.T) {
+			t.Parallel()
+
+			synctest.Test(t, func(t *testing.T) {
+				ctx := context.Background()
+				producer := baseservice.Init(riversharedtest.BaseServiceArchetype(t), &producer{
+					abandonCh:      make(chan struct{}, 1),
+					activeJobs:     make(map[int64]*producerActiveJob),
+					config:         &producerConfig{},
+					finalizationCh: make(chan struct{}, 1),
+					jobResultCh:    make(chan *jobexecutor.JobExecutor, 1),
+					pilot: &jobSetStateIfRunningManyFuncPilot{
+						jobSetStateIfRunningManyFunc: func(context.Context, riverdriver.Executor, *riverdriver.JobSetStateIfRunningManyParams) ([]*rivertype.JobRow, error) {
+							t.Error("shutdown must not overwrite a leader result already accepted by the completer")
+							return nil, riverdriver.ErrClosedPool
+						},
+					},
+				})
+				// Peer cases skip the database update with a missing timestamp.
+				// Leader cases have one, so only the submitted result prevents an
+				// update while the recording completer hasn't persisted it yet.
+				job := &rivertype.JobRow{ID: 1}
+				completingJob := job
+				if !strings.HasPrefix(finalizingJob, "Leader") {
+					completingJob = &rivertype.JobRow{ID: 2}
+				} else {
+					job.AttemptedAt = new(time.Now())
+				}
+				// Deliberately keep a completer call in flight as abandonment fires.
+				releaseCh := make(chan struct{})
+				release := sync.OnceFunc(func() { close(releaseCh) })
+				startedCh := make(chan struct{})
+				executor := &jobexecutor.JobExecutor{
+					Completer: &blockingJobCompleter{releaseCh: releaseCh, startedCh: startedCh},
+					JobRow:    job,
+				}
+				producer.addActiveJob(job.ID, executor)
+				activeJob := producer.activeJobs[job.ID]
+
+				var finalized testsignal.TestSignal[error]
+				finalized.Init(t)
+				go func() {
+					finalized.Signal(executor.JobSetStateIfRunningFunc(ctx, completingJob, &jobstats.JobStatistics{},
+						riverdriver.JobSetStateCompleted(completingJob.ID, time.Now(), nil)))
+				}()
+				riversharedtest.WaitOrTimeout(t, startedCh)
+
+				// A late finalization from a previous run can leave a notification
+				// queued. It must neither start abandonment early nor lose the
+				// wakeup when the in-flight completion releases its mutex.
+				producer.finalizationCh <- struct{}{}
+				var stopped testsignal.TestSignal[struct{}]
+				stopped.Init(t)
+				go func() {
+					producer.executorShutdownLoop(ctx)
+					stopped.Signal(struct{}{})
+				}()
+				defer func() {
+					release()
+					producer.handleWorkerDone(executor)
+					stopped.WaitOrTimeout()
+				}()
+
+				synctest.Wait()
+				require.False(t, executor.IsAbandoned())
+				stopped.RequireEmpty()
+
+				if strings.HasSuffix(finalizingJob, "BeforeTimeout") {
+					release()
+					require.NoError(t, finalized.WaitOrTimeout())
+					synctest.Wait()
+					// A completion notification alone must not initiate abandonment.
+					require.False(t, activeJob.executor.IsAbandoned())
+					stopped.RequireEmpty()
+					producer.abandon()
+				} else {
+					producer.abandon()
+					synctest.Wait() // the initial abandonment pass encounters the held mutex
+					require.False(t, activeJob.executor.IsAbandoned())
+					stopped.RequireEmpty()
+
+					release()
+					require.NoError(t, finalized.WaitOrTimeout())
+				}
+				synctest.Wait()
+
+				// No JobDone arrives: processing is stuck on a later peer. Both
+				// leader and peer completions must wake the abandonment loop.
+				require.True(t, activeJob.executor.IsAbandoned())
+				require.Equal(t, strings.HasPrefix(finalizingJob, "Leader"), activeJob.leaderFinalizationSubmitted)
+				require.Empty(t, producer.activeJobs)
+				require.Zero(t, producer.numJobsActive.Load())
+				if strings.HasPrefix(finalizingJob, "Leader") {
+					require.Equal(t, uint64(1), producer.numJobsRan.Load())
+				} else {
+					require.Zero(t, producer.numJobsRan.Load())
+				}
+			})
+		})
+	}
+}
+
+func TestProducer_HandleWorkerDone(t *testing.T) {
+	t.Parallel()
+
+	for _, timing := range []string{"AfterAbandonment", "AfterRestart", "DuringAbandonment"} {
+		t.Run(timing, func(t *testing.T) {
+			t.Parallel()
+
+			synctest.Test(t, func(t *testing.T) {
+				producer := &producer{
+					activeJobs:  make(map[int64]*producerActiveJob),
+					jobResultCh: make(chan *jobexecutor.JobExecutor, 1),
+				}
+				job := &rivertype.JobRow{ID: 1}
+				executor := &jobexecutor.JobExecutor{JobRow: job}
+				producer.addActiveJob(job.ID, executor)
+				activeJob := producer.activeJobs[job.ID]
+
+				// Replacement worker slots can leave more executors than the
+				// result channel has room for. No receiver remains after stop.
+				producer.jobResultCh <- &jobexecutor.JobExecutor{}
+				if timing != "DuringAbandonment" {
+					require.True(t, activeJob.tryAbandon())
+					delete(producer.activeJobs, job.ID)
+					if timing == "AfterRestart" {
+						producer.addActiveJob(job.ID, &jobexecutor.JobExecutor{JobRow: job})
+					}
+				}
+
+				var done testsignal.TestSignal[struct{}]
+				done.Init(t)
+				go func() {
+					producer.handleWorkerDone(executor)
+					done.Signal(struct{}{})
+				}()
+				synctest.Wait()
+				if timing == "DuringAbandonment" {
+					done.RequireEmpty()
+					require.True(t, activeJob.tryAbandon())
+				}
+				done.WaitOrTimeout()
+			})
+		})
+	}
 }
 
 func TestProducer_MetricEmitHook(t *testing.T) {
