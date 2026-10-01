@@ -75,11 +75,22 @@ impl FieldErrors {
         column: &str,
         decoded: Result<T, impl Display>,
     ) -> T {
+        self.field_or_else(column, decoded, T::default)
+    }
+
+    /// Returns a decoded field, or records why it couldn't be decoded and
+    /// leaves it as `empty` returns.
+    pub(crate) fn field_or_else<T>(
+        &mut self,
+        column: &str,
+        decoded: Result<T, impl Display>,
+        empty: impl FnOnce() -> T,
+    ) -> T {
         decoded.unwrap_or_else(|error| {
             self.columns.push(column.to_owned());
             self.messages
                 .push(format!("error unmarshaling `{column}`: {error}"));
-            T::default()
+            empty()
         })
     }
 

@@ -451,6 +451,20 @@ async fn rescuer_recovers_undecodable_stuck_jobs() {
         stuck.push(job.job.row.id);
     }
     set_json_column(&database.pool, stuck[0], "tags", r#"{"not":"an array"}"#).await;
+    // Like River Go, the rescue error is appended to `errors` that aren't
+    // valid JSON by wrapping them in an array, and metadata that isn't valid
+    // JSON is left in place.
+    let invalid_json = client.insert(ResilienceArgs {}).await.unwrap().job.row.id;
+    sqlx::query(
+        "UPDATE river_job SET state = 'running', attempt = 1, \
+         attempted_at = datetime('now', '-1 hour'), errors = 'not json', \
+         metadata = 'not json' WHERE id = ?",
+    )
+    .bind(invalid_json)
+    .execute(&database.pool)
+    .await
+    .unwrap();
+    stuck.push(invalid_json);
 
     let mut run = client.start().unwrap();
     for id in &stuck {
@@ -467,6 +481,161 @@ async fn rescuer_recovers_undecodable_stuck_jobs() {
         .await
         .unwrap();
     assert_eq!(tags, r#"{"not":"an array"}"#);
+
+    let (errors, metadata): (String, String) =
+        sqlx::query_as("SELECT json(errors), metadata FROM river_job WHERE id = ?")
+            .bind(invalid_json)
+            .fetch_one(&database.pool)
+            .await
+            .unwrap();
+    let errors: Vec<serde_json::Value> = serde_json::from_str(&errors).unwrap();
+    assert_eq!(errors.len(), 2);
+    assert_eq!(errors[0], "not json");
+    assert_eq!(metadata, "not json");
+}
+
+/// Sets a JSON column to text that isn't valid JSON, as an out of band
+/// change could.
+async fn set_invalid_json_column(pool: &SqlitePool, id: i64, column: &str) {
+    sqlx::query(sqlx::AssertSqlSafe(format!(
+        "UPDATE river_job SET {column} = 'not json' WHERE id = ?"
+    )))
+    .bind(id)
+    .execute(pool)
+    .await
+    .unwrap();
+}
+
+// Like River Go, a JSON column holding text that isn't valid JSON doesn't
+// fail fetches from its queue, completion, or scheduling. A job with one is
+// claimed as undecodable and its attempt fails, the value is left in place,
+// and the other jobs are worked.
+#[tokio::test(flavor = "multi_thread")]
+#[allow(clippy::too_many_lines)]
+async fn invalid_json_columns_fail_attempts_without_stalling_the_queue() {
+    const COLUMNS: [&str; 5] = ["args", "attempted_by", "errors", "metadata", "tags"];
+
+    let database = TestDatabase::new(Duration::from_secs(5)).await;
+    let error_handler = RecordingErrorHandler::default();
+    let client = Client::builder(database.pool.clone())
+        .id("sqlite-resilience-invalid-json")
+        .maintenance(
+            MaintenanceConfig::default()
+                .with_elect_interval(Duration::from_millis(20))
+                .with_scheduler_interval(Duration::from_millis(50)),
+        )
+        .error_handler(error_handler.clone())
+        .retry_policy(RetryAnHourLater)
+        .workers(completing_workers())
+        .queue("default", fast_queue())
+        .build()
+        .unwrap();
+    let mut events = client
+        .subscribe(&[EventKind::JobCompleted, EventKind::JobFailed])
+        .unwrap();
+
+    let mut invalid = Vec::new();
+    for column in COLUMNS {
+        let job = client.insert(ResilienceArgs {}).await.unwrap();
+        set_invalid_json_column(&database.pool, job.job.row.id, column).await;
+        invalid.push((column, job.job.row.id));
+    }
+    let ordinary = client.insert(ResilienceArgs {}).await.unwrap();
+
+    let mut run = client.start().unwrap();
+    run.wait_ready().await.unwrap();
+    let mut events_by_id = std::collections::HashMap::new();
+    while events_by_id.len() < invalid.len() + 1 {
+        let event = tokio::time::timeout(Duration::from_secs(10), events.recv())
+            .await
+            .expect("job events")
+            .unwrap();
+        let event = event.as_job().unwrap().clone();
+        events_by_id.insert(event.job.id, event);
+    }
+    assert_eq!(
+        events_by_id[&ordinary.job.row.id].kind,
+        JobEventKind::Completed
+    );
+
+    let handled = error_handler.0.lock().unwrap().clone();
+    for &(column, id) in &invalid {
+        assert_eq!(events_by_id[&id].kind, JobEventKind::Failed, "{column}");
+        let (_, error) = handled.iter().find(|(job, _)| job.id == id).unwrap();
+        assert!(
+            error.starts_with("job row couldn't be decoded: "),
+            "{column}: {error}"
+        );
+        assert!(
+            error.contains(&format!("error unmarshaling `{column}`: ")),
+            "{column}: {error}"
+        );
+
+        // The invalid value is left in place, except that the attempt error
+        // is appended to an invalid `errors` value wrapped in an array.
+        let (state, attempt, stored_type, stored): (String, i64, String, String) =
+            sqlx::query_as(sqlx::AssertSqlSafe(format!(
+                "SELECT state, attempt, typeof({column}), \
+                 CASE WHEN typeof({column}) = 'text' THEN {column} ELSE json({column}) END \
+                 FROM river_job WHERE id = ?"
+            )))
+            .bind(id)
+            .fetch_one(&database.pool)
+            .await
+            .unwrap();
+        assert_eq!(state, "retryable", "{column}");
+        assert_eq!(attempt, 1, "{column}");
+        if column == "errors" {
+            let errors: Vec<serde_json::Value> = serde_json::from_str(&stored).unwrap();
+            assert_eq!(errors.len(), 2);
+            assert_eq!(errors[0], "not json");
+            assert_eq!(errors[1]["error"], error.as_str());
+        } else {
+            assert_eq!(
+                (stored_type.as_str(), stored.as_str()),
+                ("text", "not json"),
+                "{column}"
+            );
+        }
+    }
+
+    // The scheduler makes the failed jobs available again without failing on
+    // their invalid values, along with an ordinary scheduled job.
+    let scheduled = client
+        .insert(ResilienceArgs {})
+        .opts(InsertOpts::default().with_scheduled_at(Utc::now() + chrono::Duration::hours(1)))
+        .await
+        .unwrap();
+    sqlx::query("UPDATE river_job SET scheduled_at = datetime('now', '-1 second') WHERE state IN ('retryable', 'scheduled')")
+        .execute(&database.pool)
+        .await
+        .unwrap();
+    wait_until(
+        Duration::from_secs(10),
+        "scheduled job completion",
+        || async { job_state(&database.pool, scheduled.job.row.id).await == "completed" },
+    )
+    .await;
+    // Wrapping the invalid `errors` in an array made that job decodable, so
+    // it's worked this time. The others fail again.
+    for &(column, id) in &invalid {
+        let expected = if column == "errors" {
+            "completed"
+        } else {
+            "retryable"
+        };
+        wait_until(Duration::from_secs(10), column, || async {
+            let (state, attempt): (String, i64) =
+                sqlx::query_as("SELECT state, attempt FROM river_job WHERE id = ?")
+                    .bind(id)
+                    .fetch_one(&database.pool)
+                    .await
+                    .unwrap();
+            state == expected && attempt == 2
+        })
+        .await;
+    }
+    run.shutdown().await.unwrap();
 }
 
 #[tokio::test(flavor = "multi_thread")]

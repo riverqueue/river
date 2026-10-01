@@ -20,7 +20,7 @@ use std::{
 };
 
 use chrono::{DateTime, SubsecRound, Utc};
-use serde_json::{Map, Value};
+use serde_json::{Map, Value, value::RawValue};
 use sqlx::{AssertSqlSafe, FromRow, QueryBuilder, Sqlite, SqliteConnection};
 
 use sqlx::sqlite::SqliteRow;
@@ -31,26 +31,69 @@ use crate::{
     query::{JobListKeyset, JobListSqlPart},
 };
 
+/// Job columns as River reads them. A JSON column can be changed out of band
+/// to text that isn't valid JSON, which makes SQLite's JSON functions fail
+/// with "malformed JSON", including the `json()` that converts the stored
+/// JSONB to text. Like River Go, such a value is returned as is instead, so
+/// the row decodes as undecodable rather than failing the whole statement,
+/// and a fetched job with one has its attempt failed. River writes these
+/// columns as JSONB, so only text values are checked.
 pub(crate) const JOB_COLUMNS: &str = r#"
     id,
     attempt,
     attempted_at,
-    CASE WHEN attempted_by IS NULL THEN NULL ELSE json(attempted_by) END AS attempted_by,
+    CASE WHEN typeof(attempted_by) = 'text' AND NOT json_valid(attempted_by) THEN attempted_by ELSE json(attempted_by) END AS attempted_by,
     created_at,
-    json(args) AS encoded_args,
-    CASE WHEN errors IS NULL THEN NULL ELSE json(errors) END AS errors,
+    CASE WHEN typeof(args) = 'text' AND NOT json_valid(args) THEN args ELSE json(args) END AS encoded_args,
+    CASE WHEN typeof(errors) = 'text' AND NOT json_valid(errors) THEN errors ELSE json(errors) END AS errors,
     finalized_at,
     kind,
     max_attempts,
-    json(metadata) AS metadata,
+    CASE WHEN typeof(metadata) = 'text' AND NOT json_valid(metadata) THEN metadata ELSE json(metadata) END AS metadata,
     priority,
     queue,
     scheduled_at,
     state,
-    json(tags) AS tags,
+    CASE WHEN typeof(tags) = 'text' AND NOT json_valid(tags) THEN tags ELSE json(tags) END AS tags,
     unique_key,
     unique_states
 "#;
+
+/// Whether a stored JSON column holds text that isn't valid JSON. See
+/// [`JOB_COLUMNS`].
+macro_rules! invalid_json {
+    ($column:literal) => {
+        concat!(
+            "(typeof(",
+            $column,
+            ") = 'text' AND NOT json_valid(",
+            $column,
+            "))"
+        )
+    };
+}
+
+/// A job's `cancel_attempted_at`, treating metadata that isn't valid JSON as
+/// not having one. Like River Go, a key with a JSON `null` value still counts,
+/// which `->` distinguishes from a missing key.
+const CANCEL_ATTEMPTED_AT: &str = concat!(
+    "(CASE WHEN NOT ",
+    invalid_json!("metadata"),
+    " THEN metadata -> 'cancel_attempted_at' END)"
+);
+
+/// Appends the attempt error bound next to `errors`. `errors` is always an
+/// array unless it's been changed out of band. Like River Go, any other value
+/// is wrapped in an array, as a string if it isn't valid JSON, so the new
+/// error is still appended without losing it.
+const ERRORS_APPENDED: &str = concat!(
+    "CASE WHEN ",
+    invalid_json!("errors"),
+    " THEN jsonb(json_array(errors, json(?))) \
+     WHEN coalesce(json_type(errors), 'array') <> 'array' \
+         THEN jsonb(json_array(json(errors), json(?))) \
+     ELSE jsonb(json_insert(json(coalesce(errors, jsonb('[]'))), '$[#]', json(?))) END"
+);
 
 const QUEUE_COLUMNS: &str = r#"
     created_at,
@@ -207,24 +250,26 @@ pub(crate) struct NotificationInput<'a> {
 
 // River Go stores `attempt`, `max_attempts`, and `priority` as native
 // integers, so they decode as `i64` and saturate into `JobRow`'s fields.
+// JSON columns are read as bytes, since a value changed out of band might not
+// even be UTF-8.
 #[derive(Clone, Debug, FromRow)]
 struct JobRecord {
     attempt: i64,
     attempted_at: Option<DateTime<Utc>>,
-    attempted_by: Option<String>,
+    attempted_by: Option<Vec<u8>>,
     created_at: DateTime<Utc>,
-    encoded_args: String,
-    errors: Option<String>,
+    encoded_args: Vec<u8>,
+    errors: Option<Vec<u8>>,
     finalized_at: Option<DateTime<Utc>>,
     id: i64,
     kind: String,
     max_attempts: i64,
-    metadata: String,
+    metadata: Vec<u8>,
     priority: i64,
     queue: String,
     scheduled_at: DateTime<Utc>,
     state: String,
-    tags: String,
+    tags: Vec<u8>,
     unique_key: Option<Vec<u8>>,
     unique_states: Option<i64>,
 }
@@ -249,27 +294,46 @@ impl JobRecord {
         };
         let state = JobState::try_from(self.state.as_str())
             .map_err(|error| unidentifiable(error.to_string()))?;
-        let encoded_args = serde_json::value::RawValue::from_string(self.encoded_args)
-            .map_err(|error| unidentifiable(format!("error decoding `args`: {error}")))?;
 
         let mut errors = FieldErrors::default();
+        // Like River Go, args that aren't valid JSON are left empty, as
+        // `null`, so the job isn't worked with them.
+        let encoded_args = errors.field_or_else(
+            "args",
+            json_text(self.encoded_args)
+                .and_then(|text| RawValue::from_string(text).map_err(|error| error.to_string())),
+            || RawValue::from_string("null".to_owned()).expect("null is valid JSON"),
+        );
         let attempted_by = errors.field(
             "attempted_by",
-            decode_json_strings(self.attempted_by.as_deref()),
+            self.attempted_by
+                .map(json_text)
+                .transpose()
+                .and_then(|text| {
+                    decode_json_strings(text.as_deref()).map_err(|error| error.to_string())
+                }),
         );
         let attempt_errors = errors.field(
             "errors",
-            self.errors
-                .as_deref()
-                .map_or_else(|| Ok(Vec::new()), AttemptError::from_json_array_lenient),
+            self.errors.map(json_text).transpose().and_then(|text| {
+                text.as_deref()
+                    .map_or_else(|| Ok(Vec::new()), AttemptError::from_json_array_lenient)
+                    .map_err(|error| error.to_string())
+            }),
         );
         let metadata = errors.field(
             "metadata",
-            self.metadata
-                .parse::<JobMetadata>()
-                .map_err(|error| error.to_string()),
+            json_text(self.metadata).and_then(|text| {
+                text.parse::<JobMetadata>()
+                    .map_err(|error| error.to_string())
+            }),
         );
-        let tags = errors.field("tags", decode_json_strings(Some(&self.tags)));
+        let tags = errors.field(
+            "tags",
+            json_text(self.tags).and_then(|text| {
+                decode_json_strings(Some(&text)).map_err(|error| error.to_string())
+            }),
+        );
         let unique_states = errors.field(
             "unique_states",
             self.unique_states.map(decode_unique_states).transpose(),
@@ -349,6 +413,11 @@ impl From<LeaderRecord> for Leader {
             leader_id: record.leader_id,
         }
     }
+}
+
+/// Converts a JSON column read as bytes to text.
+fn json_text(bytes: Vec<u8>) -> Result<String, String> {
+    String::from_utf8(bytes).map_err(|error| error.to_string())
 }
 
 fn decode_json_or_default<T>(encoded: Option<&str>) -> Result<T, serde_json::Error>
@@ -494,31 +563,10 @@ pub(crate) async fn claim(
             attempted_at = "#,
     );
     query.push_bind(&now);
+    query.push(", attempted_by = ");
+    push_attempted_by_appended(&mut query, params);
     query.push(
         r#",
-            attempted_by = jsonb(json_insert(
-                (
-                    SELECT jsonb_group_array(value)
-                    FROM (
-                        SELECT value FROM (
-                            SELECT key, value
-                            FROM json_each(coalesce(attempted_by, jsonb('[]')))
-                            ORDER BY key DESC
-                            LIMIT "#,
-    );
-    query.push_bind(params.max_attempted_by.saturating_sub(1));
-    query.push(
-        r#"
-                        ) ORDER BY key ASC
-                    )
-                ),
-                '$[#]',
-                "#,
-    );
-    query.push_bind(params.client_id);
-    query.push(
-        r#"
-            )),
             state = 'running'
         WHERE id IN (
             SELECT river_job.id
@@ -555,6 +603,41 @@ pub(crate) async fn claim(
     Ok(rows.iter().map(decode_job_row).collect())
 }
 
+/// Pushes `attempted_by` with this client appended, keeping at most
+/// `max_attempted_by` entries. Like River Go, an `attempted_by` that isn't
+/// valid JSON is left in place, since `json_each` would fail on it and with
+/// it the whole claim; the job is then claimed as undecodable. `json_each`'s
+/// input is guarded too, as River Go guards it for SQLite implementations that
+/// evaluate a `CASE` branch that isn't taken.
+fn push_attempted_by_appended(query: &mut QueryBuilder<Sqlite>, params: &ClaimJobs<'_>) {
+    query.push(concat!(
+        "CASE WHEN ",
+        invalid_json!("attempted_by"),
+        r#" THEN attempted_by ELSE jsonb(json_insert(
+            (
+                SELECT jsonb_group_array(value)
+                FROM (
+                    SELECT value FROM (
+                        SELECT key, value
+                        FROM json_each(CASE WHEN "#,
+        invalid_json!("attempted_by"),
+        r#" THEN jsonb('[]') ELSE coalesce(attempted_by, jsonb('[]')) END)
+                        ORDER BY key DESC
+                        LIMIT "#,
+    ));
+    query.push_bind(params.max_attempted_by.saturating_sub(1));
+    query.push(
+        r#"
+                    ) ORDER BY key ASC
+                )
+            ),
+            '$[#]',
+            "#,
+    );
+    query.push_bind(params.client_id.to_owned());
+    query.push(")) END");
+}
+
 /// Claims exactly the IDs selected by an exact-version extension.
 ///
 /// The caller keeps selection and this update in one transaction. Eligibility
@@ -578,31 +661,10 @@ pub(crate) async fn claim_selected(
             attempted_at = "#,
     );
     query.push_bind(&now);
+    query.push(", attempted_by = ");
+    push_attempted_by_appended(&mut query, params);
     query.push(
         r#",
-            attempted_by = jsonb(json_insert(
-                (
-                    SELECT jsonb_group_array(value)
-                    FROM (
-                        SELECT value FROM (
-                            SELECT key, value
-                            FROM json_each(coalesce(attempted_by, jsonb('[]')))
-                            ORDER BY key DESC
-                            LIMIT "#,
-    );
-    query.push_bind(params.max_attempted_by.saturating_sub(1));
-    query.push(
-        r#"
-                        ) ORDER BY key ASC
-                    )
-                ),
-                '$[#]',
-                "#,
-    );
-    query.push_bind(params.client_id);
-    query.push(
-        r#"
-            )),
             state = 'running'
         WHERE state = 'available' AND id IN ("#,
     );
@@ -919,12 +981,10 @@ pub(crate) async fn complete_decoded(
         .map(serde_json::to_string)
         .transpose()?
         .unwrap_or_else(|| "{}".to_owned());
-    // Like River Go, a `cancel_attempted_at` key cancels the job even when its
-    // value is JSON `null`; `->` distinguishes that from a missing key.
-    let should_cancel = r#"(
-        (? IN ('available', 'retryable', 'scheduled'))
-        AND (metadata -> 'cancel_attempted_at') IS NOT NULL
-    )"#;
+    let should_cancel = format!(
+        "((? IN ('available', 'retryable', 'scheduled')) AND {CANCEL_ATTEMPTED_AT} IS NOT NULL)"
+    );
+    let metadata_valid = concat!("NOT ", invalid_json!("metadata"));
     let sql = format!(
         r#"
         UPDATE river_job
@@ -933,24 +993,15 @@ pub(crate) async fn complete_decoded(
                 WHEN NOT {should_cancel} AND ? THEN ?
                 ELSE attempt
             END,
-            -- `errors` is always an array unless it's been changed out of
-            -- band. Like River Go, wrap any other value in an array so the
-            -- new error is still appended without losing it.
-            errors = CASE
-                WHEN ? AND coalesce(json_type(errors), 'array') <> 'array'
-                    THEN jsonb(json_array(json(errors), json(?)))
-                WHEN ? THEN jsonb(json_insert(
-                    json(coalesce(errors, jsonb('[]'))), '$[#]', json(?)
-                ))
-                ELSE errors
-            END,
+            errors = CASE WHEN ? THEN {ERRORS_APPENDED} ELSE errors END,
             finalized_at = CASE
                 WHEN {should_cancel} THEN ?
                 WHEN ? THEN ?
                 ELSE finalized_at
             END,
+            -- Like River Go, metadata that isn't valid JSON is left in place.
             metadata = CASE
-                WHEN ? THEN jsonb_patch(json(metadata), json(?))
+                WHEN ? AND {metadata_valid} THEN jsonb_patch(json(metadata), json(?))
                 ELSE metadata
             END,
             scheduled_at = CASE
@@ -969,7 +1020,7 @@ pub(crate) async fn complete_decoded(
         .bind(params.attempt.unwrap_or_default())
         .bind(params.error.is_some())
         .bind(&error)
-        .bind(params.error.is_some())
+        .bind(&error)
         .bind(&error)
         .bind(state)
         .bind(sqlite_time(params.now))
@@ -996,10 +1047,15 @@ pub(crate) async fn merge_metadata_if_not_running(
     metadata_updates: &Map<String, Value>,
 ) -> Result<Option<DecodedJob>, BackendError> {
     let metadata = serde_json::to_string(metadata_updates)?;
+    // Like River Go, metadata that isn't valid JSON is left in place.
+    let metadata_valid = concat!("NOT ", invalid_json!("metadata"));
     let sql = format!(
         r#"
         UPDATE river_job
-        SET metadata = jsonb_patch(json(metadata), json(?))
+        SET metadata = CASE
+            WHEN {metadata_valid} THEN jsonb_patch(json(metadata), json(?))
+            ELSE metadata
+        END
         WHERE id = ? AND state != 'running'
         RETURNING {JOB_COLUMNS}
         "#
@@ -1534,16 +1590,17 @@ pub(crate) async fn rescue(
     params: &RescueJob<'_>,
 ) -> Result<Option<JobRow>, BackendError> {
     let error = serde_json::to_string(params.error)?;
+    // Like River Go, the rescue error is appended to any `errors` value, and
+    // metadata that isn't valid JSON is left in place.
+    let metadata_invalid = invalid_json!("metadata");
     let sql = format!(
         r#"
         UPDATE river_job
         SET
-            errors = jsonb(json_insert(
-                json(coalesce(errors, jsonb('[]'))), '$[#]', json(?)
-            )),
+            errors = {ERRORS_APPENDED},
             finalized_at = ?,
             scheduled_at = ?,
-            metadata = jsonb_set(
+            metadata = CASE WHEN {metadata_invalid} THEN metadata ELSE jsonb_set(
                 metadata,
                 '$."river:rescue_count"',
                 coalesce(
@@ -1553,14 +1610,16 @@ pub(crate) async fn rescue(
                     END,
                     0
                 ) + 1
-            ),
+            ) END,
             state = ?
         WHERE id = ? AND state = 'running' AND attempted_at < ?
         RETURNING {JOB_COLUMNS}
         "#
     );
     let row = sqlx::query(AssertSqlSafe(sql))
-        .bind(error)
+        .bind(&error)
+        .bind(&error)
+        .bind(&error)
         .bind(sqlite_time_optional(params.finalized_at))
         .bind(sqlite_time(params.scheduled_at))
         .bind(params.state.as_str())
@@ -1637,32 +1696,43 @@ pub(crate) async fn cleanup_jobs(
         .rows_affected())
 }
 
+/// A due job the scheduler may make available.
+#[derive(Clone, Debug, FromRow)]
+pub(crate) struct ScheduleCandidate {
+    pub id: i64,
+    pub unique_key: Option<Vec<u8>>,
+}
+
 /// Selects due retryable/scheduled jobs in scheduler order. Scheduling is a
 /// multi-step SQLite operation: callers keep a write transaction open while
 /// checking unique collisions and applying the transitions below.
+///
+/// Like River Go, only the columns scheduling needs are selected, so a job
+/// whose row can't be decoded, like one whose attempt failed because a JSON
+/// column isn't valid JSON, doesn't fail scheduling for every other job. The
+/// transitions below return such a job's row with the undecodable fields left
+/// empty.
 pub(crate) async fn schedule_candidates(
     connection: &mut SqliteConnection,
     now: DateTime<Utc>,
     limit: i32,
-) -> Result<Vec<JobRow>, BackendError> {
+) -> Result<Vec<ScheduleCandidate>, BackendError> {
     if limit <= 0 {
         return Ok(Vec::new());
     }
-    let sql = format!(
+    Ok(sqlx::query_as::<_, ScheduleCandidate>(
         r#"
-        SELECT {JOB_COLUMNS}
+        SELECT id, unique_key
         FROM river_job
         WHERE state IN ('retryable', 'scheduled') AND scheduled_at <= ?
         ORDER BY priority ASC, scheduled_at ASC, id ASC
         LIMIT ?
-        "#
-    );
-    let records = sqlx::query_as::<_, JobRecord>(AssertSqlSafe(sql))
-        .bind(sqlite_time(now))
-        .bind(limit)
-        .fetch_all(&mut *connection)
-        .await?;
-    records.into_iter().map(JobRecord::into_job).collect()
+        "#,
+    )
+    .bind(sqlite_time(now))
+    .bind(limit)
+    .fetch_all(&mut *connection)
+    .await?)
 }
 
 pub(crate) async fn schedule_has_unique_collision(
@@ -1716,11 +1786,8 @@ pub(crate) async fn schedule_set_available(
         separated.push_unseparated(")");
     }
     query.push(format!(" RETURNING {JOB_COLUMNS}"));
-    let records = query
-        .build_query_as::<JobRecord>()
-        .fetch_all(&mut *connection)
-        .await?;
-    records.into_iter().map(JobRecord::into_job).collect()
+    let records = query.build().fetch_all(&mut *connection).await?;
+    Ok(tolerant_rows(&records))
 }
 
 pub(crate) async fn schedule_discard_conflicts(
@@ -1735,12 +1802,17 @@ pub(crate) async fn schedule_discard_conflicts(
         r#"
         UPDATE river_job
         SET
-            metadata = jsonb_patch(
+            metadata = CASE WHEN "#,
+    );
+    // Like River Go, metadata that isn't valid JSON is left in place.
+    query.push(concat!(
+        invalid_json!("metadata"),
+        r#" THEN metadata ELSE jsonb_patch(
                 json(metadata),
                 json('{"unique_key_conflict":"scheduler_discarded"}')
-            ),
+            ) END,
             finalized_at = "#,
-    );
+    ));
     query
         .push_bind(sqlite_time(now))
         .push(", state = 'discarded' WHERE id IN (");
@@ -1752,11 +1824,8 @@ pub(crate) async fn schedule_discard_conflicts(
         separated.push_unseparated(")");
     }
     query.push(format!(" RETURNING {JOB_COLUMNS}"));
-    let records = query
-        .build_query_as::<JobRecord>()
-        .fetch_all(&mut *connection)
-        .await?;
-    records.into_iter().map(JobRecord::into_job).collect()
+    let records = query.build().fetch_all(&mut *connection).await?;
+    Ok(tolerant_rows(&records))
 }
 
 #[cfg(test)]

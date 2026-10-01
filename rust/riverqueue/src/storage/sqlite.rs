@@ -79,6 +79,8 @@ impl Backend for SqliteBackend<'_> {
         Ok(Some(row))
     }
 
+    // Like River Go, metadata that isn't valid JSON doesn't fail the lookup
+    // for the other jobs.
     async fn job_cancel_requested(&mut self, ids: &[i64]) -> Result<Vec<i64>, Error> {
         let ids = format!(
             "[{}]",
@@ -87,7 +89,8 @@ impl Backend for SqliteBackend<'_> {
         Ok(sqlx::query_scalar(
             "SELECT id FROM river_job \
              WHERE id IN (SELECT value FROM json_each(?)) \
-               AND (metadata -> 'cancel_attempted_at') IS NOT NULL \
+               AND (CASE WHEN typeof(metadata) = 'text' AND NOT json_valid(metadata) \
+                         THEN NULL ELSE metadata -> 'cancel_attempted_at' END) IS NOT NULL \
                AND state = 'running' \
              ORDER BY id",
         )
