@@ -349,8 +349,15 @@ func TestWorker_Work(t *testing.T) {
 		}))
 
 		worker := river.WorkFunc(func(ctx context.Context, job *river.Job[testArgs]) error {
-			riversharedtest.WaitOrTimeout(t, stuckLogged)
-			return nil
+			// Keep this below the executor's five-second fallback so ignoring
+			// JobStuckThreshold fails on CI too, where WaitOrTimeout allows
+			// ten seconds. The configured warning takes only 11 milliseconds.
+			select {
+			case <-stuckLogged:
+				return nil
+			case <-time.After(3 * time.Second):
+				return errors.New("stuck job warning was not logged within 3 seconds")
+			}
 		})
 		tw := NewWorker(t, bundle.driver, bundle.config, worker)
 
