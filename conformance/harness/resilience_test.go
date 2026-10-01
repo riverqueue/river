@@ -430,6 +430,88 @@ func TestResilienceSQLiteConformance(t *testing.T) { //nolint:tparallel // Subte
 		}
 	})
 
+	// A JSON column changed out of band to text that isn't valid JSON must
+	// not stall its queue. Like River Go, an implementation fails such a
+	// job's attempt without working it, as it fails any row it can't decode,
+	// leaves the value in place, and works the other jobs. An `errors` value
+	// that isn't valid JSON is wrapped in an array, as a string, so the
+	// attempt error can still be appended.
+	t.Run("sqlite_runtime_invalid_json_columns", func(t *testing.T) { //nolint:paralleltest // Shares the SQLite database.
+		defer scenarios.record(t)
+
+		type replacedText struct {
+			Previous     *string `json:"previous"`
+			PreviousType string  `json:"previous_type"`
+		}
+		columns := []string{"args", "attempted_by", "errors", "metadata", "tags"}
+		for _, worker := range []*adapter{candidateAdapter, goAdapter} {
+			goAdapter.call(t, "reset", map[string]any{}, nil)
+			var ordinary normalizedJob
+			goAdapter.call(t, "insert", map[string]any{"message": "ordinary"}, &ordinary)
+			invalid := make(map[string]int64, len(columns))
+			originals := make(map[string]*string, len(columns))
+			for _, column := range columns {
+				var job normalizedJob
+				goAdapter.call(t, "insert", map[string]any{"message": "invalid " + column}, &job)
+				var replaced replacedText
+				goAdapter.call(t, "raw_replace_json_text", map[string]any{
+					"column": column, "id": job.ID, "text": "not json",
+				}, &replaced)
+				invalid[column] = job.ID
+				originals[column] = replaced.Previous
+			}
+
+			worker.call(t, "start", map[string]any{
+				"client_id":      worker.name + "-invalid-json",
+				"retry_delay_ms": time.Hour.Milliseconds(),
+			}, nil)
+			var completed normalizedJob
+			worker.call(t, "wait", map[string]any{"id": ordinary.ID, "states": []string{"completed"}}, &completed)
+			waitForRuntimeStats(t, worker, func(stats runtimeStats) bool {
+				return countRuntimeEvent(stats, "job_failed") == len(columns)
+			})
+			worker.call(t, "stop", map[string]any{}, nil)
+
+			for _, column := range columns {
+				id := invalid[column]
+				// Restore a readable value, getting back the one the worker
+				// left.
+				var left replacedText
+				restore := originals[column]
+				if column == "errors" {
+					// The wrapped errors are valid JSON; keep them to check.
+					goAdapter.call(t, "raw_replace_json_text", map[string]any{
+						"column": column, "id": id, "text": nil,
+					}, &left)
+					restore = left.Previous
+				}
+				var restored replacedText
+				goAdapter.call(t, "raw_replace_json_text", map[string]any{
+					"column": column, "id": id, "text": restore,
+				}, &restored)
+				if column != "errors" {
+					left = restored
+					require.Equal(t, "text", left.PreviousType, "%s %s", worker.name, column)
+					require.Equal(t, "not json", *left.Previous, "%s rewrote invalid %s", worker.name, column)
+				}
+
+				var failed normalizedJob
+				goAdapter.call(t, "get", map[string]any{"id": id}, &failed)
+				require.Equal(t, "retryable", failed.State, "%s %s", worker.name, column)
+				require.Equal(t, 1, failed.Attempt, "%s %s", worker.name, column)
+				require.NotEmpty(t, failed.Errors, "%s %s", worker.name, column)
+				attemptError := failed.Errors[len(failed.Errors)-1]
+				require.Equal(t, 1, attemptError.Attempt, "%s %s", worker.name, column)
+				require.True(t, strings.HasPrefix(attemptError.Error, "job row couldn't be decoded: "),
+					"%s %s: %s", worker.name, column, attemptError.Error)
+				if column == "errors" {
+					require.Len(t, failed.Errors, 2, worker.name)
+					require.Equal(t, "not json", failed.Errors[0].Error, worker.name)
+				}
+			}
+		}
+	})
+
 	t.Run("sqlite_runtime_completion_under_writer_lock", func(t *testing.T) { //nolint:paralleltest // Shares the SQLite database.
 		defer scenarios.record(t)
 

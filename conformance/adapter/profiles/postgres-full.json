@@ -65,6 +65,7 @@
     "raw_job_row",
     "raw_job_timestamps",
     "raw_notifications",
+    "raw_replace_json_text",
     "request_resign",
     "reset",
     "retry",

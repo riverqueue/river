@@ -233,7 +233,7 @@
       "type": "string"
     }
   },
-  "adapter_version": 18,
+  "adapter_version": 19,
   "errors": [
     {
       "code": -32700,
@@ -1529,6 +1529,65 @@
         "type": "object",
         "required": [
           "notifications"
+        ]
+      }
+    },
+    {
+      "capability": "job_crud",
+      "description": "Replace one of a SQLite job's JSON columns with `text` stored as SQLite TEXT rather than JSONB, or with NULL when `text` is null, as an out-of-band change could. The text doesn't need to be valid JSON. Returns the column's previous value, as stored when it was TEXT and rendered with `json(column)` otherwise, and its SQLite `typeof`. PostgreSQL adapters report `unsupported`.",
+      "name": "raw_replace_json_text",
+      "params": {
+        "additionalProperties": false,
+        "properties": {
+          "column": {
+            "enum": [
+              "args",
+              "attempted_by",
+              "errors",
+              "metadata",
+              "tags"
+            ]
+          },
+          "id": {
+            "$ref": "#/$defs/job_id"
+          },
+          "text": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "type": "object",
+        "required": [
+          "column",
+          "id",
+          "text"
+        ]
+      },
+      "result": {
+        "additionalProperties": false,
+        "properties": {
+          "previous": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "previous_type": {
+            "enum": [
+              "blob",
+              "integer",
+              "null",
+              "real",
+              "text"
+            ]
+          }
+        },
+        "type": "object",
+        "required": [
+          "previous",
+          "previous_type"
         ]
       }
     },

@@ -140,6 +140,7 @@ var scenarioRegistry = map[string]scenarioBinding{ //nolint:gochecknoglobals // 
 	"sqlite_runtime_extensions_resumable_subscriptions":              {owner: scenarioOwnerSQLiteRuntime, profile: "sqlite-runtime-v1", tier: "runtime"},
 	"sqlite_runtime_external_terminal_completion_race":               {owner: scenarioOwnerSQLiteRuntime, profile: "sqlite-runtime-v1", tier: "mixed"},
 	"sqlite_runtime_go_integer_ranges":                               {owner: scenarioOwnerSQLiteResilience, profile: "sqlite-runtime-v1", tier: "mixed"},
+	"sqlite_runtime_invalid_json_columns":                            {owner: scenarioOwnerSQLiteResilience, profile: "sqlite-runtime-v1", tier: "mixed"},
 	"sqlite_runtime_job_list_cursor_interchange":                     {owner: scenarioOwnerSQLiteRuntime, profile: "sqlite-runtime-v1", tier: "storage"},
 	"sqlite_runtime_job_rows":                                        {owner: scenarioOwnerSQLiteRuntime, profile: "sqlite-runtime-v1", tier: "mixed"},
 	"sqlite_runtime_leader_election_disabled":                        {owner: scenarioOwnerSQLiteRuntime, profile: "sqlite-runtime-v1", tier: "mixed"},

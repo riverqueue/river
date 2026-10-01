@@ -46,7 +46,7 @@ use sqlx::{
 };
 use tokio::sync::watch;
 
-const ADAPTER_VERSION: u32 = 18;
+const ADAPTER_VERSION: u32 = 19;
 const PROTOCOL_REVISION: u32 = 1;
 
 const ADAPTER_METHODS: &[&str] = &[
@@ -85,6 +85,7 @@ const ADAPTER_METHODS: &[&str] = &[
     "raw_job_row",
     "raw_job_timestamps",
     "raw_notifications",
+    "raw_replace_json_text",
     "request_resign",
     "reset",
     "retry",
@@ -238,6 +239,7 @@ const SQLITE_RUNTIME_METHODS: &[&str] = &[
     "raw_job_row",
     "raw_job_timestamps",
     "raw_notifications",
+    "raw_replace_json_text",
     "request_resign",
     "reset",
     "retry",
@@ -2098,6 +2100,14 @@ impl Adapter {
                 }
                 Err(AdapterError::unsupported("PostgreSQL has no notification outbox").into())
             }
+            "raw_replace_json_text" => {
+                required_i64(&params, "id")?;
+                required_string(&params, "column")?;
+                Err(AdapterError::unsupported(
+                    "PostgreSQL JSON columns can't hold text that isn't JSON",
+                )
+                .into())
+            }
             "raw_job_timestamps" => {
                 let id = required_i64(&params, "id")?;
                 let (created_at, scheduled_at) = sqlx::query_as::<_, (String, String)>(
@@ -2873,6 +2883,39 @@ impl SqliteAdapter {
                     .fetch_one(&self.pool)
                     .await?;
                 Ok(serde_json::to_value(row)?)
+            }
+            "raw_replace_json_text" => {
+                let id = required_i64(&params, "id")?;
+                let column = required_string(&params, "column")?;
+                if !["args", "attempted_by", "errors", "metadata", "tags"]
+                    .contains(&column.as_str())
+                {
+                    return Err(format!("unknown JSON column {column:?}").into());
+                }
+                let text = match params.get("text") {
+                    Some(Value::String(text)) => Some(text.clone()),
+                    Some(Value::Null) => None,
+                    _ => return Err("text must be a string or null".into()),
+                };
+                let mut tx = self.pool.begin().await?;
+                let (previous, previous_type) = sqlx::query_as::<_, (Option<String>, String)>(
+                    AssertSqlSafe(format!(
+                        "SELECT CASE WHEN typeof({column}) = 'text' THEN {column} ELSE json({column}) END, \
+                         typeof({column}) FROM river_job WHERE id = ?"
+                    )),
+                )
+                .bind(id)
+                .fetch_one(&mut *tx)
+                .await?;
+                sqlx::query(AssertSqlSafe(format!(
+                    "UPDATE river_job SET {column} = ? WHERE id = ?"
+                )))
+                .bind(text)
+                .bind(id)
+                .execute(&mut *tx)
+                .await?;
+                tx.commit().await?;
+                Ok(json!({"previous": previous, "previous_type": previous_type}))
             }
             "raw_job_timestamps" => {
                 let id = required_i64(&params, "id")?;

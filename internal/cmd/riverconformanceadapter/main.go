@@ -39,7 +39,7 @@ import (
 )
 
 const (
-	adapterVersion        = 18
+	adapterVersion        = 19
 	implementationVersion = "0.48.0"
 	protocolRevision      = 1
 )
@@ -80,6 +80,7 @@ var adapterMethods = []string{ //nolint:gochecknoglobals
 	"raw_job_row",
 	"raw_job_timestamps",
 	"raw_notifications",
+	"raw_replace_json_text",
 	"request_resign",
 	"reset",
 	"retry",
@@ -201,11 +202,36 @@ var sqliteRuntimeMethods = []string{ //nolint:gochecknoglobals
 	"barrier_create", "barrier_release", "cancel", "clock_set", "cron_next", "delete", "delete_many", "get",
 	"handshake", "insert", "insert_many", "leader", "list", "migrate",
 	"queue_add", "queue_get", "queue_list", "queue_pause", "queue_remove", "queue_resume",
-	"queue_update", "raw_finalize", "raw_insert_exact_json", "raw_insert_no_notify", "raw_job_exact_json", "raw_job_row", "raw_job_timestamps", "raw_notifications", "request_resign", "reset", "retry", "retry_delay",
+	"queue_update", "raw_finalize", "raw_insert_exact_json", "raw_insert_no_notify", "raw_job_exact_json", "raw_job_row", "raw_job_timestamps", "raw_notifications", "raw_replace_json_text", "request_resign", "reset", "retry", "retry_delay",
 	"rng_seed", "runtime_stats", "start", "stop", "tx_begin", "tx_cancel", "tx_commit",
 	"tx_delete", "tx_delete_many", "tx_get", "tx_insert", "tx_insert_many",
 	"tx_list", "tx_queue_get", "tx_queue_list", "tx_queue_pause", "tx_queue_resume",
 	"tx_queue_update", "tx_retry", "tx_rollback", "tx_update", "unique_key", "update", "wait", "work",
+}
+
+// sqliteJSONColumnStatements read and replace each SQLite job JSON column for
+// raw_replace_json_text: stored TEXT as is, JSONB rendered with json().
+var sqliteJSONColumnStatements = map[string]struct{ get, set string }{ //nolint:gochecknoglobals
+	"args": {
+		get: "SELECT CASE WHEN typeof(args) = 'text' THEN args ELSE json(args) END, typeof(args) FROM river_job WHERE id = ?",
+		set: "UPDATE river_job SET args = ? WHERE id = ?",
+	},
+	"attempted_by": {
+		get: "SELECT CASE WHEN typeof(attempted_by) = 'text' THEN attempted_by ELSE json(attempted_by) END, typeof(attempted_by) FROM river_job WHERE id = ?",
+		set: "UPDATE river_job SET attempted_by = ? WHERE id = ?",
+	},
+	"errors": {
+		get: "SELECT CASE WHEN typeof(errors) = 'text' THEN errors ELSE json(errors) END, typeof(errors) FROM river_job WHERE id = ?",
+		set: "UPDATE river_job SET errors = ? WHERE id = ?",
+	},
+	"metadata": {
+		get: "SELECT CASE WHEN typeof(metadata) = 'text' THEN metadata ELSE json(metadata) END, typeof(metadata) FROM river_job WHERE id = ?",
+		set: "UPDATE river_job SET metadata = ? WHERE id = ?",
+	},
+	"tags": {
+		get: "SELECT CASE WHEN typeof(tags) = 'text' THEN tags ELSE json(tags) END, typeof(tags) FROM river_job WHERE id = ?",
+		set: "UPDATE river_job SET tags = ? WHERE id = ?",
+	},
 }
 
 // parameterlessMethods take no params; any param is rejected.
@@ -1895,6 +1921,17 @@ func (s *adapterState) handle(ctx context.Context, req *request) (any, error) {
 		}
 		return nil, unsupported(errors.New("PostgreSQL has no notification outbox"))
 
+	case "raw_replace_json_text":
+		var params struct {
+			Column string  `json:"column"`
+			ID     int64   `json:"id"`
+			Text   *string `json:"text"`
+		}
+		if err := decodeParams(req.Params, &params); err != nil {
+			return nil, err
+		}
+		return nil, unsupported(errors.New("PostgreSQL JSON columns can't hold text that isn't JSON"))
+
 	case "raw_job_timestamps":
 		id, err := requestID(req.Params)
 		if err != nil {
@@ -2806,6 +2843,39 @@ func (s *sqliteAdapterState) handle(ctx context.Context, req *request) (any, err
 			return nil, err
 		}
 		return map[string]any{"notifications": notifications}, nil
+
+	case "raw_replace_json_text":
+		var params struct {
+			Column string  `json:"column"`
+			ID     int64   `json:"id"`
+			Text   *string `json:"text"`
+		}
+		if err := decodeParams(req.Params, &params); err != nil {
+			return nil, err
+		}
+		statements, ok := sqliteJSONColumnStatements[params.Column]
+		if !ok {
+			return nil, invalidParams(fmt.Errorf("unknown JSON column %q", params.Column))
+		}
+		tx, err := s.pool.BeginTx(ctx, nil)
+		if err != nil {
+			return nil, err
+		}
+		defer func() { _ = tx.Rollback() }()
+		var (
+			previous     *string
+			previousType string
+		)
+		if err := tx.QueryRowContext(ctx, statements.get, params.ID).Scan(&previous, &previousType); err != nil {
+			return nil, err
+		}
+		if _, err := tx.ExecContext(ctx, statements.set, params.Text, params.ID); err != nil {
+			return nil, err
+		}
+		if err := tx.Commit(); err != nil {
+			return nil, err
+		}
+		return map[string]any{"previous": previous, "previous_type": previousType}, nil
 
 	case "raw_job_timestamps":
 		id, err := requestID(req.Params)

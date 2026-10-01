@@ -284,6 +284,11 @@ whose cursor text always contains `-`.
   late worker completion preserves that state and error while merging worker
   metadata and delivering the canonical worker-outcome event. A current
   timestamp keeps leader cleaners from deleting the row mid-scenario.
+- `raw_replace_json_text` replaces one of a SQLite job's JSON columns with
+  text stored as TEXT, which need not be valid JSON, as an out-of-band change
+  could, and returns the column's previous value. The suite uses it to prove
+  a job with an invalid JSON value is failed without stalling its queue, and
+  that the value is left in place.
 - `fault_disconnect_listeners` terminates the adapter's PostgreSQL listener
   backends and the harness waits for reconnection.
 - `fault_disconnect_application` terminates all non-caller connections for one
