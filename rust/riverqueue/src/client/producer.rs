@@ -845,7 +845,7 @@ pub(super) async fn run_queue(
             _ => Box::pin(fetch_available(&inner, &queue, available, &fetch_cancel)).await,
         };
         last_fetch = Some(tokio::time::Instant::now());
-        let FetchedJobs { rows, undecodable } = match fetched {
+        let FetchedJobs { claimed } = match fetched {
             Ok(fetched) => fetched,
             Err(fetch_error) => {
                 error!(error = %crate::error::Chain(&fetch_error), "River job fetch failed; retrying");
@@ -856,17 +856,20 @@ pub(super) async fn run_queue(
         // gets an executor that fails its attempt with the decode error
         // instead of working it, so it's retried or discarded rather than
         // left running.
-        let claimed = rows.into_iter().map(|row| (row, None)).chain(
-            undecodable
-                .into_iter()
-                .filter_map(|UndecodableJob { error, row, .. }| {
-                    let Some(row) = row else {
-                        error!(%error, "claimed River job row couldn't be identified; leaving it for the rescuer");
-                        return None;
-                    };
-                    Some((*row, Some(error)))
-                }),
-        );
+        let claimed = claimed.into_iter().filter_map(|decoded| match decoded {
+            Ok(row) => Some((row, None)),
+            Err(UndecodableJob {
+                error, row: None, ..
+            }) => {
+                error!(%error, "claimed River job row couldn't be identified; leaving it for the rescuer");
+                None
+            }
+            Err(UndecodableJob {
+                error,
+                row: Some(row),
+                ..
+            }) => Some((*row, Some(error))),
+        });
         for (row, decode_error) in claimed {
             let hard_cancel = work_cancel.child_token();
             let cancellation = hard_cancel.child_token();
@@ -1192,33 +1195,25 @@ where
         .await
 }
 
-/// Jobs claimed by one fetch. Claims commit before rows are decoded, so rows
-/// that can't be fully decoded are returned separately to have their attempts
-/// failed, instead of failing the whole fetch and stranding every claimed job.
+/// Jobs claimed by one fetch, in the order they were claimed. Claims commit
+/// before rows are decoded, so a row that can't be fully decoded is kept with
+/// its decode error to have its attempt failed, instead of failing the whole
+/// fetch and stranding every claimed job.
 #[derive(Default)]
 pub(super) struct FetchedJobs {
-    pub(super) rows: Vec<JobRow>,
-    pub(super) undecodable: Vec<UndecodableJob>,
+    pub(super) claimed: Vec<DecodedJob>,
 }
 
 impl FetchedJobs {
-    pub(super) fn from_decoded(decoded: Vec<DecodedJob>) -> Self {
-        let mut fetched = Self::default();
-        for row in decoded {
-            match row {
-                Ok(row) => fetched.rows.push(row),
-                Err(undecodable) => fetched.undecodable.push(undecodable),
-            }
-        }
-        fetched
+    pub(super) const fn from_decoded(claimed: Vec<DecodedJob>) -> Self {
+        Self { claimed }
     }
 
     pub(super) fn extend(&mut self, other: Self) {
-        self.rows.extend(other.rows);
-        self.undecodable.extend(other.undecodable);
+        self.claimed.extend(other.claimed);
     }
 
-    pub(super) fn len(&self) -> usize {
-        self.rows.len() + self.undecodable.len()
+    pub(super) const fn len(&self) -> usize {
+        self.claimed.len()
     }
 }
