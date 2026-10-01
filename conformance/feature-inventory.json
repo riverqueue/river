@@ -1095,7 +1095,7 @@
     {
       "applicability": "driver_specific",
       "area": "driver",
-      "detail": "func(ctx context.Context, params *JobGetAvailableParams) ([]*rivertype.JobRow, error)",
+      "detail": "func(ctx context.Context, params *JobGetAvailableParams) (*JobGetAvailableResult, error)",
       "id": "driver.Executor.JobGetAvailable",
       "rationale": "Go driver-seam method for job queries; their persisted effects are covered by the client, job_state, and metadata_key items.",
       "source": "riverdriver/river_driver_interface.go:riverdriver.Executor.JobGetAvailable"
@@ -1669,7 +1669,7 @@
     {
       "applicability": "internal",
       "area": "extension",
-      "detail": "func(ctx context.Context, exec riverdriver.Executor, state ProducerState, params *riverdriver.JobGetAvailableParams) ([]*rivertype.JobRow, error)",
+      "detail": "func(ctx context.Context, exec riverdriver.Executor, state ProducerState, params *riverdriver.JobGetAvailableParams) (*riverdriver.JobGetAvailableResult, error)",
       "id": "extension.riverpilot.Pilot.JobGetAvailable",
       "rationale": "Part of the unstable Go extension seam (riverpilot) used to substitute storage operations. Implementations may have their own seam; it carries no cross-language contract, and the default behavior's effects are covered by the driver and protocol items.",
       "source": "rivershared/riverpilot/pilot.go:riverpilot.Pilot.JobGetAvailable"
