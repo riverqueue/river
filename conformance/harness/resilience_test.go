@@ -47,10 +47,9 @@ func TestResilienceConformance(t *testing.T) { //nolint:paralleltest // Owns the
 	candidateProxy := startFaultProxy(ctx, t, databaseURL)
 	workers := []resilienceWorker{
 		{
-			adapter:   startReferenceAdapter(t, repositoryRoot, goProxy.url, "go-proxied"),
-			name:      "go",
-			proxy:     goProxy,
-			reference: true,
+			adapter: startReferenceAdapter(t, repositoryRoot, goProxy.url, "go-proxied"),
+			name:    "go",
+			proxy:   goProxy,
 		},
 		{
 			adapter: startCandidateAdapter(t, repositoryRoot, candidateProxy.url, candidateSpec.Implementation, candidateSpec, candidateSpec.Command),
@@ -256,17 +255,13 @@ func TestResilienceConformance(t *testing.T) { //nolint:paralleltest // Owns the
 			execSQL(ctx, t, database, `UPDATE river_job
 				SET errors = ARRAY['{"error": "sparse", "extra": true}'::jsonb]
 				WHERE id = `+strconv.FormatInt(sparseErrors.ID, 10))
-			decodable := []int64{ordinary.ID, sparseErrors.ID}
-			// Attempt errors in a shape River doesn't write decode leniently.
-			// The Go reference joins once upstream River decodes them this
-			// way; until then it fails the whole fetch on such a row.
+			// Attempt errors in a shape River doesn't write decode leniently,
+			// with an `at` that isn't RFC 3339 left zero.
 			const oddErrorsSQL = `ARRAY['{"at": "2024-01-02 03:04:05+00", "attempt": "1", "error": {"message": "boom"}, "trace": ["frame"]}'::jsonb, '42'::jsonb]`
-			if !worker.reference {
-				reference.call(t, "insert", map[string]any{"message": "odd errors"}, &oddErrors)
-				execSQL(ctx, t, database, `UPDATE river_job SET errors = `+oddErrorsSQL+`
-					WHERE id = `+strconv.FormatInt(oddErrors.ID, 10))
-				decodable = append(decodable, oddErrors.ID)
-			}
+			reference.call(t, "insert", map[string]any{"message": "odd errors"}, &oddErrors)
+			execSQL(ctx, t, database, `UPDATE river_job SET errors = `+oddErrorsSQL+`
+				WHERE id = `+strconv.FormatInt(oddErrors.ID, 10))
+			decodable := []int64{ordinary.ID, sparseErrors.ID, oddErrors.ID}
 			reference.call(t, "insert", map[string]any{"message": "array metadata retried"}, &retried)
 			reference.call(t, "insert", map[string]any{
 				"message": "array metadata discarded", "opts": map[string]any{"max_attempts": 1},
@@ -278,8 +273,6 @@ func TestResilienceConformance(t *testing.T) { //nolint:paralleltest // Owns the
 				"client_id":      worker.name + "-decode",
 				"retry_delay_ms": retryDelay.Milliseconds(),
 			}, nil)
-			// Poll through SQL, since the reference can't yet read the row with
-			// odd attempt errors.
 			for _, id := range decodable {
 				var (
 					attempt int
@@ -292,20 +285,18 @@ func TestResilienceConformance(t *testing.T) { //nolint:paralleltest // Owns the
 				})
 				require.Equal(t, 1, attempt, "%s job %d", worker.name, id)
 			}
-			if !worker.reference {
-				var worked normalizedJob
-				worker.adapter.call(t, "get", map[string]any{"id": oddErrors.ID}, &worked)
-				require.Equal(t, []normalizedAttemptError{
-					{At: "2024-01-02T03:04:05Z", Attempt: 1, Error: `{"message":"boom"}`, Trace: `["frame"]`},
-					{At: "0001-01-01T00:00:00Z", Error: "42"},
-				}, worked.Errors, worker.name)
-				var errorsText string
-				require.NoError(t, database.QueryRow(ctx,
-					"SELECT errors::text FROM river_job WHERE id = $1", oddErrors.ID).Scan(&errorsText))
-				var expectedText string
-				require.NoError(t, database.QueryRow(ctx, "SELECT ("+oddErrorsSQL+")::text").Scan(&expectedText))
-				require.Equal(t, expectedText, errorsText, "%s rewrote attempt errors it only read", worker.name)
-			}
+			var worked normalizedJob
+			worker.adapter.call(t, "get", map[string]any{"id": oddErrors.ID}, &worked)
+			require.Equal(t, []normalizedAttemptError{
+				{At: "0001-01-01T00:00:00Z", Attempt: 1, Error: `{"message":"boom"}`, Trace: `["frame"]`},
+				{At: "0001-01-01T00:00:00Z", Error: "42"},
+			}, worked.Errors, worker.name)
+			var errorsText string
+			require.NoError(t, database.QueryRow(ctx,
+				"SELECT errors::text FROM river_job WHERE id = $1", oddErrors.ID).Scan(&errorsText))
+			var expectedText string
+			require.NoError(t, database.QueryRow(ctx, "SELECT ("+oddErrorsSQL+")::text").Scan(&expectedText))
+			require.Equal(t, expectedText, errorsText, "%s rewrote attempt errors it only read", worker.name)
 			failed := 0
 			for _, row := range []struct {
 				failedState string
@@ -476,10 +467,9 @@ func TestResilienceSQLiteConformance(t *testing.T) { //nolint:tparallel // Subte
 }
 
 type resilienceWorker struct {
-	adapter   *adapter
-	name      string
-	proxy     *faultProxy
-	reference bool
+	adapter *adapter
+	name    string
+	proxy   *faultProxy
 }
 
 // faultProxy forwards TCP connections to PostgreSQL and can make the database
