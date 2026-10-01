@@ -11,7 +11,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ⚠️ This release contains a new database migration, version 8, but it only affects SQLite:
 
-- If you're on Postgres, you can ignore it with no adverse affects.
+- If you're on Postgres, you can ignore it with no adverse effect.
 - If you're on SQLite, it rebuilds `river_job` to add an `AUTOINCREMENT` keyword to the primary key, preventing a possible edge case where generated job IDs could be reused after deletion. It's not necessary to run the migration for River to work, but it's a good idea to get it in when convenient. [PR #1390](https://github.com/riverqueue/river/pull/1390).
 
 ### Added
