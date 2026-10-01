@@ -14,6 +14,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - If you're on Postgres, you can ignore it with no adverse effect.
 - If you're on SQLite, it rebuilds `river_job` to add an `AUTOINCREMENT` keyword to the primary key, preventing a possible edge case where generated job IDs could be reused after deletion. It's not necessary to run the migration for River to work, but it's a good idea to get it in when convenient. [PR #1390](https://github.com/riverqueue/river/pull/1390).
 
+⚠️ If using River Pro, make sure to upgrade it to at least River Pro v0.31.0 to get a compatible package.
+
 ### Added
 
 - Added support for YugabyteDB. When `LISTEN/NOTIFY` is unavailable or disabled, clients automatically poll for running job cancellations and queue pause, resume, and metadata changes, and skip unsupported notification broadcasts. This works with the default `PollOnly: false`. Native notifications require YugabyteDB 2025.2.3 or later with `ysql_yb_enable_listen_notify=true` on both Masters and TServers. [PR #1347](https://github.com/riverqueue/river/pull/1347).
