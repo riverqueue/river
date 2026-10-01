@@ -104,10 +104,11 @@ pub(crate) struct InsertBatchItem {
 
 /// A failed job attempt persisted in `river_job.errors`.
 ///
-/// Attempt errors deserialize from JSON leniently: an element written by
-/// another tool or edited by hand decodes on a best effort
-/// basis instead of making its job row unreadable, and only invalid JSON is an
-/// error. Deserializing requires a JSON deserializer, such as `serde_json`'s.
+/// Attempt errors deserialize from JSON like River Go's `encoding/json`
+/// decodes them, which requires a JSON deserializer such as `serde_json`'s.
+/// Job rows read from the database decode their attempt errors leniently
+/// instead: an element written by another tool or edited by hand decodes on a
+/// best effort basis rather than making its row unreadable.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 #[non_exhaustive]
 pub struct AttemptError {

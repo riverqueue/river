@@ -1,11 +1,11 @@
-//! Lenient decoding of persisted attempt errors.
+//! Decoding of attempt errors.
 //!
-//! This follows River Go's `AttemptError.UnmarshalJSON`. River always writes
-//! attempt errors in the shape [`AttemptError`] serializes to, but elements
-//! written by other tools or edited by hand might not match it. Because a job
-//! row can't be read or worked unless every one of its attempt errors
-//! decodes, any element that's valid JSON decodes on a best effort basis
-//! instead of failing.
+//! [`AttemptError`] deserializes the way River Go's `encoding/json` decodes
+//! `rivertype.AttemptError`. Persisted attempt errors are decoded leniently
+//! instead, like River Go's driver reads: River always writes them in the
+//! shape [`AttemptError`] serializes to, but elements written by other tools
+//! or edited by hand might not match it, and a job row can't be read or worked
+//! unless every one of its attempt errors decodes.
 
 use std::{borrow::Cow, fmt};
 
@@ -20,33 +20,54 @@ use super::AttemptError;
 use crate::client::saturating_i16;
 
 impl<'de> Deserialize<'de> for AttemptError {
-    /// Decodes an attempt error leniently.
+    /// Decodes an attempt error like Go's `encoding/json`: fields match
+    /// case-insensitively, a repeated field takes its last value, missing,
+    /// `null`, and unknown fields are accepted, and `at` must be an RFC 3339
+    /// timestamp. A field of any other type is an error.
     ///
     /// Only a JSON deserializer (such as [`serde_json`]'s) can decode an
-    /// attempt error, since fields in an unexpected shape are kept as their
-    /// JSON text.
+    /// attempt error.
     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
     where
         D: Deserializer<'de>,
     {
         let raw = Box::<RawValue>::deserialize(deserializer)?;
-        Self::from_json_lenient(raw.get()).map_err(de::Error::custom)
+        Self::from_json_strict(raw.get()).map_err(de::Error::custom)
     }
 }
 
 impl AttemptError {
+    /// Decodes an attempt error like Go's `encoding/json`. See
+    /// [`AttemptError`]'s `Deserialize` implementation.
+    fn from_json_strict(json: &str) -> Result<Self, String> {
+        let json = json.trim_matches(is_json_whitespace);
+        if json == "null" {
+            return Ok(Self::new(go_zero_time(), 0, ""));
+        }
+        if !json.starts_with('{') {
+            return Err(format!("cannot decode {json} into an attempt error"));
+        }
+        let fields: Fields = serde_json::from_str(json).map_err(|error| error.to_string())?;
+        if let Some(invalid) = fields.invalid {
+            return Err(invalid);
+        }
+        Ok(Self {
+            at: strict_time(raw_or_null(fields.at.as_deref()))?,
+            attempt: strict_attempt(raw_or_null(fields.attempt.as_deref()))?,
+            error: strict_string(raw_or_null(fields.error.as_deref()))?,
+            trace: strict_string(raw_or_null(fields.trace.as_deref()))?,
+        })
+    }
+
     /// Decodes one persisted attempt error exactly like River Go's
-    /// `AttemptError.UnmarshalJSON`.
+    /// `riverdriver.UnmarshalAttemptError`.
     ///
     /// Elements in the shape River writes decode as they would with Go's
-    /// `encoding/json` defaults: fields match case-insensitively, a repeated
-    /// field takes its last value, and missing, `null`, and unknown fields are
-    /// accepted. Any other valid JSON decodes on a best effort basis:
+    /// `encoding/json` defaults. Any other valid JSON decodes on a best
+    /// effort basis:
     ///
-    /// * `at` accepts RFC 3339 timestamps, along with timestamps that use a
-    ///   space instead of `T`, a numeric UTC offset without a colon or
-    ///   minutes (as in PostgreSQL's text output), or no offset at all (taken
-    ///   to be UTC). Any other value leaves Go's zero time.
+    /// * `at` accepts only what Go's `time.Time` does, RFC 3339 timestamps.
+    ///   Any other value leaves Go's zero time.
     /// * `attempt` accepts integers, numbers with an integral value, and
     ///   strings containing either. Any other value leaves zero.
     /// * `error` and `trace` accept strings. Any other non-null value is kept
@@ -59,11 +80,11 @@ impl AttemptError {
     pub(crate) fn from_json_lenient(json: &str) -> Result<Self, serde_json::Error> {
         let json = json.trim_matches(is_json_whitespace);
         if json.starts_with('{') {
-            let fields: LenientFields = serde_json::from_str(json)?;
+            let fields: Fields = serde_json::from_str(json)?;
             return Ok(Self {
-                at: fields
-                    .at
-                    .map_or_else(go_zero_time, |raw| lenient_time(raw.get())),
+                at: fields.at.map_or_else(go_zero_time, |raw| {
+                    strict_time(raw.get()).unwrap_or_else(|_| go_zero_time())
+                }),
                 attempt: fields.attempt.map_or(0, |raw| lenient_attempt(raw.get())),
                 error: fields
                     .error
@@ -80,6 +101,18 @@ impl AttemptError {
         let raw: Box<RawValue> = serde_json::from_str(json)?;
         Ok(Self::new(go_zero_time(), 0, lenient_string(raw.get())))
     }
+
+    /// Decodes a persisted JSON array of attempt errors like River Go's
+    /// `riverdriver.UnmarshalAttemptErrors`: each element decodes with
+    /// [`from_json_lenient`](Self::from_json_lenient), `null` is empty, and
+    /// anything other than an array is an error.
+    pub(crate) fn from_json_array_lenient(json: &str) -> Result<Vec<Self>, serde_json::Error> {
+        serde_json::from_str::<Option<Vec<Box<RawValue>>>>(json)?
+            .unwrap_or_default()
+            .iter()
+            .map(|raw| Self::from_json_lenient(raw.get()))
+            .collect()
+    }
 }
 
 /// Go's zero `time.Time`, which Go leaves in an attempt error without a
@@ -94,14 +127,17 @@ fn go_zero_time() -> DateTime<Utc> {
 /// An attempt error object's fields as raw JSON, matched the way Go's
 /// `encoding/json` matches struct fields.
 #[derive(Default)]
-struct LenientFields {
+struct Fields {
     at: Option<Box<RawValue>>,
     attempt: Option<Box<RawValue>>,
     error: Option<Box<RawValue>>,
     trace: Option<Box<RawValue>>,
+    /// Why Go's `encoding/json` would reject a value, including one later
+    /// replaced by a repeated field, which Go still reports.
+    invalid: Option<String>,
 }
 
-impl<'de> Deserialize<'de> for LenientFields {
+impl<'de> Deserialize<'de> for Fields {
     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
     where
         D: Deserializer<'de>,
@@ -109,7 +145,7 @@ impl<'de> Deserialize<'de> for LenientFields {
         struct FieldsVisitor;
 
         impl<'de> Visitor<'de> for FieldsVisitor {
-            type Value = LenientFields;
+            type Value = Fields;
 
             fn expecting(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
                 formatter.write_str("an attempt error object")
@@ -119,23 +155,26 @@ impl<'de> Deserialize<'de> for LenientFields {
             where
                 A: MapAccess<'de>,
             {
-                let mut fields = LenientFields::default();
+                let mut fields = Fields::default();
                 while let Some(key) = map.next_key::<String>()? {
                     let value = map.next_value::<Box<RawValue>>()?;
                     // Go folds case when matching field names. Only ASCII
                     // letters fold to the letters of these four names.
-                    let field = if key.eq_ignore_ascii_case("at") {
-                        &mut fields.at
+                    let (field, valid) = if key.eq_ignore_ascii_case("at") {
+                        (&mut fields.at, strict_time(value.get()).map(drop))
                     } else if key.eq_ignore_ascii_case("attempt") {
-                        &mut fields.attempt
+                        (&mut fields.attempt, strict_attempt(value.get()).map(drop))
                     } else if key.eq_ignore_ascii_case("error") {
-                        &mut fields.error
+                        (&mut fields.error, strict_string(value.get()).map(drop))
                     } else if key.eq_ignore_ascii_case("trace") {
-                        &mut fields.trace
+                        (&mut fields.trace, strict_string(value.get()).map(drop))
                     } else {
                         continue;
                     };
                     *field = Some(value);
+                    if let Err(invalid) = valid {
+                        fields.invalid.get_or_insert(invalid);
+                    }
                 }
                 Ok(fields)
             }
@@ -145,8 +184,50 @@ impl<'de> Deserialize<'de> for LenientFields {
     }
 }
 
+/// A field's raw JSON, with a missing field read as `null` like Go does.
+fn raw_or_null(field: Option<&RawValue>) -> &str {
+    field.map_or("null", RawValue::get)
+}
+
 fn is_json_whitespace(character: char) -> bool {
     matches!(character, ' ' | '\t' | '\n' | '\r')
+}
+
+/// Decodes `at` like Go's `time.Time.UnmarshalJSON`: `null` is Go's zero
+/// time, and a string must hold an RFC 3339 timestamp. Like Go 1.26, the
+/// string isn't unescaped first.
+fn strict_time(raw: &str) -> Result<DateTime<Utc>, String> {
+    if raw == "null" {
+        return Ok(go_zero_time());
+    }
+    raw.strip_prefix('"')
+        .and_then(|text| text.strip_suffix('"'))
+        .and_then(parse_rfc3339)
+        .ok_or_else(|| format!("attempt error time {raw} isn't an RFC 3339 timestamp"))
+}
+
+/// Decodes `attempt` like Go's `encoding/json` decodes an `int`: an integer
+/// literal or `null`. `attempt` is narrower than Go's `int`, so values beyond
+/// `i16` saturate like other persisted attempt counts.
+fn strict_attempt(raw: &str) -> Result<i16, String> {
+    if raw == "null" {
+        return Ok(0);
+    }
+    raw.parse::<i64>()
+        .map(saturating_i16)
+        .map_err(|_| format!("attempt error attempt {raw} isn't an integer"))
+}
+
+/// Decodes `error` or `trace` like Go's `encoding/json` decodes a `string`:
+/// a string or `null`.
+fn strict_string(raw: &str) -> Result<String, String> {
+    if raw == "null" {
+        return Ok(String::new());
+    }
+    if raw.starts_with('"') {
+        return serde_json::from_str(raw).map_err(|error| error.to_string());
+    }
+    Err(format!("attempt error value {raw} isn't a string"))
 }
 
 /// The largest magnitude up to which every integer is exactly representable
@@ -228,30 +309,19 @@ fn compact_json(raw: &str) -> String {
     compacted
 }
 
-/// Decodes `at` like Go, which leaves the zero time for anything other than a
-/// string in one of the accepted layouts.
-fn lenient_time(raw: &str) -> DateTime<Utc> {
-    serde_json::from_str::<String>(raw)
-        .ok()
-        .and_then(|text| parse_go_time(text.trim()))
-        .unwrap_or_else(go_zero_time)
-}
-
-/// Parses a timestamp in any of the layouts River Go accepts for an attempt
-/// error's `at`, with the same validation as Go's `time.Parse`:
-///
-/// `YYYY-MM-DD`, `T` or a space, a one or two digit hour, `:MM:SS`, an
-/// optional fraction introduced by `.` or `,` (digits past nanoseconds are
-/// ignored), and then `Z`, `±hh:mm`, `±hhmm`, `±hh`, or nothing for UTC.
-/// Offsets may be as large as Go allows, 24 hours and 60 minutes.
-fn parse_go_time(text: &str) -> Option<DateTime<Utc>> {
+/// Parses a timestamp exactly as Go's `time.Time.UnmarshalJSON` does, which
+/// is with `time.Parse` and Go's RFC 3339 layout: `YYYY-MM-DD`, `T`, a one or
+/// two digit hour, `:MM:SS` with valid ranges and no leap second, an optional
+/// fraction introduced by `.` or `,` (digits past nanoseconds are ignored),
+/// and `Z` or a `±hh:mm` offset of up to 24 hours and 60 minutes.
+fn parse_rfc3339(text: &str) -> Option<DateTime<Utc>> {
     let mut parser = TimeParser(text.as_bytes());
     let year = parser.digits(4)?;
     parser.expect(b"-")?;
     let month = parser.digits(2)?;
     parser.expect(b"-")?;
     let day = parser.digits(2)?;
-    parser.expect(b"T").or_else(|| parser.expect(b" "))?;
+    parser.expect(b"T")?;
     // Go's `15` hour takes one digit when a second one doesn't follow.
     let hour = parser.digits(2).or_else(|| parser.digits(1))?;
     parser.expect(b":")?;
@@ -316,25 +386,22 @@ impl TimeParser<'_> {
             })
     }
 
-    /// Consumes an optional UTC offset, returning it in seconds east of UTC.
+    /// Consumes a `Z` or `±hh:mm` UTC offset, returning it in seconds east of
+    /// UTC.
     fn offset(&mut self) -> Option<i64> {
-        let sign = match self.0.first() {
-            None => return Some(0),
-            Some(b'Z') => {
+        let sign = match self.0.first()? {
+            b'Z' => {
                 self.0 = &self.0[1..];
                 return Some(0);
             }
-            Some(b'+') => 1,
-            Some(b'-') => -1,
-            Some(_) => return None,
+            b'+' => 1,
+            b'-' => -1,
+            _ => return None,
         };
         self.0 = &self.0[1..];
         let hours = self.digits(2)?;
-        let minutes = if self.expect(b":").is_some() {
-            self.digits(2)?
-        } else {
-            self.digits(2).unwrap_or(0)
-        };
+        self.expect(b":")?;
+        let minutes = self.digits(2)?;
         if hours > 24 || minutes > 60 {
             return None;
         }
@@ -359,17 +426,35 @@ mod tests {
         AttemptError::new(at, attempt, error).with_trace(trace)
     }
 
+    fn assert_lenient<const N: usize>(cases: [(&str, &str, AttemptError); N]) {
+        for (name, json, expected) in cases {
+            assert_eq!(
+                AttemptError::from_json_lenient(json).unwrap(),
+                expected,
+                "{name}"
+            );
+        }
+    }
+
+    fn whole_second() -> DateTime<Utc> {
+        NaiveDate::from_ymd_opt(2024, 1, 2)
+            .and_then(|date| date.and_hms_opt(3, 4, 5))
+            .unwrap()
+            .and_utc()
+    }
+
     #[test]
     fn invalid_json_is_an_error() {
         assert!(AttemptError::from_json_lenient(r#"{"at":"#).is_err());
+        assert!(AttemptError::from_json_array_lenient(r#"[{"at":"#).is_err());
         assert!(serde_json::from_str::<AttemptError>(r#"{"at":"#).is_err());
     }
 
-    // The cases of River Go's `TestAttemptError_UnmarshalJSON/Lenient`.
+    // The cases of River Go's `TestUnmarshalAttemptError`.
     #[test]
     fn lenient_like_go() {
         let zero = go_zero_time();
-        for (name, json, expected) in [
+        assert_lenient([
             (
                 "AtInvalid",
                 r#"{"at":"not a time","attempt":2,"error":"err"}"#,
@@ -378,7 +463,7 @@ mod tests {
             (
                 "AtNoOffset",
                 r#"{"at":"2024-01-02T03:04:05.123456","attempt":2}"#,
-                attempt_error(attempt_at(), 2, "", ""),
+                attempt_error(zero, 2, "", ""),
             ),
             (
                 "AtNumber",
@@ -388,12 +473,17 @@ mod tests {
             (
                 "AtPostgresText",
                 r#"{"at":"2024-01-02 03:04:05.123456+00","attempt":2}"#,
+                attempt_error(zero, 2, "", ""),
+            ),
+            (
+                "AtRFC3339WithOtherInvalidField",
+                r#"{"at":"2024-01-02T03:04:05.123456Z","attempt":"2"}"#,
                 attempt_error(attempt_at(), 2, "", ""),
             ),
             (
                 "AtSpaceNoOffset",
                 r#"{"at":"2024-01-02 03:04:05.123456","attempt":2}"#,
-                attempt_error(attempt_at(), 2, "", ""),
+                attempt_error(zero, 2, "", ""),
             ),
             (
                 "AttemptFloat",
@@ -446,30 +536,12 @@ mod tests {
                 r#"{"attempt":"x","error":null,"trace":null}"#,
                 attempt_error(zero, 0, "", ""),
             ),
-        ] {
-            assert_eq!(
-                serde_json::from_str::<AttemptError>(json).unwrap(),
-                expected,
-                "{name}"
-            );
-        }
-    }
-
-    fn assert_decodes<const N: usize>(cases: [(&str, &str, AttemptError); N]) {
-        for (name, json, expected) in cases {
-            assert_eq!(
-                serde_json::from_str::<AttemptError>(json).unwrap(),
-                expected,
-                "{name}"
-            );
-        }
-    }
-
-    fn whole_second() -> DateTime<Utc> {
-        NaiveDate::from_ymd_opt(2024, 1, 2)
-            .and_then(|date| date.and_hms_opt(3, 4, 5))
-            .unwrap()
-            .and_utc()
+            (
+                "StrictShapeUnchanged",
+                r#"{"attempt":2,"error":null}"#,
+                attempt_error(zero, 2, "", ""),
+            ),
+        ]);
     }
 
     // Behavior of Go's `encoding/json` that the Go test cases don't reach.
@@ -477,7 +549,7 @@ mod tests {
     fn lenient_fields_edges_like_go() {
         let zero = go_zero_time();
         let whole = whole_second();
-        assert_decodes([
+        assert_lenient([
             (
                 "CaseInsensitiveLastWins",
                 r#"{"error":"first","ERROR":"second","Attempt":2}"#,
@@ -485,7 +557,7 @@ mod tests {
             ),
             (
                 "EscapedKey",
-                r#"{"at":"2024-01-02T03:04:05Z"}"#,
+                concat!(r#"{""#, "\\", r#"u0061t":"2024-01-02T03:04:05Z"}"#),
                 attempt_error(whole, 0, "", ""),
             ),
             ("ElementNull", "null", attempt_error(zero, 0, "", "")),
@@ -523,18 +595,15 @@ mod tests {
         ]);
     }
 
-    // Behavior of Go's `time.Parse` with the accepted layouts that the Go test
-    // cases don't reach.
+    // Behavior of Go's `time.Time.UnmarshalJSON` that the Go test cases don't
+    // reach: it accepts what `time.Parse` does with Go's RFC 3339 layout, and
+    // anything else leaves zero.
     #[test]
+    #[allow(clippy::too_many_lines)]
     fn lenient_time_edges_like_go() {
         let zero = go_zero_time();
         let whole = whole_second();
-        assert_decodes([
-            (
-                "AtOneDigitHour",
-                r#"{"at":"2024-01-02T3:04:05Z"}"#,
-                attempt_error(whole, 0, "", ""),
-            ),
+        assert_lenient([
             (
                 "AtCommaFraction",
                 r#"{"at":"2024-01-02T03:04:05,123456Z"}"#,
@@ -542,17 +611,12 @@ mod tests {
             ),
             (
                 "AtFractionBeyondNanoseconds",
-                r#"{"at":" 2024-01-02T03:04:05.1234560009Z "}"#,
+                r#"{"at":"2024-01-02T03:04:05.1234560009Z"}"#,
                 attempt_error(attempt_at(), 0, "", ""),
             ),
             (
-                "AtOffsetWithoutColon",
-                r#"{"at":"2024-01-02T05:34:05+0230"}"#,
-                attempt_error(whole, 0, "", ""),
-            ),
-            (
-                "AtOffsetWithColon",
-                r#"{"at":"2024-01-02 00:04:05-03:00"}"#,
+                "AtOffset",
+                r#"{"at":"2024-01-02T00:04:05-03:00"}"#,
                 attempt_error(whole, 0, "", ""),
             ),
             (
@@ -561,13 +625,36 @@ mod tests {
                 attempt_error(whole, 0, "", ""),
             ),
             (
-                "AtOffsetHoursOnly",
-                r#"{"at":"2024-01-02T08:04:05+05"}"#,
+                "AtOneDigitHour",
+                r#"{"at":"2024-01-02T3:04:05Z"}"#,
                 attempt_error(whole, 0, "", ""),
             ),
             (
-                "AtOffsetHourOutOfRange",
-                r#"{"at":"2024-01-02T03:04:05+25:00"}"#,
+                "AtYearZero",
+                r#"{"at":"0000-01-01T00:00:00Z"}"#,
+                attempt_error(
+                    NaiveDate::from_ymd_opt(0, 1, 1)
+                        .and_then(|date| date.and_hms_opt(0, 0, 0))
+                        .unwrap()
+                        .and_utc(),
+                    0,
+                    "",
+                    "",
+                ),
+            ),
+            (
+                "AtEmptyFraction",
+                r#"{"at":"2024-01-02T03:04:05.Z"}"#,
+                attempt_error(zero, 0, "", ""),
+            ),
+            (
+                "AtEscaped",
+                concat!(r#"{"at":"2024-01-02T03:04:05"#, "\\", r#"u005a"}"#),
+                attempt_error(zero, 0, "", ""),
+            ),
+            (
+                "AtHourOutOfRange",
+                r#"{"at":"2024-01-02T24:04:05Z"}"#,
                 attempt_error(zero, 0, "", ""),
             ),
             (
@@ -581,16 +668,129 @@ mod tests {
                 attempt_error(zero, 0, "", ""),
             ),
             (
-                "AtTrailingText",
-                r#"{"at":"2024-01-02T03:04:05Zjunk"}"#,
-                attempt_error(zero, 0, "", ""),
-            ),
-            (
                 "AtLowercaseSeparator",
                 r#"{"at":"2024-01-02t03:04:05Z"}"#,
                 attempt_error(zero, 0, "", ""),
             ),
+            (
+                "AtOffsetHourOutOfRange",
+                r#"{"at":"2024-01-02T03:04:05+25:00"}"#,
+                attempt_error(zero, 0, "", ""),
+            ),
+            (
+                "AtOffsetHoursOnly",
+                r#"{"at":"2024-01-02T08:04:05+05"}"#,
+                attempt_error(zero, 0, "", ""),
+            ),
+            (
+                "AtOffsetMinuteOutOfRange",
+                r#"{"at":"2024-01-02T03:04:05+05:61"}"#,
+                attempt_error(zero, 0, "", ""),
+            ),
+            (
+                "AtOffsetWithoutColon",
+                r#"{"at":"2024-01-02T05:34:05+0230"}"#,
+                attempt_error(zero, 0, "", ""),
+            ),
+            (
+                "AtSurroundingSpace",
+                r#"{"at":" 2024-01-02T03:04:05Z "}"#,
+                attempt_error(zero, 0, "", ""),
+            ),
+            (
+                "AtTrailingText",
+                r#"{"at":"2024-01-02T03:04:05Zjunk"}"#,
+                attempt_error(zero, 0, "", ""),
+            ),
         ]);
+    }
+
+    // The cases of River Go's `TestUnmarshalAttemptErrors`.
+    #[test]
+    fn lenient_array_like_go() {
+        assert_eq!(
+            AttemptError::from_json_array_lenient("[]").unwrap(),
+            Vec::new()
+        );
+        assert_eq!(
+            AttemptError::from_json_array_lenient("null").unwrap(),
+            Vec::new()
+        );
+        assert!(AttemptError::from_json_array_lenient(r#"{"error":"not an array"}"#).is_err());
+        // One unexpected element doesn't prevent decoding the others.
+        assert_eq!(
+            AttemptError::from_json_array_lenient(
+                r#"[{"at":"2024-01-02T03:04:05.123456Z","attempt":1,"error":"err1","trace":""},"err2"]"#
+            )
+            .unwrap(),
+            vec![
+                attempt_error(attempt_at(), 1, "err1", ""),
+                attempt_error(go_zero_time(), 0, "err2", ""),
+            ]
+        );
+        assert_eq!(
+            AttemptError::from_json_array_lenient(
+                r#"[{"at":"invalid","attempt":"2","error":"err"},{"error":"next"}]"#
+            )
+            .unwrap(),
+            vec![
+                attempt_error(go_zero_time(), 2, "err", ""),
+                attempt_error(go_zero_time(), 0, "next", ""),
+            ]
+        );
+    }
+
+    // Deserializing an attempt error is strict like Go's `encoding/json`.
+    #[test]
+    fn deserializes_like_go_json() {
+        let zero = go_zero_time();
+        for (name, json, expected) in [
+            (
+                "Full",
+                r#"{"at":"2024-01-02T03:04:05.123456Z","attempt":3,"error":"err","trace":"t","extra":[1]}"#,
+                attempt_error(attempt_at(), 3, "err", "t"),
+            ),
+            (
+                "CaseInsensitiveLastWins",
+                r#"{"error":"first","ERROR":"second","Attempt":2}"#,
+                attempt_error(zero, 2, "second", ""),
+            ),
+            (
+                "MissingAndNull",
+                r#"{"at":null,"attempt":null,"error":"err","trace":null}"#,
+                attempt_error(zero, 0, "err", ""),
+            ),
+            ("Null", "null", attempt_error(zero, 0, "", "")),
+            (
+                "AttemptSaturates",
+                r#"{"attempt":-40000}"#,
+                attempt_error(zero, i16::MIN, "", ""),
+            ),
+        ] {
+            assert_eq!(
+                serde_json::from_str::<AttemptError>(json).unwrap(),
+                expected,
+                "{name}"
+            );
+        }
+
+        for (name, json) in [
+            ("AtNotRFC3339", r#"{"at":"2024-01-02 03:04:05+00"}"#),
+            ("AtNumber", r#"{"at":1704164645}"#),
+            ("AttemptFloat", r#"{"attempt":3.0}"#),
+            ("AttemptString", r#"{"attempt":"3"}"#),
+            ("AttemptOverflow", r#"{"attempt":9223372036854775808}"#),
+            ("ErrorObject", r#"{"error":{"message":"boom"}}"#),
+            ("TraceArray", r#"{"trace":["frame"]}"#),
+            ("RepeatedInvalidField", r#"{"error":1,"error":"err"}"#),
+            ("ElementString", r#""job failed""#),
+            ("ElementArray", "[]"),
+        ] {
+            assert!(
+                serde_json::from_str::<AttemptError>(json).is_err(),
+                "{name}"
+            );
+        }
     }
 
     #[test]
@@ -625,35 +825,15 @@ mod tests {
             serde_json::from_str::<AttemptError>(&encoded).unwrap(),
             attempt_error
         );
+        assert_eq!(
+            AttemptError::from_json_lenient(&encoded).unwrap(),
+            attempt_error
+        );
         // Values decoded from `serde_json::Value` work the same way.
         assert_eq!(
             serde_json::from_value::<AttemptError>(serde_json::to_value(&attempt_error).unwrap())
                 .unwrap(),
             attempt_error
-        );
-    }
-
-    // One unexpected element doesn't prevent decoding the others.
-    #[test]
-    fn slice() {
-        assert_eq!(
-            serde_json::from_str::<Vec<AttemptError>>(
-                r#"[{"at":"2024-01-02T03:04:05.123456Z","attempt":1,"error":"err1","trace":""},"err2"]"#
-            )
-            .unwrap(),
-            vec![
-                attempt_error(attempt_at(), 1, "err1", ""),
-                attempt_error(go_zero_time(), 0, "err2", ""),
-            ]
-        );
-    }
-
-    // Missing fields and nulls decode the same as with Go's defaults.
-    #[test]
-    fn strict_shape_unchanged() {
-        assert_eq!(
-            serde_json::from_str::<AttemptError>(r#"{"attempt":2,"error":null}"#).unwrap(),
-            attempt_error(go_zero_time(), 2, "", "")
         );
     }
 }

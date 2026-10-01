@@ -259,7 +259,9 @@ impl JobRecord {
         );
         let attempt_errors = errors.field(
             "errors",
-            decode_json_or_default::<Option<Vec<AttemptError>>>(self.errors.as_deref()),
+            self.errors
+                .as_deref()
+                .map_or_else(|| Ok(Vec::new()), AttemptError::from_json_array_lenient),
         );
         let metadata = errors.field(
             "metadata",
@@ -279,7 +281,7 @@ impl JobRecord {
             attempted_by,
             created_at: self.created_at,
             encoded_args,
-            errors: attempt_errors.unwrap_or_default(),
+            errors: attempt_errors,
             finalized_at: self.finalized_at,
             kind: self.kind,
             max_attempts: saturating_i16(self.max_attempts),

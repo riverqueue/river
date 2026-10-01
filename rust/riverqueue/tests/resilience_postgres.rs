@@ -551,8 +551,9 @@ async fn claimed_rows_decode_individually_and_leniently() {
     assert_eq!(
         odd_errors.errors,
         [
+            // Like Go's `time.Time`, `at` accepts only RFC 3339.
             AttemptError::new(
-                "2024-01-02T03:04:05Z".parse().unwrap(),
+                "0001-01-01T00:00:00Z".parse().unwrap(),
                 1,
                 r#"{"message":"boom"}"#
             )

@@ -132,6 +132,22 @@ pub fn error_chain(error: &(dyn std::error::Error + 'static)) -> String {
     crate::error::Chain(error).to_string()
 }
 
+/// Decodes one persisted attempt error leniently, like River Go's driver
+/// reads, so an element in a shape River doesn't write can't make its row
+/// unreadable. [`AttemptError`]'s `Deserialize` is strict like Go's
+/// `encoding/json`, so add-on crates reading `errors` from the database use
+/// this instead. Only text that isn't valid JSON is an error.
+pub fn attempt_error_from_json(json: &str) -> Result<AttemptError, serde_json::Error> {
+    AttemptError::from_json_lenient(json)
+}
+
+/// Decodes a persisted JSON array of attempt errors leniently, decoding each
+/// element like [`attempt_error_from_json`]. `null` is empty, and anything
+/// other than an array is an error.
+pub fn attempt_errors_from_json(json: &str) -> Result<Vec<AttemptError>, serde_json::Error> {
+    AttemptError::from_json_array_lenient(json)
+}
+
 /// Encodes a UTC timestamp in River's canonical SQLite wire format.
 ///
 /// This keeps companion crates aligned with River and Go's
