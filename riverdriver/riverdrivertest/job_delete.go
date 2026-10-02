@@ -275,28 +275,90 @@ func exerciseJobDelete[TTx any](ctx context.Context, t *testing.T, executorWithT
 			require.NoError(t, err)
 		})
 
+		// Each case inserts a retained backlog in queues `kept1`/`kept2`
+		// *before* jobs in `deleted1`/`deleted2`, so retained jobs hold the
+		// lowest IDs. With `Max: 2`, a query that limits candidates before
+		// applying queue filters selects only retained jobs, deletes nothing,
+		// and the cleaner stops making progress. Jobs rotate through every
+		// finalized state so each state's branch of the query is exercised.
+		for _, testCase := range []struct {
+			name              string
+			queuesExcluded    []string
+			queuesIncluded    []string
+			wantBatches       []int    // rows deleted by each successive call
+			wantDeletedQueues []string // queues whose jobs are eligible
+		}{
+			// `kept1` appears in both lists; exclusion takes precedence.
+			{name: "Both", queuesExcluded: []string{"kept1", "kept2"}, queuesIncluded: []string{"deleted1", "deleted2", "kept1"}, wantBatches: []int{2, 2, 1, 0}, wantDeletedQueues: []string{"deleted1", "deleted2"}},
+			// An empty exclusion list excludes nothing, same as nil.
+			{name: "EmptyExcluded", queuesExcluded: []string{}, wantBatches: []int{2, 2, 2, 2, 2, 1, 0}, wantDeletedQueues: []string{"deleted1", "deleted2", "kept1", "kept2"}},
+			// A non-nil empty inclusion list matches no queues, unlike nil.
+			{name: "EmptyIncluded", queuesIncluded: []string{}, wantBatches: []int{0}},
+			{name: "Excluded", queuesExcluded: []string{"kept1", "kept2"}, wantBatches: []int{2, 2, 1, 0}, wantDeletedQueues: []string{"deleted1", "deleted2"}},
+			{name: "Included", queuesIncluded: []string{"deleted1", "deleted2"}, wantBatches: []int{2, 2, 1, 0}, wantDeletedQueues: []string{"deleted1", "deleted2"}},
+			{name: "MissingIncluded", queuesIncluded: []string{"missing"}, wantBatches: []int{0}},
+			{name: "NilLists", wantBatches: []int{2, 2, 2, 2, 2, 1, 0}, wantDeletedQueues: []string{"deleted1", "deleted2", "kept1", "kept2"}},
+		} {
+			t.Run("QueuesFilteredBeforeLimit/"+testCase.name, func(t *testing.T) {
+				t.Parallel()
+
+				exec, _ := setup(ctx, t)
+
+				finalizedStates := []rivertype.JobState{rivertype.JobStateCancelled, rivertype.JobStateCompleted, rivertype.JobStateDiscarded}
+
+				queues := []string{"kept1", "kept2", "kept1", "kept2", "kept1", "kept2", "deleted1", "deleted2", "deleted1", "deleted2", "deleted1"}
+
+				allJobIDs := make([]int64, 0, len(queues))
+				var eligibleJobIDs []int64
+				for i, queue := range queues {
+					job := testfactory.Job(ctx, t, exec, &testfactory.JobOpts{
+						FinalizedAt: &beforeHorizon,
+						Queue:       &queue,
+						State:       &finalizedStates[i%len(finalizedStates)],
+					})
+					allJobIDs = append(allJobIDs, job.ID)
+					if slices.Contains(testCase.wantDeletedQueues, queue) {
+						eligibleJobIDs = append(eligibleJobIDs, job.ID)
+					}
+				}
+
+				var numDeletedTotal int
+				for _, wantDeleted := range testCase.wantBatches {
+					numDeleted, err := exec.JobDeleteBefore(ctx, &riverdriver.JobDeleteBeforeParams{
+						CancelledDoDelete:           true,
+						CancelledFinalizedAtHorizon: horizon,
+						CompletedDoDelete:           true,
+						CompletedFinalizedAtHorizon: horizon,
+						DiscardedDoDelete:           true,
+						DiscardedFinalizedAtHorizon: horizon,
+						Max:                         2,
+						QueuesExcluded:              testCase.queuesExcluded,
+						QueuesIncluded:              testCase.queuesIncluded,
+					})
+					require.NoError(t, err)
+					require.Equal(t, wantDeleted, numDeleted)
+					numDeletedTotal += numDeleted
+
+					// Batches delete the oldest eligible jobs first, so after
+					// each call exactly the first numDeletedTotal eligible IDs
+					// are gone and every other job remains.
+					remainingJobs, err := exec.JobGetByIDMany(ctx, &riverdriver.JobGetByIDManyParams{ID: allJobIDs})
+					require.NoError(t, err)
+					require.Equal(t,
+						slices.DeleteFunc(slices.Clone(allJobIDs), func(id int64) bool {
+							return slices.Contains(eligibleJobIDs[:numDeletedTotal], id)
+						}),
+						sliceutil.Map(remainingJobs, func(job *rivertype.JobRow) int64 { return job.ID }),
+					)
+				}
+				require.Len(t, eligibleJobIDs, numDeletedTotal)
+			})
+		}
+
 		t.Run("QueuesIncluded", func(t *testing.T) {
 			t.Parallel()
 
-			exec, bundle := setup(ctx, t)
-
-			// I ran into yet another huge sqlc SQLite bug in that when mixing
-			// normal parameters with a `sqlc.slice` the latter must appear at
-			// the very end because it'll produce unnamed placeholders (?)
-			// instead of positional placeholders (?1) like most parameters. The
-			// trick of putting it at the end works, but only if you have
-			// exactly one `sqlc.slice` needed. If you need multiple and they
-			// need to be interspersed with other parameters (like in the case
-			// of `queues_excluded` and `queues_included`), everything stops
-			// working real fast. I could have worked around this by breaking
-			// the SQLite version of this operation into two sqlc queries, but
-			// since we only expect to need `queues_excluded` on SQLite (and not
-			// `queues_included` for the foreseeable future), I've just set
-			// SQLite to not support `queues_included` for the time being.
-			if bundle.driver.DatabaseName() == riverdriver.DatabaseNameSQLite {
-				t.Logf("Skipping JobDeleteBefore with QueuesIncluded test for SQLite")
-				return
-			}
+			exec, _ := setup(ctx, t)
 
 			var (
 				cancelledJob = testfactory.Job(ctx, t, exec, &testfactory.JobOpts{FinalizedAt: &beforeHorizon, State: new(rivertype.JobStateCancelled)})
@@ -306,7 +368,7 @@ func exerciseJobDelete[TTx any](ctx context.Context, t *testing.T, executorWithT
 				includedQueue1 = "included1"
 				includedQueue2 = "included2"
 
-				// Not deleted because in an omitted queue.
+				// Deleted because in an included queue.
 				deletedJob1 = testfactory.Job(ctx, t, exec, &testfactory.JobOpts{FinalizedAt: &beforeHorizon, Queue: &includedQueue1, State: new(rivertype.JobStateCompleted)})
 				deletedJob2 = testfactory.Job(ctx, t, exec, &testfactory.JobOpts{FinalizedAt: &beforeHorizon, Queue: &includedQueue2, State: new(rivertype.JobStateCompleted)})
 			)

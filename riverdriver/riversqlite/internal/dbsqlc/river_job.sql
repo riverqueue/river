@@ -94,34 +94,25 @@ RETURNING *;
 
 -- name: JobDeleteBefore :execresult
 DELETE FROM /* TEMPLATE: schema */river_job
-WHERE
-    id IN (
-        SELECT id
-        FROM /* TEMPLATE: schema */river_job
-        WHERE
+WHERE id IN (
+    SELECT id
+    FROM /* TEMPLATE: schema */river_job
+    WHERE (
             (state = 'cancelled' AND cast(@cancelled_do_delete AS boolean) AND finalized_at < cast(@cancelled_finalized_at_horizon AS text)) OR
             (state = 'completed' AND cast(@completed_do_delete AS boolean) AND finalized_at < cast(@completed_finalized_at_horizon AS text)) OR
             (state = 'discarded' AND cast(@discarded_do_delete AS boolean) AND finalized_at < cast(@discarded_finalized_at_horizon AS text))
-        ORDER BY id
-        LIMIT @max
-    )
-    -- This is really awful, but unless the `sqlc.slice` appears as the very
-    -- last parameter in the query things will fail if it includes more than one
-    -- element. The sqlc SQLite driver uses position-based placeholders (?1) for
-    -- most parameters, but unnamed ones with `sqlc.slice` (?), and when
-    -- positional parameters follow unnamed parameters great confusion is the
-    -- result. Making sure `sqlc.slice` is last is the only workaround I could
-    -- find, but it stops working if there are multiple clauses that need a
-    -- positional placeholder plus `sqlc.slice` like this one (the Postgres
-    -- driver supports a `queues_included` parameter that I couldn't support
-    -- here). The non-workaround version is (unfortunately) to never, ever use
-    -- the sqlc driver for SQLite -- it's not a little buggy, it's off the
-    -- charts buggy, and there's little interest from the maintainers in fixing
-    -- any of it. We already started using it though, so plough on.
-    AND (
-        cast(@queues_excluded_empty AS boolean)
-        OR river_job.queue NOT IN (sqlc.slice('queues_excluded'))
-    );
+        )
+        AND (
+            cast(@queues_excluded_empty AS boolean)
+            OR queue NOT IN (SELECT value FROM json_each(cast(@queues_excluded AS blob)))
+        )
+        AND (
+            NOT cast(@queues_included_filter AS boolean)
+            OR queue IN (SELECT value FROM json_each(cast(@queues_included AS blob)))
+        )
+    ORDER BY id
+    LIMIT @max
+);
 
 -- name: JobDeleteMany :many
 DELETE FROM /* TEMPLATE: schema */river_job
