@@ -67,6 +67,117 @@ fn finalized_deletions() -> Vec<(riverqueue::__private::FinalizedJobDeleteParams
     ]
 }
 
+/// Queues of the jobs seeded for each [`QueueFilterCase`], in ID order.
+/// Retained jobs in `kept1`/`kept2` come first and outnumber a batch of 2, so
+/// a query that limits candidates before applying queue filters selects only
+/// retained jobs, deletes nothing, and stops the cleaner from making progress.
+/// Seeds rotate through the finalized states so every state's branch of the
+/// query is exercised.
+const QUEUE_FILTER_SEEDS: [&str; 11] = [
+    "kept1", "kept2", "kept1", "kept2", "kept1", "kept2", "deleted1", "deleted2", "deleted1",
+    "deleted2", "deleted1",
+];
+
+/// Finalized state of the seed at each index of [`QUEUE_FILTER_SEEDS`].
+fn queue_filter_seed_state(index: usize) -> &'static str {
+    ["cancelled", "completed", "discarded"][index % 3]
+}
+
+/// Repeated cleaner batches over [`QUEUE_FILTER_SEEDS`] with one set of
+/// queue filters.
+struct QueueFilterCase {
+    /// Jobs deleted by each successive batch.
+    batches: Vec<u64>,
+    /// Queues whose jobs are eligible for deletion.
+    deleted_queues: Vec<&'static str>,
+    name: &'static str,
+    params: riverqueue::__private::FinalizedJobDeleteParams,
+}
+
+impl QueueFilterCase {
+    /// Seed IDs left after `deleted` jobs are gone: batches delete the oldest
+    /// eligible jobs first.
+    fn remaining(&self, ids: &[i64], deleted: u64) -> Vec<i64> {
+        let mut deleted = usize::try_from(deleted).unwrap();
+        ids.iter()
+            .zip(QUEUE_FILTER_SEEDS)
+            .filter(|(_, queue)| {
+                if deleted > 0 && self.deleted_queues.contains(queue) {
+                    deleted -= 1;
+                    return false;
+                }
+                true
+            })
+            .map(|(&id, _)| id)
+            .collect()
+    }
+
+    /// Number of seeds eligible for deletion.
+    fn eligible(&self) -> u64 {
+        QUEUE_FILTER_SEEDS
+            .iter()
+            .filter(|queue| self.deleted_queues.contains(queue))
+            .count()
+            .try_into()
+            .unwrap()
+    }
+}
+
+fn queue_filter_cases() -> Vec<QueueFilterCase> {
+    let case = |name: &'static str,
+                queues_excluded: &[&str],
+                queues_included: Option<&[&str]>,
+                batches: Vec<u64>,
+                deleted_queues: Vec<&'static str>| {
+        let horizon = chrono::Utc::now();
+        let mut params = riverqueue::__private::FinalizedJobDeleteParams::new(2);
+        params.cancelled_before = Some(horizon);
+        params.completed_before = Some(horizon);
+        params.discarded_before = Some(horizon);
+        params.queues_excluded = queues_excluded
+            .iter()
+            .map(|&queue| queue.to_owned())
+            .collect();
+        params.queues_included =
+            queues_included.map(|queues| queues.iter().map(|&queue| queue.to_owned()).collect());
+        QueueFilterCase {
+            batches,
+            deleted_queues,
+            name,
+            params,
+        }
+    };
+    let all = vec!["deleted1", "deleted2", "kept1", "kept2"];
+    vec![
+        // `kept1` appears in both lists; exclusion takes precedence.
+        case(
+            "both",
+            &["kept1", "kept2"],
+            Some(&["deleted1", "deleted2", "kept1"]),
+            vec![2, 2, 1, 0],
+            vec!["deleted1", "deleted2"],
+        ),
+        // An empty inclusion list matches no queues, unlike `None`.
+        case("empty_included", &[], Some(&[]), vec![0], vec![]),
+        case(
+            "excluded",
+            &["kept1", "kept2"],
+            None,
+            vec![2, 2, 1, 0],
+            vec!["deleted1", "deleted2"],
+        ),
+        case(
+            "included",
+            &[],
+            Some(&["deleted1", "deleted2"]),
+            vec![2, 2, 1, 0],
+            vec!["deleted1", "deleted2"],
+        ),
+        case("missing_included", &[], Some(&["missing"]), vec![0], vec![]),
+        case("no_filters", &[], None, vec![2, 2, 2, 2, 2, 1, 0], all),
+    ]
+}
+
 /// Records what River binds the pilot to when its client is built.
 #[derive(Clone, Default)]
 struct InstallPilot {
@@ -319,6 +430,66 @@ mod postgres {
     }
 
     #[tokio::test(flavor = "multi_thread")]
+    async fn filters_queues_before_the_batch_limit() {
+        use riverqueue::__private::{DatabaseConfig, delete_finalized_jobs};
+
+        let schema = PostgresSchema::new("seam_queue_filters").await;
+        let table = schema.table("river_job");
+        let database = DatabaseConfig::Postgres {
+            schema: schema.schema.clone(),
+        };
+        for case in queue_filter_cases() {
+            sqlx::query(AssertSqlSafe(format!("DELETE FROM {table}")))
+                .execute(&schema.pool)
+                .await
+                .unwrap();
+            let mut ids = Vec::new();
+            for (index, queue) in QUEUE_FILTER_SEEDS.into_iter().enumerate() {
+                let id: i64 = sqlx::query_scalar(AssertSqlSafe(format!(
+                    "INSERT INTO {table} (args, finalized_at, kind, max_attempts, queue, state) \
+                     VALUES ('{{}}', now() - interval '1 hour', 'extension_seams', 25, $1, \
+                     $2::text::{}) RETURNING id",
+                    schema.table("river_job_state"),
+                )))
+                .bind(queue)
+                .bind(queue_filter_seed_state(index))
+                .fetch_one(&schema.pool)
+                .await
+                .unwrap();
+                ids.push(id);
+            }
+            let mut deleted_total = 0;
+            for (batch, &want) in case.batches.iter().enumerate() {
+                let mut connection = schema.pool.acquire().await.unwrap();
+                let deleted = delete_finalized_jobs(
+                    DatabaseConnection::Postgres(&mut connection),
+                    &database,
+                    &case.params,
+                )
+                .await
+                .unwrap();
+                drop(connection);
+                assert_eq!(deleted, want, "{} batch {batch}", case.name);
+                deleted_total += deleted;
+                let remaining: Vec<i64> = sqlx::query_scalar(AssertSqlSafe(format!(
+                    "SELECT id FROM {table} ORDER BY id"
+                )))
+                .fetch_all(&schema.pool)
+                .await
+                .unwrap();
+                assert_eq!(
+                    remaining,
+                    case.remaining(&ids, deleted_total),
+                    "{} batch {batch}",
+                    case.name
+                );
+            }
+            assert_eq!(deleted_total, case.eligible(), "{}", case.name);
+        }
+        schema.cleanup().await;
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
     async fn pilot_is_installed_once() {
         let schema = PostgresSchema::new("seam_install").await;
         assert_pilot_is_installed_once(|| builder(&schema)).await;
@@ -380,6 +551,60 @@ mod sqlite {
                 .unwrap();
             let expected: Vec<i64> = kept.iter().map(|&index| ids[index]).collect();
             assert_eq!(remaining, expected, "{params:?}");
+        }
+        sqlite_cleanup(pool, path).await;
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn filters_queues_before_the_batch_limit() {
+        use riverqueue::__private::{DatabaseConfig, delete_finalized_jobs};
+
+        let (pool, path) = sqlite_file_pool(4).await;
+        for case in queue_filter_cases() {
+            sqlx::query("DELETE FROM river_job")
+                .execute(&pool)
+                .await
+                .unwrap();
+            let mut ids = Vec::new();
+            for (index, queue) in QUEUE_FILTER_SEEDS.into_iter().enumerate() {
+                let id: i64 = sqlx::query_scalar(
+                    "INSERT INTO river_job (args, finalized_at, kind, max_attempts, queue, state) \
+                     VALUES (jsonb('{}'), strftime('%Y-%m-%d %H:%M:%f', 'now', '-1 hour'), \
+                     'extension_seams', 25, ?, ?) RETURNING id",
+                )
+                .bind(queue)
+                .bind(queue_filter_seed_state(index))
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+                ids.push(id);
+            }
+            let mut deleted_total = 0;
+            for (batch, &want) in case.batches.iter().enumerate() {
+                let mut connection = pool.acquire().await.unwrap();
+                let deleted = delete_finalized_jobs(
+                    DatabaseConnection::Sqlite(&mut connection),
+                    &DatabaseConfig::Sqlite,
+                    &case.params,
+                )
+                .await
+                .unwrap();
+                drop(connection);
+                assert_eq!(deleted, want, "{} batch {batch}", case.name);
+                deleted_total += deleted;
+                let remaining: Vec<i64> =
+                    sqlx::query_scalar("SELECT id FROM river_job ORDER BY id")
+                        .fetch_all(&pool)
+                        .await
+                        .unwrap();
+                assert_eq!(
+                    remaining,
+                    case.remaining(&ids, deleted_total),
+                    "{} batch {batch}",
+                    case.name
+                );
+            }
+            assert_eq!(deleted_total, case.eligible(), "{}", case.name);
         }
         sqlite_cleanup(pool, path).await;
     }
