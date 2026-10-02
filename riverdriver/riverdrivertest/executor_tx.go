@@ -2,6 +2,8 @@ package riverdrivertest
 
 import (
 	"context"
+	"errors"
+	"os"
 	"sync"
 	"testing"
 	"time"
@@ -11,6 +13,7 @@ import (
 	"github.com/riverqueue/river/riverdbtest"
 	"github.com/riverqueue/river/riverdriver"
 	"github.com/riverqueue/river/rivershared/testfactory"
+	"github.com/riverqueue/river/rivershared/util/dbutil"
 	"github.com/riverqueue/river/rivershared/util/hashutil"
 	"github.com/riverqueue/river/rivershared/util/randutil"
 	"github.com/riverqueue/river/rivertype"
@@ -285,5 +288,124 @@ func exerciseExecutorTx[TTx any](ctx context.Context, t *testing.T,
 		require.Equal(t, 2, field2)
 		require.Equal(t, 3, field3)
 		require.Equal(t, "foo", fieldFoo)
+	})
+
+	t.Run("WithTx", func(t *testing.T) {
+		t.Parallel()
+
+		legacySubtransactions := os.Getenv("RIVER_USE_LEGACY_SUBTRANSACTIONS") == "1" || os.Getenv("RIVER_USE_LEGACY_SUBTRANSACTIONS") == "true"
+		for _, name := range []string{"BorrowedDatabaseError", "BorrowedError", "BorrowedSuccess", "OwnedError", "OwnedSuccess"} {
+			t.Run(name, func(t *testing.T) {
+				t.Parallel()
+
+				driver, schema := driverWithSchema(ctx, t, nil)
+				exec := driver.GetExecutor()
+				var borrowed riverdriver.ExecutorTx
+				var priorJob *rivertype.JobRow
+				if name == "BorrowedDatabaseError" || name == "BorrowedError" || name == "BorrowedSuccess" {
+					var err error
+					borrowed, err = exec.Begin(ctx)
+					require.NoError(t, err)
+					t.Cleanup(func() { _ = borrowed.Rollback(ctx) })
+					exec = borrowed
+					priorJob = testfactory.Job(ctx, t, borrowed, &testfactory.JobOpts{Schema: schema})
+				}
+
+				var job *rivertype.JobRow
+				var innerErr error
+				if name == "BorrowedError" || name == "OwnedError" {
+					innerErr = errors.New("error after writing")
+				}
+				result, err := dbutil.WithTxV(ctx, exec, func(ctx context.Context, tx riverdriver.ExecutorTx) (int64, error) {
+					if borrowed != nil {
+						if legacySubtransactions {
+							require.NotSame(t, borrowed, tx, "legacy mode creates a savepoint")
+						} else {
+							require.Same(t, borrowed, tx, "reuse the caller's transaction without a savepoint")
+						}
+					}
+					job = testfactory.Job(ctx, t, tx, &testfactory.JobOpts{Schema: schema})
+					if name == "BorrowedDatabaseError" {
+						innerErr = tx.Exec(ctx, "SELECT * FROM river_nonexistent_table")
+						require.Error(t, innerErr)
+					}
+					return job.ID, innerErr
+				})
+				if innerErr != nil {
+					require.ErrorIs(t, err, innerErr)
+					require.Zero(t, result)
+				} else {
+					require.NoError(t, err)
+					require.Equal(t, job.ID, result)
+				}
+
+				if borrowed != nil {
+					_, err := borrowed.JobGetByID(ctx, &riverdriver.JobGetByIDParams{ID: job.ID, Schema: schema})
+					aborted := name == "BorrowedDatabaseError" && !legacySubtransactions && driver.DatabaseName() == riverdriver.DatabaseNamePostgres
+					switch {
+					case aborted:
+						require.Error(t, err)
+					case legacySubtransactions && innerErr != nil:
+						require.ErrorIs(t, err, rivertype.ErrNotFound, "the savepoint rolls back partial writes")
+					default:
+						require.NoError(t, err)
+					}
+					if !aborted {
+						_, err = borrowed.JobGetByID(ctx, &riverdriver.JobGetByIDParams{ID: priorJob.ID, Schema: schema})
+						require.NoError(t, err, "earlier writes remain in the caller's transaction")
+					}
+					if legacySubtransactions && innerErr != nil {
+						require.NoError(t, borrowed.Commit(ctx), "the caller can commit earlier writes after an error")
+						_, err = driver.GetExecutor().JobGetByID(ctx, &riverdriver.JobGetByIDParams{ID: priorJob.ID, Schema: schema})
+						require.NoError(t, err)
+					} else {
+						require.NoError(t, borrowed.Rollback(ctx))
+					}
+				}
+				_, err = driver.GetExecutor().JobGetByID(ctx, &riverdriver.JobGetByIDParams{ID: job.ID, Schema: schema})
+				if borrowed != nil || innerErr != nil {
+					require.ErrorIs(t, err, rivertype.ErrNotFound)
+				} else {
+					require.NoError(t, err)
+				}
+			})
+		}
+
+		t.Run("TransactionIDs", func(t *testing.T) {
+			t.Parallel()
+
+			// Inspect the actual writes as well as executor identity: nested
+			// helpers or driver internals must not allocate subtransaction IDs
+			// unless the legacy fallback is explicitly enabled.
+			driver, schema := driverWithSchema(ctx, t, nil)
+			if driver.DatabaseName() != riverdriver.DatabaseNamePostgres {
+				t.Skip("uses PostgreSQL tuple transaction IDs to detect hidden subtransactions")
+			}
+			tx, err := driver.GetExecutor().Begin(ctx)
+			require.NoError(t, err)
+			t.Cleanup(func() { _ = tx.Rollback(ctx) })
+
+			// Include a write directly in the caller's transaction so that
+			// even one savepoint encompassing all helper writes is detected.
+			_ = testfactory.Job(ctx, t, tx, &testfactory.JobOpts{Schema: schema})
+			const numJobs = 80 // Exceeds PostgreSQL's cached subtransaction ID limit.
+			for range numJobs {
+				require.NoError(t, dbutil.WithTx(ctx, tx, func(ctx context.Context, execTx riverdriver.ExecutorTx) error {
+					return dbutil.WithTx(ctx, execTx, func(ctx context.Context, execTx riverdriver.ExecutorTx) error {
+						_ = testfactory.Job(ctx, t, execTx, &testfactory.JobOpts{Schema: schema})
+						return nil
+					})
+				}))
+			}
+
+			var numRows, numTransactions int
+			require.NoError(t, tx.QueryRow(ctx, "SELECT count(*), count(DISTINCT xmin::text) FROM "+dbutil.SafeIdentifier(schema)+".river_job").Scan(&numRows, &numTransactions))
+			require.Equal(t, numJobs+1, numRows)
+			if legacySubtransactions {
+				require.Equal(t, numJobs+1, numTransactions, "legacy mode allocates a subtransaction ID for each helper write")
+			} else {
+				require.Equal(t, 1, numTransactions, "all writes must use the caller's transaction ID by default")
+			}
+		})
 	})
 }
