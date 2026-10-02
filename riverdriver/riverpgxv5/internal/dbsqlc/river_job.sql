@@ -329,7 +329,8 @@ ON CONFLICT (unique_key)
         AND unique_states IS NOT NULL
         AND /* TEMPLATE: schema */river_job_state_in_bitmask(unique_states, state)
     -- Something needs to be updated for a row to be returned on a conflict.
-    DO UPDATE SET kind = EXCLUDED.kind
+    -- Keep the existing kind, which may differ under `ExcludeKind`.
+    DO UPDATE SET kind = river_job.kind
 RETURNING
     sqlc.embed(river_job),
     /* TEMPLATE_BEGIN: unique_skipped_as_duplicate */ (xmax != 0) /* TEMPLATE_END */ AS unique_skipped_as_duplicate;
