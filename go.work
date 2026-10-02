@@ -9,6 +9,7 @@ use (
 	./riverdriver/riverdatabasesql
 	./riverdriver/riverdrivertest
 	./riverdriver/riverpgxv5
+	./riverdriver/rivermysql
 	./riverdriver/riversqlite
 	./rivershared
 	./rivertype

@@ -44,6 +44,7 @@ type WherePredicate struct {
 }
 
 type sqlFragmentBuilder interface {
+	DatabaseName() string
 	SQLFragmentColumnContainsAll(column, namedArg string, values []string) (string, any, error)
 	SQLFragmentColumnContainsAny(column, namedArg string, values []string) (string, any, error)
 	SQLFragmentColumnIn(column string, values any) (string, any, error)
@@ -197,6 +198,17 @@ func JobMakeDriverParams(ctx context.Context, params *JobListParams, sqlFragment
 	var orderByBuilder strings.Builder
 
 	for i, orderBy := range params.OrderBy {
+		// MySQL doesn't support NULLS FIRST/LAST. Sort by nullness first to
+		// preserve the same cursor ordering as Postgres and SQLite.
+		mysqlNullOrder := sqlFragmentBuilder.DatabaseName() == riverdriver.DatabaseNameMySQL && orderBy.Expr != "id"
+		if mysqlNullOrder {
+			orderByBuilder.WriteString(orderBy.Expr)
+			if orderBy.Order == SortOrderAsc {
+				orderByBuilder.WriteString(" IS NULL ASC, ")
+			} else {
+				orderByBuilder.WriteString(" IS NULL DESC, ")
+			}
+		}
 		orderByBuilder.WriteString(orderBy.Expr)
 		// Match Postgres's default null placement on every driver. Leave the
 		// non-null ID tie-breaker alone: SQLite otherwise adds a temporary sort
@@ -204,12 +216,12 @@ func JobMakeDriverParams(ctx context.Context, params *JobListParams, sqlFragment
 		switch orderBy.Order {
 		case SortOrderAsc:
 			orderByBuilder.WriteString(" ASC")
-			if orderBy.Expr != "id" {
+			if orderBy.Expr != "id" && !mysqlNullOrder {
 				orderByBuilder.WriteString(" NULLS LAST")
 			}
 		case SortOrderDesc:
 			orderByBuilder.WriteString(" DESC")
-			if orderBy.Expr != "id" {
+			if orderBy.Expr != "id" && !mysqlNullOrder {
 				orderByBuilder.WriteString(" NULLS FIRST")
 			}
 		case SortOrderUnspecified:

@@ -100,6 +100,25 @@ func exerciseDriverPool[TTx any](ctx context.Context, t *testing.T,
 		})
 	})
 
+	t.Run("SafeIdentifier", func(t *testing.T) {
+		t.Parallel()
+
+		_, driver := executorWithTx(ctx, t)
+
+		switch driver.DatabaseName() {
+		case riverdriver.DatabaseNamePostgres, riverdriver.DatabaseNameSQLite:
+			require.Equal(t, `"my_schema"`, driver.SafeIdentifier("my_schema"))
+			require.Equal(t, `"has space"`, driver.SafeIdentifier("has space"))
+			require.Equal(t, `"has""quote"`, driver.SafeIdentifier(`has"quote`))
+		case riverdriver.DatabaseNameMySQL:
+			require.Equal(t, "`my_schema`", driver.SafeIdentifier("my_schema"))
+			require.Equal(t, "`has space`", driver.SafeIdentifier("has space"))
+			require.Equal(t, "`has``backtick`", driver.SafeIdentifier("has`backtick"))
+		default:
+			require.FailNow(t, "Don't know how to check SafeIdentifier for: "+driver.DatabaseName())
+		}
+	})
+
 	t.Run("SupportsListenNotify", func(t *testing.T) {
 		t.Parallel()
 
@@ -109,6 +128,8 @@ func exerciseDriverPool[TTx any](ctx context.Context, t *testing.T,
 		case riverdriver.DatabaseNamePostgres:
 			require.True(t, driver.SupportsListenNotify())
 		case riverdriver.DatabaseNameSQLite:
+			require.True(t, driver.SupportsListenNotify())
+		case riverdriver.DatabaseNameMySQL:
 			require.True(t, driver.SupportsListenNotify())
 		default:
 			require.FailNow(t, "Don't know how to check SupportsListenNotify for: "+driver.DatabaseName())
@@ -126,7 +147,8 @@ func requireMissingRelation(t *testing.T, err error, schema, missingRelation str
 		// lib/pq: pq: relation %s.%s does not exist
 		// SQLite: no such table: %s.%s
 		// Turso: turso: error: Invalid argument supplied: no such database: %s
-		require.Regexp(t, fmt.Sprintf(`(pq: relation "%s\.%s" does not exist|no such table: %s\.%s|no such database: %s)`, schema, missingRelation, schema, missingRelation, schema), err.Error())
+		// MySQL: Unknown database '%s'
+		require.Regexp(t, fmt.Sprintf(`(pq: relation "%s\.%s" does not exist|no such table: %s\.%s|no such database: %s|Unknown database '%s')`, schema, missingRelation, schema, missingRelation, schema, schema), err.Error())
 	}
 }
 
@@ -139,6 +161,23 @@ var sqliteJobJSONColumns = []string{"args", "attempted_by", "errors", "metadata"
 // job row's JSON columns, it's rejected with a "malformed JSON" error by any of
 // SQLite's JSON functions that touch it.
 const sqliteMalformedValue = "not json"
+
+// setJobJSONColumn overwrites a JSON column of a SQLite or MySQL job row with the
+// given JSON, simulating a row changed out of band into a shape that River
+// can't decode. Postgres' column types don't allow the equivalent.
+func setJobJSONColumn[TTx any](ctx context.Context, t *testing.T, exec riverdriver.Executor, driver riverdriver.Driver[TTx], schema string, jobID int64, column, jsonValue string) {
+	t.Helper()
+
+	table := "river_job"
+	if schema != "" {
+		table = driver.SafeIdentifier(schema) + "." + table
+	}
+	valueSQL := "jsonb(?)"
+	if driver.DatabaseName() == riverdriver.DatabaseNameMySQL {
+		valueSQL = "CAST(? AS JSON)"
+	}
+	require.NoError(t, exec.Exec(ctx, "UPDATE "+table+" SET "+column+" = "+valueSQL+" WHERE id = ?", jsonValue, jobID))
+}
 
 // sqliteJobColumnText returns a column of a SQLite job row cast to text, which
 // can be used to check that a value that isn't valid JSON (and so can't be
@@ -159,13 +198,4 @@ func sqliteSetJobColumnMalformed(ctx context.Context, t *testing.T, exec riverdr
 	t.Helper()
 
 	require.NoError(t, exec.Exec(ctx, "UPDATE river_job SET "+column+" = ? WHERE id = ?", sqliteMalformedValue, jobID))
-}
-
-// sqliteSetJobJSONColumn overwrites a JSON column of a SQLite job row with the
-// given JSON, simulating a row changed out of band into a shape that River
-// can't decode. Postgres' column types don't allow the equivalent.
-func sqliteSetJobJSONColumn(ctx context.Context, t *testing.T, exec riverdriver.Executor, jobID int64, column, jsonValue string) {
-	t.Helper()
-
-	require.NoError(t, exec.Exec(ctx, "UPDATE river_job SET "+column+" = jsonb(?) WHERE id = ?", jsonValue, jobID))
 }

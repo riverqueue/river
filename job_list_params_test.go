@@ -429,7 +429,7 @@ func Test_JobListParams_toDBParams_CustomConditions(t *testing.T) {
 			Where("state = @other_state OR finalized_at IS NULL", NamedArgs{"other_state": "completed"}).
 			After(&JobListCursor{id: 42, time: cursorTime})
 		driverParams := driverParamsFunc(t, bundle)
-		const cursorSQL = `("finalized_at" < @cursor_time OR ("finalized_at" = @cursor_time AND "id" < @after_id))`
+		const cursorSQL = `(finalized_at < @cursor_time OR (finalized_at = @cursor_time AND id < @after_id))`
 		require.Equal(t, "state = any(@state)\n  AND state = @other_state OR finalized_at IS NULL\n  AND "+cursorSQL, driverParams.WhereClause)
 		require.Equal(t, map[string]any{
 			"after_id":    int64(42),
@@ -530,29 +530,29 @@ func Test_JobListParams_toDBParamsNullableTimeField(t *testing.T) {
 			name:          "AttemptedAtAsc",
 			params:        NewJobListParams().States(rivertype.JobStateRunning).OrderBy(JobListOrderByTime, SortOrderAsc),
 			wantOrderBy:   "attempted_at ASC NULLS LAST, id ASC",
-			wantAfterNull: `("attempted_at" IS NULL AND "id" > @after_id)`,
-			wantAfterTime: `("attempted_at" > @cursor_time OR ("attempted_at" = @cursor_time AND "id" > @after_id) OR "attempted_at" IS NULL)`,
+			wantAfterNull: `(attempted_at IS NULL AND id > @after_id)`,
+			wantAfterTime: `(attempted_at > @cursor_time OR (attempted_at = @cursor_time AND id > @after_id) OR attempted_at IS NULL)`,
 		},
 		{
 			name:          "AttemptedAtDesc",
 			params:        NewJobListParams().States(rivertype.JobStateRunning).OrderBy(JobListOrderByTime, SortOrderDesc),
 			wantOrderBy:   "attempted_at DESC NULLS FIRST, id DESC",
-			wantAfterNull: `("attempted_at" IS NOT NULL OR "id" < @after_id)`,
-			wantAfterTime: `("attempted_at" < @cursor_time OR ("attempted_at" = @cursor_time AND "id" < @after_id))`,
+			wantAfterNull: `(attempted_at IS NOT NULL OR id < @after_id)`,
+			wantAfterTime: `(attempted_at < @cursor_time OR (attempted_at = @cursor_time AND id < @after_id))`,
 		},
 		{
 			name:          "FinalizedAtMixedStatesAsc",
 			params:        NewJobListParams().States(rivertype.JobStateCompleted, rivertype.JobStateAvailable).OrderBy(JobListOrderByTime, SortOrderAsc),
 			wantOrderBy:   "finalized_at ASC NULLS LAST, id ASC",
-			wantAfterNull: `("finalized_at" IS NULL AND "id" > @after_id)`,
-			wantAfterTime: `("finalized_at" > @cursor_time OR ("finalized_at" = @cursor_time AND "id" > @after_id) OR "finalized_at" IS NULL)`,
+			wantAfterNull: `(finalized_at IS NULL AND id > @after_id)`,
+			wantAfterTime: `(finalized_at > @cursor_time OR (finalized_at = @cursor_time AND id > @after_id) OR finalized_at IS NULL)`,
 		},
 		{
 			name:          "FinalizedAtMixedStatesDesc",
 			params:        NewJobListParams().States(rivertype.JobStateCompleted, rivertype.JobStateAvailable).OrderBy(JobListOrderByTime, SortOrderDesc),
 			wantOrderBy:   "finalized_at DESC NULLS FIRST, id DESC",
-			wantAfterNull: `("finalized_at" IS NOT NULL OR "id" < @after_id)`,
-			wantAfterTime: `("finalized_at" < @cursor_time OR ("finalized_at" = @cursor_time AND "id" < @after_id))`,
+			wantAfterNull: `(finalized_at IS NOT NULL OR id < @after_id)`,
+			wantAfterTime: `(finalized_at < @cursor_time OR (finalized_at = @cursor_time AND id < @after_id))`,
 		},
 		{
 			// An ungrouped OR can include available jobs despite the completed
@@ -560,20 +560,20 @@ func Test_JobListParams_toDBParamsNullableTimeField(t *testing.T) {
 			name:          "FinalizedAtWithCondition",
 			params:        NewJobListParams().States(rivertype.JobStateCompleted).OrderBy(JobListOrderByTime, SortOrderAsc).Where("state = 'available' OR state = 'completed'"),
 			wantOrderBy:   "finalized_at ASC NULLS LAST, id ASC",
-			wantAfterNull: `("finalized_at" IS NULL AND "id" > @after_id)`,
-			wantAfterTime: `("finalized_at" > @cursor_time OR ("finalized_at" = @cursor_time AND "id" > @after_id) OR "finalized_at" IS NULL)`,
+			wantAfterNull: `(finalized_at IS NULL AND id > @after_id)`,
+			wantAfterTime: `(finalized_at > @cursor_time OR (finalized_at = @cursor_time AND id > @after_id) OR finalized_at IS NULL)`,
 		},
 		{
 			name:          "FinalizedStates",
 			params:        NewJobListParams().OrderBy(JobListOrderByFinalizedAt, SortOrderAsc),
 			wantOrderBy:   "finalized_at ASC NULLS LAST, id ASC",
-			wantAfterTime: `("finalized_at" > @cursor_time OR ("finalized_at" = @cursor_time AND "id" > @after_id))`,
+			wantAfterTime: `(finalized_at > @cursor_time OR (finalized_at = @cursor_time AND id > @after_id))`,
 		},
 		{
 			name:          "ScheduledAt",
 			params:        NewJobListParams().States(rivertype.JobStateAvailable, rivertype.JobStateCompleted).OrderBy(JobListOrderByTime, SortOrderAsc),
 			wantOrderBy:   "scheduled_at ASC NULLS LAST, id ASC",
-			wantAfterTime: `("scheduled_at" > @cursor_time OR ("scheduled_at" = @cursor_time AND "id" > @after_id))`,
+			wantAfterTime: `(scheduled_at > @cursor_time OR (scheduled_at = @cursor_time AND id > @after_id))`,
 		},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
