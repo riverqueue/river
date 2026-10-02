@@ -39,7 +39,7 @@ import (
 )
 
 const (
-	adapterVersion        = 19
+	adapterVersion        = 20
 	implementationVersion = "0.48.0"
 	protocolRevision      = 1
 )
@@ -53,6 +53,7 @@ var adapterMethods = []string{ //nolint:gochecknoglobals
 	"connection_count",
 	"cron_next",
 	"delete",
+	"delete_finalized",
 	"delete_many",
 	"fault_disconnect_application",
 	"fault_disconnect_listeners",
@@ -199,7 +200,7 @@ var sqliteRuntimeCapabilities = []string{ //nolint:gochecknoglobals
 }
 
 var sqliteRuntimeMethods = []string{ //nolint:gochecknoglobals
-	"barrier_create", "barrier_release", "cancel", "clock_set", "cron_next", "delete", "delete_many", "get",
+	"barrier_create", "barrier_release", "cancel", "clock_set", "cron_next", "delete", "delete_finalized", "delete_many", "get",
 	"handshake", "insert", "insert_many", "leader", "list", "migrate",
 	"queue_add", "queue_get", "queue_list", "queue_pause", "queue_remove", "queue_resume",
 	"queue_update", "raw_finalize", "raw_insert_exact_json", "raw_insert_no_notify", "raw_job_exact_json", "raw_job_row", "raw_job_timestamps", "raw_notifications", "raw_replace_json_text", "request_resign", "reset", "retry", "retry_delay",
@@ -1551,6 +1552,17 @@ func (s *adapterState) handle(ctx context.Context, req *request) (any, error) {
 		}
 		return normalizeJob(job), nil
 
+	case "delete_finalized":
+		params, err := makeJobDeleteBeforeParams(req.Params)
+		if err != nil {
+			return nil, err
+		}
+		deleted, err := riverpgxv5.New(s.pool).GetExecutor().JobDeleteBefore(ctx, params)
+		if err != nil {
+			return nil, err
+		}
+		return map[string]any{"deleted": deleted}, nil
+
 	case "delete_many":
 		params, _, err := makeJobDeleteManyParams(req.Params, false)
 		if err != nil {
@@ -2691,6 +2703,17 @@ func (s *sqliteAdapterState) handle(ctx context.Context, req *request) (any, err
 			return nil, err
 		}
 		return normalizeJob(job), nil
+
+	case "delete_finalized":
+		params, err := makeJobDeleteBeforeParams(req.Params)
+		if err != nil {
+			return nil, err
+		}
+		deleted, err := riversqlite.New(s.pool).GetExecutor().JobDeleteBefore(ctx, params)
+		if err != nil {
+			return nil, err
+		}
+		return map[string]any{"deleted": deleted}, nil
 
 	case "delete_many":
 		params, _, err := makeJobDeleteManyParams(req.Params, false)
@@ -4060,6 +4083,39 @@ func makeJobListParams(raw json.RawMessage, transactional bool) (*river.JobListP
 
 // makeJobDeleteManyParams decodes bulk delete filters and the transaction
 // handle, which only tx_delete_many accepts.
+// makeJobDeleteBeforeParams decodes delete_finalized params into one batch
+// of the job cleaner's deletion, covering every finalized state. A null or
+// absent `queues_included` decodes as nil, which matches every queue, while
+// an empty list stays non-nil and matches none.
+func makeJobDeleteBeforeParams(raw json.RawMessage) (*riverdriver.JobDeleteBeforeParams, error) {
+	var params struct {
+		Before         time.Time `json:"before"`
+		Limit          int       `json:"limit"`
+		QueuesExcluded []string  `json:"queues_excluded"`
+		QueuesIncluded []string  `json:"queues_included"`
+	}
+	if err := decodeParams(raw, &params); err != nil {
+		return nil, err
+	}
+	if params.Before.IsZero() {
+		return nil, invalidParams(errors.New("before is required"))
+	}
+	if params.Limit < 1 {
+		return nil, invalidParams(errors.New("limit must be positive"))
+	}
+	return &riverdriver.JobDeleteBeforeParams{
+		CancelledDoDelete:           true,
+		CancelledFinalizedAtHorizon: params.Before,
+		CompletedDoDelete:           true,
+		CompletedFinalizedAtHorizon: params.Before,
+		DiscardedDoDelete:           true,
+		DiscardedFinalizedAtHorizon: params.Before,
+		Max:                         params.Limit,
+		QueuesExcluded:              params.QueuesExcluded,
+		QueuesIncluded:              params.QueuesIncluded,
+	}, nil
+}
+
 func makeJobDeleteManyParams(raw json.RawMessage, transactional bool) (*river.JobDeleteManyParams, string, error) {
 	var params struct {
 		All    bool                 `json:"all"`

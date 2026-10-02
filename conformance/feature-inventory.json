@@ -1083,7 +1083,11 @@
       "area": "driver",
       "detail": "func(ctx context.Context, params *JobDeleteBeforeParams) (int, error)",
       "id": "driver.Executor.JobDeleteBefore",
-      "rationale": "Go driver-seam method for job queries; their persisted effects are covered by the client, job_state, and metadata_key items.",
+      "rationale": "Go driver-seam method for the job cleaner's deletion, also reused by extensions' own cleaner passes. The adapter's delete_finalized method runs it directly so queue inclusion and exclusion are checked before the batch limit on every engine.",
+      "scenarios": [
+        "job_cleaner_queue_filters",
+        "sqlite_runtime_job_cleaner_queue_filters"
+      ],
       "source": "riverdriver/river_driver_interface.go:riverdriver.Executor.JobDeleteBefore"
     },
     {

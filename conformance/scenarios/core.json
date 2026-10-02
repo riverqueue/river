@@ -33,6 +33,7 @@
     { "evidence": [{ "path": "conformance/harness/resilience_test.go", "symbol": "TestResilienceConformance" }], "name": "hard_shutdown_soft_stop_classification", "tier": "runtime" },
     { "evidence": [{ "path": "conformance/harness/storage_scenarios_test.go", "symbol": "verifyHistoricalMigrations" }], "name": "historical_migration_down_up", "tier": "storage" },
     { "evidence": [{ "path": "conformance/harness/coordination_scenarios_test.go", "symbol": "verifyIgnoredCancellationHardAbort" }], "name": "ignored_cancellation_hard_abort", "tier": "chaos" },
+    { "evidence": [{ "path": "conformance/harness/storage_scenarios_test.go", "symbol": "verifyJobCleanerQueueFilters" }], "name": "job_cleaner_queue_filters", "tier": "storage" },
     { "evidence": [{ "path": "conformance/harness/storage_scenarios_test.go", "symbol": "verifyJobListCursorInterchange" }], "name": "job_list_cursor_interchange", "tier": "storage" },
     { "evidence": [{ "path": "conformance/harness/storage_scenarios_test.go", "symbol": "verifyJobRowRoundTrip" }], "name": "job_row_round_trip_all_fields", "tier": "codec" },
     { "evidence": [{ "path": "conformance/harness/coordination_scenarios_test.go", "symbol": "verifyLeaderElectionDisabled" }], "name": "leader_election_disabled_both_directions", "tier": "mixed" },

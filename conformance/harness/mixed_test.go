@@ -129,6 +129,11 @@ func TestMixedConformance(t *testing.T) {
 
 		verifyBulkDeleteSafety(t, goAdapter, candidateAdapter)
 	})
+	t.Run("job_cleaner_queue_filters", func(t *testing.T) {
+		defer scenarios.record(t)
+
+		verifyJobCleanerQueueFilters(t, goAdapter, candidateAdapter)
+	})
 	t.Run("differential_job_list_filters_and_cursors", func(t *testing.T) {
 		defer scenarios.record(t)
 

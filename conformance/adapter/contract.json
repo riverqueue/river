@@ -233,7 +233,7 @@
       "type": "string"
     }
   },
-  "adapter_version": 19,
+  "adapter_version": 20,
   "errors": [
     {
       "code": -32700,
@@ -478,6 +478,56 @@
       },
       "result": {
         "$ref": "#/$defs/job"
+      }
+    },
+    {
+      "capability": "job_crud",
+      "description": "Run one batch of River's job cleaner deletion outside a client, as an extension's own cleaner pass would: delete up to `limit` cancelled, completed, and discarded jobs finalized before `before`, lowest IDs first. Jobs in `queues_excluded` are kept. When `queues_included` is present and not null, only jobs in those queues are deleted, so an empty list deletes nothing; exclusion wins over inclusion. Queue filters apply before `limit`, so retained jobs never use up a batch. Returns how many jobs were deleted.",
+      "name": "delete_finalized",
+      "params": {
+        "additionalProperties": false,
+        "properties": {
+          "before": {
+            "$ref": "#/$defs/timestamp"
+          },
+          "limit": {
+            "minimum": 1,
+            "type": "integer"
+          },
+          "queues_excluded": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "queues_included": {
+            "items": {
+              "type": "string"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          }
+        },
+        "type": "object",
+        "required": [
+          "before",
+          "limit"
+        ]
+      },
+      "result": {
+        "additionalProperties": false,
+        "properties": {
+          "deleted": {
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "type": "object",
+        "required": [
+          "deleted"
+        ]
       }
     },
     {

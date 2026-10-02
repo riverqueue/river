@@ -38,6 +38,7 @@
     "connection_count",
     "cron_next",
     "delete",
+    "delete_finalized",
     "delete_many",
     "fault_disconnect_application",
     "fault_disconnect_listeners",

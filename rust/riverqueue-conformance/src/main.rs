@@ -16,8 +16,9 @@ use std::{
 use async_trait::async_trait;
 use chrono::{DateTime, SecondsFormat, Utc};
 use riverqueue::__private::{
-    ClaimedJob, ClientBuilderExt, Pilot, PilotError, PilotProducer, ProducerClaimContext,
-    ProducerClaimNext, ProducerStartContext,
+    ClaimedJob, ClientBuilderExt, DatabaseConfig, DatabaseConnection, FinalizedJobDeleteParams,
+    Pilot, PilotError, PilotProducer, ProducerClaimContext, ProducerClaimNext,
+    ProducerStartContext, delete_finalized_jobs,
 };
 use riverqueue::database::SchemaName;
 use riverqueue::{
@@ -46,7 +47,7 @@ use sqlx::{
 };
 use tokio::sync::watch;
 
-const ADAPTER_VERSION: u32 = 19;
+const ADAPTER_VERSION: u32 = 20;
 const PROTOCOL_REVISION: u32 = 1;
 
 const ADAPTER_METHODS: &[&str] = &[
@@ -58,6 +59,7 @@ const ADAPTER_METHODS: &[&str] = &[
     "connection_count",
     "cron_next",
     "delete",
+    "delete_finalized",
     "delete_many",
     "fault_disconnect_application",
     "fault_disconnect_listeners",
@@ -217,6 +219,7 @@ const SQLITE_RUNTIME_METHODS: &[&str] = &[
     "clock_set",
     "cron_next",
     "delete",
+    "delete_finalized",
     "delete_many",
     "get",
     "handshake",
@@ -1807,6 +1810,19 @@ impl Adapter {
                     .await?;
                 Ok(normalize_job(&row))
             }
+            "delete_finalized" => {
+                let delete = delete_finalized_params(&params)?;
+                let mut connection = self.pool.acquire().await?;
+                let deleted = delete_finalized_jobs(
+                    DatabaseConnection::Postgres(&mut connection),
+                    &DatabaseConfig::Postgres {
+                        schema: schema_name(None)?,
+                    },
+                    &delete,
+                )
+                .await?;
+                Ok(json!({"deleted": deleted}))
+            }
             "delete_many" => {
                 let list = list_params(&params)?;
                 let delete = if params.get("all").and_then(Value::as_bool).unwrap_or(false) {
@@ -2780,6 +2796,17 @@ impl SqliteAdapter {
                     .await?;
                 Ok(normalize_job(&row))
             }
+            "delete_finalized" => {
+                let delete = delete_finalized_params(&params)?;
+                let mut connection = self.pool.acquire().await?;
+                let deleted = delete_finalized_jobs(
+                    DatabaseConnection::Sqlite(&mut connection),
+                    &DatabaseConfig::Sqlite,
+                    &delete,
+                )
+                .await?;
+                Ok(json!({"deleted": deleted}))
+            }
             "delete_many" => {
                 let list = list_params(&params)?;
                 let delete = if params.get("all").and_then(Value::as_bool).unwrap_or(false) {
@@ -3513,6 +3540,29 @@ impl InsertOptsParams {
         }
         opts
     }
+}
+
+/// Decodes `delete_finalized` params into one batch of the job cleaner's
+/// deletion covering every finalized state. A null or absent
+/// `queues_included` matches every queue, while an empty list matches none.
+fn delete_finalized_params(
+    params: &Value,
+) -> Result<FinalizedJobDeleteParams, Box<dyn std::error::Error + Send + Sync>> {
+    let before = DateTime::parse_from_rfc3339(&required_string(params, "before")?)?.to_utc();
+    let limit = required_i64(params, "limit")?;
+    if limit < 1 {
+        return Err(AdapterError::invalid_params("limit must be positive").into());
+    }
+    let mut delete = FinalizedJobDeleteParams::new(limit);
+    delete.cancelled_before = Some(before);
+    delete.completed_before = Some(before);
+    delete.discarded_before = Some(before);
+    delete.queues_excluded = string_array(params, "queues_excluded")?;
+    delete.queues_included = match params.get("queues_included") {
+        None | Some(Value::Null) => None,
+        Some(queues) => Some(serde_json::from_value(queues.clone())?),
+    };
+    Ok(delete)
 }
 
 fn list_params(params: &Value) -> Result<JobListParams, Box<dyn std::error::Error + Send + Sync>> {

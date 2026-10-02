@@ -556,6 +556,94 @@ func verifyBulkDeleteSafety(t *testing.T, goAdapter, candidateAdapter *adapter) 
 	}
 }
 
+// verifyJobCleanerQueueFilters runs batches of the job cleaner's deletion with
+// each implementation over jobs the other finalized. Retained jobs in queues
+// `kept1`/`kept2` are inserted before jobs in `deleted1`/`deleted2`, so they
+// hold the lowest IDs and outnumber a batch of 2. A query that limits
+// candidates before applying queue filters would select only retained jobs,
+// delete nothing, and stop the cleaner from making progress.
+func verifyJobCleanerQueueFilters(t *testing.T, goAdapter, candidateAdapter *adapter) {
+	t.Helper()
+
+	queues := []string{"kept1", "kept2", "kept1", "kept2", "kept1", "kept2", "deleted1", "deleted2", "deleted1", "deleted2", "deleted1"}
+	for _, pair := range []struct {
+		cleaner *adapter
+		writer  *adapter
+	}{
+		{cleaner: candidateAdapter, writer: goAdapter},
+		{cleaner: goAdapter, writer: candidateAdapter},
+	} {
+		for _, testCase := range []struct {
+			name              string
+			queuesExcluded    []string
+			queuesIncluded    []string // nil omits the inclusion filter
+			wantBatches       []int    // jobs deleted by each successive batch
+			wantDeletedQueues []string // queues whose jobs are eligible
+		}{
+			// `kept1` appears in both lists; exclusion takes precedence.
+			{name: "both", queuesExcluded: []string{"kept1", "kept2"}, queuesIncluded: []string{"deleted1", "deleted2", "kept1"}, wantBatches: []int{2, 2, 1, 0}, wantDeletedQueues: []string{"deleted1", "deleted2"}},
+			// An empty exclusion list excludes nothing.
+			{name: "empty excluded", queuesExcluded: []string{}, wantBatches: []int{2, 2, 2, 2, 2, 1, 0}, wantDeletedQueues: []string{"deleted1", "deleted2", "kept1", "kept2"}},
+			// An empty inclusion list matches no queues, unlike an absent one.
+			{name: "empty included", queuesIncluded: []string{}, wantBatches: []int{0}},
+			{name: "excluded", queuesExcluded: []string{"kept1", "kept2"}, wantBatches: []int{2, 2, 1, 0}, wantDeletedQueues: []string{"deleted1", "deleted2"}},
+			{name: "included", queuesIncluded: []string{"deleted1", "deleted2"}, wantBatches: []int{2, 2, 1, 0}, wantDeletedQueues: []string{"deleted1", "deleted2"}},
+			{name: "missing included", queuesIncluded: []string{"missing"}, wantBatches: []int{0}},
+			{name: "no filters", wantBatches: []int{2, 2, 2, 2, 2, 1, 0}, wantDeletedQueues: []string{"deleted1", "deleted2", "kept1", "kept2"}},
+		} {
+			pair.writer.call(t, "reset", map[string]any{}, nil)
+			allIDs := make([]int64, 0, len(queues))
+			var eligibleIDs []int64
+			for _, queue := range queues {
+				var job normalizedJob
+				pair.writer.call(t, "insert", map[string]any{
+					"message": "job cleaner queue filters", "opts": map[string]any{"queue": queue},
+				}, &job)
+				pair.writer.call(t, "cancel", map[string]any{"id": job.ID}, nil)
+				allIDs = append(allIDs, job.ID)
+				if slices.Contains(testCase.wantDeletedQueues, queue) {
+					eligibleIDs = append(eligibleIDs, job.ID)
+				}
+			}
+
+			params := map[string]any{
+				// Every job was finalized just now, so a future horizon makes
+				// each one old enough to delete.
+				"before": time.Now().Add(time.Hour).UTC().Format(time.RFC3339Nano),
+				"limit":  2,
+			}
+			if testCase.queuesExcluded != nil {
+				params["queues_excluded"] = testCase.queuesExcluded
+			}
+			if testCase.queuesIncluded != nil {
+				params["queues_included"] = testCase.queuesIncluded
+			}
+			var deletedTotal int
+			for batch, wantDeleted := range testCase.wantBatches {
+				var result struct {
+					Deleted int `json:"deleted"`
+				}
+				pair.cleaner.call(t, "delete_finalized", params, &result)
+				require.Equal(t, wantDeleted, result.Deleted, "%s batch %d over %s's jobs (%s)", pair.cleaner.name, batch, pair.writer.name, testCase.name)
+				deletedTotal += result.Deleted
+
+				// Batches delete the oldest eligible jobs first, so exactly
+				// the first deletedTotal eligible jobs are gone.
+				var listed struct {
+					Jobs []normalizedJob `json:"jobs"`
+				}
+				pair.writer.call(t, "list", map[string]any{"ids": allIDs, "limit": len(allIDs), "order_by": "id"}, &listed)
+				require.Equal(t,
+					slices.DeleteFunc(slices.Clone(allIDs), func(id int64) bool { return slices.Contains(eligibleIDs[:deletedTotal], id) }),
+					jobIDs(listed.Jobs),
+					"%s batch %d over %s's jobs (%s)", pair.cleaner.name, batch, pair.writer.name, testCase.name,
+				)
+			}
+			require.Len(t, eligibleIDs, deletedTotal, "%s over %s's jobs (%s)", pair.cleaner.name, pair.writer.name, testCase.name)
+		}
+	}
+}
+
 // verifyDifferentialListCursors pages through a filtered list with cursors
 // emitted by one implementation and consumed by the other.
 func verifyDifferentialListCursors(t *testing.T, goAdapter, candidateAdapter *adapter, filterMetadata bool) {

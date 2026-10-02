@@ -275,6 +275,14 @@ resume each engine from the other's cursor, including a
 `raw_insert_no_notify` kind (`conformance_cursor<>&~~~`) that Go escapes and
 whose cursor text always contains `-`.
 
+`delete_finalized` runs one batch of the job cleaner's deletion outside a
+client, the way an extension's own cleaner pass reuses it, with the cleaner's
+excluded queues and an optional included list (`null` matches every queue, an
+empty list none). `job_cleaner_queue_filters` and its SQLite variant put a
+backlog of excluded or non-included jobs, larger than a batch, ahead of
+deletable ones, and require every batch to skip it, so that retained jobs
+never stall cleanup of other queues.
+
 ## Fault injection
 
 - `raw_insert_no_notify` proves polling recovers work when notification

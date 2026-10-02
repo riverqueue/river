@@ -150,6 +150,11 @@ func TestMixedSQLiteRuntimeConformance(t *testing.T) {
 
 		verifySQLiteQueues(t, goAdapter, candidateAdapter)
 	})
+	t.Run("sqlite_runtime_job_cleaner_queue_filters", func(t *testing.T) {
+		defer scenarios.record(t)
+
+		verifyJobCleanerQueueFilters(t, goAdapter, candidateAdapter)
+	})
 	t.Run("sqlite_runtime_notification_wakeups", func(t *testing.T) {
 		defer scenarios.record(t)
 
