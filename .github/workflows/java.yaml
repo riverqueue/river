@@ -1,0 +1,132 @@
+name: Java
+
+# Filter the workflow so unrelated changes don't add skipped jobs to CI.
+on:
+  push:
+    branches:
+      - master
+    paths:
+      - ".github/actions/setup-java/**"
+      - ".github/workflows/java.yaml"
+      - "Makefile"
+      - "conformance/**"
+      - "java/**"
+      - "riverdriver/riverpgxv5/migration/**"
+      - "riverdriver/riversqlite/migration/**"
+  pull_request:
+    paths:
+      - ".github/actions/setup-java/**"
+      - ".github/workflows/java.yaml"
+      - "Makefile"
+      - "conformance/**"
+      - "java/**"
+      - "riverdriver/riverpgxv5/migration/**"
+      - "riverdriver/riversqlite/migration/**"
+  workflow_dispatch:
+
+concurrency:
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+  group: ${{ github.workflow }}-${{ github.ref }}
+
+permissions:
+  contents: read
+
+jobs:
+  quality:
+    name: Quality and package archives
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+
+      - uses: ./.github/actions/setup-java
+
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.work
+
+      # Install once; lint/java invokes the linter for each standalone Go tool.
+      - name: Set up Go linter
+        uses: golangci/golangci-lint-action@v9
+        with:
+          args: --help
+          version: v2.13.1
+
+      - name: Compile, check formatting, and lint maintenance tools
+        run: make lint/java
+
+      - name: Test Go maintenance tools
+        run: make test/java/tools
+
+      - name: Verify canonical migration mirror
+        run: make verify/java-migrations
+
+      - name: Check publishable archives
+        run: make check/java/package
+
+  java_versions:
+    name: Test (Java ${{ matrix.java-version }}, SQLite)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        java-version: ["21", "25"]
+
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+
+      - uses: ./.github/actions/setup-java
+        with:
+          java-version: ${{ matrix.java-version }}
+
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.work
+
+      - name: Unit, SQLite, and executable CLI tests
+        run: make test/java/sqlite
+
+  postgres:
+    name: Test (PostgreSQL ${{ matrix.postgres-version }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        postgres-version: [14, 15, 16, 17, 18]
+    env:
+      RIVER_TEST_DATABASE_URL: postgres://postgres:postgres@127.0.0.1:5432/river_test?sslmode=disable
+
+    services:
+      postgres:
+        image: postgres:${{ matrix.postgres-version }}
+        env:
+          POSTGRES_DB: river_test
+          POSTGRES_PASSWORD: postgres
+        options: >-
+          --health-cmd "pg_isready -U postgres -d river_test"
+          --health-interval 2s
+          --health-timeout 5s
+          --health-retries 5
+        ports:
+          - 5432:5432
+
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+
+      - uses: ./.github/actions/setup-java
+
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.work
+
+      - name: PostgreSQL client, worker, and migration tests
+        run: make test/java/postgres

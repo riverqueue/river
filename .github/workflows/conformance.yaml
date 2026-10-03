@@ -1,6 +1,6 @@
 name: Conformance
 
-# The Rust and JavaScript workflows run only when their own files change, but
+# The port workflows run only when their own files or dependencies change, but
 # their fixture tests compare against values generated from River's Go code.
 # This job closes that gap: when Go code, SQL queries the generator reads, or
 # the generator itself changes, it regenerates the fixtures and runs only the
@@ -11,6 +11,7 @@ on:
       - master
     paths:
       - ".github/workflows/conformance.yaml"
+      - "Makefile"
       - "**.go"
       - "**/go.mod"
       - "**/go.sum"
@@ -20,6 +21,7 @@ on:
   pull_request:
     paths:
       - ".github/workflows/conformance.yaml"
+      - "Makefile"
       - "**.go"
       - "**/go.mod"
       - "**/go.sum"
@@ -69,9 +71,16 @@ jobs:
 
       - uses: ./.github/actions/setup-js
 
+      - uses: ./.github/actions/setup-java
+        with:
+          java-version: "21"
+
       # Each target generates the fixtures before running its tests.
       - name: Rust fixture tests
         run: make test/rust/conformance
 
       - name: JavaScript fixture tests
         run: make test/js/conformance
+
+      - name: Java fixture tests
+        run: make test/java/conformance

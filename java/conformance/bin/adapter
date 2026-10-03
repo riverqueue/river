@@ -1,0 +1,5 @@
+#!/bin/sh
+set -eu
+root=$(CDPATH= cd -- "$(dirname -- "$0")/../.." && pwd)
+snapshot=$(cat "$root/.conformance/adapter-path")
+exec java --enable-native-access=ALL-UNNAMED -jar "$snapshot"
