@@ -131,6 +131,25 @@ jobs:
       - name: Test
         run: make test/race
 
+  build_and_test_pgrust:
+    name: Test pgRust (latest)
+    env:
+      GOTOOLCHAIN: local
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Setup Go
+        uses: actions/setup-go@v6
+        with:
+          go-version: "stable"
+          check-latest: true
+
+      - name: Test
+        run: make test/pgrust
+
   cli:
     strategy:
       matrix:

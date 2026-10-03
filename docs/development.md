@@ -10,6 +10,19 @@ Run tests:
 
     go test ./... --timeout 2s
 
+### pgRust
+
+With Docker running, test against the latest [pgRust](https://github.com/malisper/pgrust)
+release:
+
+    make test/pgrust
+
+This pulls `malisper/pgrust:latest`, starts a temporary database on an available
+loopback port, and runs the full workspace test suite with the race detector,
+including both PostgreSQL drivers. The container and its data are removed when
+the command finishes; failures also print the server logs. Your local PostgreSQL
+instance is left running. CI runs the same command in a single pgRust job.
+
 ## Run lint
 
 Run the linter and try to autofix:
