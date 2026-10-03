@@ -60,6 +60,10 @@ define test-target
 endef
 $(foreach mod,$(submodules),$(eval $(call test-target,$(mod))))
 
+.PHONY: test/pgrust
+test/pgrust: ## Run tests with race detector against the latest pgRust (requires Docker)
+	+MAKE="$(MAKE)" bash ./.github/test-pgrust.sh
+
 .PHONY: test/race
 test/race:: ## Run test suite for all submodules with race detector
 define test-race-target
