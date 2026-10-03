@@ -129,7 +129,30 @@ jobs:
         run: psql -c "CREATE DATABASE river_test" $ADMIN_DATABASE_URL
 
       - name: Test
-        run: make test/race
+        run: make test/race TEST_DATABASE=postgres
+
+  build_and_test_sqlite:
+    env:
+      GOTOOLCHAIN: local
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        # Keep both supported Go versions covered without repeating SQLite,
+        # libSQL, and Turso tests for every PostgreSQL version.
+        go-version: ["1.27", "1.26"]
+      fail-fast: false
+    timeout-minutes: 5
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Setup Go ${{ matrix.go-version }}
+        uses: actions/setup-go@v6
+        with:
+          go-version: ${{ matrix.go-version }}
+
+      - name: Test
+        run: make test/race TEST_DATABASE=sqlite
 
   cli:
     strategy:

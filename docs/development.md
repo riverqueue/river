@@ -8,7 +8,22 @@ Raise the test database:
 
 Run tests:
 
-    go test ./... --timeout 2s
+    make test
+
+By default, this runs all workspace modules and database drivers. Use
+`make test/race` to enable the race detector.
+
+To run only the SQLite, libSQL, and Turso driver tests (no PostgreSQL needed):
+
+    make test TEST_DATABASE=sqlite
+
+To run the regular suite with the SQLite driver tests excluded:
+
+    make test TEST_DATABASE=postgres
+
+`TEST_DATABASE` also applies to `make test/race`. CI separates these suites so
+the PostgreSQL version matrix doesn't repeat the SQLite tests. Each suite still
+runs on both supported Go versions.
 
 ## Run lint
 
