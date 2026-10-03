@@ -1,0 +1,55 @@
+name: CI (Java)
+
+# Filter the workflow so unrelated changes don't add skipped jobs to CI.
+on:
+  push:
+    branches:
+      - master
+    paths:
+      - ".github/workflows/ci-java.yaml"
+      - "java/**"
+  pull_request:
+    paths:
+      - ".github/workflows/ci-java.yaml"
+      - "java/**"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build_and_test:
+    name: java
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      RIVER_TEST_DATABASE_URL: postgres://postgres:postgres@127.0.0.1:5432/river_test?sslmode=disable
+
+    services:
+      postgres:
+        image: postgres:18
+        env:
+          POSTGRES_DB: river_test
+          POSTGRES_PASSWORD: postgres
+        options: >-
+          --health-cmd "pg_isready -U postgres -d river_test"
+          --health-interval 2s
+          --health-timeout 5s
+          --health-retries 5
+        ports:
+          - 5432:5432
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Setup Java 25
+        uses: actions/setup-java@v6
+        with:
+          distribution: temurin
+          java-version: "25"
+          cache: maven
+          cache-dependency-path: "java/**/pom.xml"
+
+      - name: Build, test, and check formatting
+        run: mvn --batch-mode --no-transfer-progress verify
+        working-directory: java

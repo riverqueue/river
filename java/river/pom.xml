@@ -1,0 +1,13 @@
+<project xmlns="http://maven.apache.org/POM/4.0.0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
+  <modelVersion>4.0.0</modelVersion>
+  <parent><groupId>com.riverqueue</groupId><artifactId>river-java</artifactId><version>0.48.0-alpha.1</version></parent>
+  <artifactId>river</artifactId>
+  <description>Transactional jobs interoperable with River Go</description>
+  <licenses><license><name>Mozilla Public License 2.0</name><url>https://mozilla.org/MPL/2.0/</url><distribution>repo</distribution></license></licenses>
+  <dependencies>
+    <dependency><groupId>tools.jackson.core</groupId><artifactId>jackson-databind</artifactId></dependency>
+    <dependency><groupId>org.postgresql</groupId><artifactId>postgresql</artifactId><optional>true</optional></dependency>
+    <dependency><groupId>org.xerial</groupId><artifactId>sqlite-jdbc</artifactId><optional>true</optional></dependency>
+    <dependency><groupId>org.junit.jupiter</groupId><artifactId>junit-jupiter</artifactId><scope>test</scope></dependency>
+  </dependencies>
+</project>
