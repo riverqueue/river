@@ -43,6 +43,22 @@ submodules := $(shell go list -f '{{.Dir}}' -m)
 
 ITERATIONS ?= 100
 
+TEST_DATABASE ?= all
+
+# Only filter the shared driver suite. Other packages have SQLite-named tests
+# that use PostgreSQL or mocks and should stay in the regular test run.
+sqlite_test_pattern := '^(Test.*(LibSQL|SQLite|Turso)|Example_(libSQL|sqlite|turso))'
+test_submodules := $(submodules)
+ifeq ($(TEST_DATABASE),postgres)
+    test_submodules := $(filter-out %/riverdriver/riversqlite,$(submodules))
+    driver_test_flags := -skip $(sqlite_test_pattern)
+else ifeq ($(TEST_DATABASE),sqlite)
+    test_submodules := $(filter %/riverdriver/riverdrivertest %/riverdriver/riversqlite,$(submodules))
+    driver_test_flags := -run $(sqlite_test_pattern)
+else ifneq ($(TEST_DATABASE),all)
+    $(error TEST_DATABASE must be all, postgres, or sqlite)
+endif
+
 # Definitions of following tasks look ugly, but they're done this way because to
 # produce the best/most comprehensible output by far (e.g. compared to a shell
 # loop).
@@ -54,18 +70,18 @@ endef
 $(foreach mod,$(submodules),$(eval $(call lint-target,$(mod))))
 
 .PHONY: test
-test:: ## Run test suite for all submodules
+test:: ## Run tests (TEST_DATABASE=all, postgres, or sqlite)
 define test-target
-    test:: ; cd $1 && go test ./... -timeout 2m
+    test:: ; cd $1 && go test ./... -timeout 2m $(if $(filter %/riverdriver/riverdrivertest,$1),$(driver_test_flags))
 endef
-$(foreach mod,$(submodules),$(eval $(call test-target,$(mod))))
+$(foreach mod,$(test_submodules),$(eval $(call test-target,$(mod))))
 
 .PHONY: test/race
-test/race:: ## Run test suite for all submodules with race detector
+test/race:: ## Run tests with race detector (TEST_DATABASE=all, postgres, or sqlite)
 define test-race-target
-    test/race:: ; cd $1 && go test ./... -race -timeout 2m
+    test/race:: ; cd $1 && go test ./... -race -timeout 2m $(if $(filter %/riverdriver/riverdrivertest,$1),$(driver_test_flags))
 endef
-$(foreach mod,$(submodules),$(eval $(call test-race-target,$(mod))))
+$(foreach mod,$(test_submodules),$(eval $(call test-race-target,$(mod))))
 
 .PHONY: bench
 bench:: ## Run benchmarks in each submodule (ITERATIONS=100)
