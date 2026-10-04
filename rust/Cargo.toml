@@ -1,5 +1,6 @@
 [workspace]
 members = [
+    "riverqueue-macros",
     "riverqueue-migrate",
 ]
 resolver = "3"
