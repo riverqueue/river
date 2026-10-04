@@ -1,0 +1,117 @@
+{
+  "$comment": "River Go's snooze counter goldens, recorded from its executor's rule in internal/jobexecutor/job_executor.go, which reads each count with gjson. They match the Rust port's rust/riverqueue/tests/fixtures/maintenance_values.json.",
+  "snooze_counters": [
+    {
+      "expected_snoozes": 1,
+      "metadata": {},
+      "name": "absent"
+    },
+    {
+      "expected_snoozes": 3,
+      "metadata": {
+        "snoozes": 2
+      },
+      "name": "integer"
+    },
+    {
+      "expected_snoozes": 3,
+      "metadata": {
+        "snoozes": 2.9
+      },
+      "name": "fraction_truncates"
+    },
+    {
+      "expected_snoozes": -1,
+      "metadata": {
+        "snoozes": -2.5
+      },
+      "name": "negative_fraction_truncates_toward_zero"
+    },
+    {
+      "expected_snoozes": 1001,
+      "metadata": {
+        "snoozes": 1000.0
+      },
+      "name": "exponent"
+    },
+    {
+      "expected_snoozes": 9007199254740994,
+      "metadata": {
+        "snoozes": 9007199254740993
+      },
+      "name": "beyond_float_precision"
+    },
+    {
+      "expected_snoozes": 5,
+      "metadata": {
+        "snoozes": "4"
+      },
+      "name": "numeric_string"
+    },
+    {
+      "expected_snoozes": -6,
+      "metadata": {
+        "snoozes": "-7"
+      },
+      "name": "negative_numeric_string"
+    },
+    {
+      "expected_snoozes": 1,
+      "metadata": {
+        "snoozes": "4.5"
+      },
+      "name": "fractional_string_is_zero"
+    },
+    {
+      "expected_snoozes": 1,
+      "metadata": {
+        "snoozes": " 5"
+      },
+      "name": "padded_string_is_zero"
+    },
+    {
+      "expected_snoozes": 1,
+      "metadata": {
+        "snoozes": "abc"
+      },
+      "name": "non_numeric_string_is_zero"
+    },
+    {
+      "expected_snoozes": 2,
+      "metadata": {
+        "snoozes": true
+      },
+      "name": "true_is_one"
+    },
+    {
+      "expected_snoozes": 1,
+      "metadata": {
+        "snoozes": false
+      },
+      "name": "false_is_zero"
+    },
+    {
+      "expected_snoozes": 1,
+      "metadata": {
+        "snoozes": null
+      },
+      "name": "null_is_zero"
+    },
+    {
+      "expected_snoozes": 1,
+      "metadata": {
+        "snoozes": [3]
+      },
+      "name": "array_is_zero"
+    },
+    {
+      "expected_snoozes": 1,
+      "metadata": {
+        "snoozes": {
+          "count": 3
+        }
+      },
+      "name": "object_is_zero"
+    }
+  ]
+}
