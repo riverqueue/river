@@ -185,6 +185,32 @@ func (capture *postgresNotificationCapture) next(t *testing.T) []rawNotification
 	return notifications
 }
 
+// sqliteNotificationCapture reads SQLite outbox rows through an observing
+// adapter, in ID order, with IDs cleared.
+type sqliteNotificationCapture struct {
+	afterID  int64
+	observer *adapter
+}
+
+func newSQLiteNotificationCapture(t *testing.T, observer *adapter) *sqliteNotificationCapture {
+	t.Helper()
+
+	capture := &sqliteNotificationCapture{observer: observer}
+	_ = capture.next(t)
+	return capture
+}
+
+func (capture *sqliteNotificationCapture) next(t *testing.T) []rawNotification {
+	t.Helper()
+
+	notifications := rawNotificationsAfter(t, capture.observer, capture.afterID)
+	for index := range notifications {
+		capture.afterID = notifications[index].ID
+		notifications[index].ID = 0
+	}
+	return notifications
+}
+
 // notificationOperation is the notifications one operation published.
 type notificationOperation struct {
 	name          string

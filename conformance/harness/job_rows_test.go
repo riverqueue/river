@@ -600,3 +600,168 @@ func verifySQLiteJobRows(t *testing.T, goAdapter, candidateAdapter *adapter) {
 		requireSameJobRows(t, operation.name, goAdapter, candidateAdapter, operation.reference, operation.candidate)
 	}
 }
+
+// verifySQLiteWorkedJobRows has each implementation work the same Go
+// inserted jobs to completion, discard, and recorded output, then compares
+// the SQLite columns written by each worker with Go's.
+func verifySQLiteWorkedJobRows(t *testing.T, goAdapter, candidateAdapter *adapter) {
+	t.Helper()
+
+	const clientID = "sqlite-job-rows-worker"
+	opts := map[string]any{
+		"max_attempts": 1,
+		"metadata":     map[string]any{"note": jobRowText},
+		"tags":         []string{"job-rows", "tag_2"},
+	}
+	behaviors := []string{"", "error", "output"}
+	insert := func() []int64 {
+		ids := make([]int64, len(behaviors))
+		for index, behavior := range behaviors {
+			var inserted normalizedJob
+			goAdapter.call(t, "insert", map[string]any{
+				"behavior": behavior, "message": jobRowText, "opts": opts,
+			}, &inserted)
+			ids[index] = inserted.ID
+		}
+		return ids
+	}
+
+	goAdapter.call(t, "reset", map[string]any{}, nil)
+	referenceIDs := insert()
+	for _, id := range referenceIDs {
+		goAdapter.call(t, "work", map[string]any{"client_id": clientID, "id": id}, nil)
+	}
+	candidateIDs := insert()
+	for _, id := range candidateIDs {
+		candidateAdapter.call(t, "work", map[string]any{"client_id": clientID, "id": id}, nil)
+	}
+	for index, behavior := range behaviors {
+		requireSameJobRows(t, "work "+behavior, goAdapter, candidateAdapter, referenceIDs[index], candidateIDs[index])
+	}
+}
+
+// verifySQLiteRuntimeJobRows compares the SQLite columns, state, and
+// attempt each implementation's client writes when it claims a job, snoozes
+// one, discards a retry that conflicts with a unique job, and rescues an
+// abandoned job. Go sets up the same jobs for both, so every other column
+// matches too.
+func verifySQLiteRuntimeJobRows(t *testing.T, repositoryRoot, databaseURL, profile string, goAdapter, candidateAdapter *adapter) {
+	t.Helper()
+
+	operations := []string{"claim", "snooze", "scheduler discard", "rescue"}
+	crashes := 0
+	type runtimeJobRow struct {
+		attempt int
+		raw     rawJobRow
+		state   string
+	}
+	write := func(actor *adapter) map[string]runtimeJobRow {
+		t.Helper()
+
+		rows := make(map[string]runtimeJobRow, len(operations))
+		read := func(operation string, id int64) {
+			t.Helper()
+
+			var row runtimeJobRow
+			goAdapter.call(t, "raw_job_row", map[string]any{"id": id}, &row.raw)
+			var job normalizedJob
+			goAdapter.call(t, "get", map[string]any{"id": id}, &job)
+			row.attempt, row.state = job.Attempt, job.State
+			rows[operation] = row
+		}
+		goAdapter.call(t, "reset", map[string]any{}, nil)
+		opts := map[string]any{"metadata": map[string]any{"note": jobRowText}, "tags": []string{"job-rows"}}
+
+		// Claim and snooze: the actor works jobs Go inserts, one held on a
+		// barrier while running and one snoozed well beyond the scheduler's
+		// threshold so it stays scheduled.
+		const barrier = "job-rows-claim"
+		actor.call(t, "barrier_create", map[string]any{"name": barrier}, nil)
+		actor.call(t, "start", map[string]any{"client_id": "job-rows-runtime", "max_workers": 2}, nil)
+		var claimed, snoozed normalizedJob
+		goAdapter.call(t, "insert", map[string]any{"behavior": "barrier_wait", "message": barrier, "opts": opts}, &claimed)
+		goAdapter.call(t, "wait", map[string]any{"id": claimed.ID, "states": []string{"running"}}, &claimed)
+		read("claim", claimed.ID)
+		actor.call(t, "barrier_release", map[string]any{"name": barrier}, nil)
+		goAdapter.call(t, "insert", map[string]any{
+			"behavior": "snooze_once", "duration_ms": 60_000, "message": jobRowText, "opts": opts,
+		}, &snoozed)
+		goAdapter.call(t, "wait", map[string]any{"id": snoozed.ID, "states": []string{"scheduled"}}, &snoozed)
+		read("snooze", snoozed.ID)
+		goAdapter.call(t, "wait", map[string]any{"id": claimed.ID}, &claimed)
+		actor.call(t, "stop", map[string]any{}, nil)
+
+		// Scheduler discard: a retryable unique job whose unique states
+		// exclude retryable becomes due while another job holds its key, so
+		// the leader's scheduler discards it. The retry delay exceeds Go's
+		// default scheduler interval, so the retry stays retryable until then.
+		uniqueOpts := map[string]any{
+			"max_attempts": 3, "queue": "job_rows_discard",
+			"unique": map[string]any{"by_args": true, "by_state": []string{"available", "pending", "running", "scheduled"}},
+		}
+		goAdapter.call(t, "start", map[string]any{
+			"client_id": "job-rows-setup", "leader_election_disabled": true, "max_workers": 1,
+			"queue": "job_rows_discard", "retry_delay_ms": 5_500,
+		}, nil)
+		var discarded, holder normalizedJob
+		goAdapter.call(t, "insert", map[string]any{"behavior": "error", "message": jobRowText, "opts": uniqueOpts}, &discarded)
+		goAdapter.call(t, "wait", map[string]any{"id": discarded.ID, "states": []string{"retryable"}}, &discarded)
+		goAdapter.call(t, "stop", map[string]any{}, nil)
+		goAdapter.call(t, "insert", map[string]any{"behavior": "error", "message": jobRowText, "opts": uniqueOpts}, &holder)
+		require.NotEqual(t, discarded.ID, holder.ID, "a retryable job outside its unique states blocked insertion")
+		time.Sleep(time.Until(parseTime(t, discarded.ScheduledAt).Add(100 * time.Millisecond)))
+		actor.startWithTuning(t, map[string]any{"client_id": "job-rows-scheduler", "max_workers": 1},
+			map[string]any{"elect_interval_ms": 20, "scheduler_interval_ms": 20})
+		goAdapter.call(t, "wait", map[string]any{"id": discarded.ID, "states": []string{"discarded"}}, &discarded)
+		read("scheduler discard", discarded.ID)
+		actor.call(t, "stop", map[string]any{}, nil)
+
+		// Rescue: a process holding a running attempt dies, and the actor's
+		// leader rescues the abandoned attempt. Its retry delay keeps the
+		// rescued job retryable.
+		crashes++
+		const rescueAfter = time.Second
+		crasher := startReferenceAdapterForProfile(t, repositoryRoot, databaseURL, "sqlite", profile,
+			fmt.Sprintf("go-job-rows-crasher-%d", crashes))
+		crasher.call(t, "start", map[string]any{
+			"client_id": "job-rows-crasher", "leader_election_disabled": true, "max_workers": 1, "queue": "job_rows_rescue",
+		}, nil)
+		var rescued normalizedJob
+		goAdapter.call(t, "insert", map[string]any{
+			"behavior": "sleep", "duration_ms": 60_000, "message": jobRowText,
+			"opts": map[string]any{"max_attempts": 3, "queue": "job_rows_rescue", "tags": []string{"job-rows"}},
+		}, &rescued)
+		goAdapter.call(t, "wait", map[string]any{"id": rescued.ID, "states": []string{"running"}}, &rescued)
+		crasher.kill(t)
+		waitUntilRescuable(t, rescued, rescueAfter)
+		actor.startWithTuning(t, map[string]any{
+			"client_id": "job-rows-rescuer", "job_timeout_ms": rescueAfter.Milliseconds(), "max_workers": 1,
+			"rescue_after_ms": rescueAfter.Milliseconds(), "retry_delay_ms": 60_000,
+		}, map[string]any{"elect_interval_ms": 20, "rescuer_interval_ms": 20})
+		goAdapter.call(t, "wait", map[string]any{"id": rescued.ID, "states": []string{"retryable"}}, &rescued)
+		read("rescue", rescued.ID)
+		actor.call(t, "stop", map[string]any{}, nil)
+		return rows
+	}
+
+	comparableRow := func(writer string, row runtimeJobRow) map[string]any {
+		t.Helper()
+
+		columns := comparableJobRow(t, writer, row.raw)
+		columns["attempt"] = row.attempt
+		columns["state"] = row.state
+		return columns
+	}
+	// A scheduler finalizes a discarded job at its look-ahead time, the
+	// current time plus its interval, which only implementations that accept
+	// `scheduler_interval_ms` shorten.
+	unpinned := map[string][]string{"scheduler discard": {".finalized_at"}}
+	reference := write(goAdapter)
+	candidate := write(candidateAdapter)
+	for _, operation := range operations {
+		requireEquivalentJobRows(t, operation, goAdapter.name, candidateAdapter.name,
+			comparableRow(goAdapter.name, reference[operation]),
+			comparableRow(candidateAdapter.name, candidate[operation]),
+			unpinned[operation]...)
+	}
+}
