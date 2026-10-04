@@ -14,12 +14,16 @@
       ],
       "@riverqueue/migrate": [
         "./migrate/src/index.ts"
+      ],
+      "@riverqueue/worker-threads": [
+        "./worker-threads/src/index.ts"
       ]
     }
   },
   "include": [
     "src",
     "driver/*/src",
-    "migrate/src"
+    "migrate/src",
+    "worker-threads/src"
   ]
 }
