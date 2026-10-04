@@ -319,7 +319,7 @@ func (e *Executor) JobCancel(ctx context.Context, params *riverdriver.JobCancelP
 	// exists and is not running, only one database operation is needed, but if
 	// the initial update comes back empty, it does one more fetch to return the
 	// most appropriate error.
-	return dbutil.WithTxV(ctx, e, func(ctx context.Context, execTx riverdriver.ExecutorTx) (*rivertype.JobRow, error) { // TODO
+	return dbutil.WithTxV(ctx, e.executor(), func(ctx context.Context, execTx riverdriver.ExecutorTx) (*rivertype.JobRow, error) { // TODO
 		dbtx := templateReplaceWrapper{dbtx: e.driver.UnwrapTx(execTx), replacer: &e.driver.replacer}
 
 		cancelledAt, err := params.CancelAttemptedAt.UTC().MarshalJSON()
@@ -437,7 +437,7 @@ func (e *Executor) JobDelete(ctx context.Context, params *riverdriver.JobDeleteP
 	// exists and is not running, only one database operation is needed, but if
 	// the initial delete comes back empty, it does one more fetch to return the
 	// most appropriate error.
-	return dbutil.WithTxV(ctx, e, func(ctx context.Context, execTx riverdriver.ExecutorTx) (*rivertype.JobRow, error) { // TODO
+	return dbutil.WithTxV(ctx, e.executor(), func(ctx context.Context, execTx riverdriver.ExecutorTx) (*rivertype.JobRow, error) { // TODO
 		dbtx := templateReplaceWrapper{dbtx: e.driver.UnwrapTx(execTx), replacer: &e.driver.replacer}
 
 		job, err := dbsqlc.New().JobDelete(schemaTemplateParam(ctx, params.Schema), dbtx, params.ID)
@@ -806,7 +806,7 @@ func (e *Executor) JobList(ctx context.Context, params *riverdriver.JobListParam
 }
 
 func (e *Executor) JobRescueMany(ctx context.Context, params *riverdriver.JobRescueManyParams) (*struct{}, error) {
-	if err := dbutil.WithTx(ctx, e, func(ctx context.Context, execTx riverdriver.ExecutorTx) error {
+	if err := dbutil.WithTx(ctx, e.executor(), func(ctx context.Context, execTx riverdriver.ExecutorTx) error {
 		ctx = schemaTemplateParam(ctx, params.Schema)
 		dbtx := templateReplaceWrapper{dbtx: e.driver.UnwrapTx(execTx), replacer: &e.driver.replacer}
 
@@ -838,7 +838,7 @@ func (e *Executor) JobRetry(ctx context.Context, params *riverdriver.JobRetryPar
 	// exists and is not running, only one database operation is needed, but if
 	// the initial update comes back empty, it does one more fetch to return the
 	// most appropriate error.
-	return dbutil.WithTxV(ctx, e, func(ctx context.Context, execTx riverdriver.ExecutorTx) (*rivertype.JobRow, error) {
+	return dbutil.WithTxV(ctx, e.executor(), func(ctx context.Context, execTx riverdriver.ExecutorTx) (*rivertype.JobRow, error) {
 		dbtx := templateReplaceWrapper{dbtx: e.driver.UnwrapTx(execTx), replacer: &e.driver.replacer}
 
 		job, err := dbsqlc.New().JobRetry(schemaTemplateParam(ctx, params.Schema), dbtx, &dbsqlc.JobRetryParams{
@@ -877,7 +877,7 @@ func (e *Executor) JobSchedule(ctx context.Context, params *riverdriver.JobSched
 	// version (i.e. an advisory lock should maybe be taken around when checking
 	// rows to avoid non-repeatable read anomalies), but since only one writer
 	// at a time is possible for SQLite, this should be okay.
-	return dbutil.WithTxV(ctx, e, func(ctx context.Context, execTx riverdriver.ExecutorTx) ([]*riverdriver.JobScheduleResult, error) {
+	return dbutil.WithTxV(ctx, e.executor(), func(ctx context.Context, execTx riverdriver.ExecutorTx) ([]*riverdriver.JobScheduleResult, error) {
 		ctx = schemaTemplateParam(ctx, params.Schema)
 		dbtx := templateReplaceWrapper{dbtx: e.driver.UnwrapTx(execTx), replacer: &e.driver.replacer}
 
@@ -973,7 +973,7 @@ func (e *Executor) JobSchedule(ctx context.Context, params *riverdriver.JobSched
 func (e *Executor) JobSetStateIfRunningMany(ctx context.Context, params *riverdriver.JobSetStateIfRunningManyParams) ([]*rivertype.JobRow, error) {
 	setRes := make([]*rivertype.JobRow, 0, len(params.ID))
 
-	if err := dbutil.WithTx(ctx, e, func(ctx context.Context, execTx riverdriver.ExecutorTx) error {
+	if err := dbutil.WithTx(ctx, e.executor(), func(ctx context.Context, execTx riverdriver.ExecutorTx) error {
 		ctx = schemaTemplateParam(ctx, params.Schema)
 		dbtx := templateReplaceWrapper{dbtx: e.driver.UnwrapTx(execTx), replacer: &e.driver.replacer}
 
@@ -1485,6 +1485,15 @@ func (e *Executor) TableTruncate(ctx context.Context, params *riverdriver.TableT
 	}
 
 	return nil
+}
+
+// executor preserves transaction identity when a method is invoked through an
+// embedded Executor, so transaction helpers can reuse it without a savepoint.
+func (e *Executor) executor() riverdriver.Executor {
+	if e.execTx != nil {
+		return e.execTx
+	}
+	return e
 }
 
 type ExecutorTx struct {

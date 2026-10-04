@@ -735,6 +735,19 @@ func (c QueueConfig) validate(queueName string, clientFetchCooldown time.Duratio
 // Client is a single isolated instance of River. Your application may use
 // multiple instances operating on different databases or Postgres schemas
 // within a single database.
+//
+// Methods ending in Tx reuse the caller's transaction. The caller remains
+// responsible for committing or rolling it back, and should roll back on error
+// because an operation may have made partial changes. If the application needs
+// to recover from an error and continue the transaction, it should create its
+// own savepoint before calling River.
+//
+// As a temporary compatibility fallback, set RIVER_USE_LEGACY_SUBTRANSACTIONS=1
+// (or true) before starting the application to restore savepoints in internal
+// transaction helpers, including those used by River Pro. This applies only to
+// calls using those helpers, not every transactional API. The fallback is
+// planned for removal in a future release; prefer explicit application-owned
+// savepoints.
 type Client[TTx any] struct {
 	// BaseService and BaseStartStop can't be embedded like on other services
 	// because their properties would leak to the external API.

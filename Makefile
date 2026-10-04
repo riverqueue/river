@@ -76,12 +76,19 @@ define test-target
 endef
 $(foreach mod,$(test_submodules),$(eval $(call test-target,$(mod))))
 
+# Exercise the temporary savepoint fallback as well as default transaction reuse.
+test:: ; cd ./riverdriver/riverdrivertest && RIVER_USE_LEGACY_SUBTRANSACTIONS=1 go test . -run '/WithTx$$' -timeout 2m
+test:: ; cd ./riverdriver/riverdrivertest && RIVER_USE_LEGACY_SUBTRANSACTIONS=1 go test . -run '^TestDriverRiverPgxV5$$/.*/WithTx$$' -timeout 2m
+
 .PHONY: test/race
 test/race:: ## Run tests with race detector (TEST_DATABASE=all, postgres, or sqlite)
 define test-race-target
     test/race:: ; cd $1 && go test ./... -race -timeout 2m $(if $(filter %/riverdriver/riverdrivertest,$1),$(driver_test_flags))
 endef
 $(foreach mod,$(test_submodules),$(eval $(call test-race-target,$(mod))))
+
+test/race:: ; cd ./riverdriver/riverdrivertest && RIVER_USE_LEGACY_SUBTRANSACTIONS=1 go test . -race -run '/WithTx$$' -timeout 2m
+test/race:: ; cd ./riverdriver/riverdrivertest && RIVER_USE_LEGACY_SUBTRANSACTIONS=1 go test . -race -run '^TestDriverRiverPgxV5$$/.*/WithTx$$' -timeout 2m
 
 .PHONY: bench
 bench:: ## Run benchmarks in each submodule (ITERATIONS=100)

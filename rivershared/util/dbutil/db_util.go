@@ -3,6 +3,7 @@ package dbutil
 import (
 	"context"
 	"fmt"
+	"os"
 	"strings"
 	"time"
 
@@ -41,8 +42,10 @@ func RollbackWithoutCancel[TExec riverdriver.ExecutorTx](ctx context.Context, ex
 	return timeoututil.WithTimeout(ctxWithoutCancel, 5*time.Second, "dbutil.RollbackWithoutCancel", execTx.Rollback)
 }
 
-// WithTx starts and commits a transaction on a driver executor around
-// the given function, allowing the return of a generic value.
+// WithTx runs the given function in a transaction, reusing exec if it's already
+// a transaction. Only a transaction started by WithTx is committed or rolled
+// back; the owner of a reused transaction must roll it back on error.
+// RIVER_USE_LEGACY_SUBTRANSACTIONS restores savepoints as described in WithTxV.
 //
 // Rollbacks use RollbackWithoutCancel to maximize the chance of a successful
 // rollback even where an operation within the transaction timed out due to
@@ -54,14 +57,30 @@ func WithTx[TExec riverdriver.Executor](ctx context.Context, exec TExec, innerFu
 	return err
 }
 
-// WithTxV starts and commits a transaction on a driver executor around
-// the given function, allowing the return of a generic value.
+// WithTxV runs the given function in a transaction, allowing the return of a
+// generic value. If exec is already a transaction, it is reused without starting
+// a savepoint, committing, or rolling back. On error, the owner must roll back
+// that transaction, including any partial writes made by innerFunc. Call Begin
+// explicitly when an operation needs its own rollback boundary.
+//
+// As a temporary compatibility fallback, setting
+// RIVER_USE_LEGACY_SUBTRANSACTIONS=1 (or true) disables transaction reuse and
+// restores savepoints. This fallback is planned for removal in a future release.
 //
 // Rollbacks use RollbackWithoutCancel to maximize the chance of a successful
 // rollback even where an operation within the transaction timed out due to
 // context timeout.
 func WithTxV[TExec riverdriver.Executor, T any](ctx context.Context, exec TExec, innerFunc func(ctx context.Context, execTx riverdriver.ExecutorTx) (T, error)) (T, error) {
 	var defaultRes T
+
+	legacySubtransactions := os.Getenv("RIVER_USE_LEGACY_SUBTRANSACTIONS")
+	if tx, ok := any(exec).(riverdriver.ExecutorTx); ok && legacySubtransactions != "1" && legacySubtransactions != "true" {
+		res, err := innerFunc(ctx, tx)
+		if err != nil {
+			return defaultRes, err
+		}
+		return res, nil
+	}
 
 	tx, err := exec.Begin(ctx)
 	if err != nil {
