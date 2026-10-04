@@ -800,7 +800,8 @@ ON CONFLICT (unique_key)
                 ELSE 0
             END >= 1
     -- Something needs to be updated for a row to be returned on a conflict.
-    DO UPDATE SET kind = EXCLUDED.kind
+    -- Keep the existing kind, which may differ under ` + "`" + `ExcludeKind` + "`" + `.
+    DO UPDATE SET kind = river_job.kind
 RETURNING id, json(args), attempt, attempted_at, json(attempted_by), created_at, json(errors), finalized_at, kind, max_attempts, json(metadata), priority, queue, state, scheduled_at, json(tags), unique_key, unique_states
 `
 
@@ -907,7 +908,8 @@ ON CONFLICT (unique_key)
                 ELSE 0
             END >= 1
     -- Something needs to be updated for a row to be returned on a conflict.
-    DO UPDATE SET kind = EXCLUDED.kind
+    -- Keep the existing kind, which may differ under ` + "`" + `ExcludeKind` + "`" + `.
+    DO UPDATE SET kind = river_job.kind
 RETURNING id, json(args), attempt, attempted_at, json(attempted_by), created_at, json(errors), finalized_at, kind, max_attempts, json(metadata), priority, queue, state, scheduled_at, json(tags), unique_key, unique_states
 `
 

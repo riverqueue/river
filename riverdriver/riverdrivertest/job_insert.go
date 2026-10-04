@@ -236,6 +236,49 @@ func exerciseJobInsert[TTx any](ctx context.Context, t *testing.T,
 			require.Equal(t, results1[0].Job.ID, results2[0].Job.ID)
 		})
 
+		// With UniqueOpts.ExcludeKind, jobs of different kinds share a unique
+		// key. A skipped insert must return the incumbent row unmodified rather
+		// than rewriting its kind to the kind of the skipped job.
+		t.Run("UniqueConflictDifferentKindLeavesIncumbentKind", func(t *testing.T) {
+			t.Parallel()
+
+			exec, _ := setup(ctx, t)
+
+			insertParams := func(kind string) *riverdriver.JobInsertFastManyParams {
+				return &riverdriver.JobInsertFastManyParams{
+					Jobs: []*riverdriver.JobInsertFastParams{
+						{
+							EncodedArgs:  []byte(`{"encoded": "args"}`),
+							Kind:         kind,
+							MaxAttempts:  rivercommon.MaxAttemptsDefault,
+							Priority:     rivercommon.PriorityDefault,
+							Queue:        rivercommon.QueueDefault,
+							State:        rivertype.JobStateAvailable,
+							Tags:         []string{},
+							UniqueKey:    []byte("unique-key-exclude-kind"),
+							UniqueStates: 0xff,
+						},
+					},
+				}
+			}
+
+			results1, err := exec.JobInsertFastMany(ctx, insertParams("kind_a"))
+			require.NoError(t, err)
+			require.Len(t, results1, 1)
+			require.False(t, results1[0].UniqueSkippedAsDuplicate)
+
+			results2, err := exec.JobInsertFastMany(ctx, insertParams("kind_b"))
+			require.NoError(t, err)
+			require.Len(t, results2, 1)
+			require.True(t, results2[0].UniqueSkippedAsDuplicate)
+			require.Equal(t, results1[0].Job.ID, results2[0].Job.ID)
+			require.Equal(t, "kind_a", results2[0].Job.Kind)
+
+			job, err := exec.JobGetByID(ctx, &riverdriver.JobGetByIDParams{ID: results1[0].Job.ID})
+			require.NoError(t, err)
+			require.Equal(t, "kind_a", job.Kind)
+		})
+
 		t.Run("UniqueConflictWithinBatch", func(t *testing.T) {
 			t.Parallel()
 

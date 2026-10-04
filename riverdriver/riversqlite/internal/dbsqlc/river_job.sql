@@ -290,7 +290,8 @@ ON CONFLICT (unique_key)
                 ELSE 0
             END >= 1
     -- Something needs to be updated for a row to be returned on a conflict.
-    DO UPDATE SET kind = EXCLUDED.kind
+    -- Keep the existing kind, which may differ under `ExcludeKind`.
+    DO UPDATE SET kind = river_job.kind
 RETURNING *;
 
 -- name: JobInsertFastMany :many
@@ -340,7 +341,8 @@ ON CONFLICT (unique_key)
                 ELSE 0
             END >= 1
     -- Something needs to be updated for a row to be returned on a conflict.
-    DO UPDATE SET kind = EXCLUDED.kind
+    -- Keep the existing kind, which may differ under `ExcludeKind`.
+    DO UPDATE SET kind = river_job.kind
 RETURNING *;
 
 -- name: JobInsertFastNoReturning :execrows
