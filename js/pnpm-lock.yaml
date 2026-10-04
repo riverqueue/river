@@ -99,6 +99,18 @@ importers:
         specifier: ^6.0.3
         version: 6.0.3
 
+  driver/sqlite:
+    devDependencies:
+      '@riverqueue/migrate':
+        specifier: workspace:0.50.0-alpha.1
+        version: link:../../migrate
+      '@types/node':
+        specifier: ^26.1.1
+        version: 26.1.1
+      riverqueue:
+        specifier: workspace:0.50.0-alpha.1
+        version: link:../..
+
   examples/node-postgres:
     dependencies:
       '@riverqueue/driver-pg':

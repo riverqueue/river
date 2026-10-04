@@ -9,6 +9,9 @@
       "@riverqueue/driver-prisma": [
         "./driver/prisma/src/index.ts"
       ],
+      "@riverqueue/driver-sqlite": [
+        "./driver/sqlite/src/index.ts"
+      ],
       "@riverqueue/migrate": [
         "./migrate/src/index.ts"
       ]
