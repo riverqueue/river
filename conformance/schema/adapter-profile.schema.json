@@ -1,0 +1,33 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "$schema": { "type": "string" },
+    "backend": { "enum": ["postgres", "sqlite"] },
+    "capabilities": {
+      "items": { "pattern": "^[a-z0-9_]+$", "type": "string" },
+      "minItems": 1,
+      "type": "array"
+    },
+    "description": { "minLength": 1, "type": "string" },
+    "extends": { "pattern": "^[a-z0-9_-]+$", "type": "string" },
+    "methods": {
+      "items": { "pattern": "^[a-z0-9_]+$", "type": "string" },
+      "minItems": 1,
+      "type": "array"
+    },
+    "name": { "pattern": "^[a-z0-9_-]+$", "type": "string" },
+    "protocol_revision": { "minimum": 1, "type": "integer" }
+  },
+  "required": [
+    "$schema",
+    "backend",
+    "capabilities",
+    "description",
+    "methods",
+    "name",
+    "protocol_revision"
+  ],
+  "title": "River conformance adapter backend profile",
+  "type": "object"
+}
