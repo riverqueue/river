@@ -152,6 +152,21 @@ importers:
         specifier: ^6.0.3
         version: 6.0.3
 
+  migrate:
+    devDependencies:
+      '@riverqueue/driver-pg':
+        specifier: workspace:0.50.0-alpha.1
+        version: link:../driver/pg
+      '@types/node':
+        specifier: ^26.1.1
+        version: 26.1.1
+      pg:
+        specifier: ^8.22.0
+        version: 8.22.0
+      riverqueue:
+        specifier: workspace:0.50.0-alpha.1
+        version: link:..
+
 packages:
 
   '@babel/helper-string-parser@7.29.7':

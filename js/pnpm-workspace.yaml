@@ -1,6 +1,7 @@
 packages:
   - "driver/*"
   - "examples/*"
+  - "migrate"
 
 ignoredBuiltDependencies:
   - "@prisma/client"
