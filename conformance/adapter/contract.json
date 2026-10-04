@@ -1,0 +1,2862 @@
+{
+  "$schema": "../schema/adapter-contract.schema.json",
+  "$defs": {
+    "count_result": {
+      "additionalProperties": false,
+      "properties": {
+        "count": {
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "type": "object",
+      "required": [
+        "count"
+      ]
+    },
+    "empty": {
+      "additionalProperties": false,
+      "properties": {},
+      "type": "object"
+    },
+    "handle": {
+      "minLength": 1,
+      "type": "string"
+    },
+    "insert_job": {
+      "additionalProperties": false,
+      "properties": {
+        "behavior": {
+          "description": "Built-in `conformance_echo` worker behavior; empty completes immediately.",
+          "enum": [
+            "",
+            "barrier_output",
+            "barrier_wait",
+            "cancel",
+            "cancel_error",
+            "cancel_panic",
+            "cooperative_cancel",
+            "discard",
+            "error",
+            "ignored_cancel",
+            "output",
+            "panic",
+            "resumable",
+            "resumable_cursor",
+            "resumable_duplicate",
+            "sleep",
+            "snooze_once",
+            "snooze_then_cancel",
+            "transactional_complete"
+          ]
+        },
+        "duration_ms": {
+          "minimum": 0,
+          "type": "integer"
+        },
+        "message": {
+          "type": "string"
+        },
+        "opts": {
+          "$ref": "#/$defs/insert_opts"
+        }
+      },
+      "type": "object"
+    },
+    "insert_opts": {
+      "additionalProperties": false,
+      "properties": {
+        "max_attempts": {
+          "minimum": 1,
+          "type": "integer"
+        },
+        "metadata": {
+          "type": "object"
+        },
+        "pending": {
+          "type": "boolean"
+        },
+        "priority": {
+          "type": "integer"
+        },
+        "queue": {
+          "type": "string"
+        },
+        "scheduled_at": {
+          "$ref": "#/$defs/timestamp"
+        },
+        "tags": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "unique": {
+          "additionalProperties": false,
+          "properties": {
+            "by_args": {
+              "type": "boolean"
+            },
+            "by_period_ms": {
+              "minimum": 0,
+              "type": "integer"
+            },
+            "by_queue": {
+              "type": "boolean"
+            },
+            "by_state": {
+              "items": {
+                "$ref": "#/$defs/job_state"
+              },
+              "type": "array"
+            },
+            "exclude_kind": {
+              "type": "boolean"
+            }
+          },
+          "type": "object"
+        }
+      },
+      "type": "object"
+    },
+    "insert_result": {
+      "additionalProperties": false,
+      "properties": {
+        "job": {
+          "$ref": "../schema/normalized-job.schema.json"
+        },
+        "unique_skipped_as_duplicate": {
+          "type": "boolean"
+        }
+      },
+      "type": "object",
+      "required": [
+        "job",
+        "unique_skipped_as_duplicate"
+      ]
+    },
+    "job": {
+      "$ref": "../schema/normalized-job.schema.json"
+    },
+    "job_id": {
+      "description": "Exact signed 64-bit job ID.",
+      "minimum": 1,
+      "type": "integer"
+    },
+    "job_state": {
+      "enum": [
+        "available",
+        "cancelled",
+        "completed",
+        "discarded",
+        "pending",
+        "retryable",
+        "running",
+        "scheduled"
+      ]
+    },
+    "jobs_result": {
+      "additionalProperties": false,
+      "properties": {
+        "jobs": {
+          "items": {
+            "$ref": "#/$defs/job"
+          },
+          "type": "array"
+        }
+      },
+      "type": "object",
+      "required": [
+        "jobs"
+      ]
+    },
+    "list_result": {
+      "additionalProperties": false,
+      "properties": {
+        "cursor": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "jobs": {
+          "items": {
+            "$ref": "#/$defs/job"
+          },
+          "type": "array"
+        }
+      },
+      "type": "object",
+      "required": [
+        "cursor",
+        "jobs"
+      ]
+    },
+    "migration_result": {
+      "additionalProperties": false,
+      "properties": {
+        "applied": {
+          "items": {
+            "minimum": 1,
+            "type": "integer"
+          },
+          "type": "array"
+        },
+        "existing": {
+          "items": {
+            "minimum": 1,
+            "type": "integer"
+          },
+          "type": "array"
+        },
+        "valid": {
+          "type": "boolean"
+        }
+      },
+      "type": "object",
+      "required": [
+        "applied",
+        "existing",
+        "valid"
+      ]
+    },
+    "queue": {
+      "$ref": "../schema/normalized-queue.schema.json"
+    },
+    "schema_name": {
+      "description": "Custom PostgreSQL schema; empty or absent selects the default. Implementations reject invalid names.",
+      "type": "string"
+    },
+    "timestamp": {
+      "description": "RFC 3339 timestamp.",
+      "minLength": 1,
+      "type": "string"
+    }
+  },
+  "adapter_version": 22,
+  "errors": [
+    {
+      "code": -32700,
+      "description": "The request line is not valid JSON.",
+      "name": "parse_error"
+    },
+    {
+      "code": -32600,
+      "description": "The request is not a JSON-RPC 2.0 request.",
+      "name": "invalid_request"
+    },
+    {
+      "code": -32601,
+      "description": "The adapter does not implement the method in its advertised profile.",
+      "name": "method_not_found"
+    },
+    {
+      "code": -32602,
+      "description": "The params do not match the method's params schema, including unknown parameters.",
+      "name": "invalid_params"
+    },
+    {
+      "code": -32000,
+      "description": "The adapter itself failed; not a River outcome.",
+      "name": "internal"
+    },
+    {
+      "code": -32001,
+      "description": "A requested job or queue does not exist, or a transaction handle or barrier is unknown.",
+      "name": "not_found"
+    },
+    {
+      "code": -32002,
+      "description": "The implementation rejected the request or could not complete it: validation, an invalid state such as an already running client, or a wait that did not reach its states.",
+      "name": "rejected"
+    },
+    {
+      "code": -32003,
+      "description": "The database reported an error, such as a statement failing in an aborted transaction.",
+      "name": "database_error"
+    },
+    {
+      "code": -32004,
+      "description": "The adapter cannot honor a valid optional parameter or feature, such as a start tuning option its implementation does not expose.",
+      "name": "unsupported"
+    }
+  ],
+  "methods": [
+    {
+      "capability": "barriers",
+      "description": "Create a named worker barrier.",
+      "name": "barrier_create",
+      "params": {
+        "additionalProperties": false,
+        "properties": {
+          "name": {
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "type": "object",
+        "required": [
+          "name"
+        ]
+      },
+      "result": {
+        "additionalProperties": false,
+        "properties": {},
+        "type": "object"
+      }
+    },
+    {
+      "capability": "barriers",
+      "description": "Release a named worker barrier.",
+      "name": "barrier_release",
+      "params": {
+        "additionalProperties": false,
+        "properties": {
+          "name": {
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "type": "object",
+        "required": [
+          "name"
+        ]
+      },
+      "result": {
+        "additionalProperties": false,
+        "properties": {},
+        "type": "object"
+      }
+    },
+    {
+      "capability": "insert",
+      "description": "Measure in-process insertion without RPC framing overhead.",
+      "name": "benchmark_enqueue",
+      "params": {
+        "additionalProperties": false,
+        "properties": {
+          "jobs": {
+            "minimum": 1,
+            "type": "integer"
+          }
+        },
+        "type": "object",
+        "required": [
+          "jobs"
+        ]
+      },
+      "result": {
+        "additionalProperties": false,
+        "properties": {
+          "duration_ns": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "p95_ns": {
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "type": "object",
+        "required": [
+          "duration_ns",
+          "p95_ns"
+        ]
+      }
+    },
+    {
+      "capability": "cancel",
+      "description": "Cancel a job outside a transaction.",
+      "name": "cancel",
+      "params": {
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "$ref": "#/$defs/job_id"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id"
+        ]
+      },
+      "result": {
+        "$ref": "#/$defs/job"
+      }
+    },
+    {
+      "capability": "deterministic_controls",
+      "description": "Set the adapter's deterministic test clock.",
+      "name": "clock_set",
+      "params": {
+        "additionalProperties": false,
+        "properties": {
+          "now": {
+            "$ref": "#/$defs/timestamp"
+          }
+        },
+        "type": "object",
+        "required": [
+          "now"
+        ]
+      },
+      "result": {
+        "additionalProperties": false,
+        "properties": {},
+        "type": "object"
+      }
+    },
+    {
+      "capability": "lifecycle",
+      "description": "Report application connections owned by the adapter.",
+      "name": "connection_count",
+      "params": {
+        "additionalProperties": false,
+        "properties": {},
+        "type": "object"
+      },
+      "result": {
+        "$ref": "#/$defs/count_result"
+      }
+    },
+    {
+      "capability": "deterministic_controls",
+      "description": "Calculate successive occurrences of a standard cron expression from a reference time, using River Go's documented cron semantics.",
+      "name": "cron_next",
+      "params": {
+        "additionalProperties": false,
+        "properties": {
+          "count": {
+            "minimum": 1,
+            "type": "integer"
+          },
+          "expression": {
+            "type": "string"
+          },
+          "from": {
+            "$ref": "#/$defs/timestamp"
+          }
+        },
+        "required": [
+          "count",
+          "expression",
+          "from"
+        ],
+        "type": "object"
+      },
+      "result": {
+        "additionalProperties": false,
+        "properties": {
+          "next": {
+            "items": {
+              "$ref": "#/$defs/timestamp"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "next"
+        ],
+        "type": "object"
+      }
+    },
+    {
+      "capability": "job_crud",
+      "description": "Delete one job.",
+      "name": "delete",
+      "params": {
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "$ref": "#/$defs/job_id"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id"
+        ]
+      },
+      "result": {
+        "$ref": "#/$defs/job"
+      }
+    },
+    {
+      "capability": "job_crud",
+      "description": "Run one batch of River's job cleaner deletion outside a client, as an extension's own cleaner pass would: delete up to `limit` cancelled, completed, and discarded jobs finalized before `before`, lowest IDs first. Jobs in `queues_excluded` are kept. When `queues_included` is present and not null, only jobs in those queues are deleted, so an empty list deletes nothing; exclusion wins over inclusion. Queue filters apply before `limit`, so retained jobs never use up a batch. Returns how many jobs were deleted.",
+      "name": "delete_finalized",
+      "params": {
+        "additionalProperties": false,
+        "properties": {
+          "before": {
+            "$ref": "#/$defs/timestamp"
+          },
+          "limit": {
+            "minimum": 1,
+            "type": "integer"
+          },
+          "queues_excluded": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "queues_included": {
+            "items": {
+              "type": "string"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          }
+        },
+        "type": "object",
+        "required": [
+          "before",
+          "limit"
+        ]
+      },
+      "result": {
+        "additionalProperties": false,
+        "properties": {
+          "deleted": {
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "type": "object",
+        "required": [
+          "deleted"
+        ]
+      }
+    },
+    {
+      "capability": "job_crud",
+      "description": "Delete jobs using safe filters or an explicit all flag.",
+      "name": "delete_many",
+      "params": {
+        "additionalProperties": false,
+        "properties": {
+          "all": {
+            "type": "boolean"
+          },
+          "ids": {
+            "items": {
+              "$ref": "#/$defs/job_id"
+            },
+            "type": "array"
+          },
+          "kinds": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "limit": {
+            "minimum": 1,
+            "type": "integer"
+          },
+          "queues": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "states": {
+            "items": {
+              "$ref": "#/$defs/job_state"
+            },
+            "type": "array"
+          }
+        },
+        "type": "object"
+      },
+      "result": {
+        "$ref": "#/$defs/jobs_result"
+      }
+    },
+    {
+      "capability": "fault_injection",
+      "description": "Disconnect allow-listed application connections.",
+      "name": "fault_disconnect_application",
+      "params": {
+        "additionalProperties": false,
+        "properties": {
+          "application_name": {
+            "pattern": "^river-conformance-",
+            "type": "string"
+          }
+        },
+        "type": "object",
+        "required": [
+          "application_name"
+        ]
+      },
+      "result": {
+        "$ref": "#/$defs/count_result"
+      }
+    },
+    {
+      "capability": "fault_injection",
+      "description": "Disconnect the adapter's listener connections.",
+      "name": "fault_disconnect_listeners",
+      "params": {
+        "additionalProperties": false,
+        "properties": {},
+        "type": "object"
+      },
+      "result": {
+        "$ref": "#/$defs/count_result"
+      }
+    },
+    {
+      "capability": "fault_injection",
+      "description": "Expire the current leader lease.",
+      "name": "fault_expire_leader",
+      "params": {
+        "additionalProperties": false,
+        "properties": {},
+        "type": "object"
+      },
+      "result": {
+        "additionalProperties": false,
+        "properties": {},
+        "type": "object"
+      }
+    },
+    {
+      "capability": "get",
+      "description": "Read one normalized job.",
+      "name": "get",
+      "params": {
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "$ref": "#/$defs/job_id"
+          },
+          "schema": {
+            "$ref": "#/$defs/schema_name"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id"
+        ]
+      },
+      "result": {
+        "$ref": "#/$defs/job"
+      }
+    },
+    {
+      "capability": "lifecycle",
+      "description": "Describe adapter, implementation, protocol, methods, and capabilities. A PostgreSQL adapter that honors RIVER_CONFORMANCE_APPLICATION_NAME reports the name in application_name.",
+      "name": "handshake",
+      "params": {
+        "additionalProperties": false,
+        "properties": {},
+        "type": "object"
+      },
+      "result": {
+        "additionalProperties": false,
+        "properties": {
+          "adapter_version": {
+            "minimum": 1,
+            "type": "integer"
+          },
+          "application_name": {
+            "pattern": "^river-conformance-",
+            "type": "string"
+          },
+          "backend": {
+            "enum": [
+              "postgres",
+              "sqlite"
+            ]
+          },
+          "capabilities": {
+            "items": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "implementation": {
+            "pattern": "^[a-z][a-z0-9_-]*$",
+            "type": "string"
+          },
+          "implementation_version": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "methods": {
+            "items": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "migration_lines": {
+            "additionalProperties": {
+              "minimum": 1,
+              "type": "integer"
+            },
+            "type": "object"
+          },
+          "profile": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "protocol_revision": {
+            "minimum": 1,
+            "type": "integer"
+          }
+        },
+        "type": "object",
+        "required": [
+          "adapter_version",
+          "backend",
+          "capabilities",
+          "implementation",
+          "implementation_version",
+          "methods",
+          "migration_lines",
+          "profile",
+          "protocol_revision"
+        ]
+      }
+    },
+    {
+      "capability": "insert",
+      "description": "Insert one conformance job.",
+      "name": "insert",
+      "params": {
+        "additionalProperties": false,
+        "properties": {
+          "behavior": {
+            "description": "Built-in `conformance_echo` worker behavior; empty completes immediately.",
+            "enum": [
+              "",
+              "barrier_output",
+              "barrier_wait",
+              "cancel",
+              "cancel_error",
+              "cancel_panic",
+              "cooperative_cancel",
+              "discard",
+              "error",
+              "ignored_cancel",
+              "output",
+              "panic",
+              "resumable",
+              "resumable_cursor",
+              "resumable_duplicate",
+              "sleep",
+              "snooze_once",
+              "snooze_then_cancel",
+              "transactional_complete"
+            ]
+          },
+          "duration_ms": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "message": {
+            "type": "string"
+          },
+          "opts": {
+            "$ref": "#/$defs/insert_opts"
+          },
+          "schema": {
+            "$ref": "#/$defs/schema_name"
+          }
+        },
+        "type": "object"
+      },
+      "result": {
+        "$ref": "#/$defs/job"
+      }
+    },
+    {
+      "capability": "insert",
+      "description": "Atomically insert a typed job batch and return ordered normalized results.",
+      "name": "insert_many",
+      "params": {
+        "additionalProperties": false,
+        "properties": {
+          "jobs": {
+            "items": {
+              "additionalProperties": false,
+              "properties": {
+                "behavior": {
+                  "description": "Built-in `conformance_echo` worker behavior; empty completes immediately.",
+                  "enum": [
+                    "",
+                    "barrier_output",
+                    "barrier_wait",
+                    "cancel",
+                    "cancel_error",
+                    "cancel_panic",
+                    "cooperative_cancel",
+                    "discard",
+                    "error",
+                    "ignored_cancel",
+                    "output",
+                    "panic",
+                    "resumable",
+                    "resumable_cursor",
+                    "resumable_duplicate",
+                    "sleep",
+                    "snooze_once",
+                    "snooze_then_cancel",
+                    "transactional_complete"
+                  ]
+                },
+                "duration_ms": {
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "message": {
+                  "type": "string"
+                },
+                "opts": {
+                  "$ref": "#/$defs/insert_opts"
+                }
+              },
+              "type": "object"
+            },
+            "type": "array"
+          }
+        },
+        "type": "object",
+        "required": [
+          "jobs"
+        ]
+      },
+      "result": {
+        "additionalProperties": false,
+        "properties": {
+          "results": {
+            "items": {
+              "$ref": "#/$defs/insert_result"
+            },
+            "type": "array"
+          }
+        },
+        "type": "object",
+        "required": [
+          "results"
+        ]
+      }
+    },
+    {
+      "capability": "leadership",
+      "description": "Read the active leader and election term.",
+      "name": "leader",
+      "params": {
+        "additionalProperties": false,
+        "properties": {},
+        "type": "object"
+      },
+      "result": {
+        "additionalProperties": false,
+        "properties": {
+          "elected_at": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "leader_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "type": "object",
+        "required": [
+          "elected_at",
+          "leader_id"
+        ]
+      }
+    },
+    {
+      "capability": "job_crud",
+      "description": "List normalized jobs with filters and a portable cursor.",
+      "name": "list",
+      "params": {
+        "additionalProperties": false,
+        "properties": {
+          "after": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "direction": {
+            "enum": [
+              "asc",
+              "desc"
+            ]
+          },
+          "ids": {
+            "items": {
+              "$ref": "#/$defs/job_id"
+            },
+            "type": "array"
+          },
+          "kinds": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "limit": {
+            "minimum": 1,
+            "type": "integer"
+          },
+          "metadata": {
+            "type": "object"
+          },
+          "order_by": {
+            "enum": [
+              "finalized_at",
+              "id",
+              "scheduled_at",
+              "time"
+            ]
+          },
+          "priorities": {
+            "items": {
+              "type": "integer"
+            },
+            "type": "array"
+          },
+          "queues": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "states": {
+            "items": {
+              "$ref": "#/$defs/job_state"
+            },
+            "type": "array"
+          },
+          "tags_all": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "tags_any": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          }
+        },
+        "type": "object"
+      },
+      "result": {
+        "$ref": "#/$defs/list_result"
+      }
+    },
+    {
+      "capability": "notifications",
+      "description": "Report active listener connections.",
+      "name": "listener_count",
+      "params": {
+        "additionalProperties": false,
+        "properties": {},
+        "type": "object"
+      },
+      "result": {
+        "$ref": "#/$defs/count_result"
+      }
+    },
+    {
+      "capability": "migrate",
+      "description": "Run an up or down migration with target, step, and dry-run controls.",
+      "name": "migrate",
+      "params": {
+        "additionalProperties": false,
+        "properties": {
+          "direction": {
+            "enum": [
+              "down",
+              "up"
+            ]
+          },
+          "dry_run": {
+            "type": "boolean"
+          },
+          "max_steps": {
+            "minimum": 1,
+            "type": "integer"
+          },
+          "schema": {
+            "$ref": "#/$defs/schema_name"
+          },
+          "target_version": {
+            "type": "integer"
+          }
+        },
+        "type": "object"
+      },
+      "result": {
+        "$ref": "#/$defs/migration_result"
+      }
+    },
+    {
+      "capability": "queues",
+      "description": "Add or reconfigure a runtime queue.",
+      "name": "queue_add",
+      "params": {
+        "additionalProperties": false,
+        "properties": {
+          "max_workers": {
+            "minimum": 1,
+            "type": "integer"
+          },
+          "name": {
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "type": "object",
+        "required": [
+          "name"
+        ]
+      },
+      "result": {
+        "additionalProperties": false,
+        "properties": {},
+        "type": "object"
+      }
+    },
+    {
+      "capability": "queues",
+      "description": "Read one normalized persisted queue.",
+      "name": "queue_get",
+      "params": {
+        "additionalProperties": false,
+        "properties": {
+          "name": {
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "type": "object",
+        "required": [
+          "name"
+        ]
+      },
+      "result": {
+        "$ref": "#/$defs/queue"
+      }
+    },
+    {
+      "capability": "queues",
+      "description": "List normalized persisted queues.",
+      "name": "queue_list",
+      "params": {
+        "additionalProperties": false,
+        "properties": {
+          "limit": {
+            "minimum": 1,
+            "type": "integer"
+          }
+        },
+        "type": "object"
+      },
+      "result": {
+        "additionalProperties": false,
+        "properties": {
+          "queues": {
+            "items": {
+              "$ref": "#/$defs/queue"
+            },
+            "type": "array"
+          }
+        },
+        "type": "object",
+        "required": [
+          "queues"
+        ]
+      }
+    },
+    {
+      "capability": "queues",
+      "description": "Pause a persisted queue.",
+      "name": "queue_pause",
+      "params": {
+        "additionalProperties": false,
+        "properties": {
+          "name": {
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "type": "object",
+        "required": [
+          "name"
+        ]
+      },
+      "result": {
+        "additionalProperties": false,
+        "properties": {},
+        "type": "object"
+      }
+    },
+    {
+      "capability": "queues",
+      "description": "Remove a runtime queue.",
+      "name": "queue_remove",
+      "params": {
+        "additionalProperties": false,
+        "properties": {
+          "name": {
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "type": "object",
+        "required": [
+          "name"
+        ]
+      },
+      "result": {
+        "additionalProperties": false,
+        "properties": {},
+        "type": "object"
+      }
+    },
+    {
+      "capability": "queues",
+      "description": "Resume a persisted queue.",
+      "name": "queue_resume",
+      "params": {
+        "additionalProperties": false,
+        "properties": {
+          "name": {
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "type": "object",
+        "required": [
+          "name"
+        ]
+      },
+      "result": {
+        "additionalProperties": false,
+        "properties": {},
+        "type": "object"
+      }
+    },
+    {
+      "capability": "queues",
+      "description": "Update persisted queue metadata. Without `metadata` the queue's metadata is unchanged.",
+      "name": "queue_update",
+      "params": {
+        "additionalProperties": false,
+        "properties": {
+          "metadata": {
+            "type": "object"
+          },
+          "name": {
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "type": "object",
+        "required": [
+          "name"
+        ]
+      },
+      "result": {
+        "$ref": "#/$defs/queue"
+      }
+    },
+    {
+      "capability": "job_crud",
+      "description": "Force a running job into an external terminal state for completion-race tests.",
+      "name": "raw_finalize",
+      "params": {
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "$ref": "#/$defs/job_id"
+          },
+          "metadata": {
+            "type": "object"
+          },
+          "state": {
+            "enum": [
+              "completed",
+              "discarded"
+            ]
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "state"
+        ]
+      },
+      "result": {
+        "$ref": "#/$defs/job"
+      }
+    },
+    {
+      "capability": "job_crud",
+      "description": "Insert exact JSON numeric fixtures with optional exact signed-64-bit job ID and raw metadata object text, and return that ID.",
+      "name": "raw_insert_exact_json",
+      "params": {
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "$ref": "#/$defs/job_id"
+          },
+          "metadata_json": {
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "result": {
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "$ref": "#/$defs/job_id"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id"
+        ]
+      }
+    },
+    {
+      "capability": "job_crud",
+      "description": "Insert a normalized full-field row for codec checks.",
+      "name": "raw_insert_full_row",
+      "params": {
+        "additionalProperties": false,
+        "properties": {},
+        "type": "object"
+      },
+      "result": {
+        "$ref": "#/$defs/job"
+      }
+    },
+    {
+      "capability": "notifications",
+      "description": "Insert directly without a notification.",
+      "name": "raw_insert_no_notify",
+      "params": {
+        "additionalProperties": false,
+        "properties": {
+          "behavior": {
+            "description": "Built-in `conformance_echo` worker behavior; empty completes immediately.",
+            "enum": [
+              "",
+              "barrier_output",
+              "barrier_wait",
+              "cancel",
+              "cancel_error",
+              "cancel_panic",
+              "cooperative_cancel",
+              "discard",
+              "error",
+              "ignored_cancel",
+              "output",
+              "panic",
+              "resumable",
+              "resumable_cursor",
+              "resumable_duplicate",
+              "sleep",
+              "snooze_once",
+              "snooze_then_cancel",
+              "transactional_complete"
+            ]
+          },
+          "duration_ms": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "message": {
+            "type": "string"
+          },
+          "opts": {
+            "$ref": "#/$defs/insert_opts"
+          },
+          "kind": {
+            "description": "Job kind; defaults to `conformance_echo`.",
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "result": {
+        "$ref": "#/$defs/job"
+      }
+    },
+    {
+      "capability": "job_crud",
+      "description": "Read exact numeric tokens from job JSON through the implementation driver.",
+      "name": "raw_job_exact_json",
+      "params": {
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "$ref": "#/$defs/job_id"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id"
+        ]
+      },
+      "result": {
+        "additionalProperties": false,
+        "properties": {
+          "big_integer": {
+            "type": "string"
+          },
+          "beyond_float": {
+            "type": "string"
+          },
+          "decimal": {
+            "type": "string"
+          },
+          "integer": {
+            "type": "string"
+          },
+          "negative": {
+            "type": "string"
+          },
+          "long_decimal": {
+            "type": "string"
+          }
+        },
+        "type": "object",
+        "required": [
+          "decimal",
+          "integer",
+          "negative"
+        ]
+      }
+    },
+    {
+      "capability": "job_crud",
+      "description": "Read a job's JSON and timestamp columns exactly as the database renders them: SQLite `json(column)` and `CAST(column AS TEXT)`, PostgreSQL `column::text`. The harness compares JSON columns as decoded values and timestamp text as written. On SQLite, `jsonb` also holds each JSONB column's stored bytes as `hex(column)`, so the harness can check that each column is stored as JSONB with the same value; it is null on PostgreSQL. `unique_key` holds the stored unique key as uppercase hex and `unique_states` the stored state mask as the database renders it as text (PostgreSQL `bit(8)` text such as `11110101`, SQLite the integer), both null when the job isn't unique. On SQLite, `unique_key_type` and `unique_states_type` hold each column's `typeof`; they are null on PostgreSQL.",
+      "name": "raw_job_row",
+      "params": {
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "$ref": "#/$defs/job_id"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id"
+        ]
+      },
+      "result": {
+        "additionalProperties": false,
+        "properties": {
+          "args": {
+            "type": "string"
+          },
+          "attempted_at": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "attempted_by": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "created_at": {
+            "type": "string"
+          },
+          "errors": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "finalized_at": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "jsonb": {
+            "additionalProperties": false,
+            "properties": {
+              "args": {
+                "type": "string",
+                "pattern": "^([0-9A-F]{2})*$"
+              },
+              "attempted_by": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "pattern": "^([0-9A-F]{2})*$"
+              },
+              "errors": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "pattern": "^([0-9A-F]{2})*$"
+              },
+              "metadata": {
+                "type": "string",
+                "pattern": "^([0-9A-F]{2})*$"
+              },
+              "tags": {
+                "type": "string",
+                "pattern": "^([0-9A-F]{2})*$"
+              }
+            },
+            "type": [
+              "object",
+              "null"
+            ],
+            "required": [
+              "args",
+              "attempted_by",
+              "errors",
+              "metadata",
+              "tags"
+            ]
+          },
+          "metadata": {
+            "type": "string"
+          },
+          "scheduled_at": {
+            "type": "string"
+          },
+          "tags": {
+            "type": "string"
+          },
+          "unique_key": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "pattern": "^([0-9A-F]{2})*$"
+          },
+          "unique_key_type": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "unique_states": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "unique_states_type": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "type": "object",
+        "required": [
+          "args",
+          "attempted_at",
+          "attempted_by",
+          "created_at",
+          "errors",
+          "finalized_at",
+          "jsonb",
+          "metadata",
+          "scheduled_at",
+          "tags",
+          "unique_key",
+          "unique_key_type",
+          "unique_states",
+          "unique_states_type"
+        ]
+      }
+    },
+    {
+      "capability": "job_crud",
+      "description": "Read the database's raw persisted job timestamp representation.",
+      "name": "raw_job_timestamps",
+      "params": {
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "$ref": "#/$defs/job_id"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id"
+        ]
+      },
+      "result": {
+        "additionalProperties": false,
+        "properties": {
+          "created_at": {
+            "type": "string"
+          },
+          "scheduled_at": {
+            "type": "string"
+          }
+        },
+        "type": "object",
+        "required": [
+          "created_at",
+          "scheduled_at"
+        ]
+      }
+    },
+    {
+      "capability": "notifications",
+      "description": "Read SQLite notification outbox rows with an ID greater than `after_id`, in ID order, exactly as stored: the `topic` text, the `payload` text, and SQLite's `typeof(payload)`. This compares the notification bytes implementations write, such as a cancellation's control payload. Only SQLite has an outbox; PostgreSQL adapters validate the params and report `unsupported`.",
+      "name": "raw_notifications",
+      "params": {
+        "additionalProperties": false,
+        "properties": {
+          "after_id": {
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "type": "object",
+        "required": [
+          "after_id"
+        ]
+      },
+      "result": {
+        "additionalProperties": false,
+        "properties": {
+          "notifications": {
+            "items": {
+              "additionalProperties": false,
+              "properties": {
+                "id": {
+                  "minimum": 1,
+                  "type": "integer"
+                },
+                "payload": {
+                  "type": "string"
+                },
+                "payload_type": {
+                  "type": "string"
+                },
+                "topic": {
+                  "type": "string"
+                }
+              },
+              "type": "object",
+              "required": [
+                "id",
+                "payload",
+                "payload_type",
+                "topic"
+              ]
+            },
+            "type": "array"
+          }
+        },
+        "type": "object",
+        "required": [
+          "notifications"
+        ]
+      }
+    },
+    {
+      "capability": "job_crud",
+      "description": "Replace one of a SQLite job's JSON columns with `text` stored as SQLite TEXT rather than JSONB, or with NULL when `text` is null, as an out-of-band change could. The text doesn't need to be valid JSON. Returns the column's previous value, as stored when it was TEXT and rendered with `json(column)` otherwise, and its SQLite `typeof`. PostgreSQL adapters report `unsupported`.",
+      "name": "raw_replace_json_text",
+      "params": {
+        "additionalProperties": false,
+        "properties": {
+          "column": {
+            "enum": [
+              "args",
+              "attempted_by",
+              "errors",
+              "metadata",
+              "tags"
+            ]
+          },
+          "id": {
+            "$ref": "#/$defs/job_id"
+          },
+          "text": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "type": "object",
+        "required": [
+          "column",
+          "id",
+          "text"
+        ]
+      },
+      "result": {
+        "additionalProperties": false,
+        "properties": {
+          "previous": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "previous_type": {
+            "enum": [
+              "blob",
+              "integer",
+              "null",
+              "real",
+              "text"
+            ]
+          }
+        },
+        "type": "object",
+        "required": [
+          "previous",
+          "previous_type"
+        ]
+      }
+    },
+    {
+      "capability": "job_crud",
+      "description": "Rewrite one job's kind out of band, leaving every other column, including `unique_key`, as stored. Unique scenarios use it to give an existing job a kind other than `conformance_echo` while it keeps its unique key.",
+      "name": "raw_set_kind",
+      "params": {
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "$ref": "#/$defs/job_id"
+          },
+          "kind": {
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "kind"
+        ]
+      },
+      "result": {
+        "$ref": "#/$defs/job"
+      }
+    },
+    {
+      "capability": "leadership",
+      "description": "Request leader resignation.",
+      "name": "request_resign",
+      "params": {
+        "additionalProperties": false,
+        "properties": {
+          "handle": {
+            "$ref": "#/$defs/handle"
+          }
+        },
+        "type": "object"
+      },
+      "result": {
+        "additionalProperties": false,
+        "properties": {},
+        "type": "object"
+      }
+    },
+    {
+      "capability": "reset",
+      "description": "Truncate River runtime tables in a disposable schema.",
+      "name": "reset",
+      "params": {
+        "additionalProperties": false,
+        "properties": {
+          "schema": {
+            "$ref": "#/$defs/schema_name"
+          }
+        },
+        "type": "object"
+      },
+      "result": {
+        "additionalProperties": false,
+        "properties": {},
+        "type": "object"
+      }
+    },
+    {
+      "capability": "retry",
+      "description": "Retry a job outside a transaction.",
+      "name": "retry",
+      "params": {
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "$ref": "#/$defs/job_id"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id"
+        ]
+      },
+      "result": {
+        "$ref": "#/$defs/job"
+      }
+    },
+    {
+      "capability": "deterministic_controls",
+      "description": "Calculate a deterministic retry delay.",
+      "name": "retry_delay",
+      "params": {
+        "additionalProperties": false,
+        "properties": {
+          "error_count": {
+            "minimum": 1,
+            "type": "integer"
+          },
+          "job_id": {
+            "type": "integer"
+          }
+        },
+        "type": "object",
+        "required": [
+          "error_count",
+          "job_id"
+        ]
+      },
+      "result": {
+        "additionalProperties": false,
+        "properties": {
+          "delay_ns": {
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "type": "object",
+        "required": [
+          "delay_ns"
+        ]
+      }
+    },
+    {
+      "capability": "deterministic_controls",
+      "description": "Set the adapter's deterministic random seed.",
+      "name": "rng_seed",
+      "params": {
+        "additionalProperties": false,
+        "properties": {
+          "seed": {
+            "description": "Unsigned 64-bit seed. Implementations whose default retry policy has no seedable jitter ignore it.",
+            "maximum": 18446744073709551615,
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "type": "object",
+        "required": [
+          "seed"
+        ]
+      },
+      "result": {
+        "additionalProperties": false,
+        "properties": {},
+        "type": "object"
+      }
+    },
+    {
+      "capability": "extensions",
+      "description": "Read extension, resumable, and subscription observations from a running client.",
+      "name": "runtime_stats",
+      "params": {
+        "additionalProperties": false,
+        "properties": {},
+        "type": "object"
+      },
+      "result": {
+        "additionalProperties": false,
+        "properties": {
+          "cancelled_at_start": {
+            "description": "Attempts of the `cooperative_cancel` behavior whose cancellation was already requested when the worker started.",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "error_handler_calls": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "events": {
+            "items": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "periodic_starts": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "resumable_first_runs": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "resumable_second_runs": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "stuck_jobs": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "trace": {
+            "items": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "type": "array"
+          }
+        },
+        "type": "object",
+        "required": [
+          "cancelled_at_start",
+          "error_handler_calls",
+          "events",
+          "periodic_starts",
+          "resumable_first_runs",
+          "resumable_second_runs",
+          "stuck_jobs",
+          "trace"
+        ]
+      }
+    },
+    {
+      "capability": "lifecycle",
+      "description": "Start a configurable worker client.",
+      "name": "start",
+      "params": {
+        "additionalProperties": false,
+        "properties": {
+          "cancelled_job_retention_ms": {
+            "description": "Retention for jobs finalized in this state before the job cleaner deletes them; `-1` keeps them forever.",
+            "minimum": -1,
+            "type": "integer"
+          },
+          "claim_barrier": {
+            "description": "Name of a barrier created with `barrier_create` that holds the client's first claim that returns jobs: once that claim commits, the client keeps its jobs without starting them until the barrier is released, while it keeps receiving notifications. Stopping the client releases it, and later claims don't wait. A name that isn't a current barrier is rejected with `invalid_params`. The harness uses it to deliver a cancellation between a claim and the start of the claimed job.",
+            "minLength": 1,
+            "type": "string"
+          },
+          "client_id": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "completed_job_retention_ms": {
+            "description": "Retention for jobs finalized in this state before the job cleaner deletes them; `-1` keeps them forever.",
+            "minimum": -1,
+            "type": "integer"
+          },
+          "discarded_job_retention_ms": {
+            "description": "Retention for jobs finalized in this state before the job cleaner deletes them; `-1` keeps them forever.",
+            "minimum": -1,
+            "type": "integer"
+          },
+          "elect_interval_ms": {
+            "description": "Optional tuning: leader election interval. Adapters that cannot configure it reject the request with `unsupported`; the harness sends it only to candidates whose descriptor lists it in `start_options`.",
+            "minimum": 1,
+            "type": "integer"
+          },
+          "error_handler_cancel": {
+            "type": "boolean"
+          },
+          "fetch_only_known_kinds": {
+            "description": "Claim only jobs of the kinds the client registers, including kind aliases, like Go's `Config.FetchOnlyKnownKinds`, leaving jobs of other kinds available without using attempts.",
+            "type": "boolean"
+          },
+          "fetch_poll_interval_ms": {
+            "minimum": 1,
+            "type": "integer"
+          },
+          "instrumented": {
+            "type": "boolean"
+          },
+          "job_cleaner_interval_ms": {
+            "description": "Optional tuning: interval between job cleaner runs. Adapters that cannot configure it may ignore it.",
+            "minimum": 1,
+            "type": "integer"
+          },
+          "job_stuck_threshold_ms": {
+            "minimum": 1,
+            "type": "integer"
+          },
+          "job_timeout_disabled": {
+            "description": "Disable the client-wide job timeout.",
+            "type": "boolean"
+          },
+          "job_timeout_ms": {
+            "minimum": 1,
+            "type": "integer"
+          },
+          "leader_election_disabled": {
+            "description": "Keep the client out of leader election, like Go's `Config.LeaderElectionDisabled`: it works jobs but never becomes leader or runs leader-owned maintenance. Combined with `periodic_run_on_start`, the start is rejected.",
+            "type": "boolean"
+          },
+          "max_workers": {
+            "minimum": 1,
+            "type": "integer"
+          },
+          "periodic_run_on_start": {
+            "type": "boolean"
+          },
+          "periodic_unique": {
+            "description": "With `periodic_run_on_start`, insert the run-on-start periodic job (ID `conformance-periodic`) with unique options `by_args` and `by_queue`, so a later leader of any implementation skips its own run-on-start insertion as a duplicate, and register after it a second, non-unique run-on-start periodic job (ID `conformance-periodic-marker`, message `periodic marker`), whose insertion shows the unique one's was attempted. Rejected without `periodic_run_on_start`.",
+            "type": "boolean"
+          },
+          "poll_only": {
+            "type": "boolean"
+          },
+          "queue": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "queue_cleaner_interval_ms": {
+            "description": "Optional tuning: interval between queue cleaner runs. Adapters that cannot configure it may ignore it.",
+            "minimum": 1,
+            "type": "integer"
+          },
+          "reindexer_index_names": {
+            "description": "Indexes the leader reindexes, overriding the default set.",
+            "items": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "reindexer_interval_ms": {
+            "description": "Interval between reindexer runs.",
+            "minimum": 1,
+            "type": "integer"
+          },
+          "rescue_after_ms": {
+            "description": "Duration a running job may run before the leader's rescuer treats it as abandoned.",
+            "minimum": 1,
+            "type": "integer"
+          },
+          "rescuer_interval_ms": {
+            "description": "Optional tuning: interval between rescuer runs. Handled like `elect_interval_ms`.",
+            "minimum": 1,
+            "type": "integer"
+          },
+          "retry_delay_ms": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "scheduler_interval_ms": {
+            "description": "Optional tuning: interval between scheduler runs and the threshold below which retries and snoozes stay available. Handled like `elect_interval_ms`.",
+            "minimum": 1,
+            "type": "integer"
+          },
+          "schema": {
+            "$ref": "#/$defs/schema_name"
+          },
+          "worker_kinds": {
+            "description": "Kinds the client registers the built-in worker under, replacing the default `[\"conformance_echo\"]`. `conformance_echo_peer` is the same worker under a second kind. `conformance_echo_renamed` is the same worker after a safe rename from `conformance_echo`, which it keeps as a kind alias, like Go's `JobArgsWithKindAliases`: it also works jobs of kind `conformance_echo`, so it can't be combined with `conformance_echo`. A conflicting registration is rejected with `invalid_params`.",
+            "items": {
+              "enum": [
+                "conformance_echo",
+                "conformance_echo_peer",
+                "conformance_echo_renamed"
+              ]
+            },
+            "minItems": 1,
+            "type": "array",
+            "uniqueItems": true
+          }
+        },
+        "type": "object",
+        "required": [
+          "client_id"
+        ]
+      },
+      "result": {
+        "additionalProperties": false,
+        "properties": {},
+        "type": "object"
+      }
+    },
+    {
+      "capability": "lifecycle",
+      "description": "Stop a running worker client gracefully or immediately.",
+      "name": "stop",
+      "params": {
+        "additionalProperties": false,
+        "properties": {
+          "cancel": {
+            "type": "boolean"
+          }
+        },
+        "type": "object"
+      },
+      "result": {
+        "additionalProperties": false,
+        "properties": {},
+        "type": "object"
+      }
+    },
+    {
+      "capability": "transactions",
+      "description": "Begin a named transaction.",
+      "name": "tx_begin",
+      "params": {
+        "additionalProperties": false,
+        "properties": {
+          "handle": {
+            "$ref": "#/$defs/handle"
+          }
+        },
+        "type": "object",
+        "required": [
+          "handle"
+        ]
+      },
+      "result": {
+        "additionalProperties": false,
+        "properties": {},
+        "type": "object"
+      }
+    },
+    {
+      "capability": "transactions",
+      "description": "Cancel one job in a transaction.",
+      "name": "tx_cancel",
+      "params": {
+        "additionalProperties": false,
+        "properties": {
+          "handle": {
+            "$ref": "#/$defs/handle"
+          },
+          "id": {
+            "$ref": "#/$defs/job_id"
+          }
+        },
+        "type": "object",
+        "required": [
+          "handle",
+          "id"
+        ]
+      },
+      "result": {
+        "$ref": "#/$defs/job"
+      }
+    },
+    {
+      "capability": "transactions",
+      "description": "Commit and consume a named transaction.",
+      "name": "tx_commit",
+      "params": {
+        "additionalProperties": false,
+        "properties": {
+          "handle": {
+            "$ref": "#/$defs/handle"
+          }
+        },
+        "type": "object",
+        "required": [
+          "handle"
+        ]
+      },
+      "result": {
+        "additionalProperties": false,
+        "properties": {},
+        "type": "object"
+      }
+    },
+    {
+      "capability": "transactions",
+      "description": "Delete one job in a transaction.",
+      "name": "tx_delete",
+      "params": {
+        "additionalProperties": false,
+        "properties": {
+          "handle": {
+            "$ref": "#/$defs/handle"
+          },
+          "id": {
+            "$ref": "#/$defs/job_id"
+          }
+        },
+        "type": "object",
+        "required": [
+          "handle",
+          "id"
+        ]
+      },
+      "result": {
+        "$ref": "#/$defs/job"
+      }
+    },
+    {
+      "capability": "transactions",
+      "description": "Delete jobs with filters in a transaction.",
+      "name": "tx_delete_many",
+      "params": {
+        "additionalProperties": false,
+        "properties": {
+          "all": {
+            "type": "boolean"
+          },
+          "ids": {
+            "items": {
+              "$ref": "#/$defs/job_id"
+            },
+            "type": "array"
+          },
+          "kinds": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "limit": {
+            "minimum": 1,
+            "type": "integer"
+          },
+          "queues": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "states": {
+            "items": {
+              "$ref": "#/$defs/job_state"
+            },
+            "type": "array"
+          },
+          "handle": {
+            "$ref": "#/$defs/handle"
+          }
+        },
+        "type": "object",
+        "required": [
+          "handle"
+        ]
+      },
+      "result": {
+        "$ref": "#/$defs/jobs_result"
+      }
+    },
+    {
+      "capability": "transactions",
+      "description": "Deliberately abort PostgreSQL transaction state.",
+      "name": "tx_fail",
+      "params": {
+        "additionalProperties": false,
+        "properties": {
+          "handle": {
+            "$ref": "#/$defs/handle"
+          }
+        },
+        "type": "object",
+        "required": [
+          "handle"
+        ]
+      },
+      "result": {
+        "additionalProperties": false,
+        "properties": {},
+        "type": "object"
+      }
+    },
+    {
+      "capability": "transactions",
+      "description": "Read one job in a transaction.",
+      "name": "tx_get",
+      "params": {
+        "additionalProperties": false,
+        "properties": {
+          "handle": {
+            "$ref": "#/$defs/handle"
+          },
+          "id": {
+            "$ref": "#/$defs/job_id"
+          }
+        },
+        "type": "object",
+        "required": [
+          "handle",
+          "id"
+        ]
+      },
+      "result": {
+        "$ref": "#/$defs/job"
+      }
+    },
+    {
+      "capability": "transactions",
+      "description": "Insert one job in a transaction.",
+      "name": "tx_insert",
+      "params": {
+        "additionalProperties": false,
+        "properties": {
+          "handle": {
+            "$ref": "#/$defs/handle"
+          },
+          "job": {
+            "additionalProperties": false,
+            "properties": {
+              "behavior": {
+                "description": "Built-in `conformance_echo` worker behavior; empty completes immediately.",
+                "enum": [
+                  "",
+                  "barrier_output",
+                  "barrier_wait",
+                  "cancel",
+                  "cancel_error",
+                  "cancel_panic",
+                  "cooperative_cancel",
+                  "discard",
+                  "error",
+                  "ignored_cancel",
+                  "output",
+                  "panic",
+                  "resumable",
+                  "resumable_cursor",
+                  "resumable_duplicate",
+                  "sleep",
+                  "snooze_once",
+                  "snooze_then_cancel",
+                  "transactional_complete"
+                ]
+              },
+              "duration_ms": {
+                "minimum": 0,
+                "type": "integer"
+              },
+              "message": {
+                "type": "string"
+              },
+              "opts": {
+                "$ref": "#/$defs/insert_opts"
+              }
+            },
+            "type": "object"
+          }
+        },
+        "type": "object",
+        "required": [
+          "handle",
+          "job"
+        ]
+      },
+      "result": {
+        "$ref": "#/$defs/job"
+      }
+    },
+    {
+      "capability": "transactions",
+      "description": "Insert a typed job batch in a caller-managed transaction and return ordered normalized results.",
+      "name": "tx_insert_many",
+      "params": {
+        "additionalProperties": false,
+        "properties": {
+          "handle": {
+            "$ref": "#/$defs/handle"
+          },
+          "jobs": {
+            "items": {
+              "additionalProperties": false,
+              "properties": {
+                "behavior": {
+                  "description": "Built-in `conformance_echo` worker behavior; empty completes immediately.",
+                  "enum": [
+                    "",
+                    "barrier_output",
+                    "barrier_wait",
+                    "cancel",
+                    "cancel_error",
+                    "cancel_panic",
+                    "cooperative_cancel",
+                    "discard",
+                    "error",
+                    "ignored_cancel",
+                    "output",
+                    "panic",
+                    "resumable",
+                    "resumable_cursor",
+                    "resumable_duplicate",
+                    "sleep",
+                    "snooze_once",
+                    "snooze_then_cancel",
+                    "transactional_complete"
+                  ]
+                },
+                "duration_ms": {
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "message": {
+                  "type": "string"
+                },
+                "opts": {
+                  "$ref": "#/$defs/insert_opts"
+                }
+              },
+              "type": "object"
+            },
+            "type": "array"
+          }
+        },
+        "type": "object",
+        "required": [
+          "handle",
+          "jobs"
+        ]
+      },
+      "result": {
+        "additionalProperties": false,
+        "properties": {
+          "results": {
+            "items": {
+              "$ref": "#/$defs/insert_result"
+            },
+            "type": "array"
+          }
+        },
+        "type": "object",
+        "required": [
+          "results"
+        ]
+      }
+    },
+    {
+      "capability": "transactions",
+      "description": "List jobs in a transaction.",
+      "name": "tx_list",
+      "params": {
+        "additionalProperties": false,
+        "properties": {
+          "after": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "direction": {
+            "enum": [
+              "asc",
+              "desc"
+            ]
+          },
+          "ids": {
+            "items": {
+              "$ref": "#/$defs/job_id"
+            },
+            "type": "array"
+          },
+          "kinds": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "limit": {
+            "minimum": 1,
+            "type": "integer"
+          },
+          "metadata": {
+            "type": "object"
+          },
+          "order_by": {
+            "enum": [
+              "finalized_at",
+              "id",
+              "scheduled_at",
+              "time"
+            ]
+          },
+          "priorities": {
+            "items": {
+              "type": "integer"
+            },
+            "type": "array"
+          },
+          "queues": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "states": {
+            "items": {
+              "$ref": "#/$defs/job_state"
+            },
+            "type": "array"
+          },
+          "tags_all": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "tags_any": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "handle": {
+            "$ref": "#/$defs/handle"
+          }
+        },
+        "type": "object",
+        "required": [
+          "handle"
+        ]
+      },
+      "result": {
+        "$ref": "#/$defs/list_result"
+      }
+    },
+    {
+      "capability": "transactions",
+      "description": "Read one persisted queue in a transaction.",
+      "name": "tx_queue_get",
+      "params": {
+        "additionalProperties": false,
+        "properties": {
+          "handle": {
+            "$ref": "#/$defs/handle"
+          },
+          "name": {
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "type": "object",
+        "required": [
+          "handle",
+          "name"
+        ]
+      },
+      "result": {
+        "$ref": "#/$defs/queue"
+      }
+    },
+    {
+      "capability": "transactions",
+      "description": "List persisted queues in a transaction.",
+      "name": "tx_queue_list",
+      "params": {
+        "additionalProperties": false,
+        "properties": {
+          "handle": {
+            "$ref": "#/$defs/handle"
+          },
+          "limit": {
+            "minimum": 1,
+            "type": "integer"
+          }
+        },
+        "type": "object",
+        "required": [
+          "handle"
+        ]
+      },
+      "result": {
+        "additionalProperties": false,
+        "properties": {
+          "queues": {
+            "items": {
+              "$ref": "#/$defs/queue"
+            },
+            "type": "array"
+          }
+        },
+        "type": "object",
+        "required": [
+          "queues"
+        ]
+      }
+    },
+    {
+      "capability": "transactions",
+      "description": "Pause a persisted queue in a transaction.",
+      "name": "tx_queue_pause",
+      "params": {
+        "additionalProperties": false,
+        "properties": {
+          "handle": {
+            "$ref": "#/$defs/handle"
+          },
+          "name": {
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "type": "object",
+        "required": [
+          "handle",
+          "name"
+        ]
+      },
+      "result": {
+        "additionalProperties": false,
+        "properties": {},
+        "type": "object"
+      }
+    },
+    {
+      "capability": "transactions",
+      "description": "Resume a persisted queue in a transaction.",
+      "name": "tx_queue_resume",
+      "params": {
+        "additionalProperties": false,
+        "properties": {
+          "handle": {
+            "$ref": "#/$defs/handle"
+          },
+          "name": {
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "type": "object",
+        "required": [
+          "handle",
+          "name"
+        ]
+      },
+      "result": {
+        "additionalProperties": false,
+        "properties": {},
+        "type": "object"
+      }
+    },
+    {
+      "capability": "transactions",
+      "description": "Update persisted queue metadata in a transaction. Without `metadata` the queue's metadata is unchanged.",
+      "name": "tx_queue_update",
+      "params": {
+        "additionalProperties": false,
+        "properties": {
+          "handle": {
+            "$ref": "#/$defs/handle"
+          },
+          "metadata": {
+            "type": "object"
+          },
+          "name": {
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "type": "object",
+        "required": [
+          "handle",
+          "name"
+        ]
+      },
+      "result": {
+        "$ref": "#/$defs/queue"
+      }
+    },
+    {
+      "capability": "transactions",
+      "description": "Retry one job in a transaction.",
+      "name": "tx_retry",
+      "params": {
+        "additionalProperties": false,
+        "properties": {
+          "handle": {
+            "$ref": "#/$defs/handle"
+          },
+          "id": {
+            "$ref": "#/$defs/job_id"
+          }
+        },
+        "type": "object",
+        "required": [
+          "handle",
+          "id"
+        ]
+      },
+      "result": {
+        "$ref": "#/$defs/job"
+      }
+    },
+    {
+      "capability": "transactions",
+      "description": "Roll back and consume a named transaction.",
+      "name": "tx_rollback",
+      "params": {
+        "additionalProperties": false,
+        "properties": {
+          "handle": {
+            "$ref": "#/$defs/handle"
+          }
+        },
+        "type": "object",
+        "required": [
+          "handle"
+        ]
+      },
+      "result": {
+        "additionalProperties": false,
+        "properties": {},
+        "type": "object"
+      }
+    },
+    {
+      "capability": "transactions",
+      "description": "Update one job in a transaction.",
+      "name": "tx_update",
+      "params": {
+        "additionalProperties": false,
+        "properties": {
+          "handle": {
+            "$ref": "#/$defs/handle"
+          },
+          "id": {
+            "$ref": "#/$defs/job_id"
+          },
+          "output": {
+            "description": "Any JSON value recorded as metadata `output`."
+          }
+        },
+        "type": "object",
+        "required": [
+          "handle",
+          "id"
+        ]
+      },
+      "result": {
+        "$ref": "#/$defs/job"
+      }
+    },
+    {
+      "capability": "unique_jobs",
+      "description": "Calculate a language-neutral unique-key fixture and state mask.",
+      "name": "unique_key",
+      "params": {
+        "additionalProperties": false,
+        "properties": {
+          "args": {
+            "description": "Encoded job arguments. All-args fixtures include non-object values, which must fail with expected_error."
+          },
+          "expected_error": {
+            "description": "Fixture expectation; adapters ignore it.",
+            "enum": [
+              "rejected"
+            ]
+          },
+          "expected_sha256": {
+            "description": "Fixture expectation; adapters ignore it.",
+            "type": "string"
+          },
+          "expected_state_mask": {
+            "description": "Fixture expectation; adapters ignore it.",
+            "type": "integer"
+          },
+          "kind": {
+            "enum": [
+              "conformance_all_args",
+              "conformance_dotted_selected_args",
+              "conformance_numeric_boundaries",
+              "conformance_selected_args",
+              "conformance_simple"
+            ]
+          },
+          "name": {
+            "description": "Fixture name; adapters ignore it.",
+            "type": "string"
+          },
+          "now": {
+            "$ref": "#/$defs/timestamp"
+          },
+          "options": {
+            "additionalProperties": false,
+            "properties": {
+              "by_args": {
+                "type": "boolean"
+              },
+              "by_period_nanos": {
+                "minimum": 0,
+                "type": "integer"
+              },
+              "by_queue": {
+                "type": "boolean"
+              },
+              "by_state": {
+                "items": {
+                  "$ref": "#/$defs/job_state"
+                },
+                "type": "array"
+              },
+              "exclude_kind": {
+                "type": "boolean"
+              }
+            },
+            "type": "object",
+            "required": [
+              "by_args",
+              "by_period_nanos",
+              "by_queue",
+              "exclude_kind"
+            ]
+          },
+          "queue": {
+            "type": "string"
+          },
+          "scheduled_at": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "selected_unique_components": {
+            "description": "Decoded JSON field-name paths for selected argument fixtures.",
+            "items": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "type": "array"
+          },
+          "selected_unique_paths": {
+            "description": "Fixture documentation; adapters ignore it.",
+            "items": {
+              "type": "string"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          }
+        },
+        "type": "object",
+        "required": [
+          "args",
+          "kind",
+          "now",
+          "options",
+          "queue"
+        ]
+      },
+      "result": {
+        "additionalProperties": false,
+        "properties": {
+          "sha256": {
+            "pattern": "^[0-9a-f]{64}$",
+            "type": "string"
+          },
+          "state_mask": {
+            "maximum": 255,
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "type": "object",
+        "required": [
+          "sha256",
+          "state_mask"
+        ]
+      }
+    },
+    {
+      "capability": "job_crud",
+      "description": "Update one job outside a transaction.",
+      "name": "update",
+      "params": {
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "$ref": "#/$defs/job_id"
+          },
+          "output": {
+            "description": "Any JSON value recorded as metadata `output`."
+          }
+        },
+        "type": "object",
+        "required": [
+          "id"
+        ]
+      },
+      "result": {
+        "$ref": "#/$defs/job"
+      }
+    },
+    {
+      "capability": "work",
+      "description": "Wait for a job to reach one of the requested states.",
+      "name": "wait",
+      "params": {
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "$ref": "#/$defs/job_id"
+          },
+          "states": {
+            "items": {
+              "$ref": "#/$defs/job_state"
+            },
+            "type": "array"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id"
+        ]
+      },
+      "result": {
+        "$ref": "#/$defs/job"
+      }
+    },
+    {
+      "capability": "work",
+      "description": "Run one job with a short-lived worker client.",
+      "name": "work",
+      "params": {
+        "additionalProperties": false,
+        "properties": {
+          "client_id": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "id": {
+            "$ref": "#/$defs/job_id"
+          },
+          "schema": {
+            "$ref": "#/$defs/schema_name"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id"
+        ]
+      },
+      "result": {
+        "$ref": "#/$defs/job"
+      }
+    }
+  ],
+  "protocol_revision": 1
+}

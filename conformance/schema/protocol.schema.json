@@ -1,0 +1,51 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "$schema": { "type": "string" },
+    "capabilities": {
+      "additionalProperties": {
+        "enum": ["complete", "in_progress", "not_applicable", "planned"]
+      },
+      "description": "Protocol capabilities. postgres-full-v1 adapters advertise exactly the complete ones.",
+      "type": "object"
+    },
+    "capability_decisions": {
+      "additionalProperties": { "minLength": 1, "type": "string" },
+      "description": "Why each capability that is not complete is planned, in progress, or not applicable.",
+      "type": "object"
+    },
+    "implementations": {
+      "additionalProperties": {
+        "additionalProperties": false,
+        "properties": {
+          "package": { "minLength": 1, "type": "string" },
+          "registry": {
+            "minLength": 1,
+            "pattern": "^[a-z][a-z0-9._-]*$",
+            "type": "string"
+          },
+          "version": { "minLength": 1, "type": "string" }
+        },
+        "required": ["package", "registry", "version"],
+        "type": "object"
+      },
+      "minProperties": 1,
+      "propertyNames": { "pattern": "^[a-z][a-z0-9_-]*$" },
+      "type": "object"
+    },
+    "migration": {
+      "additionalProperties": false,
+      "properties": {
+        "latest": { "minimum": 1, "type": "integer" },
+        "line": { "minLength": 1, "type": "string" }
+      },
+      "required": ["latest", "line"],
+      "type": "object"
+    },
+    "protocol_revision": { "minimum": 1, "type": "integer" }
+  },
+  "required": ["capabilities", "implementations", "migration", "protocol_revision"],
+  "title": "River protocol compatibility manifest",
+  "type": "object"
+}

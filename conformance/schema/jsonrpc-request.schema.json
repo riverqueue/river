@@ -1,0 +1,13 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "id": { "type": ["integer", "string"] },
+    "jsonrpc": { "const": "2.0" },
+    "method": { "minLength": 1, "type": "string" },
+    "params": { "type": "object" }
+  },
+  "required": ["id", "jsonrpc", "method"],
+  "title": "River conformance JSON-RPC request",
+  "type": "object"
+}
