@@ -358,6 +358,41 @@ func TestMixedConformance(t *testing.T) {
 
 		pair.eachAdapter(func(current *adapter) { verifyCompletionBatching(t, observer, current) })
 	})
+	t.Run("mixed_request_resign_terms", func(t *testing.T) {
+		defer scenarios.record(t)
+
+		verifyLeadershipRequestLifecycle(t, observer, goAdapter, candidateAdapter)
+	})
+	t.Run("mixed_leader_failover_both_directions", func(t *testing.T) {
+		defer scenarios.record(t)
+
+		verifyGracefulLeaderFailover(t, pair)
+	})
+	t.Run("leader_election_disabled_both_directions", func(t *testing.T) {
+		defer scenarios.record(t)
+
+		pair.eachDirection(func(disabled, eligible *adapter) { verifyLeaderElectionDisabled(t, disabled, eligible) })
+	})
+	t.Run("listener_backend_disconnect_reconnect", func(t *testing.T) {
+		defer scenarios.record(t)
+
+		verifyListenerReconnect(t, pair)
+	})
+	t.Run("lost_notification_poll_recovery", func(t *testing.T) {
+		defer scenarios.record(t)
+
+		pair.eachDirection(func(inserter, worker *adapter) { verifyLostNotificationPollRecovery(t, inserter, worker) })
+	})
+	t.Run("mixed_skip_locked_competition", func(t *testing.T) {
+		defer scenarios.record(t)
+
+		verifySkipLockedCompetition(t, goAdapter, candidateAdapter)
+	})
+	t.Run("ignored_cancellation_hard_abort", func(t *testing.T) {
+		defer scenarios.record(t)
+
+		verifyIgnoredCancellationHardAbort(t, repositoryRoot, databaseURL, pair)
+	})
 	t.Run("candidate_process_kill_reference_rescue", func(t *testing.T) {
 		defer scenarios.record(t)
 
@@ -367,6 +402,18 @@ func TestMixedConformance(t *testing.T) {
 		defer scenarios.record(t)
 
 		verifyProcessKillCrossEngineRescue(t, repositoryRoot, databaseURL, goAdapter, candidateAdapter)
+	})
+	t.Run("mixed_leader_death_failover_both_directions", func(t *testing.T) {
+		defer scenarios.record(t)
+
+		pair.eachDirection(func(leaderKind, follower *adapter) {
+			verifyLeaderDeathFailover(t, repositoryRoot, databaseURL, leaderKind, follower)
+		})
+	})
+	t.Run("rolling_deployment_same_protocol", func(t *testing.T) {
+		defer scenarios.record(t)
+
+		verifyRollingDeployment(t, repositoryRoot, databaseURL, pair)
 	})
 	t.Run("clock_boundary_scheduling", func(t *testing.T) {
 		defer scenarios.record(t)
@@ -382,6 +429,11 @@ func TestMixedConformance(t *testing.T) {
 		defer scenarios.record(t)
 
 		verifyPoolPressure(t, goAdapter, candidateAdapter)
+	})
+	t.Run("process_kill_restart_and_rescue", func(t *testing.T) {
+		defer scenarios.record(t)
+
+		verifyProcessKillRestartAndRescue(t, repositoryRoot, databaseURL, pair)
 	})
 }
 
