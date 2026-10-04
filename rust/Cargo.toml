@@ -3,6 +3,7 @@ members = [
     "riverqueue",
     "riverqueue-macros",
     "riverqueue-migrate",
+    "riverqueue-test",
 ]
 resolver = "3"
 
