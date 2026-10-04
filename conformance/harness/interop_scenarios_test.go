@@ -4,6 +4,7 @@ package harness_test
 
 import (
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 )
@@ -86,4 +87,91 @@ func verifyUniqueColumnBytes(t *testing.T, goAdapter, candidateAdapter *adapter)
 	params := map[string]any{"message": "not unique"}
 	require.Equal(t, uniqueColumns{}, write(goAdapter, params))
 	require.Equal(t, uniqueColumns{}, write(candidateAdapter, params))
+}
+
+// verifyUniquePeriodicJob has one implementation's leader insert a unique
+// run-on-start periodic job and then requires a later leader of the other
+// implementation to skip its own run-on-start insertion as a duplicate, in
+// both directions. It only skips when both compute the same unique key and
+// states for the periodic job.
+func verifyUniquePeriodicJob(t *testing.T, goAdapter, candidateAdapter *adapter) {
+	t.Helper()
+
+	for _, pair := range []struct {
+		first, second *adapter
+	}{
+		{first: goAdapter, second: candidateAdapter},
+		{first: candidateAdapter, second: goAdapter},
+	} {
+		pair.first.call(t, "reset", map[string]any{}, nil)
+		start := func(leader *adapter) {
+			t.Helper()
+
+			clientID := leader.name + "-periodic-unique"
+			leader.call(t, "start", map[string]any{
+				"client_id": clientID, "instrumented": true, "max_workers": 1,
+				"periodic_run_on_start": true, "periodic_unique": true,
+			}, nil)
+			require.Equal(t, clientID, waitForLeader(t, leader, ""))
+			_ = waitForRuntimeStats(t, leader, func(stats runtimeStats) bool { return stats.PeriodicStarts == 1 })
+		}
+
+		start(pair.first)
+		periodic := waitForPeriodicJob(t, pair.first, "conformance-periodic")
+		pair.first.call(t, "wait", map[string]any{"id": periodic.ID}, &periodic)
+		require.Equal(t, "completed", periodic.State)
+		pair.first.call(t, "stop", map[string]any{}, nil)
+
+		start(pair.second)
+		// Each leader inserts a non-unique marker job after the unique
+		// job, so once the second leader's marker exists, its attempt to
+		// insert the unique job has been made.
+		var periodicJobs []normalizedJob
+		deadline := time.Now().Add(10 * time.Second)
+		for {
+			var listed struct {
+				Jobs []normalizedJob `json:"jobs"`
+			}
+			pair.second.call(t, "list", map[string]any{}, &listed)
+			markers := 0
+			periodicJobs = periodicJobs[:0]
+			for _, job := range listed.Jobs {
+				switch job.Metadata["river:periodic_job_id"] {
+				case "conformance-periodic-marker":
+					markers++
+				case "conformance-periodic":
+					periodicJobs = append(periodicJobs, job)
+				}
+			}
+			if markers == 2 {
+				break
+			}
+			require.True(t, time.Now().Before(deadline), "%s inserted no periodic marker job", pair.second.name)
+			time.Sleep(10 * time.Millisecond)
+		}
+		require.Len(t, periodicJobs, 1, "%s inserted a unique periodic job %s already inserted", pair.second.name, pair.first.name)
+		require.Equal(t, periodic.ID, periodicJobs[0].ID)
+		pair.second.call(t, "stop", map[string]any{}, nil)
+	}
+}
+
+// waitForPeriodicJob waits for a job inserted by the periodic job with the
+// given ID and returns it.
+func waitForPeriodicJob(t *testing.T, observer *adapter, periodicJobID string) normalizedJob {
+	t.Helper()
+
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		var listed struct {
+			Jobs []normalizedJob `json:"jobs"`
+		}
+		observer.call(t, "list", map[string]any{}, &listed)
+		for _, job := range listed.Jobs {
+			if job.Metadata["river:periodic_job_id"] == periodicJobID {
+				return job
+			}
+		}
+		require.True(t, time.Now().Before(deadline), "no job from periodic job %s", periodicJobID)
+		time.Sleep(10 * time.Millisecond)
+	}
 }
