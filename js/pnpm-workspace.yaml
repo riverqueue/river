@@ -2,6 +2,7 @@ packages:
   - "driver/*"
   - "examples/*"
   - "migrate"
+  - "test"
   - "worker-threads"
 
 ignoredBuiltDependencies:
