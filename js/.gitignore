@@ -1,6 +1,7 @@
 node_modules/
 coverage/
 dist/
+docs/api/
 temp/
 */temp/
 examples/prisma/src/generated/prisma/

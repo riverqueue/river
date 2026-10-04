@@ -1,0 +1,23 @@
+{
+  "$schema": "https://typedoc.org/schema.json",
+  "entryPoints": [
+    "src/index.ts",
+    "cli/src/index.ts",
+    "driver/pg/src/index.ts",
+    "driver/prisma/src/index.ts",
+    "driver/sqlite/src/index.ts",
+    "migrate/src/index.ts",
+    "test/src/index.ts",
+    "worker-threads/src/index.ts"
+  ],
+  "entryPointStrategy": "resolve",
+  "excludeInternal": true,
+  "excludePrivate": true,
+  "includeVersion": true,
+  "out": "docs/api",
+  "readme": "docs/README.md",
+  "tsconfig": "tsconfig.docs.json",
+  "validation": {
+    "notExported": false
+  }
+}
