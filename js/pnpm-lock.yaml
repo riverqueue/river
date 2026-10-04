@@ -179,6 +179,12 @@ importers:
         specifier: workspace:0.50.0-alpha.1
         version: link:..
 
+  test:
+    devDependencies:
+      riverqueue:
+        specifier: workspace:0.50.0-alpha.1
+        version: link:..
+
   worker-threads:
     devDependencies:
       '@riverqueue/driver-sqlite':

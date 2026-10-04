@@ -15,6 +15,9 @@
       "@riverqueue/migrate": [
         "./migrate/src/index.ts"
       ],
+      "@riverqueue/test": [
+        "./test/src/index.ts"
+      ],
       "@riverqueue/worker-threads": [
         "./worker-threads/src/index.ts"
       ]
@@ -24,6 +27,7 @@
     "src",
     "driver/*/src",
     "migrate/src",
+    "test/src",
     "worker-threads/src"
   ]
 }
