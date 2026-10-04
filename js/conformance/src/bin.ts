@@ -1,10 +1,18 @@
 #!/usr/bin/env node
 import { DatabaseSync } from "node:sqlite";
+import pg from "pg";
 import { assertRuntimeSupport } from "riverqueue";
 
 import { PortableSqliteAdapter } from "./adapter.js";
+import { InsertOnlyConformanceAdapter } from "./insert-only-adapter.js";
 import {
+  POSTGRES_CONFORMANCE_APPLICATION_NAME,
+  PostgresConformanceAdapter,
+} from "./pg-adapter.js";
+import {
+  loadInsertOnlyProfile,
   loadPortableStorageProfile,
+  loadPostgresFullProfile,
   loadSqliteRuntimeProfile,
 } from "./profile.js";
 import { serveJsonRpc } from "./rpc.js";
@@ -15,12 +23,52 @@ const SHUTDOWN_TIMEOUT_MS = 15_000;
 async function main(): Promise<void> {
   assertRuntimeSupport();
   const backend = process.env.RIVER_CONFORMANCE_DATABASE_KIND ?? "sqlite";
+  if (backend === "postgres") {
+    await runPostgres();
+    return;
+  }
   if (backend !== "sqlite") {
     throw new Error(
       `unsupported conformance backend ${JSON.stringify(backend)}`
     );
   }
   await runSqlite();
+}
+
+async function runPostgres(): Promise<void> {
+  const requestedProfile =
+    process.env.RIVER_CONFORMANCE_PROFILE ?? "postgres-full-v1";
+  if (
+    requestedProfile !== "postgres-full-v1" &&
+    requestedProfile !== "insert-only-v1"
+  ) {
+    throw new Error(
+      `PostgreSQL adapter cannot use profile ${JSON.stringify(requestedProfile)}`
+    );
+  }
+  const databaseURL = requiredDatabaseURL();
+  const pool = new pg.Pool({
+    application_name: POSTGRES_CONFORMANCE_APPLICATION_NAME,
+    connectionString: databaseURL,
+    max: 32,
+  });
+  // The fault-injection contract deliberately terminates idle application
+  // backends. node-postgres surfaces those expected failures on the Pool.
+  pool.on("error", () => undefined);
+  const adapter =
+    requestedProfile === "insert-only-v1"
+      ? new InsertOnlyConformanceAdapter(pool, await loadInsertOnlyProfile())
+      : new PostgresConformanceAdapter(pool, await loadPostgresFullProfile());
+  try {
+    await serveJsonRpc(process.stdin, process.stdout, (method, params) =>
+      adapter.dispatch(method, params)
+    );
+  } finally {
+    await closeWithin(async () => {
+      await adapter.close();
+      await pool.end();
+    });
+  }
 }
 
 async function runSqlite(): Promise<void> {
