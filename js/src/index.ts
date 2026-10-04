@@ -14,6 +14,8 @@ export type {
   QueueOperations,
   TransactionOptions,
 } from "./client.js";
+export { cron } from "./cron.js";
+export type { CronOptions, CronSchedule } from "./cron.js";
 export type {
   ClientDriver,
   DriverCapability,
