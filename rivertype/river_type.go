@@ -341,6 +341,10 @@ type Hook interface {
 }
 
 // HookInsertBegin is an interface to a hook that runs before job insertion.
+// The hook runs synchronously as part of the insert operation and does not
+// receive the insert transaction. With a pool limited to one connection, a
+// hook that queries the same pool can block waiting for the connection held by
+// the insert until its context is canceled.
 type HookInsertBegin interface {
 	Hook
 
@@ -548,6 +552,10 @@ type Plugin interface {
 
 // JobInsertMiddleware provides an interface for middleware that integrations
 // can use to encapsulate common logic around job insertion.
+// Middleware runs synchronously around the insert operation. With a
+// single-connection pool, querying the same pool from middleware can block
+// until the insert releases its connection, which cannot happen until the
+// middleware returns.
 //
 // Implementations should embed river.JobMiddlewareDefaults to inherit default
 // implementations for phases where no custom code is needed, and for forward

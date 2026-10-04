@@ -11,6 +11,13 @@
 // errors is to set the maximum pool size to one connection like
 // `dbPool.SetMaxOpenConns(1)`.
 //
+// With a single-connection pool, insert hooks and middleware must not query
+// the same pool while an insert is running: the insert holds its connection
+// until they return, so their query can wait indefinitely for that connection.
+// Likewise, application code that already holds a transaction should use
+// `Client.InsertTx` or `Client.InsertManyTx` with that transaction instead of
+// `Client.Insert` or `Client.InsertMany`.
+//
 // A known deficiency in this driver compared to Postgres is that due to
 // limitations in sqlc, it performs operations like completion and `InsertMany`
 // one row at a time instead of in batches. This means that it's slower than the

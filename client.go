@@ -1890,6 +1890,10 @@ var errNoDriverDBPool = errors.New("driver must have non-nil database pool to us
 // provided context is used for the underlying Postgres insert and can be used
 // to cancel the operation or apply a timeout.
 //
+// If the application already holds a transaction on a pool limited to one
+// connection, use InsertTx with that transaction instead; Insert opens its own
+// transaction and waits for a pool connection.
+//
 //	jobRow, err := client.Insert(insertCtx, MyArgs{}, nil)
 //	if err != nil {
 //		// handle error
