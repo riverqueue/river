@@ -35,7 +35,7 @@
   "devDependencies": {
     "@prisma/client": "7.9.1",
     "prisma": "7.9.1",
-    "typescript": "^5.8.0"
+    "typescript": "^6.0.3"
   },
   "keywords": [
     "river",

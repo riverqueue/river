@@ -1,0 +1,18 @@
+{
+  "extends": "./tsconfig.base.json",
+  "compilerOptions": {
+    "noEmit": true,
+    "paths": {
+      "@riverqueue/driver-pg": [
+        "./driver/pg/src/index.ts"
+      ],
+      "@riverqueue/driver-prisma": [
+        "./driver/prisma/src/index.ts"
+      ]
+    }
+  },
+  "include": [
+    "src",
+    "driver/*/src"
+  ]
+}
