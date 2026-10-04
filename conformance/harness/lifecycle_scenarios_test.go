@@ -100,6 +100,130 @@ func verifyProcessKillCrossEngineRescue(t *testing.T, root, databaseURL string, 
 	recovery.call(t, "stop", map[string]any{}, nil)
 }
 
+// verifyLeaderDeathFailover kills the leading process of one implementation
+// and requires the other implementation to take over. Both run the same
+// run-on-start periodic job with instrumentation, so the enqueued periodic
+// jobs and each engine's periodic-enqueuer starts show that exactly one
+// engine runs leader-only maintenance in each term.
+func verifyLeaderDeathFailover(t *testing.T, root, databaseURL string, leaderKind, follower *adapter) {
+	t.Helper()
+
+	periodicFilter := map[string]any{"metadata": map[string]any{"river:periodic_job_id": "conformance-periodic"}}
+	follower.call(t, "reset", map[string]any{}, nil)
+	leaderID := leaderKind.spec.Implementation + "-dying-leader"
+	leader := startDisposable(t, root, databaseURL, leaderID, leaderKind)
+	leader.call(t, "start", map[string]any{
+		"client_id": leaderID, "instrumented": true, "max_workers": 1, "periodic_run_on_start": true,
+	}, nil)
+	require.Equal(t, leaderID, waitForLeader(t, follower, ""))
+	waitForRuntimeStats(t, leader, func(stats runtimeStats) bool { return stats.PeriodicStarts == 1 })
+	waitForListedJobCount(t, follower, periodicFilter, 1)
+
+	followerID := follower.spec.Implementation + "-surviving-follower"
+	follower.call(t, "start", map[string]any{
+		"client_id": followerID, "instrumented": true, "max_workers": 1, "periodic_run_on_start": true,
+	}, nil)
+	// Completing a job gives a follower that wrongly started leader-only
+	// maintenance time to show it before the checks below.
+	var marker normalizedJob
+	follower.call(t, "insert", map[string]any{"message": "follower running"}, &marker)
+	follower.call(t, "wait", map[string]any{"id": marker.ID}, &marker)
+	stats := waitForRuntimeStats(t, follower, func(runtimeStats) bool { return true })
+	require.Zero(t, stats.PeriodicStarts, "a follower ran the leader-only periodic enqueuer")
+	require.Equal(t, leaderID, readLeader(t, follower).LeaderID)
+	waitForListedJobCount(t, follower, periodicFilter, 1)
+
+	leader.kill(t)
+	// The dead leader cannot resign; expiring its lease stands in for the
+	// TTL running out.
+	follower.call(t, "fault_expire_leader", map[string]any{}, nil)
+	require.Equal(t, followerID, waitForLeader(t, follower, leaderID))
+	waitForRuntimeStats(t, follower, func(stats runtimeStats) bool { return stats.PeriodicStarts == 1 })
+	periodic := waitForListedJobCount(t, follower, periodicFilter, 2)
+	for _, job := range periodic {
+		require.Equal(t, true, job.Metadata["periodic"])
+	}
+	// The count stays at one periodic job per term after later work.
+	follower.call(t, "insert", map[string]any{"message": "after takeover"}, &marker)
+	follower.call(t, "wait", map[string]any{"id": marker.ID}, &marker)
+	waitForListedJobCount(t, follower, periodicFilter, 2)
+	require.Equal(t, followerID, readLeader(t, follower).LeaderID)
+	follower.call(t, "stop", map[string]any{}, nil)
+}
+
+// verifyRollingDeployment replaces every engine's process one at a time
+// while both implementations keep inserting and working jobs, then requires
+// every job to complete exactly once. The engines share a protocol revision
+// but run as independently restarted processes, which is the version skew
+// a rolling deployment of mixed implementations produces.
+func verifyRollingDeployment(t *testing.T, root, databaseURL string, pair mixedPair) {
+	t.Helper()
+
+	const jobsPerStep = 20
+	pair.reference.call(t, "reset", map[string]any{}, nil)
+	type deployment struct {
+		adapter *adapter
+		kind    *adapter
+		version int
+	}
+	deployments := []*deployment{
+		{adapter: startDisposable(t, root, databaseURL, "go-rolling-0", pair.reference), kind: pair.reference},
+		{adapter: startDisposable(t, root, databaseURL, pair.candidateSpec.Implementation+"-rolling-0", pair.candidate), kind: pair.candidate},
+	}
+	clientID := func(current *deployment) string {
+		return fmt.Sprintf("%s-rolling-%d", current.kind.spec.Implementation, current.version)
+	}
+	for _, current := range deployments {
+		current.adapter.call(t, "start", map[string]any{"client_id": clientID(current), "max_workers": 4}, nil)
+	}
+	var ids []int64
+	insertBatch := func(step string) {
+		for index := range jobsPerStep {
+			inserter := deployments[index%len(deployments)].adapter
+			var job normalizedJob
+			inserter.call(t, "insert", map[string]any{
+				"behavior": "sleep", "duration_ms": 20, "message": fmt.Sprintf("rolling %s %d", step, index),
+				"opts": map[string]any{"tags": []string{"rolling_deployment"}},
+			}, &job)
+			ids = append(ids, job.ID)
+		}
+	}
+	insertBatch("initial")
+	for _, current := range deployments {
+		// Stop the old process gracefully, insert while it is gone, then
+		// bring up a new process of the same implementation.
+		current.adapter.call(t, "stop", map[string]any{}, nil)
+		insertBatch(fmt.Sprintf("without-%s-%d", current.kind.spec.Implementation, current.version))
+		current.version++
+		name := fmt.Sprintf("%s-rolling-%d", current.kind.spec.Implementation, current.version)
+		current.adapter = startDisposable(t, root, databaseURL, name, current.kind)
+		current.adapter.call(t, "start", map[string]any{"client_id": clientID(current), "max_workers": 4}, nil)
+		insertBatch(fmt.Sprintf("with-%s-%d", current.kind.spec.Implementation, current.version))
+	}
+
+	completed := waitForListedJobCountWithin(t, pair.reference, map[string]any{
+		"limit": len(ids), "states": []string{"completed"}, "tags_all": []string{"rolling_deployment"},
+	}, len(ids), 30*time.Second)
+	require.ElementsMatch(t, ids, jobIDs(completed))
+	workers := make(map[string]int)
+	for _, job := range completed {
+		require.Equal(t, 1, job.Attempt, "job %d ran more than once", job.ID)
+		require.Len(t, job.AttemptedBy, 1)
+		require.Empty(t, job.Errors)
+		workers[job.AttemptedBy[0]]++
+	}
+	t.Logf("rolling deployment work split: %v", workers)
+	for _, current := range deployments {
+		require.Positive(t, workers[clientID(current)], "%s did no work after its replacement", clientID(current))
+	}
+	leader := waitForLeader(t, pair.reference, "")
+	require.Contains(t, []string{clientID(deployments[0]), clientID(deployments[1])}, leader,
+		"leadership must end with a replacement process")
+	for _, current := range deployments {
+		current.adapter.call(t, "stop", map[string]any{}, nil)
+	}
+}
+
 // verifyClockBoundaries checks scheduling boundaries across implementations:
 // a job scheduled in the future is never attempted before its time, and a
 // snooze no longer than the scheduler interval leaves the job available

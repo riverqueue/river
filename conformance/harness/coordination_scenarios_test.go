@@ -3,6 +3,7 @@
 package harness_test
 
 import (
+	"encoding/json"
 	"fmt"
 	"slices"
 	"strings"
@@ -356,6 +357,377 @@ func verifyTransactionalNotificationWakeups(t *testing.T, observer *postgresObse
 			pair.worker.call(t, "stop", map[string]any{}, nil)
 		}
 	}
+}
+
+// verifyLeadershipRequestLifecycle requests resignation from each
+// implementation, directly and in transactions, while the other leads. On
+// PostgreSQL the harness also listens to the raw leadership channel to prove
+// a rolled-back request publishes nothing.
+func verifyLeadershipRequestLifecycle(t *testing.T, observer *postgresObserver, first, second *adapter) {
+	t.Helper()
+
+	for _, pair := range []struct {
+		leader    *adapter
+		requester *adapter
+	}{
+		{leader: first, requester: second},
+		{leader: second, requester: first},
+	} {
+		pair.leader.call(t, "reset", map[string]any{}, nil)
+		pair.leader.call(t, "start", map[string]any{
+			"client_id": pair.leader.name + "-resign-lifecycle", "max_workers": 1,
+		}, nil)
+		initial := waitForLeaderTerm(t, pair.leader, "")
+		require.Equal(t, pair.leader.name+"-resign-lifecycle", initial.LeaderID)
+
+		pair.requester.call(t, "request_resign", map[string]any{}, nil)
+		afterDirect := waitForLeaderTerm(t, pair.leader, initial.ElectedAt)
+
+		var listener *postgresNotificationListener
+		if observer != nil {
+			listener = observer.listen(t, observer.currentSchema(t)+".river_leadership")
+		}
+		rollbackHandle := pair.requester.name + "-resign-rollback"
+		pair.requester.call(t, "tx_begin", map[string]any{"handle": rollbackHandle}, nil)
+		pair.requester.call(t, "request_resign", map[string]any{"handle": rollbackHandle}, nil)
+		pair.requester.call(t, "tx_rollback", map[string]any{"handle": rollbackHandle}, nil)
+		if listener != nil {
+			require.Empty(t, listener.receiveUntilMarker(t, observer, rollbackHandle+"-marker"),
+				"rolled-back resignation request published a notification")
+		}
+		require.Equal(t, afterDirect.ElectedAt, readLeader(t, pair.leader).ElectedAt)
+
+		commitHandle := pair.requester.name + "-resign-commit"
+		pair.requester.call(t, "tx_begin", map[string]any{"handle": commitHandle}, nil)
+		pair.requester.call(t, "request_resign", map[string]any{"handle": commitHandle}, nil)
+		pair.requester.call(t, "tx_commit", map[string]any{"handle": commitHandle}, nil)
+		if listener != nil {
+			// The leader may already have answered with a resigned
+			// notification; only resignation requests are counted.
+			requests := 0
+			for _, payload := range listener.receiveUntilMarker(t, observer, commitHandle+"-marker") {
+				var notification struct {
+					Action string `json:"action"`
+				}
+				require.NoError(t, json.Unmarshal([]byte(payload), &notification))
+				if notification.Action == "request_resign" {
+					requests++
+				}
+			}
+			require.Equal(t, 1, requests, "committed resignation request was not published exactly once")
+		}
+		_ = waitForLeaderTerm(t, pair.leader, afterDirect.ElectedAt)
+		pair.leader.call(t, "stop", map[string]any{}, nil)
+	}
+}
+
+// verifyGracefulLeaderFailover moves leadership between the reference and the
+// candidate with resignation requests and graceful stops in both directions,
+// requiring both implementations to agree on the single current leader.
+func verifyGracefulLeaderFailover(t *testing.T, pair mixedPair) {
+	t.Helper()
+
+	goID := "go-mixed-worker"
+	candidateID := pair.candidateSpec.Implementation + "-mixed-worker"
+	pair.reference.call(t, "reset", map[string]any{}, nil)
+	pair.reference.call(t, "start", map[string]any{"client_id": goID, "max_workers": 2}, nil)
+	pair.candidate.call(t, "start", map[string]any{"client_id": candidateID, "max_workers": 2}, nil)
+	firstTerm := waitForLeaderTerm(t, pair.reference, "")
+	pair.reference.call(t, "request_resign", map[string]any{}, nil)
+	secondTerm := waitForLeaderTerm(t, pair.reference, firstTerm.ElectedAt)
+	pair.candidate.call(t, "request_resign", map[string]any{}, nil)
+	thirdTerm := waitForLeaderTerm(t, pair.candidate, secondTerm.ElectedAt)
+	require.Equal(t, thirdTerm, readLeader(t, pair.reference), "implementations disagree about the leader")
+
+	leaderAdapter, leaderID := pair.reference, goID
+	followerAdapter, followerID := pair.candidate, candidateID
+	if thirdTerm.LeaderID == candidateID {
+		leaderAdapter, leaderID = pair.candidate, candidateID
+		followerAdapter, followerID = pair.reference, goID
+	} else {
+		require.Equal(t, goID, thirdTerm.LeaderID)
+	}
+	leaderAdapter.call(t, "stop", map[string]any{}, nil)
+	require.Equal(t, followerID, waitForLeader(t, followerAdapter, leaderID))
+	leaderAdapter.call(t, "start", map[string]any{"client_id": leaderID, "max_workers": 2}, nil)
+	followerAdapter.call(t, "stop", map[string]any{}, nil)
+	require.Equal(t, leaderID, waitForLeader(t, leaderAdapter, followerID))
+	require.Equal(t, readLeader(t, leaderAdapter), readLeader(t, followerAdapter))
+	leaderAdapter.call(t, "stop", map[string]any{}, nil)
+}
+
+// verifyLeaderElectionDisabled starts a client with leader election disabled
+// alongside an eligible client of another implementation. The disabled
+// client must reject periodic jobs, work the periodic job the eligible
+// leader enqueues into its queue, run no leader-only maintenance, and never
+// become leader, including after the eligible leader stops and after the
+// disabled client restarts. Where the implementation allows it, the disabled
+// client uses a short election interval, so one that still took part in
+// elections would become leader within the scenario.
+func verifyLeaderElectionDisabled(t *testing.T, disabled, eligible *adapter) {
+	t.Helper()
+
+	// SQLite can't filter job lists by metadata, so periodic jobs are
+	// selected from the full list.
+	periodicJobs := func() []normalizedJob {
+		var result struct {
+			Jobs []normalizedJob `json:"jobs"`
+		}
+		disabled.call(t, "list", map[string]any{"limit": 100}, &result)
+		var periodic []normalizedJob
+		for _, job := range result.Jobs {
+			if job.Metadata["river:periodic_job_id"] == "conformance-periodic" {
+				periodic = append(periodic, job)
+			}
+		}
+		return periodic
+	}
+	disabledID := disabled.spec.Implementation + "-election-disabled"
+	eligibleID := eligible.spec.Implementation + "-election-eligible"
+	disabledParams := map[string]any{
+		"client_id": disabledID, "instrumented": true, "leader_election_disabled": true, "max_workers": 1,
+	}
+	fastElection := map[string]any{"elect_interval_ms": 20}
+	disabled.call(t, "reset", map[string]any{}, nil)
+
+	disabled.requireCallError(t, "start", map[string]any{
+		"client_id": disabledID, "leader_election_disabled": true, "periodic_run_on_start": true,
+	}, "rejected")
+	disabled.startWithTuning(t, disabledParams, fastElection)
+	var marker normalizedJob
+	eligible.call(t, "insert", map[string]any{"message": "before an eligible client starts"}, &marker)
+	disabled.call(t, "wait", map[string]any{"id": marker.ID}, &marker)
+	require.Equal(t, []string{disabledID}, marker.AttemptedBy)
+	require.Empty(t, readLeader(t, eligible).LeaderID, "a client with leader election disabled became leader")
+
+	// The eligible client works a separate queue, so only the disabled
+	// client works the periodic job it enqueues into the default queue.
+	eligible.startWithTuning(t, map[string]any{
+		"client_id": eligibleID, "instrumented": true, "max_workers": 1,
+		"periodic_run_on_start": true, "queue": "election_eligible",
+	}, fastElection)
+	require.Equal(t, eligibleID, waitForLeader(t, disabled, ""))
+	waitForRuntimeStats(t, eligible, func(stats runtimeStats) bool { return stats.PeriodicStarts == 1 })
+	deadline := time.Now().Add(5 * time.Second)
+	for len(periodicJobs()) == 0 && time.Now().Before(deadline) {
+		time.Sleep(10 * time.Millisecond)
+	}
+	enqueued := periodicJobs()
+	require.Len(t, enqueued, 1, "the eligible leader did not enqueue its periodic job")
+	periodic := enqueued[0]
+	disabled.call(t, "wait", map[string]any{"id": periodic.ID}, &periodic)
+	require.Equal(t, "completed", periodic.State)
+	require.Equal(t, []string{disabledID}, periodic.AttemptedBy)
+	stats := waitForRuntimeStats(t, disabled, func(runtimeStats) bool { return true })
+	require.Zero(t, stats.PeriodicStarts, "a client with leader election disabled ran the periodic enqueuer")
+
+	eligible.call(t, "stop", map[string]any{}, nil)
+	for _, step := range []string{"after the eligible leader stops", "after a restart"} {
+		if step == "after a restart" {
+			disabled.call(t, "stop", map[string]any{}, nil)
+			disabled.startWithTuning(t, disabledParams, fastElection)
+		}
+		eligible.call(t, "insert", map[string]any{"message": step}, &marker)
+		disabled.call(t, "wait", map[string]any{"id": marker.ID}, &marker)
+		require.Equal(t, "completed", marker.State)
+		require.Equal(t, []string{disabledID}, marker.AttemptedBy)
+		require.Empty(t, readLeader(t, eligible).LeaderID, "a client with leader election disabled became leader %s", step)
+	}
+	stats = waitForRuntimeStats(t, disabled, func(runtimeStats) bool { return true })
+	require.Zero(t, stats.PeriodicStarts, "a client with leader election disabled ran the periodic enqueuer")
+	require.Len(t, periodicJobs(), 1)
+	disabled.call(t, "stop", map[string]any{}, nil)
+}
+
+// verifyListenerReconnect terminates each worker's listener backend and then
+// all of its database connections, and requires a notification round trip
+// from the other implementation after each fault.
+func verifyListenerReconnect(t *testing.T, pair mixedPair) {
+	t.Helper()
+
+	pair.eachDirection(func(worker, controller *adapter) {
+		worker.call(t, "reset", map[string]any{}, nil)
+		worker.call(t, "start", map[string]any{
+			"client_id": worker.name + "-reconnect", "fetch_poll_interval_ms": 60_000, "max_workers": 1,
+		}, nil)
+		waitForListener(t, worker)
+		requireNotificationRoundTrip(t, controller, worker, "before_fault")
+
+		var disconnected struct {
+			Count int `json:"count"`
+		}
+		worker.call(t, "fault_disconnect_listeners", map[string]any{}, &disconnected)
+		require.GreaterOrEqual(t, disconnected.Count, 1)
+		waitForListener(t, worker)
+		requireNotificationRoundTrip(t, controller, worker, "after_listener_fault")
+
+		controller.call(t, "fault_disconnect_application", map[string]any{
+			"application_name": worker.applicationName,
+		}, &disconnected)
+		require.GreaterOrEqual(t, disconnected.Count, 1)
+		waitForListener(t, worker)
+		requireNotificationRoundTrip(t, controller, worker, "after_application_fault")
+		worker.call(t, "stop", map[string]any{}, nil)
+	})
+}
+
+// requireNotificationRoundTrip requires an insert by the controller to wake a
+// worker that polls once a minute. A listener that has just reconnected may
+// miss a notification sent before it resubscribed, so inserts repeat until
+// one wakes the worker or the bound elapses.
+func requireNotificationRoundTrip(t *testing.T, controller, worker *adapter, label string) {
+	t.Helper()
+
+	tag := "round_trip_" + label
+	deadline := time.Now().Add(10 * time.Second)
+	for attempt := 0; time.Now().Before(deadline); attempt++ {
+		var inserted normalizedJob
+		controller.call(t, "insert", map[string]any{
+			"message": fmt.Sprintf("%s %d", label, attempt), "opts": map[string]any{"tags": []string{tag}},
+		}, &inserted)
+		attemptDeadline := time.Now().Add(500 * time.Millisecond)
+		for time.Now().Before(attemptDeadline) {
+			var listed struct {
+				Jobs []normalizedJob `json:"jobs"`
+			}
+			worker.call(t, "list", map[string]any{"states": []string{"completed"}, "tags_all": []string{tag}}, &listed)
+			if len(listed.Jobs) > 0 {
+				return
+			}
+			time.Sleep(25 * time.Millisecond)
+		}
+	}
+	t.Fatalf("%s: %s inserts never woke %s's listener", label, controller.name, worker.name)
+}
+
+// verifyLostNotificationPollRecovery inserts without a notification and
+// requires the worker's poll loop to find the job.
+func verifyLostNotificationPollRecovery(t *testing.T, inserter, worker *adapter) {
+	t.Helper()
+
+	worker.call(t, "reset", map[string]any{}, nil)
+	worker.call(t, "start", map[string]any{
+		"client_id": worker.name + "-poll-recovery", "fetch_poll_interval_ms": 250, "max_workers": 1,
+	}, nil)
+	var notificationLost normalizedJob
+	inserter.call(t, "raw_insert_no_notify", map[string]any{"message": "poll recovery"}, &notificationLost)
+	worker.call(t, "wait", map[string]any{"id": notificationLost.ID}, &notificationLost)
+	require.Equal(t, "completed", notificationLost.State)
+	require.Equal(t, []string{worker.name + "-poll-recovery"}, notificationLost.AttemptedBy)
+	worker.call(t, "stop", map[string]any{}, nil)
+}
+
+// verifySkipLockedCompetition has both implementations compete for a burst
+// of short jobs and requires every job to run exactly once.
+func verifySkipLockedCompetition(t *testing.T, goAdapter, candidateAdapter *adapter) {
+	t.Helper()
+
+	const jobsPerInserter = 150
+	goID, candidateID := goAdapter.name+"-competitor", candidateAdapter.name+"-competitor"
+	goAdapter.call(t, "reset", map[string]any{}, nil)
+	goAdapter.call(t, "start", map[string]any{"client_id": goID, "max_workers": 8}, nil)
+	candidateAdapter.call(t, "start", map[string]any{"client_id": candidateID, "max_workers": 8}, nil)
+	for _, inserter := range []*adapter{goAdapter, candidateAdapter} {
+		jobs := make([]map[string]any, jobsPerInserter)
+		for index := range jobs {
+			jobs[index] = map[string]any{
+				"behavior": "sleep", "duration_ms": 5,
+				"message": fmt.Sprintf("competition %s %d", inserter.name, index),
+				"opts":    map[string]any{"tags": []string{"competition"}},
+			}
+		}
+		var inserted struct {
+			Results []normalizedInsertResult `json:"results"`
+		}
+		inserter.call(t, "insert_many", map[string]any{"jobs": jobs}, &inserted)
+		require.Len(t, inserted.Results, jobsPerInserter)
+	}
+	worked := waitForListedJobCountWithin(t, goAdapter, map[string]any{
+		"limit": 2 * jobsPerInserter, "states": []string{"completed"}, "tags_all": []string{"competition"},
+	}, 2*jobsPerInserter, 30*time.Second)
+	perWorker := make(map[string]int)
+	for _, job := range worked {
+		require.Equal(t, 1, job.Attempt, "job %d ran more than once", job.ID)
+		require.Len(t, job.AttemptedBy, 1)
+		require.Empty(t, job.Errors)
+		perWorker[job.AttemptedBy[0]]++
+	}
+	require.Positive(t, perWorker[goID], "Go worker claimed no jobs")
+	require.Positive(t, perWorker[candidateID], "candidate worker claimed no jobs")
+	require.Len(t, perWorker, 2)
+	t.Logf("competition split: %v", perWorker)
+	goAdapter.call(t, "stop", map[string]any{}, nil)
+	candidateAdapter.call(t, "stop", map[string]any{}, nil)
+}
+
+// verifyIgnoredCancellationHardAbort hard-stops a disposable candidate
+// process whose worker ignores cancellation. The job gets the stuck threshold
+// to respond, and is then aborted, which fails its attempt: the attempt
+// counts, its error is recorded, and the job follows the retry path. Go
+// cannot abort a goroutine that ignores its context, so this scenario
+// exercises the candidate's runtime only.
+func verifyIgnoredCancellationHardAbort(t *testing.T, repositoryRoot, databaseURL string, pair mixedPair) {
+	t.Helper()
+
+	pair.reference.call(t, "reset", map[string]any{}, nil)
+	stuck := startCandidateAdapter(t, repositoryRoot, databaseURL, "candidate-stuck", pair.candidateSpec, pair.candidateSpec.RestartCommand)
+	stuckClientID := pair.candidateSpec.Implementation + "-stuck-worker"
+	stuck.call(t, "start", map[string]any{
+		"client_id": stuckClientID, "job_stuck_threshold_ms": 100, "max_workers": 1, "queue": "ignored",
+	}, nil)
+	var stuckJob normalizedJob
+	pair.reference.call(t, "insert", map[string]any{
+		"behavior": "ignored_cancel",
+		"message":  "ignored cancellation",
+		"opts":     map[string]any{"queue": "ignored"},
+	}, &stuckJob)
+	pair.reference.call(t, "wait", map[string]any{
+		"id": stuckJob.ID, "states": []string{"running"},
+	}, &stuckJob)
+	stuck.call(t, "stop", map[string]any{"cancel": true}, nil)
+	pair.reference.call(t, "get", map[string]any{"id": stuckJob.ID}, &stuckJob)
+	require.Contains(t, []string{"available", "retryable"}, stuckJob.State)
+	require.Equal(t, 1, stuckJob.Attempt)
+	require.Len(t, stuckJob.Errors, 1)
+	require.Equal(t, 1, stuckJob.Errors[0].Attempt)
+	require.NotEmpty(t, stuckJob.Errors[0].Error)
+}
+
+// verifyProcessKillRestartAndRescue kills a candidate process mid-attempt and
+// requires a restarted candidate process to rescue and complete the job.
+func verifyProcessKillRestartAndRescue(t *testing.T, repositoryRoot, databaseURL string, pair mixedPair) {
+	t.Helper()
+
+	pair.reference.call(t, "reset", map[string]any{}, nil)
+	crashing := startCandidateAdapter(t, repositoryRoot, databaseURL, "candidate-crashing", pair.candidateSpec, pair.candidateSpec.RestartCommand)
+	crashingClientID := pair.candidateSpec.Implementation + "-crashing-worker"
+	crashing.call(t, "start", map[string]any{
+		"client_id": crashingClientID, "max_workers": 1,
+	}, nil)
+	var crashJob normalizedJob
+	pair.reference.call(t, "insert", map[string]any{
+		"behavior": "sleep", "duration_ms": 1_000, "message": "process death rescue",
+	}, &crashJob)
+	pair.reference.call(t, "wait", map[string]any{
+		"id": crashJob.ID, "states": []string{"running"},
+	}, &crashJob)
+	crashing.kill(t)
+	pair.reference.call(t, "fault_expire_leader", map[string]any{}, nil)
+
+	recovery := startCandidateAdapter(t, repositoryRoot, databaseURL, "candidate-recovery", pair.candidateSpec, pair.candidateSpec.RestartCommand)
+	recoveryClientID := pair.candidateSpec.Implementation + "-recovery-worker"
+	recovery.startWithTuning(t, map[string]any{
+		"client_id":       recoveryClientID,
+		"job_timeout_ms":  1_500,
+		"max_workers":     1,
+		"rescue_after_ms": 1_500,
+	}, map[string]any{"elect_interval_ms": 20, "rescuer_interval_ms": 20, "scheduler_interval_ms": 20})
+	recovery.call(t, "wait", map[string]any{"id": crashJob.ID}, &crashJob)
+	require.Equal(t, "completed", crashJob.State)
+	require.Equal(t, 2, crashJob.Attempt)
+	require.Equal(t, []string{crashingClientID, recoveryClientID}, crashJob.AttemptedBy)
+	require.EqualValues(t, 1, crashJob.Metadata["river:rescue_count"])
+	recovery.call(t, "stop", map[string]any{}, nil)
 }
 
 // verifyClaimOrder checks the order in which a client claims available
