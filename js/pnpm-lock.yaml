@@ -139,6 +139,75 @@ importers:
         specifier: workspace:0.50.0-alpha.1
         version: link:../..
 
+  examples/graceful-shutdown:
+    dependencies:
+      '@riverqueue/driver-sqlite':
+        specifier: workspace:*
+        version: link:../../driver/sqlite
+      '@riverqueue/migrate':
+        specifier: workspace:*
+        version: link:../../migrate
+      riverqueue:
+        specifier: workspace:*
+        version: link:../..
+      zod:
+        specifier: ^4.6.5
+        version: 4.6.5
+    devDependencies:
+      '@types/node':
+        specifier: ^26.1.1
+        version: 26.1.1
+      typescript:
+        specifier: ^6.0.3
+        version: 6.0.3
+
+  examples/hooks-metrics:
+    dependencies:
+      '@riverqueue/driver-sqlite':
+        specifier: workspace:*
+        version: link:../../driver/sqlite
+      '@riverqueue/migrate':
+        specifier: workspace:*
+        version: link:../../migrate
+      riverqueue:
+        specifier: workspace:*
+        version: link:../..
+      zod:
+        specifier: ^4.6.5
+        version: 4.6.5
+    devDependencies:
+      '@types/node':
+        specifier: ^26.1.1
+        version: 26.1.1
+      typescript:
+        specifier: ^6.0.3
+        version: 6.0.3
+
+  examples/mixed-language:
+    dependencies:
+      '@riverqueue/driver-pg':
+        specifier: workspace:*
+        version: link:../../driver/pg
+      pg:
+        specifier: ^8.22.0
+        version: 8.22.0
+      riverqueue:
+        specifier: workspace:*
+        version: link:../..
+      zod:
+        specifier: ^4.6.5
+        version: 4.6.5
+    devDependencies:
+      '@types/node':
+        specifier: ^26.1.1
+        version: 26.1.1
+      '@types/pg':
+        specifier: ^8.20.0
+        version: 8.20.0
+      typescript:
+        specifier: ^6.0.3
+        version: 6.0.3
+
   examples/node-postgres:
     dependencies:
       '@riverqueue/driver-pg':
@@ -159,6 +228,34 @@ importers:
         version: 26.1.1
       '@types/pg':
         specifier: ^8.11.0
+        version: 8.20.0
+      typescript:
+        specifier: ^6.0.3
+        version: 6.0.3
+
+  examples/pg-worker:
+    dependencies:
+      '@riverqueue/driver-pg':
+        specifier: workspace:*
+        version: link:../../driver/pg
+      '@riverqueue/migrate':
+        specifier: workspace:*
+        version: link:../../migrate
+      pg:
+        specifier: ^8.22.0
+        version: 8.22.0
+      riverqueue:
+        specifier: workspace:*
+        version: link:../..
+      zod:
+        specifier: ^4.6.5
+        version: 4.6.5
+    devDependencies:
+      '@types/node':
+        specifier: ^26.1.1
+        version: 26.1.1
+      '@types/pg':
+        specifier: ^8.20.0
         version: 8.20.0
       typescript:
         specifier: ^6.0.3
@@ -188,6 +285,53 @@ importers:
       prisma:
         specifier: 7.9.1
         version: 7.9.1(@types/node@26.1.1)(@types/react@19.2.18)(magicast@0.5.5)(react-dom@19.2.8(react@19.2.8))(react@19.2.8)(typescript@6.0.3)
+      typescript:
+        specifier: ^6.0.3
+        version: 6.0.3
+
+  examples/sqlite-worker:
+    dependencies:
+      '@riverqueue/driver-sqlite':
+        specifier: workspace:*
+        version: link:../../driver/sqlite
+      '@riverqueue/migrate':
+        specifier: workspace:*
+        version: link:../../migrate
+      riverqueue:
+        specifier: workspace:*
+        version: link:../..
+      zod:
+        specifier: ^4.6.5
+        version: 4.6.5
+    devDependencies:
+      '@types/node':
+        specifier: ^26.1.1
+        version: 26.1.1
+      typescript:
+        specifier: ^6.0.3
+        version: 6.0.3
+
+  examples/worker-thread-cpu:
+    dependencies:
+      '@riverqueue/driver-sqlite':
+        specifier: workspace:*
+        version: link:../../driver/sqlite
+      '@riverqueue/migrate':
+        specifier: workspace:*
+        version: link:../../migrate
+      '@riverqueue/worker-threads':
+        specifier: workspace:*
+        version: link:../../worker-threads
+      riverqueue:
+        specifier: workspace:*
+        version: link:../..
+      zod:
+        specifier: ^4.6.5
+        version: 4.6.5
+    devDependencies:
+      '@types/node':
+        specifier: ^26.1.1
+        version: 26.1.1
       typescript:
         specifier: ^6.0.3
         version: 6.0.3
