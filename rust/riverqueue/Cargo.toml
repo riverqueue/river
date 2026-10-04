@@ -49,6 +49,10 @@ tracing-subscriber = { version = "0.3.20", default-features = false, features = 
 tokio = { workspace = true, features = ["io-util", "net", "rt-multi-thread", "signal", "test-util"] }
 
 [[test]]
+name = "lifecycle"
+required-features = ["sqlite"]
+
+[[test]]
 name = "postgres"
 required-features = ["postgres"]
 
@@ -58,6 +62,10 @@ required-features = ["postgres"]
 
 [[test]]
 name = "sqlite_parity"
+required-features = ["sqlite"]
+
+[[test]]
+name = "sqlite_runtime"
 required-features = ["sqlite"]
 
 [[test]]
