@@ -1,0 +1,4300 @@
+// Command riverconformanceadapter exposes River Go through the shared
+// newline-delimited JSON-RPC conformance protocol.
+package main
+
+import (
+	"bufio"
+	"bytes"
+	"context"
+	"database/sql"
+	"encoding/hex"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"log/slog"
+	"os"
+	"slices"
+	"strconv"
+	"strings"
+	"sync"
+	"sync/atomic"
+	"time"
+
+	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
+	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/robfig/cron/v3"
+	"modernc.org/sqlite"
+
+	"github.com/riverqueue/river"
+	"github.com/riverqueue/river/internal/dbunique"
+	"github.com/riverqueue/river/internal/retrypolicy"
+	"github.com/riverqueue/river/riverdriver"
+	"github.com/riverqueue/river/riverdriver/riverpgxv5"
+	"github.com/riverqueue/river/riverdriver/riversqlite"
+	"github.com/riverqueue/river/rivermigrate"
+	"github.com/riverqueue/river/rivershared/baseservice"
+	"github.com/riverqueue/river/rivershared/riverpilot"
+	"github.com/riverqueue/river/rivertype"
+)
+
+const (
+	adapterVersion        = 22
+	implementationVersion = "0.49.0"
+	protocolRevision      = 1
+)
+
+var adapterMethods = []string{ //nolint:gochecknoglobals
+	"barrier_create",
+	"barrier_release",
+	"benchmark_enqueue",
+	"cancel",
+	"clock_set",
+	"connection_count",
+	"cron_next",
+	"delete",
+	"delete_finalized",
+	"delete_many",
+	"fault_disconnect_application",
+	"fault_disconnect_listeners",
+	"fault_expire_leader",
+	"get",
+	"handshake",
+	"insert",
+	"insert_many",
+	"leader",
+	"list",
+	"listener_count",
+	"migrate",
+	"queue_add",
+	"queue_get",
+	"queue_list",
+	"queue_pause",
+	"queue_remove",
+	"queue_resume",
+	"queue_update",
+	"raw_finalize",
+	"raw_insert_exact_json",
+	"raw_insert_full_row",
+	"raw_insert_no_notify",
+	"raw_job_exact_json",
+	"raw_job_row",
+	"raw_job_timestamps",
+	"raw_notifications",
+	"raw_replace_json_text",
+	"raw_set_kind",
+	"request_resign",
+	"reset",
+	"retry",
+	"retry_delay",
+	"rng_seed",
+	"runtime_stats",
+	"start",
+	"stop",
+	"tx_begin",
+	"tx_cancel",
+	"tx_commit",
+	"tx_delete",
+	"tx_delete_many",
+	"tx_fail",
+	"tx_get",
+	"tx_insert",
+	"tx_insert_many",
+	"tx_list",
+	"tx_queue_get",
+	"tx_queue_list",
+	"tx_queue_pause",
+	"tx_queue_resume",
+	"tx_queue_update",
+	"tx_retry",
+	"tx_rollback",
+	"tx_update",
+	"unique_key",
+	"update",
+	"wait",
+	"work",
+}
+
+var capabilities = []string{ //nolint:gochecknoglobals
+	"barriers",
+	"cancel",
+	"custom_schema",
+	"deterministic_controls",
+	"extensions",
+	"fault_injection",
+	"get",
+	"insert",
+	"job_crud",
+	"leadership",
+	"lifecycle",
+	"maintenance",
+	"migrate",
+	"notifications",
+	"periodic_jobs",
+	"poll_only",
+	"queues",
+	"reset",
+	"resumable_jobs",
+	"retry",
+	"scheduler",
+	"subscriptions",
+	"transactions",
+	"unique_jobs",
+	"work",
+}
+
+var sqliteAdapterMethods = []string{ //nolint:gochecknoglobals
+	"cancel",
+	"clock_set",
+	"cron_next",
+	"delete",
+	"delete_many",
+	"get",
+	"handshake",
+	"insert",
+	"insert_many",
+	"list",
+	"migrate",
+	"raw_insert_exact_json",
+	"raw_job_exact_json",
+	"raw_job_row",
+	"raw_job_timestamps",
+	"reset",
+	"retry",
+	"retry_delay",
+	"rng_seed",
+	"tx_begin",
+	"tx_cancel",
+	"tx_commit",
+	"tx_delete",
+	"tx_delete_many",
+	"tx_get",
+	"tx_insert",
+	"tx_insert_many",
+	"tx_list",
+	"tx_retry",
+	"tx_rollback",
+	"tx_update",
+	"unique_key",
+	"update",
+}
+
+var sqliteCapabilities = []string{ //nolint:gochecknoglobals
+	"cancel",
+	"deterministic_controls",
+	"get",
+	"insert",
+	"job_crud",
+	"lifecycle",
+	"migrate",
+	"reset",
+	"retry",
+	"transactions",
+	"unique_jobs",
+}
+
+var sqliteRuntimeCapabilities = []string{ //nolint:gochecknoglobals
+	"barriers", "cancel", "deterministic_controls", "extensions", "get", "insert",
+	"job_crud", "leadership", "lifecycle", "migrate", "notifications",
+	"periodic_jobs", "poll_only", "queues", "reset", "resumable_jobs", "retry", "scheduler",
+	"subscriptions", "transactions", "unique_jobs", "work",
+}
+
+var sqliteRuntimeMethods = []string{ //nolint:gochecknoglobals
+	"barrier_create", "barrier_release", "cancel", "clock_set", "cron_next", "delete", "delete_finalized", "delete_many", "get",
+	"handshake", "insert", "insert_many", "leader", "list", "migrate",
+	"queue_add", "queue_get", "queue_list", "queue_pause", "queue_remove", "queue_resume",
+	"queue_update", "raw_finalize", "raw_insert_exact_json", "raw_insert_no_notify", "raw_job_exact_json", "raw_job_row", "raw_job_timestamps", "raw_notifications", "raw_replace_json_text", "raw_set_kind", "request_resign", "reset", "retry", "retry_delay",
+	"rng_seed", "runtime_stats", "start", "stop", "tx_begin", "tx_cancel", "tx_commit",
+	"tx_delete", "tx_delete_many", "tx_get", "tx_insert", "tx_insert_many",
+	"tx_list", "tx_queue_get", "tx_queue_list", "tx_queue_pause", "tx_queue_resume",
+	"tx_queue_update", "tx_retry", "tx_rollback", "tx_update", "unique_key", "update", "wait", "work",
+}
+
+// sqliteJSONColumnStatements read and replace each SQLite job JSON column for
+// raw_replace_json_text: stored TEXT as is, JSONB rendered with json().
+var sqliteJSONColumnStatements = map[string]struct{ get, set string }{ //nolint:gochecknoglobals
+	"args": {
+		get: "SELECT CASE WHEN typeof(args) = 'text' THEN args ELSE json(args) END, typeof(args) FROM river_job WHERE id = ?",
+		set: "UPDATE river_job SET args = ? WHERE id = ?",
+	},
+	"attempted_by": {
+		get: "SELECT CASE WHEN typeof(attempted_by) = 'text' THEN attempted_by ELSE json(attempted_by) END, typeof(attempted_by) FROM river_job WHERE id = ?",
+		set: "UPDATE river_job SET attempted_by = ? WHERE id = ?",
+	},
+	"errors": {
+		get: "SELECT CASE WHEN typeof(errors) = 'text' THEN errors ELSE json(errors) END, typeof(errors) FROM river_job WHERE id = ?",
+		set: "UPDATE river_job SET errors = ? WHERE id = ?",
+	},
+	"metadata": {
+		get: "SELECT CASE WHEN typeof(metadata) = 'text' THEN metadata ELSE json(metadata) END, typeof(metadata) FROM river_job WHERE id = ?",
+		set: "UPDATE river_job SET metadata = ? WHERE id = ?",
+	},
+	"tags": {
+		get: "SELECT CASE WHEN typeof(tags) = 'text' THEN tags ELSE json(tags) END, typeof(tags) FROM river_job WHERE id = ?",
+		set: "UPDATE river_job SET tags = ? WHERE id = ?",
+	},
+}
+
+// parameterlessMethods take no params; any param is rejected.
+var parameterlessMethods = []string{ //nolint:gochecknoglobals
+	"connection_count", "fault_disconnect_listeners", "fault_expire_leader", "handshake", "leader",
+	"listener_count", "raw_insert_full_row", "runtime_stats",
+}
+
+// insertOnlyCapabilities and insertOnlyMethods are the insert-only-v1
+// profile, for clients that only insert jobs.
+var insertOnlyCapabilities = []string{"insert", "lifecycle", "transactions", "unique_jobs"} //nolint:gochecknoglobals
+
+var insertOnlyMethods = []string{ //nolint:gochecknoglobals
+	"handshake", "insert", "insert_many", "tx_begin", "tx_commit", "tx_insert", "tx_insert_many",
+	"tx_rollback", "unique_key",
+}
+
+// checkRequest rejects methods outside the advertised profile and params on
+// methods that take none.
+func checkRequest(req *request, methods []string) error {
+	if !slices.Contains(methods, req.Method) {
+		return methodNotFound(req.Method)
+	}
+	if slices.Contains(parameterlessMethods, req.Method) {
+		return decodeParams(req.Params, &struct{}{})
+	}
+	return nil
+}
+
+// rawJobRow is a job's JSON and timestamp columns as the database renders
+// them, for comparison across implementations.
+type rawJobRow struct {
+	Args        string  `json:"args"`
+	AttemptedAt *string `json:"attempted_at"`
+	AttemptedBy *string `json:"attempted_by"`
+	CreatedAt   string  `json:"created_at"`
+	Errors      *string `json:"errors"`
+	FinalizedAt *string `json:"finalized_at"`
+	// JSONB is SQLite's stored JSONB bytes, and nil on PostgreSQL.
+	JSONB       *rawJSONBColumns `json:"jsonb"`
+	Metadata    string           `json:"metadata"`
+	ScheduledAt string           `json:"scheduled_at"`
+	Tags        string           `json:"tags"`
+	// UniqueKey is the stored unique key as uppercase hex.
+	UniqueKey *string `json:"unique_key"`
+	// UniqueKeyType is SQLite's typeof(unique_key), and nil on PostgreSQL.
+	UniqueKeyType *string `json:"unique_key_type"`
+	// UniqueStates is the stored state mask as the database renders it as
+	// text.
+	UniqueStates *string `json:"unique_states"`
+	// UniqueStatesType is SQLite's typeof(unique_states), and nil on
+	// PostgreSQL.
+	UniqueStatesType *string `json:"unique_states_type"`
+}
+
+// rawJSONBColumns is a SQLite job's JSONB columns as uppercase hex, so the
+// harness can check that each column is stored as JSONB and decodes to the
+// JSON text's value.
+type rawJSONBColumns struct {
+	Args        string  `json:"args"`
+	AttemptedBy *string `json:"attempted_by"`
+	Errors      *string `json:"errors"`
+	Metadata    string  `json:"metadata"`
+	Tags        string  `json:"tags"`
+}
+
+// scanTargets returns the row's fields in the column order the raw_job_row
+// queries select.
+func (row *rawJobRow) scanTargets() []any {
+	return []any{
+		&row.Args, &row.AttemptedAt, &row.AttemptedBy, &row.CreatedAt, &row.Errors,
+		&row.FinalizedAt, &row.Metadata, &row.ScheduledAt, &row.Tags, &row.UniqueKey, &row.UniqueStates,
+	}
+}
+
+type request struct {
+	ID      any             `json:"id"`
+	JSONRPC string          `json:"jsonrpc"`
+	Method  string          `json:"method"`
+	Params  json.RawMessage `json:"params"`
+}
+
+type response struct {
+	Error   *responseError `json:"error,omitempty"`
+	ID      any            `json:"id"`
+	JSONRPC string         `json:"jsonrpc"`
+	Result  any            `json:"result,omitempty"`
+}
+
+type responseError struct {
+	Code    int    `json:"code"`
+	Message string `json:"message"`
+}
+
+// Stable JSON-RPC error codes from conformance/adapter/contract.json.
+const (
+	errorCodeDatabase       = -32003
+	errorCodeInvalidParams  = -32602
+	errorCodeInvalidRequest = -32600
+	errorCodeMethodNotFound = -32601
+	errorCodeNotFound       = -32001
+	errorCodeParse          = -32700
+	errorCodeRejected       = -32002
+	errorCodeUnsupported    = -32004
+)
+
+// adapterError carries the contract error code for a failure the adapter
+// classifies itself.
+type adapterError struct {
+	code int
+	err  error
+}
+
+func (e *adapterError) Error() string { return e.err.Error() }
+
+func (e *adapterError) Unwrap() error { return e.err }
+
+func invalidParams(err error) error { return &adapterError{code: errorCodeInvalidParams, err: err} }
+
+func methodNotFound(method string) error {
+	return &adapterError{code: errorCodeMethodNotFound, err: fmt.Errorf("method not found: %s", method)}
+}
+
+func notFound(err error) error { return &adapterError{code: errorCodeNotFound, err: err} }
+
+func rejected(err error) error { return &adapterError{code: errorCodeRejected, err: err} }
+
+func transactionNotFound(handle string) error {
+	return notFound(fmt.Errorf("transaction %q not found", handle))
+}
+
+func unsupported(err error) error { return &adapterError{code: errorCodeUnsupported, err: err} }
+
+// errorCode maps a failure to its contract error code. River reports missing
+// rows with rivertype.ErrNotFound and database failures with driver errors;
+// every other failure River returns is a rejection of the request.
+func errorCode(err error) int {
+	var classified *adapterError
+	var postgresErr *pgconn.PgError
+	var sqliteErr *sqlite.Error
+	switch {
+	case errors.As(err, &classified):
+		return classified.code
+	case errors.Is(err, rivertype.ErrNotFound):
+		return errorCodeNotFound
+	case errors.As(err, &postgresErr), errors.As(err, &sqliteErr):
+		return errorCodeDatabase
+	default:
+		return errorCodeRejected
+	}
+}
+
+// isAdapterApplicationName reports whether name may identify a conformance
+// adapter's PostgreSQL connections. Every adapter's name carries the
+// river-conformance- prefix, which fault injection relies on to never
+// terminate other connections, and the harness's own observer name is
+// excluded.
+func isAdapterApplicationName(name string) bool {
+	return strings.HasPrefix(name, "river-conformance-") && name != "river-conformance-harness"
+}
+
+// decodeParams decodes request params strictly: absent params decode as an
+// empty object and unknown fields are rejected, so a harness or protocol
+// mismatch fails loudly instead of being ignored.
+func decodeParams(raw json.RawMessage, target any) error {
+	trimmed := bytes.TrimSpace(raw)
+	if len(trimmed) == 0 || bytes.Equal(trimmed, []byte("null")) {
+		trimmed = []byte("{}")
+	}
+	decoder := json.NewDecoder(bytes.NewReader(trimmed))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(target); err != nil {
+		return invalidParams(err)
+	}
+	return nil
+}
+
+// checkHandle rejects a transaction handle on a method that does not take
+// one and requires one on a method that does.
+func checkHandle(handle string, transactional bool) error {
+	switch {
+	case transactional && handle == "":
+		return invalidParams(errors.New("handle is required"))
+	case !transactional && handle != "":
+		return invalidParams(errors.New("unknown field \"handle\""))
+	}
+	return nil
+}
+
+type conformanceArgs struct {
+	Behavior   string `json:"behavior"`
+	DurationMS uint64 `json:"duration_ms"`
+	Message    string `json:"message"`
+}
+
+func (conformanceArgs) Kind() string { return "conformance_echo" }
+
+func (args conformanceArgs) echoArgs() conformanceArgs { return args }
+
+// conformancePeerArgs registers the built-in worker under a second kind, so
+// clients of a heterogeneous fleet can each know only their own kind.
+type conformancePeerArgs struct {
+	conformanceArgs
+}
+
+func (conformancePeerArgs) Kind() string { return "conformance_echo_peer" }
+
+// conformanceRenamedArgs is the built-in worker after a safe rename from
+// `conformance_echo`, which it keeps as a kind alias.
+type conformanceRenamedArgs struct {
+	conformanceArgs
+}
+
+func (conformanceRenamedArgs) Kind() string { return "conformance_echo_renamed" }
+
+func (conformanceRenamedArgs) KindAliases() []string { return []string{"conformance_echo"} }
+
+// echoJobArgs is implemented by every args type the built-in worker is
+// registered under.
+type echoJobArgs interface {
+	river.JobArgs
+
+	echoArgs() conformanceArgs
+}
+
+// kindWorker works jobs of another registered kind with the built-in worker.
+type kindWorker[T echoJobArgs] struct {
+	river.WorkerDefaults[T]
+
+	inner *conformanceWorker
+}
+
+func (w *kindWorker[T]) Work(ctx context.Context, job *river.Job[T]) error {
+	return w.inner.Work(ctx, &river.Job[conformanceArgs]{JobRow: job.JobRow, Args: job.Args.echoArgs()})
+}
+
+// addConformanceWorkers registers the built-in worker under each of kinds,
+// defaulting to `conformance_echo` alone.
+func addConformanceWorkers(workers *river.Workers, worker *conformanceWorker, kinds []string) error {
+	if len(kinds) == 0 {
+		kinds = []string{conformanceArgs{}.Kind()}
+	}
+	for _, kind := range kinds {
+		var err error
+		switch kind {
+		case conformanceArgs{}.Kind():
+			err = river.AddWorkerSafely(workers, worker)
+		case conformancePeerArgs{}.Kind():
+			err = river.AddWorkerSafely(workers, &kindWorker[conformancePeerArgs]{inner: worker})
+		case conformanceRenamedArgs{}.Kind():
+			err = river.AddWorkerSafely(workers, &kindWorker[conformanceRenamedArgs]{inner: worker})
+		default:
+			return invalidParams(fmt.Errorf("unknown worker kind %q", kind))
+		}
+		if err != nil {
+			return invalidParams(err)
+		}
+	}
+	return nil
+}
+
+// uniqueAllArgs accepts any encoded arguments, including non-object ones, so
+// River itself decides whether all-args uniqueness can use them. Keys are
+// computed from the request's raw argument bytes.
+type uniqueAllArgs struct{}
+
+func (uniqueAllArgs) Kind() string { return "conformance_all_args" }
+
+func (*uniqueAllArgs) UnmarshalJSON([]byte) error { return nil }
+
+type uniqueNumericArgs struct {
+	Exponent        float64 `json:"exponent"`
+	Fraction        float64 `json:"fraction"`
+	Maximum         int64   `json:"maximum"`
+	Minimum         int64   `json:"minimum"`
+	UnsignedMaximum uint64  `json:"unsigned_maximum"`
+}
+
+func (uniqueNumericArgs) Kind() string { return "conformance_numeric_boundaries" }
+
+type uniqueSelectedAccount struct {
+	ID      string `json:"id"               river:"unique"`
+	Ignored string `json:"ignored"`
+	Region  string `json:"region,omitempty" river:"unique"`
+}
+
+type uniqueSelectedArgs struct {
+	Account uniqueSelectedAccount `json:"account"`
+	Ignored bool                  `json:"ignored"`
+	Label   string                `json:"label"              river:"unique"`
+	PathKey string                `json:"path/key,omitempty" river:"unique"`
+}
+
+func (uniqueSelectedArgs) Kind() string { return "conformance_selected_args" }
+
+type uniqueDottedSelectedUser struct {
+	ID string `json:"id,omitempty" river:"unique"`
+}
+
+type uniqueDottedSelectedArgs struct {
+	At      string `json:"@user,omitempty" river:"unique"`
+	Bang    string `json:"!x,omitempty"    river:"unique"`
+	Brace   string `json:"{x},omitempty"   river:"unique"`
+	Bracket string `json:"[x],omitempty"   river:"unique"`
+	Colon   string `json:":id,omitempty"   river:"unique"`
+	//nolint:tagliatelle // literal dotted names distinguish them from nested paths
+	Literal string                   `json:"user.id,omitempty"   river:"unique"`
+	Symbols string                   `json:"a*b?c#d|e,omitempty" river:"unique"`
+	User    uniqueDottedSelectedUser `json:"user"`
+	Unicode string                   `json:"é,omitempty"         river:"unique"`
+}
+
+func (uniqueDottedSelectedArgs) Kind() string { return "conformance_dotted_selected_args" }
+
+type uniqueSimpleArgs struct {
+	ID int64 `json:"id"`
+}
+
+func (uniqueSimpleArgs) Kind() string { return "conformance_simple" }
+
+type fixedClock struct{ now time.Time }
+
+func (c fixedClock) Now() time.Time { return c.now }
+
+func (fixedClock) NowOrNil() *time.Time { return nil }
+
+type conformanceWorker struct {
+	river.WorkerDefaults[conformanceArgs]
+
+	barriers *barrierRegistry
+	pool     *pgxpool.Pool
+	probe    *runtimeProbe
+}
+
+func (w *conformanceWorker) Work(ctx context.Context, job *river.Job[conformanceArgs]) error {
+	switch job.Args.Behavior {
+	case "barrier_output", "barrier_wait":
+		if err := w.barriers.wait(ctx, job.Args.Message); err != nil {
+			return err
+		}
+		if job.Args.Behavior == "barrier_output" {
+			return river.RecordOutput(ctx, map[string]any{"race": "worker"})
+		}
+		return nil
+	case "cancel":
+		return river.JobCancel(errors.New("cancelled by conformance worker"))
+	case "cancel_error":
+		<-ctx.Done()
+		return errors.New("conformance failure after cancellation")
+	case "cancel_panic":
+		<-ctx.Done()
+		panic("conformance panic after cancellation")
+	case "cooperative_cancel":
+		if ctx.Err() != nil && w.probe != nil {
+			w.probe.incrementCancelledAtStart()
+		}
+		<-ctx.Done()
+		return ctx.Err()
+	case "discard":
+		return errors.New("conformance discard")
+	case "error":
+		return errors.New("conformance retryable error")
+	case "ignored_cancel":
+		select {}
+	case "output":
+		return river.RecordOutput(ctx, map[string]any{"message": job.Args.Message})
+	case "panic":
+		panic("conformance worker panic")
+	case "sleep":
+		duration, err := durationFromMilliseconds(job.Args.DurationMS)
+		if err != nil {
+			return err
+		}
+		time.Sleep(duration)
+	case "snooze_once", "snooze_then_cancel":
+		var metadata map[string]any
+		if err := json.Unmarshal(job.Metadata, &metadata); err != nil {
+			return err
+		}
+		if _, alreadySnoozed := metadata["snoozes"]; !alreadySnoozed {
+			duration, err := durationFromMilliseconds(max(job.Args.DurationMS, 1))
+			if err != nil {
+				return err
+			}
+			return river.JobSnooze(duration)
+		}
+		if job.Args.Behavior == "snooze_then_cancel" {
+			<-ctx.Done()
+			return ctx.Err()
+		}
+	case "resumable_cursor":
+		river.ResumableStep(ctx, "first", nil, func(ctx context.Context) error {
+			return river.MetadataSet(ctx, "first_attempt", job.Attempt)
+		})
+		river.ResumableStepCursor(ctx, "second", nil, func(ctx context.Context, cursor int) error {
+			if job.Attempt == 1 {
+				if err := river.ResumableSetCursor(ctx, 7); err != nil {
+					return err
+				}
+				return errors.New("retry with cursor")
+			}
+			if cursor != 7 {
+				return fmt.Errorf("expected cursor 7, got %d", cursor)
+			}
+			return river.MetadataSet(ctx, "cursor_observed", cursor)
+		})
+		river.ResumableStep(ctx, "third", nil, func(ctx context.Context) error {
+			if job.Attempt == 2 {
+				return errors.New("retry after consuming cursor")
+			}
+			return nil
+		})
+	case "resumable", "resumable_duplicate":
+		river.ResumableStep(ctx, "first", nil, func(ctx context.Context) error {
+			w.probe.incrementResumableFirst()
+			return nil
+		})
+		secondName := "second"
+		if job.Args.Behavior == "resumable_duplicate" {
+			secondName = "first"
+		}
+		river.ResumableStep(ctx, secondName, nil, func(ctx context.Context) error {
+			w.probe.incrementResumableSecond()
+			if job.Attempt == 1 {
+				return errors.New("fail second resumable step once")
+			}
+			return nil
+		})
+	case "transactional_complete":
+		if w.pool == nil {
+			return errors.New("transactional completion is unavailable for this backend")
+		}
+		if err := river.MetadataSet(ctx, "transactional_completion", true); err != nil {
+			return err
+		}
+		tx, err := w.pool.Begin(ctx)
+		if err != nil {
+			return err
+		}
+		defer func() { _ = tx.Rollback(ctx) }()
+		if _, err := river.JobCompleteTx[*riverpgxv5.Driver](ctx, tx, job); err != nil {
+			return err
+		}
+		return tx.Commit(ctx)
+	}
+	return nil
+}
+
+// startTuningParams are the contract's optional start tuning parameters.
+// River Go keeps these intervals internal, so the reference adapter reports
+// them as unsupported rather than silently ignoring them.
+type startTuningParams struct {
+	ElectIntervalMS     *uint64 `json:"elect_interval_ms"`
+	RescuerIntervalMS   *uint64 `json:"rescuer_interval_ms"`
+	SchedulerIntervalMS *uint64 `json:"scheduler_interval_ms"`
+}
+
+func (p startTuningParams) reject() error {
+	for name, value := range map[string]*uint64{
+		"elect_interval_ms":     p.ElectIntervalMS,
+		"rescuer_interval_ms":   p.RescuerIntervalMS,
+		"scheduler_interval_ms": p.SchedulerIntervalMS,
+	} {
+		if value != nil {
+			return unsupported(fmt.Errorf("the Go reference does not expose %s as configuration", name))
+		}
+	}
+	return nil
+}
+
+type runtimeProbe struct {
+	cancelledAtStart    int
+	errorHandlerCalls   int
+	events              []string
+	mu                  sync.Mutex
+	periodicStarts      int
+	resumableFirstRuns  int
+	resumableSecondRuns int
+	stuckJobs           int
+	trace               []string
+}
+
+func (p *runtimeProbe) incrementErrorHandlerCalls() {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.errorHandlerCalls++
+}
+
+func (p *runtimeProbe) addEvent(kind river.EventKind) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.events = append(p.events, string(kind))
+}
+
+func (p *runtimeProbe) addTrace(entry string) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.trace = append(p.trace, entry)
+}
+
+func (p *runtimeProbe) incrementCancelledAtStart() {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.cancelledAtStart++
+}
+
+func (p *runtimeProbe) incrementPeriodicStarts() {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.periodicStarts++
+}
+
+func (p *runtimeProbe) incrementResumableFirst() {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.resumableFirstRuns++
+}
+
+func (p *runtimeProbe) incrementResumableSecond() {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.resumableSecondRuns++
+}
+
+func (p *runtimeProbe) incrementStuckJobs() {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.stuckJobs++
+}
+
+func (p *runtimeProbe) snapshot() map[string]any {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return map[string]any{
+		"cancelled_at_start":    p.cancelledAtStart,
+		"error_handler_calls":   p.errorHandlerCalls,
+		"events":                valueOrEmpty(slices.Clone(p.events)),
+		"periodic_starts":       p.periodicStarts,
+		"resumable_first_runs":  p.resumableFirstRuns,
+		"resumable_second_runs": p.resumableSecondRuns,
+		"stuck_jobs":            p.stuckJobs,
+		"trace":                 valueOrEmpty(slices.Clone(p.trace)),
+	}
+}
+
+type conformanceErrorHandler struct {
+	probe *runtimeProbe
+}
+
+func (h *conformanceErrorHandler) HandleError(ctx context.Context, job *rivertype.JobRow, err error) *river.ErrorHandlerResult {
+	h.probe.incrementErrorHandlerCalls()
+	return &river.ErrorHandlerResult{SetCancelled: true}
+}
+
+func (h *conformanceErrorHandler) HandlePanic(ctx context.Context, job *rivertype.JobRow, panicVal any, trace string) *river.ErrorHandlerResult {
+	h.probe.incrementErrorHandlerCalls()
+	return &river.ErrorHandlerResult{SetCancelled: true}
+}
+
+type conformancePlugin struct {
+	river.PluginDefaults
+
+	probe *runtimeProbe
+}
+
+func (p *conformancePlugin) InsertBegin(_ context.Context, _ *rivertype.JobInsertParams) error { //nolint:unparam // River hook signature requires an error result.
+	p.probe.addTrace("hook:insert_begin")
+	return nil
+}
+
+func (p *conformancePlugin) InsertMany(ctx context.Context, _ []*rivertype.JobInsertParams, doInner func(context.Context) ([]*rivertype.JobInsertResult, error)) ([]*rivertype.JobInsertResult, error) {
+	p.probe.addTrace("middleware:insert_before")
+	results, err := doInner(ctx)
+	p.probe.addTrace("middleware:insert_after")
+	return results, err
+}
+
+func (p *conformancePlugin) Start(_ context.Context, _ *rivertype.HookPeriodicJobsStartParams) error { //nolint:unparam // River hook signature requires an error result.
+	p.probe.incrementPeriodicStarts()
+	p.probe.addTrace("hook:periodic_start")
+	return nil
+}
+
+func (p *conformancePlugin) WorkBegin(_ context.Context, _ *rivertype.JobRow) error { //nolint:unparam // River hook signature requires an error result.
+	p.probe.addTrace("hook:work_begin")
+	return nil
+}
+
+func (p *conformancePlugin) Work(ctx context.Context, _ *rivertype.JobRow, doInner func(context.Context) error) error {
+	p.probe.addTrace("middleware:work_before")
+	err := doInner(ctx)
+	p.probe.addTrace("middleware:work_after")
+	return err
+}
+
+func (p *conformancePlugin) WorkEnd(_ context.Context, _ *rivertype.JobRow, err error) error {
+	p.probe.addTrace("hook:work_end")
+	return err
+}
+
+type fixedRetryPolicy struct{ delay time.Duration }
+
+func (p fixedRetryPolicy) NextRetry(job *rivertype.JobRow) time.Time {
+	return time.Now().UTC().Add(p.delay)
+}
+
+type barrierRegistry struct {
+	mu      sync.Mutex
+	waiters map[string]chan struct{}
+}
+
+func newBarrierRegistry() *barrierRegistry {
+	return &barrierRegistry{waiters: make(map[string]chan struct{})}
+}
+
+func (r *barrierRegistry) clear() {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	for _, waiter := range r.waiters {
+		close(waiter)
+	}
+	r.waiters = make(map[string]chan struct{})
+}
+
+func (r *barrierRegistry) create(name string) error {
+	if name == "" {
+		return errors.New("barrier name is required")
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if _, exists := r.waiters[name]; exists {
+		return fmt.Errorf("barrier %q already exists", name)
+	}
+	r.waiters[name] = make(chan struct{})
+	return nil
+}
+
+func (r *barrierRegistry) release(name string) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	waiter, exists := r.waiters[name]
+	if !exists {
+		return notFound(fmt.Errorf("barrier %q not found", name))
+	}
+	close(waiter)
+	delete(r.waiters, name)
+	return nil
+}
+
+func (r *barrierRegistry) exists(name string) bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	_, exists := r.waiters[name]
+	return exists
+}
+
+// releaseIfPresent releases a barrier that hasn't been released yet.
+func (r *barrierRegistry) releaseIfPresent(name string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if waiter, exists := r.waiters[name]; exists {
+		close(waiter)
+		delete(r.waiters, name)
+	}
+}
+
+func (r *barrierRegistry) wait(ctx context.Context, name string) error {
+	r.mu.Lock()
+	waiter, exists := r.waiters[name]
+	r.mu.Unlock()
+	if !exists {
+		return notFound(fmt.Errorf("barrier %q not found", name))
+	}
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-waiter:
+		return nil
+	}
+}
+
+type insertParams struct {
+	Behavior   string           `json:"behavior"`
+	DurationMS uint64           `json:"duration_ms"`
+	Kind       string           `json:"kind"`
+	Message    string           `json:"message"`
+	Opts       insertOptsParams `json:"opts"`
+	Schema     string           `json:"schema"`
+}
+
+// conformanceBehaviors are the worker behaviors the contract defines.
+var conformanceBehaviors = []string{ //nolint:gochecknoglobals // contract enum
+	"", "barrier_output", "barrier_wait", "cancel", "cancel_error", "cancel_panic",
+	"cooperative_cancel", "discard", "error", "ignored_cancel", "output", "panic", "resumable",
+	"resumable_cursor", "resumable_duplicate", "sleep", "snooze_once", "snooze_then_cancel",
+	"transactional_complete",
+}
+
+// rejectRawOnlyFields rejects the fields only raw inserts and single inserts
+// accept when they appear in batch or transactional job params, and
+// validates the worker behavior.
+func (p insertParams) rejectRawOnlyFields() error {
+	if p.Kind != "" {
+		return invalidParams(errors.New("unknown field \"kind\""))
+	}
+	if p.Schema != "" {
+		return invalidParams(errors.New("unknown field \"schema\""))
+	}
+	return p.validateBehavior()
+}
+
+func (p insertParams) validateBehavior() error {
+	if !slices.Contains(conformanceBehaviors, p.Behavior) {
+		return invalidParams(fmt.Errorf("unknown behavior %q", p.Behavior))
+	}
+	return nil
+}
+
+func (p insertParams) args() conformanceArgs {
+	return conformanceArgs{Behavior: p.Behavior, DurationMS: p.DurationMS, Message: p.Message}
+}
+
+type insertOptsParams struct {
+	MaxAttempts *int             `json:"max_attempts"`
+	Metadata    json.RawMessage  `json:"metadata"`
+	Pending     bool             `json:"pending"`
+	Priority    *int             `json:"priority"`
+	Queue       *string          `json:"queue"`
+	ScheduledAt *time.Time       `json:"scheduled_at"`
+	Tags        []string         `json:"tags"`
+	Unique      uniqueOptsParams `json:"unique"`
+}
+
+// rawSetKindParams names a job whose kind raw_set_kind rewrites out of band.
+type rawSetKindParams struct {
+	ID   int64  `json:"id"`
+	Kind string `json:"kind"`
+}
+
+type uniqueOptsParams struct {
+	ByArgs      bool                 `json:"by_args"`
+	ByPeriodMS  *uint64              `json:"by_period_ms"`
+	ByQueue     bool                 `json:"by_queue"`
+	ByState     []rivertype.JobState `json:"by_state"`
+	ExcludeKind bool                 `json:"exclude_kind"`
+}
+
+type uniqueKeyParams struct {
+	Args    json.RawMessage `json:"args"`
+	Kind    string          `json:"kind"`
+	Now     time.Time       `json:"now"`
+	Options struct {
+		ByArgs        bool                 `json:"by_args"`
+		ByPeriodNanos int64                `json:"by_period_nanos"`
+		ByQueue       bool                 `json:"by_queue"`
+		ByState       []rivertype.JobState `json:"by_state"`
+		ExcludeKind   bool                 `json:"exclude_kind"`
+	} `json:"options"`
+	Queue       string     `json:"queue"`
+	ScheduledAt *time.Time `json:"scheduled_at"`
+
+	// Fixture expectations and documentation passed through unchanged by
+	// the harness; the adapter ignores them.
+	ExpectedError            string     `json:"expected_error"`
+	ExpectedSHA256           string     `json:"expected_sha256"`
+	ExpectedStateMask        int        `json:"expected_state_mask"`
+	Name                     string     `json:"name"`
+	SelectedUniqueComponents [][]string `json:"selected_unique_components"`
+	SelectedUniquePaths      []string   `json:"selected_unique_paths"`
+}
+
+func (p uniqueKeyParams) jobArgs() (rivertype.JobArgs, error) {
+	var args rivertype.JobArgs
+	switch p.Kind {
+	case "conformance_all_args":
+		args = &uniqueAllArgs{}
+	case "conformance_numeric_boundaries":
+		var encoded struct {
+			Exponent        float64     `json:"exponent"`
+			Fraction        float64     `json:"fraction"`
+			Maximum         json.Number `json:"maximum"`
+			Minimum         json.Number `json:"minimum"`
+			UnsignedMaximum json.Number `json:"unsigned_maximum"`
+		}
+		decoder := json.NewDecoder(bytes.NewReader(p.Args))
+		decoder.UseNumber()
+		if err := decoder.Decode(&encoded); err != nil {
+			return nil, err
+		}
+		maximum, err := strconv.ParseInt(encoded.Maximum.String(), 10, 64)
+		if err != nil {
+			return nil, err
+		}
+		minimum, err := strconv.ParseInt(encoded.Minimum.String(), 10, 64)
+		if err != nil {
+			return nil, err
+		}
+		unsignedMaximum, err := strconv.ParseUint(encoded.UnsignedMaximum.String(), 10, 64)
+		if err != nil {
+			return nil, err
+		}
+		return &uniqueNumericArgs{
+			Exponent: encoded.Exponent, Fraction: encoded.Fraction, Maximum: maximum,
+			Minimum: minimum, UnsignedMaximum: unsignedMaximum,
+		}, nil
+	case "conformance_selected_args":
+		args = &uniqueSelectedArgs{}
+	case "conformance_dotted_selected_args":
+		args = &uniqueDottedSelectedArgs{}
+	case "conformance_simple":
+		args = &uniqueSimpleArgs{}
+	default:
+		return nil, fmt.Errorf("unsupported unique fixture kind %q", p.Kind)
+	}
+	if err := json.Unmarshal(p.Args, args); err != nil {
+		return nil, err
+	}
+	return args, nil
+}
+
+func (p insertOptsParams) opts() (*river.InsertOpts, error) {
+	opts := &river.InsertOpts{
+		Metadata:    p.Metadata,
+		Pending:     p.Pending,
+		ScheduledAt: valueOrZero(p.ScheduledAt),
+		Tags:        p.Tags,
+		UniqueOpts: river.UniqueOpts{
+			ByArgs:      p.Unique.ByArgs,
+			ByQueue:     p.Unique.ByQueue,
+			ByState:     p.Unique.ByState,
+			ExcludeKind: p.Unique.ExcludeKind,
+		},
+	}
+	if p.MaxAttempts != nil {
+		opts.MaxAttempts = *p.MaxAttempts
+	}
+	if p.Priority != nil {
+		opts.Priority = *p.Priority
+	}
+	if p.Queue != nil {
+		opts.Queue = *p.Queue
+	}
+	if p.Unique.ByPeriodMS != nil {
+		byPeriod, err := durationFromMilliseconds(*p.Unique.ByPeriodMS)
+		if err != nil {
+			return nil, fmt.Errorf("unique period: %w", err)
+		}
+		opts.UniqueOpts.ByPeriod = byPeriod
+	}
+	return opts, nil
+}
+
+// latestMigrationVersion returns the newest main-line migration River bundles
+// for driver.
+func latestMigrationVersion[TTx any](driver riverdriver.Driver[TTx]) (int, error) {
+	migrator, err := rivermigrate.New(driver, &rivermigrate.Config{Logger: adapterLogger()})
+	if err != nil {
+		return 0, err
+	}
+	versions := migrator.AllVersions()
+	return versions[len(versions)-1].Version, nil
+}
+
+func handleUniqueKey(rawParams json.RawMessage) (any, error) {
+	var params uniqueKeyParams
+	if err := decodeParams(rawParams, &params); err != nil {
+		return nil, err
+	}
+	args, err := params.jobArgs()
+	if err != nil {
+		return nil, err
+	}
+	opts := &dbunique.UniqueOpts{
+		ByArgs:      params.Options.ByArgs,
+		ByPeriod:    time.Duration(params.Options.ByPeriodNanos),
+		ByQueue:     params.Options.ByQueue,
+		ByState:     params.Options.ByState,
+		ExcludeKind: params.Options.ExcludeKind,
+	}
+	key, err := dbunique.UniqueKey(fixedClock{now: params.Now}, opts, &rivertype.JobInsertParams{
+		Args:         args,
+		EncodedArgs:  params.Args,
+		Kind:         params.Kind,
+		Queue:        params.Queue,
+		ScheduledAt:  params.ScheduledAt,
+		UniqueStates: opts.StateBitmask(),
+	})
+	if err != nil {
+		return nil, err
+	}
+	return map[string]any{
+		"sha256":     hex.EncodeToString(key),
+		"state_mask": opts.StateBitmask(),
+	}, nil
+}
+
+func handleQueueAdd(
+	ctx context.Context,
+	rawParams json.RawMessage,
+	addFunc func(string, river.QueueConfig) error,
+	removeFunc func(context.Context, string) error,
+) (any, error) {
+	var params struct {
+		MaxWorkers int    `json:"max_workers"`
+		Name       string `json:"name"`
+	}
+	if err := decodeParams(rawParams, &params); err != nil {
+		return nil, err
+	}
+	if params.MaxWorkers == 0 {
+		params.MaxWorkers = 1
+	}
+	err := addFunc(params.Name, river.QueueConfig{MaxWorkers: params.MaxWorkers})
+	if _, alreadyAdded := errors.AsType[*river.QueueAlreadyAddedError](err); alreadyAdded {
+		if err := removeFunc(ctx, params.Name); err != nil {
+			return nil, err
+		}
+		err = addFunc(params.Name, river.QueueConfig{MaxWorkers: params.MaxWorkers})
+	}
+	return map[string]any{}, err
+}
+
+type runningClient struct {
+	claimBarrier       string
+	client             *river.Client[pgx.Tx]
+	probe              *runtimeProbe
+	subscription       <-chan *river.Event
+	subscriptionCancel func()
+}
+
+type adapterState struct {
+	// applicationName identifies this process's PostgreSQL connections.
+	applicationName string
+	barriers        *barrierRegistry
+	clock           *time.Time
+	pool            *pgxpool.Pool
+	profile         string
+	rngSeed         uint64
+	running         *runningClient
+	transactions    map[string]pgx.Tx
+}
+
+type requestHandler interface {
+	handle(ctx context.Context, request *request) (any, error)
+}
+
+type sqliteAdapterState struct {
+	barriers     *barrierRegistry
+	clock        *time.Time
+	pool         *sql.DB
+	profile      string
+	rngSeed      uint64
+	running      *sqliteRunningClient
+	transactions map[string]*sql.Tx
+}
+
+type sqliteRunningClient struct {
+	claimBarrier       string
+	client             *river.Client[*sql.Tx]
+	probe              *runtimeProbe
+	subscription       <-chan *river.Event
+	subscriptionCancel func()
+}
+
+func main() {
+	if err := run(context.Background()); err != nil {
+		fmt.Fprintln(os.Stderr, "River Go conformance adapter:", err)
+		os.Exit(1)
+	}
+}
+
+func run(ctx context.Context) error {
+	databaseURL := os.Getenv("RIVER_CONFORMANCE_DATABASE_URL")
+	if databaseURL == "" {
+		return errors.New("RIVER_CONFORMANCE_DATABASE_URL is required")
+	}
+	databaseKind := os.Getenv("RIVER_CONFORMANCE_DATABASE_KIND")
+	if databaseKind == "sqlite" {
+		profile := os.Getenv("RIVER_CONFORMANCE_PROFILE")
+		if profile == "" {
+			profile = "portable-storage-v1"
+		}
+		if profile != "portable-storage-v1" && profile != "sqlite-runtime-v1" {
+			return fmt.Errorf("unsupported SQLite conformance profile %q", profile)
+		}
+		// Apply the pragmas through the DSN so every pooled connection gets
+		// them. database/sql replaces a connection after an interrupted
+		// statement (for example during Client.Stop), and a pragma executed
+		// once would only reach the first one. The busy timeout comes first:
+		// another adapter may be switching the same new database to WAL at the
+		// same moment.
+		separator := "?"
+		if strings.Contains(databaseURL, "?") {
+			separator = "&"
+		}
+		pool, err := sql.Open("sqlite", databaseURL+separator+
+			"_pragma=busy_timeout(5000)&_pragma=journal_mode(WAL)&_pragma=foreign_keys(1)")
+		if err != nil {
+			return err
+		}
+		defer pool.Close()
+		pool.SetMaxOpenConns(1)
+		if err := pool.PingContext(ctx); err != nil {
+			return fmt.Errorf("open SQLite database: %w", err)
+		}
+		state := &sqliteAdapterState{
+			barriers:     newBarrierRegistry(),
+			pool:         pool,
+			profile:      profile,
+			transactions: make(map[string]*sql.Tx),
+		}
+		err = runRequestLoop(ctx, state)
+		if state.running != nil {
+			stopCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+			defer cancel()
+			_ = state.running.client.StopAndCancel(stopCtx)
+			state.running.subscriptionCancel()
+		}
+		return err
+	}
+	if databaseKind != "" && databaseKind != "postgres" {
+		return fmt.Errorf("unsupported RIVER_CONFORMANCE_DATABASE_KIND %q", databaseKind)
+	}
+	poolConfig, err := pgxpool.ParseConfig(databaseURL)
+	if err != nil {
+		return err
+	}
+	// The harness passes a name unique to this process so its observations
+	// and fault injection can't reach another process of the same
+	// implementation attached to the database.
+	applicationName := os.Getenv("RIVER_CONFORMANCE_APPLICATION_NAME")
+	if applicationName == "" {
+		applicationName = "river-conformance-go"
+	}
+	if !isAdapterApplicationName(applicationName) {
+		return fmt.Errorf("RIVER_CONFORMANCE_APPLICATION_NAME %q must name a conformance adapter", applicationName)
+	}
+	poolConfig.ConnConfig.RuntimeParams["application_name"] = applicationName
+	// Fault scenarios terminate this adapter's backends while they sit idle
+	// in the pool. Checking liveness on every acquire keeps a terminated
+	// connection from failing the next request; SQLx pools, used by other
+	// adapters, test connections before acquire by default as well.
+	poolConfig.ShouldPing = func(context.Context, pgxpool.ShouldPingParams) bool { return true }
+	pool, err := pgxpool.NewWithConfig(ctx, poolConfig)
+	if err != nil {
+		return err
+	}
+	defer pool.Close()
+	profile := os.Getenv("RIVER_CONFORMANCE_PROFILE")
+	if profile == "" {
+		profile = "postgres-full-v1"
+	}
+	if profile != "postgres-full-v1" && profile != "insert-only-v1" {
+		return fmt.Errorf("unsupported PostgreSQL conformance profile %q", profile)
+	}
+	state := &adapterState{
+		applicationName: applicationName,
+		barriers:        newBarrierRegistry(),
+		pool:            pool,
+		profile:         profile,
+		transactions:    make(map[string]pgx.Tx),
+	}
+	err = runRequestLoop(ctx, state)
+	if state.running != nil {
+		stopCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+		defer cancel()
+		_ = state.running.client.StopAndCancel(stopCtx)
+		state.running.subscriptionCancel()
+	}
+	return err
+}
+
+func runRequestLoop(ctx context.Context, state requestHandler) error {
+	scanner := bufio.NewScanner(os.Stdin)
+	scanner.Buffer(make([]byte, 64*1024), 4*1024*1024)
+	encoder := json.NewEncoder(os.Stdout)
+	encoder.SetEscapeHTML(false)
+	for scanner.Scan() {
+		var req request
+		if err := json.Unmarshal(scanner.Bytes(), &req); err != nil {
+			if err := encoder.Encode(errorResponse(nil, errorCodeParse, err)); err != nil {
+				return err
+			}
+			continue
+		}
+		if req.JSONRPC != "2.0" {
+			if err := encoder.Encode(errorResponse(req.ID, errorCodeInvalidRequest, errors.New("jsonrpc must be 2.0"))); err != nil {
+				return err
+			}
+			continue
+		}
+		result, err := state.handle(ctx, &req)
+		res := response{ID: req.ID, JSONRPC: "2.0", Result: result}
+		if err != nil {
+			res = errorResponse(req.ID, errorCode(err), err)
+		}
+		if err := encoder.Encode(&res); err != nil {
+			return err
+		}
+	}
+	return scanner.Err()
+}
+
+//nolint:cyclop,funlen,gocognit,maintidx
+func (s *adapterState) handle(ctx context.Context, req *request) (any, error) {
+	methods, profileCapabilities := adapterMethods, capabilities
+	if s.profile == "insert-only-v1" {
+		methods, profileCapabilities = insertOnlyMethods, insertOnlyCapabilities
+	}
+	if err := checkRequest(req, methods); err != nil {
+		return nil, err
+	}
+	switch req.Method {
+	case "handshake":
+		latest, err := latestMigrationVersion(riverpgxv5.New(s.pool))
+		if err != nil {
+			return nil, err
+		}
+		return map[string]any{
+			"adapter_version":        adapterVersion,
+			"application_name":       s.applicationName,
+			"backend":                "postgres",
+			"capabilities":           profileCapabilities,
+			"implementation":         "go",
+			"implementation_version": implementationVersion,
+			"methods":                methods,
+			"migration_lines":        map[string]int{"main": latest},
+			"profile":                s.profile,
+			"protocol_revision":      protocolRevision,
+		}, nil
+
+	case "migrate":
+		var params struct {
+			Direction     string `json:"direction"`
+			DryRun        bool   `json:"dry_run"`
+			MaxSteps      *int   `json:"max_steps"`
+			Schema        string `json:"schema"`
+			TargetVersion *int   `json:"target_version"`
+		}
+		if err := decodeParams(req.Params, &params); err != nil {
+			return nil, err
+		}
+		if params.Schema != "" {
+			if _, err := s.pool.Exec(ctx, "CREATE SCHEMA IF NOT EXISTS "+pgx.Identifier{params.Schema}.Sanitize()); err != nil {
+				return nil, err
+			}
+		}
+		migrator, err := rivermigrate.New(riverpgxv5.New(s.pool), &rivermigrate.Config{
+			Logger: adapterLogger(),
+			Schema: params.Schema,
+		})
+		if err != nil {
+			return nil, err
+		}
+		direction := rivermigrate.DirectionUp
+		if params.Direction != "" {
+			direction = rivermigrate.Direction(params.Direction)
+		}
+		var opts *rivermigrate.MigrateOpts
+		if params.DryRun || params.MaxSteps != nil || params.TargetVersion != nil {
+			opts = &rivermigrate.MigrateOpts{DryRun: params.DryRun}
+			if params.MaxSteps != nil {
+				opts.MaxSteps = *params.MaxSteps
+			}
+			if params.TargetVersion != nil {
+				opts.TargetVersion = *params.TargetVersion
+			}
+		}
+		result, err := migrator.Migrate(ctx, direction, opts)
+		if err != nil {
+			return nil, err
+		}
+		versions := make([]int, len(result.Versions))
+		for i, version := range result.Versions {
+			versions[i] = version.Version
+		}
+		existingMigrations, err := migrator.ExistingVersions(ctx)
+		if err != nil {
+			return nil, err
+		}
+		existing := make([]int, len(existingMigrations))
+		for i, migration := range existingMigrations {
+			existing[i] = migration.Version
+		}
+		validation, err := migrator.Validate(ctx, nil)
+		if err != nil {
+			return nil, err
+		}
+		return map[string]any{"applied": versions, "existing": existing, "valid": validation.OK}, nil
+
+	case "reset":
+		if s.running != nil || len(s.transactions) > 0 {
+			return nil, errors.New("reset requires no running client or open transaction")
+		}
+		s.barriers.clear()
+		var params struct {
+			Schema string `json:"schema"`
+		}
+		if err := decodeParams(req.Params, &params); err != nil {
+			return nil, err
+		}
+		table := func(name string) string {
+			if params.Schema == "" {
+				return pgx.Identifier{name}.Sanitize()
+			}
+			return pgx.Identifier{params.Schema, name}.Sanitize()
+		}
+		_, err := s.pool.Exec(ctx, "TRUNCATE "+table("river_job")+", "+table("river_notification")+", "+table("river_queue")+", "+table("river_leader")+" RESTART IDENTITY CASCADE")
+		return map[string]any{}, err
+
+	case "clock_set":
+		var params struct {
+			Now time.Time `json:"now"`
+		}
+		if err := decodeParams(req.Params, &params); err != nil {
+			return nil, err
+		}
+		s.clock = &params.Now
+		return map[string]any{}, nil
+
+	case "rng_seed":
+		var params struct {
+			Seed uint64 `json:"seed"`
+		}
+		if err := decodeParams(req.Params, &params); err != nil {
+			return nil, err
+		}
+		s.rngSeed = params.Seed
+		return map[string]any{}, nil
+
+	case "cron_next":
+		return handleCronNext(req.Params)
+
+	case "retry_delay":
+		if s.clock == nil {
+			return nil, errors.New("clock_set is required before retry_delay")
+		}
+		var params struct {
+			ErrorCount uint32 `json:"error_count"`
+			JobID      int64  `json:"job_id"`
+		}
+		if err := decodeParams(req.Params, &params); err != nil {
+			return nil, err
+		}
+		if params.ErrorCount < 1 {
+			return nil, errors.New("error_count must be positive")
+		}
+		return map[string]any{"delay_ns": defaultRetryDelay(*s.clock, params.JobID, params.ErrorCount).Nanoseconds()}, nil
+
+	case "unique_key":
+		return handleUniqueKey(req.Params)
+
+	case "barrier_create", "barrier_release":
+		var params struct {
+			Name string `json:"name"`
+		}
+		if err := decodeParams(req.Params, &params); err != nil {
+			return nil, err
+		}
+		if req.Method == "barrier_create" {
+			return map[string]any{}, s.barriers.create(params.Name)
+		}
+		return map[string]any{}, s.barriers.release(params.Name)
+
+	case "insert":
+		var params insertParams
+		if err := decodeParams(req.Params, &params); err != nil {
+			return nil, err
+		}
+		if err := (insertParams{Behavior: params.Behavior, Kind: params.Kind}).rejectRawOnlyFields(); err != nil {
+			return nil, err
+		}
+		client, err := s.clientForSchema(params.Schema)
+		if err != nil {
+			return nil, err
+		}
+		opts, err := params.Opts.opts()
+		if err != nil {
+			return nil, err
+		}
+		result, err := client.Insert(ctx, params.args(), opts)
+		if err != nil {
+			return nil, err
+		}
+		return normalizeJob(result.Job), nil
+
+	case "insert_many":
+		jobs, err := decodeInsertManyParams(req.Params)
+		if err != nil {
+			return nil, err
+		}
+		client, err := s.client()
+		if err != nil {
+			return nil, err
+		}
+		results, err := client.InsertMany(ctx, jobs)
+		if err != nil {
+			return nil, err
+		}
+		return normalizeInsertManyResults(results), nil
+
+	case "benchmark_enqueue":
+		var params struct {
+			Jobs int `json:"jobs"`
+		}
+		if err := decodeParams(req.Params, &params); err != nil {
+			return nil, err
+		}
+		if params.Jobs < 1 {
+			return nil, errors.New("jobs must be positive")
+		}
+		client, err := s.client()
+		if err != nil {
+			return nil, err
+		}
+		latencies := make([]time.Duration, 0, params.Jobs)
+		startedAt := time.Now()
+		for index := range params.Jobs {
+			insertedAt := time.Now()
+			if _, err := client.Insert(ctx, conformanceArgs{Message: fmt.Sprintf("benchmark-enqueue-%d", index)}, nil); err != nil {
+				return nil, err
+			}
+			latencies = append(latencies, time.Since(insertedAt))
+		}
+		duration := time.Since(startedAt)
+		slices.Sort(latencies)
+		p95 := latencies[max(0, (len(latencies)*95+99)/100-1)]
+		return map[string]any{"duration_ns": duration.Nanoseconds(), "p95_ns": p95.Nanoseconds()}, nil
+
+	case "get": //nolint:usestdlibvars // JSON-RPC method names are lowercase protocol values.
+		var params struct {
+			ID     int64  `json:"id"`
+			Schema string `json:"schema"`
+		}
+		if err := decodeParams(req.Params, &params); err != nil {
+			return nil, err
+		}
+		if params.ID < 1 {
+			return nil, errors.New("id must be positive")
+		}
+		client, err := s.clientForSchema(params.Schema)
+		if err != nil {
+			return nil, err
+		}
+		job, err := client.JobGet(ctx, params.ID)
+		if err != nil {
+			return nil, err
+		}
+		return normalizeJob(job), nil
+
+	case "list":
+		params, _, err := makeJobListParams(req.Params, false)
+		if err != nil {
+			return nil, err
+		}
+		client, err := s.client()
+		if err != nil {
+			return nil, err
+		}
+		result, err := client.JobList(ctx, params)
+		if err != nil {
+			return nil, err
+		}
+		return normalizeJobListResult(result)
+
+	case "cancel", "delete", "retry": //nolint:usestdlibvars // JSON-RPC method names are lowercase protocol values.
+		id, err := requestID(req.Params)
+		if err != nil {
+			return nil, err
+		}
+		client, err := s.client()
+		if err != nil {
+			return nil, err
+		}
+		var job *rivertype.JobRow
+		switch req.Method {
+		case "cancel":
+			job, err = client.JobCancel(ctx, id)
+		case "delete": //nolint:usestdlibvars // JSON-RPC method names are lowercase protocol values.
+			job, err = client.JobDelete(ctx, id)
+		case "retry":
+			job, err = client.JobRetry(ctx, id)
+		}
+		if err != nil {
+			return nil, err
+		}
+		return normalizeJob(job), nil
+
+	case "delete_finalized":
+		params, err := makeJobDeleteBeforeParams(req.Params)
+		if err != nil {
+			return nil, err
+		}
+		deleted, err := riverpgxv5.New(s.pool).GetExecutor().JobDeleteBefore(ctx, params)
+		if err != nil {
+			return nil, err
+		}
+		return map[string]any{"deleted": deleted}, nil
+
+	case "delete_many":
+		params, _, err := makeJobDeleteManyParams(req.Params, false)
+		if err != nil {
+			return nil, err
+		}
+		client, err := s.client()
+		if err != nil {
+			return nil, err
+		}
+		result, err := client.JobDeleteMany(ctx, params)
+		if err != nil {
+			return nil, err
+		}
+		return map[string]any{"jobs": normalizeJobs(result.Jobs)}, nil
+
+	case "update":
+		var params struct {
+			ID     int64 `json:"id"`
+			Output any   `json:"output"`
+		}
+		if err := decodeParams(req.Params, &params); err != nil {
+			return nil, err
+		}
+		client, err := s.client()
+		if err != nil {
+			return nil, err
+		}
+		job, err := client.JobUpdate(ctx, params.ID, &river.JobUpdateParams{Output: params.Output})
+		if err != nil {
+			return nil, err
+		}
+		return normalizeJob(job), nil
+
+	case "raw_finalize":
+		var params struct {
+			ID       int64          `json:"id"`
+			Metadata map[string]any `json:"metadata"`
+			State    string         `json:"state"`
+		}
+		if err := decodeParams(req.Params, &params); err != nil {
+			return nil, err
+		}
+		if params.State != "completed" && params.State != "discarded" {
+			return nil, invalidParams(errors.New("state must be completed or discarded"))
+		}
+		metadata, err := json.Marshal(params.Metadata)
+		if err != nil {
+			return nil, err
+		}
+		attemptError, err := json.Marshal(map[string]any{
+			"at":      "2026-02-03T04:05:06.789Z",
+			"attempt": 1,
+			"error":   "external discard",
+			"trace":   "external trace",
+		})
+		if err != nil {
+			return nil, err
+		}
+		// finalized_at is the current time so leader cleaners never delete
+		// the row while the scenario still observes it.
+		commandTag, err := s.pool.Exec(ctx, `
+			UPDATE river_job
+			SET errors = CASE WHEN $2 = 'discarded' THEN array_append(errors, $4::jsonb) ELSE errors END,
+				finalized_at = now(),
+				metadata = metadata || $3::jsonb,
+				state = $2::river_job_state
+			WHERE id = $1 AND state = 'running'`,
+			params.ID, params.State, metadata, attemptError,
+		)
+		if err != nil {
+			return nil, err
+		}
+		if commandTag.RowsAffected() != 1 {
+			return nil, notFound(errors.New("running job not found"))
+		}
+		client, err := s.client()
+		if err != nil {
+			return nil, err
+		}
+		job, err := client.JobGet(ctx, params.ID)
+		if err != nil {
+			return nil, err
+		}
+		return normalizeJob(job), nil
+
+	case "queue_add":
+		if s.running == nil {
+			return nil, errors.New("queue_add requires a running client")
+		}
+		return handleQueueAdd(ctx, req.Params, s.running.client.Queues().Add, s.running.client.Queues().Remove)
+
+	case "queue_get":
+		var params struct {
+			Name string `json:"name"`
+		}
+		if err := decodeParams(req.Params, &params); err != nil {
+			return nil, err
+		}
+		client, err := s.client()
+		if err != nil {
+			return nil, err
+		}
+		queue, err := client.QueueGet(ctx, params.Name)
+		if err != nil {
+			return nil, err
+		}
+		return normalizeQueue(queue), nil
+
+	case "queue_list":
+		var params struct {
+			Limit int `json:"limit"`
+		}
+		if err := decodeParams(req.Params, &params); err != nil {
+			return nil, err
+		}
+		if params.Limit == 0 {
+			params.Limit = 100
+		}
+		client, err := s.client()
+		if err != nil {
+			return nil, err
+		}
+		result, err := client.QueueList(ctx, river.NewQueueListParams().First(params.Limit))
+		if err != nil {
+			return nil, err
+		}
+		queues := make([]any, len(result.Queues))
+		for i, queue := range result.Queues {
+			queues[i] = normalizeQueue(queue)
+		}
+		return map[string]any{"queues": queues}, nil
+
+	case "queue_pause", "queue_resume":
+		var params struct {
+			Name string `json:"name"`
+		}
+		if err := decodeParams(req.Params, &params); err != nil {
+			return nil, err
+		}
+		client, err := s.client()
+		if err != nil {
+			return nil, err
+		}
+		if req.Method == "queue_pause" {
+			err = client.QueuePause(ctx, params.Name, nil)
+		} else {
+			err = client.QueueResume(ctx, params.Name, nil)
+		}
+		return map[string]any{}, err
+
+	case "queue_remove":
+		if s.running == nil {
+			return nil, errors.New("queue_remove requires a running client")
+		}
+		var params struct {
+			Name string `json:"name"`
+		}
+		if err := decodeParams(req.Params, &params); err != nil {
+			return nil, err
+		}
+		return map[string]any{}, s.running.client.Queues().Remove(ctx, params.Name)
+
+	case "queue_update":
+		var params struct {
+			Metadata json.RawMessage `json:"metadata"`
+			Name     string          `json:"name"`
+		}
+		if err := decodeParams(req.Params, &params); err != nil {
+			return nil, err
+		}
+		client, err := s.client()
+		if err != nil {
+			return nil, err
+		}
+		queue, err := client.QueueUpdate(ctx, params.Name, &river.QueueUpdateParams{Metadata: params.Metadata})
+		if err != nil {
+			return nil, err
+		}
+		return normalizeQueue(queue), nil
+
+	case "request_resign":
+		var params struct {
+			Handle string `json:"handle"`
+		}
+		if err := decodeParams(req.Params, &params); err != nil {
+			return nil, err
+		}
+		client, err := s.client()
+		if err != nil {
+			return nil, err
+		}
+		if params.Handle != "" {
+			tx, ok := s.transactions[params.Handle]
+			if !ok {
+				return nil, transactionNotFound(params.Handle)
+			}
+			return map[string]any{}, client.Notify().RequestResignTx(ctx, tx)
+		}
+		return map[string]any{}, client.Notify().RequestResign(ctx)
+
+	case "leader":
+		var leaderID string
+		var electedAt time.Time
+		err := s.pool.QueryRow(ctx, "SELECT leader_id, elected_at FROM river_leader WHERE name = 'default' AND expires_at >= now()").Scan(&leaderID, &electedAt)
+		if errors.Is(err, pgx.ErrNoRows) {
+			return map[string]any{"elected_at": nil, "leader_id": nil}, nil
+		}
+		return map[string]any{"elected_at": formatTime(electedAt), "leader_id": leaderID}, err
+
+	case "listener_count":
+		var count int
+		err := s.pool.QueryRow(ctx, "SELECT count(*) FROM pg_stat_activity WHERE datname = current_database() AND application_name = $1 AND query LIKE 'LISTEN %'", s.applicationName).Scan(&count)
+		return map[string]any{"count": count}, err
+
+	case "connection_count":
+		var count int
+		err := s.pool.QueryRow(ctx, "SELECT count(*) FROM pg_stat_activity WHERE datname = current_database() AND application_name = $1", s.applicationName).Scan(&count)
+		return map[string]any{"count": count}, err
+
+	case "fault_disconnect_listeners":
+		var count int
+		err := s.pool.QueryRow(ctx, "SELECT count(*) FROM (SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = current_database() AND application_name = $1 AND query LIKE 'LISTEN %' AND pid != pg_backend_pid()) AS terminated", s.applicationName).Scan(&count)
+		return map[string]any{"count": count}, err
+
+	case "fault_disconnect_application":
+		var params struct {
+			ApplicationName string `json:"application_name"`
+		}
+		if err := decodeParams(req.Params, &params); err != nil {
+			return nil, err
+		}
+		// Only conformance adapters may be disconnected.
+		if !isAdapterApplicationName(params.ApplicationName) {
+			return nil, errors.New("application_name must name a conformance adapter")
+		}
+		var count int
+		err := s.pool.QueryRow(ctx, "SELECT count(*) FROM (SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = current_database() AND application_name = $1 AND pid != pg_backend_pid()) AS terminated", params.ApplicationName).Scan(&count)
+		return map[string]any{"count": count}, err
+
+	case "fault_expire_leader":
+		_, err := s.pool.Exec(ctx, "UPDATE river_leader SET expires_at = now() - interval '1 second'")
+		return map[string]any{}, err
+
+	case "raw_insert_no_notify":
+		var params insertParams
+		if err := decodeParams(req.Params, &params); err != nil {
+			return nil, err
+		}
+		if err := (insertParams{Behavior: params.Behavior, Schema: params.Schema}).rejectRawOnlyFields(); err != nil {
+			return nil, err
+		}
+		encodedArgs, err := json.Marshal(params.args())
+		if err != nil {
+			return nil, err
+		}
+		if params.Kind == "" {
+			params.Kind = "conformance_echo"
+		}
+		maxAttempts := river.MaxAttemptsDefault
+		if params.Opts.MaxAttempts != nil {
+			maxAttempts = *params.Opts.MaxAttempts
+		}
+		var id int64
+		err = s.pool.QueryRow(ctx, "INSERT INTO river_job (args, kind, max_attempts) VALUES ($1, $2, $3) RETURNING id", encodedArgs, params.Kind, maxAttempts).Scan(&id)
+		if err != nil {
+			return nil, err
+		}
+		client, err := s.client()
+		if err != nil {
+			return nil, err
+		}
+		job, err := client.JobGet(ctx, id)
+		if err != nil {
+			return nil, err
+		}
+		return normalizeJob(job), nil
+
+	case "raw_insert_exact_json":
+		var params struct {
+			ID           *int64  `json:"id"`
+			MetadataJSON *string `json:"metadata_json"`
+		}
+		if err := decodeParams(req.Params, &params); err != nil {
+			return nil, err
+		}
+		var id int64
+		err := s.pool.QueryRow(ctx, `
+			INSERT INTO river_job (id, args, kind, max_attempts, metadata)
+			VALUES (
+				COALESCE($1, nextval(pg_get_serial_sequence('river_job', 'id'))),
+				'{"decimal":0.12345678901234567890123456789,"integer":9223372036854775807}'::jsonb,
+				'conformance_exact_json', 25,
+				COALESCE($2::jsonb, '{"negative":-9223372036854775808}'::jsonb)
+			) RETURNING id`, params.ID, params.MetadataJSON).Scan(&id)
+		return map[string]any{"id": id}, err
+
+	case "raw_insert_full_row":
+		var id int64
+		err := s.pool.QueryRow(ctx, `
+			INSERT INTO river_job (
+				args, attempt, attempted_at, attempted_by, created_at, errors,
+				finalized_at, kind, max_attempts, metadata, priority, queue,
+				scheduled_at, state, tags, unique_key, unique_states
+			) VALUES (
+				'{"nested":{"enabled":true},"values":[1,"two",null]}'::jsonb,
+				3, '2026-01-02T03:04:06.123456Z', ARRAY['go-client','candidate-client'],
+				'2026-01-02T03:04:05.6789Z',
+				ARRAY['{"at":"2026-01-02T03:04:06.123456Z","attempt":3,"error":"worker failed: escaped \"detail\"","trace":"frame one\nframe two"}'::jsonb],
+				'2026-01-02T03:04:07.000001Z', 'conformance_full_row', 4,
+				'{"output":{"ok":true},"river:rescue_count":2,"user":"metadata"}'::jsonb,
+				2, 'priority_jobs', '2026-01-02T03:04:05.999999Z', 'discarded',
+				ARRAY['alpha_tag','beta_tag'], decode(repeat('ab', 32), 'hex'), B'11110101'
+			) RETURNING id`).Scan(&id)
+		if err != nil {
+			return nil, err
+		}
+		client, err := s.client()
+		if err != nil {
+			return nil, err
+		}
+		job, err := client.JobGet(ctx, id)
+		if err != nil {
+			return nil, err
+		}
+		return normalizeJob(job), nil
+
+	case "raw_job_exact_json":
+		id, err := requestID(req.Params)
+		if err != nil {
+			return nil, err
+		}
+		client, err := s.client()
+		if err != nil {
+			return nil, err
+		}
+		job, err := client.JobGet(ctx, id)
+		if err != nil {
+			return nil, err
+		}
+		return exactJSONTokens(job)
+
+	case "raw_job_row":
+		id, err := requestID(req.Params)
+		if err != nil {
+			return nil, err
+		}
+		var row rawJobRow
+		err = s.pool.QueryRow(ctx, `
+			SELECT args::text, attempted_at::text, attempted_by::text, created_at::text, errors::text,
+				finalized_at::text, metadata::text, scheduled_at::text, tags::text,
+				upper(encode(unique_key, 'hex')), unique_states::text
+			FROM river_job
+			WHERE id = $1`, id).Scan(row.scanTargets()...)
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, notFound(err)
+		}
+		return row, err
+
+	case "raw_notifications":
+		var params struct {
+			AfterID *int64 `json:"after_id"`
+		}
+		if err := decodeParams(req.Params, &params); err != nil {
+			return nil, err
+		}
+		if params.AfterID == nil || *params.AfterID < 0 {
+			return nil, invalidParams(errors.New("after_id must be a non-negative integer"))
+		}
+		return nil, unsupported(errors.New("PostgreSQL has no notification outbox"))
+
+	case "raw_replace_json_text":
+		var params struct {
+			Column string  `json:"column"`
+			ID     int64   `json:"id"`
+			Text   *string `json:"text"`
+		}
+		if err := decodeParams(req.Params, &params); err != nil {
+			return nil, err
+		}
+		return nil, unsupported(errors.New("PostgreSQL JSON columns can't hold text that isn't JSON"))
+
+	case "raw_set_kind":
+		var params rawSetKindParams
+		if err := decodeParams(req.Params, &params); err != nil {
+			return nil, err
+		}
+		if params.Kind == "" {
+			return nil, invalidParams(errors.New("kind is required"))
+		}
+		commandTag, err := s.pool.Exec(ctx, "UPDATE river_job SET kind = $2 WHERE id = $1", params.ID, params.Kind)
+		if err != nil {
+			return nil, err
+		}
+		if commandTag.RowsAffected() != 1 {
+			return nil, notFound(errors.New("job not found"))
+		}
+		client, err := s.client()
+		if err != nil {
+			return nil, err
+		}
+		job, err := client.JobGet(ctx, params.ID)
+		if err != nil {
+			return nil, err
+		}
+		return normalizeJob(job), nil
+
+	case "raw_job_timestamps":
+		id, err := requestID(req.Params)
+		if err != nil {
+			return nil, err
+		}
+		var createdAt, scheduledAt string
+		err = s.pool.QueryRow(ctx, `
+			SELECT created_at::text, scheduled_at::text
+			FROM river_job
+			WHERE id = $1`, id).Scan(&createdAt, &scheduledAt)
+		return map[string]any{"created_at": createdAt, "scheduled_at": scheduledAt}, err
+
+	case "start":
+		if s.running != nil {
+			return nil, errors.New("client already running")
+		}
+		var params struct {
+			maintenanceParams
+			startTuningParams
+
+			ClaimBarrier           string   `json:"claim_barrier"`
+			ClientID               string   `json:"client_id"`
+			ErrorHandlerCancel     bool     `json:"error_handler_cancel"`
+			FetchOnlyKnownKinds    bool     `json:"fetch_only_known_kinds"`
+			FetchPollIntervalMS    *uint64  `json:"fetch_poll_interval_ms"`
+			Instrumented           bool     `json:"instrumented"`
+			JobStuckThresholdMS    *uint64  `json:"job_stuck_threshold_ms"`
+			JobTimeoutMS           *uint64  `json:"job_timeout_ms"`
+			LeaderElectionDisabled bool     `json:"leader_election_disabled"`
+			MaxWorkers             int      `json:"max_workers"`
+			PeriodicRunOnStart     bool     `json:"periodic_run_on_start"`
+			PeriodicUnique         bool     `json:"periodic_unique"`
+			PollOnly               bool     `json:"poll_only"`
+			Queue                  string   `json:"queue"`
+			RescueAfterMS          *uint64  `json:"rescue_after_ms"`
+			RetryDelayMS           *uint64  `json:"retry_delay_ms"`
+			Schema                 string   `json:"schema"`
+			WorkerKinds            []string `json:"worker_kinds"`
+		}
+		if err := decodeParams(req.Params, &params); err != nil {
+			return nil, err
+		}
+		if err := params.reject(); err != nil {
+			return nil, err
+		}
+		if params.ClaimBarrier != "" && !s.barriers.exists(params.ClaimBarrier) {
+			return nil, invalidParams(fmt.Errorf("claim_barrier %q does not exist", params.ClaimBarrier))
+		}
+		if params.MaxWorkers == 0 {
+			params.MaxWorkers = 4
+		}
+		if params.Queue == "" {
+			params.Queue = river.QueueDefault
+		}
+		probe := &runtimeProbe{}
+		client, err := newWorkerClient(s.pool, s.barriers, workerClientConfig{
+			claimBarrier:           params.ClaimBarrier,
+			errorHandlerCancel:     params.ErrorHandlerCancel,
+			fetchOnlyKnownKinds:    params.FetchOnlyKnownKinds,
+			fetchPollIntervalMS:    params.FetchPollIntervalMS,
+			id:                     params.ClientID,
+			instrumented:           params.Instrumented,
+			jobStuckThresholdMS:    params.JobStuckThresholdMS,
+			jobTimeoutMS:           params.JobTimeoutMS,
+			leaderElectionDisabled: params.LeaderElectionDisabled,
+			maintenance:            params.maintenanceParams,
+			maxWorkers:             params.MaxWorkers,
+			periodicRunOnStart:     params.PeriodicRunOnStart,
+			periodicUnique:         params.PeriodicUnique,
+			pollOnly:               params.PollOnly,
+			probe:                  probe,
+			queue:                  params.Queue,
+			rescueAfterMS:          params.RescueAfterMS,
+			retryDelayMS:           params.RetryDelayMS,
+			schema:                 params.Schema,
+			workerKinds:            params.WorkerKinds,
+		})
+		if err != nil {
+			return nil, err
+		}
+		subscription, subscriptionCancel := client.Subscribe(
+			river.EventKindJobCancelled,
+			river.EventKindJobCompleted,
+			river.EventKindJobFailed,
+			river.EventKindJobInterrupted,
+			river.EventKindJobSnoozed,
+			river.EventKindQueuePaused,
+			river.EventKindQueueResumed,
+		)
+		if err := client.Start(ctx); err != nil {
+			subscriptionCancel()
+			return nil, err
+		}
+		s.running = &runningClient{
+			claimBarrier:       params.ClaimBarrier,
+			client:             client,
+			probe:              probe,
+			subscription:       subscription,
+			subscriptionCancel: subscriptionCancel,
+		}
+		return map[string]any{}, nil
+
+	case "stop":
+		if s.running == nil {
+			return nil, errors.New("client is not running")
+		}
+		var params struct {
+			Cancel bool `json:"cancel"`
+		}
+		if err := decodeParams(req.Params, &params); err != nil {
+			return nil, err
+		}
+		// A claim held on the barrier would keep the client from stopping.
+		if s.running.claimBarrier != "" {
+			s.barriers.releaseIfPresent(s.running.claimBarrier)
+		}
+		stopCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+		defer cancel()
+		if params.Cancel {
+			err := s.running.client.StopAndCancel(stopCtx)
+			s.running.subscriptionCancel()
+			s.running = nil
+			return map[string]any{}, err
+		}
+		err := s.running.client.Stop(stopCtx)
+		s.running.subscriptionCancel()
+		s.running = nil
+		return map[string]any{}, err
+
+	case "runtime_stats":
+		if s.running == nil {
+			return nil, errors.New("runtime_stats requires a running client")
+		}
+		for {
+			select {
+			case event := <-s.running.subscription:
+				if event != nil {
+					s.running.probe.addEvent(event.Kind)
+				}
+			default:
+				return s.running.probe.snapshot(), nil
+			}
+		}
+
+	case "wait":
+		var params struct {
+			ID     int64                `json:"id"`
+			States []rivertype.JobState `json:"states"`
+		}
+		if err := decodeParams(req.Params, &params); err != nil {
+			return nil, err
+		}
+		client, err := s.client()
+		if err != nil {
+			return nil, err
+		}
+		job, err := waitForStates(ctx, client, params.ID, params.States)
+		if err != nil {
+			return nil, err
+		}
+		return normalizeJob(job), nil
+
+	case "work":
+		var params struct {
+			ClientID string `json:"client_id"`
+			ID       int64  `json:"id"`
+			Schema   string `json:"schema"`
+		}
+		if err := decodeParams(req.Params, &params); err != nil {
+			return nil, err
+		}
+		if params.ID < 1 {
+			return nil, errors.New("id must be positive")
+		}
+		if params.ClientID == "" {
+			params.ClientID = "go-conformance-adapter"
+		}
+		probe := &runtimeProbe{}
+		client, err := newWorkerClient(s.pool, s.barriers, workerClientConfig{
+			id:         params.ClientID,
+			maxWorkers: 1,
+			probe:      probe,
+			queue:      river.QueueDefault,
+			schema:     params.Schema,
+		})
+		if err != nil {
+			return nil, err
+		}
+		if err := client.Start(ctx); err != nil {
+			return nil, err
+		}
+		job, waitErr := waitForStates(ctx, client, params.ID, nil)
+		stopCtx, stopCancel := context.WithTimeout(ctx, 10*time.Second)
+		defer stopCancel()
+		stopErr := client.Stop(stopCtx)
+		if waitErr != nil {
+			return nil, waitErr
+		}
+		if stopErr != nil {
+			return nil, stopErr
+		}
+		return normalizeJob(job), nil
+
+	case "tx_begin":
+		handle, err := requestHandle(req.Params)
+		if err != nil {
+			return nil, err
+		}
+		if _, ok := s.transactions[handle]; ok {
+			return nil, fmt.Errorf("transaction %q already exists", handle)
+		}
+		tx, err := s.pool.Begin(ctx)
+		if err != nil {
+			return nil, err
+		}
+		s.transactions[handle] = tx
+		return map[string]any{}, nil
+
+	case "tx_insert":
+		var params struct {
+			Handle string       `json:"handle"`
+			Job    insertParams `json:"job"`
+		}
+		if err := decodeParams(req.Params, &params); err != nil {
+			return nil, err
+		}
+		if err := params.Job.rejectRawOnlyFields(); err != nil {
+			return nil, err
+		}
+		tx, ok := s.transactions[params.Handle]
+		if !ok {
+			return nil, transactionNotFound(params.Handle)
+		}
+		client, err := s.client()
+		if err != nil {
+			return nil, err
+		}
+		opts, err := params.Job.Opts.opts()
+		if err != nil {
+			return nil, err
+		}
+		result, err := client.InsertTx(ctx, tx, params.Job.args(), opts)
+		if err != nil {
+			return nil, err
+		}
+		return normalizeJob(result.Job), nil
+
+	case "tx_insert_many":
+		var params struct {
+			Handle string          `json:"handle"`
+			Jobs   json.RawMessage `json:"jobs"`
+		}
+		if err := decodeParams(req.Params, &params); err != nil {
+			return nil, err
+		}
+		tx, ok := s.transactions[params.Handle]
+		if !ok {
+			return nil, transactionNotFound(params.Handle)
+		}
+		jobs, err := decodeInsertManyParams(params.Jobs)
+		if err != nil {
+			return nil, err
+		}
+		client, err := s.client()
+		if err != nil {
+			return nil, err
+		}
+		results, err := client.InsertManyTx(ctx, tx, jobs)
+		if err != nil {
+			return nil, err
+		}
+		return normalizeInsertManyResults(results), nil
+
+	case "tx_get", "tx_cancel", "tx_delete", "tx_retry":
+		var params struct {
+			Handle string `json:"handle"`
+			ID     int64  `json:"id"`
+		}
+		if err := decodeParams(req.Params, &params); err != nil {
+			return nil, err
+		}
+		tx, ok := s.transactions[params.Handle]
+		if !ok {
+			return nil, transactionNotFound(params.Handle)
+		}
+		client, err := s.client()
+		if err != nil {
+			return nil, err
+		}
+		var job *rivertype.JobRow
+		switch req.Method {
+		case "tx_cancel":
+			job, err = client.JobCancelTx(ctx, tx, params.ID)
+		case "tx_delete":
+			job, err = client.JobDeleteTx(ctx, tx, params.ID)
+		case "tx_get":
+			job, err = client.JobGetTx(ctx, tx, params.ID)
+		case "tx_retry":
+			job, err = client.JobRetryTx(ctx, tx, params.ID)
+		}
+		if err != nil {
+			return nil, err
+		}
+		return normalizeJob(job), nil
+
+	case "tx_update":
+		var params struct {
+			Handle string `json:"handle"`
+			ID     int64  `json:"id"`
+			Output any    `json:"output"`
+		}
+		if err := decodeParams(req.Params, &params); err != nil {
+			return nil, err
+		}
+		tx, ok := s.transactions[params.Handle]
+		if !ok {
+			return nil, transactionNotFound(params.Handle)
+		}
+		client, err := s.client()
+		if err != nil {
+			return nil, err
+		}
+		job, err := client.JobUpdateTx(ctx, tx, params.ID, &river.JobUpdateParams{Output: params.Output})
+		if err != nil {
+			return nil, err
+		}
+		return normalizeJob(job), nil
+
+	case "tx_list":
+		params, handle, err := makeJobListParams(req.Params, true)
+		if err != nil {
+			return nil, err
+		}
+		tx, ok := s.transactions[handle]
+		if !ok {
+			return nil, transactionNotFound(handle)
+		}
+		client, err := s.client()
+		if err != nil {
+			return nil, err
+		}
+		result, err := client.JobListTx(ctx, tx, params)
+		if err != nil {
+			return nil, err
+		}
+		return normalizeJobListResult(result)
+
+	case "tx_delete_many":
+		params, handle, err := makeJobDeleteManyParams(req.Params, true)
+		if err != nil {
+			return nil, err
+		}
+		tx, ok := s.transactions[handle]
+		if !ok {
+			return nil, transactionNotFound(handle)
+		}
+		client, err := s.client()
+		if err != nil {
+			return nil, err
+		}
+		result, err := client.JobDeleteManyTx(ctx, tx, params)
+		if err != nil {
+			return nil, err
+		}
+		return map[string]any{"jobs": normalizeJobs(result.Jobs)}, nil
+
+	case "tx_queue_get":
+		var params struct {
+			Handle string `json:"handle"`
+			Name   string `json:"name"`
+		}
+		if err := decodeParams(req.Params, &params); err != nil {
+			return nil, err
+		}
+		tx, ok := s.transactions[params.Handle]
+		if !ok {
+			return nil, transactionNotFound(params.Handle)
+		}
+		client, err := s.client()
+		if err != nil {
+			return nil, err
+		}
+		queue, err := client.QueueGetTx(ctx, tx, params.Name)
+		if err != nil {
+			return nil, err
+		}
+		return normalizeQueue(queue), nil
+
+	case "tx_queue_list":
+		var params struct {
+			Handle string `json:"handle"`
+			Limit  int    `json:"limit"`
+		}
+		if err := decodeParams(req.Params, &params); err != nil {
+			return nil, err
+		}
+		if params.Limit == 0 {
+			params.Limit = 100
+		}
+		tx, ok := s.transactions[params.Handle]
+		if !ok {
+			return nil, transactionNotFound(params.Handle)
+		}
+		client, err := s.client()
+		if err != nil {
+			return nil, err
+		}
+		result, err := client.QueueListTx(ctx, tx, river.NewQueueListParams().First(params.Limit))
+		if err != nil {
+			return nil, err
+		}
+		queues := make([]any, len(result.Queues))
+		for i, queue := range result.Queues {
+			queues[i] = normalizeQueue(queue)
+		}
+		return map[string]any{"queues": queues}, nil
+
+	case "tx_queue_pause", "tx_queue_resume":
+		var params struct {
+			Handle string `json:"handle"`
+			Name   string `json:"name"`
+		}
+		if err := decodeParams(req.Params, &params); err != nil {
+			return nil, err
+		}
+		tx, ok := s.transactions[params.Handle]
+		if !ok {
+			return nil, transactionNotFound(params.Handle)
+		}
+		client, err := s.client()
+		if err != nil {
+			return nil, err
+		}
+		if req.Method == "tx_queue_pause" {
+			err = client.QueuePauseTx(ctx, tx, params.Name, nil)
+		} else {
+			err = client.QueueResumeTx(ctx, tx, params.Name, nil)
+		}
+		return map[string]any{}, err
+
+	case "tx_queue_update":
+		var params struct {
+			Handle   string          `json:"handle"`
+			Metadata json.RawMessage `json:"metadata"`
+			Name     string          `json:"name"`
+		}
+		if err := decodeParams(req.Params, &params); err != nil {
+			return nil, err
+		}
+		tx, ok := s.transactions[params.Handle]
+		if !ok {
+			return nil, transactionNotFound(params.Handle)
+		}
+		client, err := s.client()
+		if err != nil {
+			return nil, err
+		}
+		queue, err := client.QueueUpdateTx(ctx, tx, params.Name, &river.QueueUpdateParams{Metadata: params.Metadata})
+		if err != nil {
+			return nil, err
+		}
+		return normalizeQueue(queue), nil
+
+	case "tx_fail":
+		handle, err := requestHandle(req.Params)
+		if err != nil {
+			return nil, err
+		}
+		tx, ok := s.transactions[handle]
+		if !ok {
+			return nil, transactionNotFound(handle)
+		}
+		_, err = tx.Exec(ctx, "SELECT 1 / 0")
+		return nil, err
+
+	case "tx_commit", "tx_rollback":
+		handle, err := requestHandle(req.Params)
+		if err != nil {
+			return nil, err
+		}
+		tx, ok := s.transactions[handle]
+		if !ok {
+			return nil, transactionNotFound(handle)
+		}
+		delete(s.transactions, handle)
+		if req.Method == "tx_commit" {
+			return map[string]any{}, tx.Commit(ctx)
+		}
+		return map[string]any{}, tx.Rollback(ctx)
+	}
+
+	return nil, methodNotFound(req.Method)
+}
+
+//nolint:cyclop,funlen,gocognit,maintidx
+func (s *sqliteAdapterState) handle(ctx context.Context, req *request) (any, error) {
+	methods, profileCapabilities := sqliteAdapterMethods, sqliteCapabilities
+	if s.profile == "sqlite-runtime-v1" {
+		methods, profileCapabilities = sqliteRuntimeMethods, sqliteRuntimeCapabilities
+	}
+	if err := checkRequest(req, methods); err != nil {
+		return nil, err
+	}
+	switch req.Method {
+	case "handshake":
+		latest, err := latestMigrationVersion(riversqlite.New(s.pool))
+		if err != nil {
+			return nil, err
+		}
+		return map[string]any{
+			"adapter_version":        adapterVersion,
+			"backend":                "sqlite",
+			"capabilities":           profileCapabilities,
+			"implementation":         "go",
+			"implementation_version": implementationVersion,
+			"methods":                methods,
+			"migration_lines":        map[string]int{"main": latest},
+			"profile":                s.profile,
+			"protocol_revision":      protocolRevision,
+		}, nil
+
+	case "migrate":
+		var params struct {
+			Direction     string `json:"direction"`
+			DryRun        bool   `json:"dry_run"`
+			MaxSteps      *int   `json:"max_steps"`
+			Schema        string `json:"schema"`
+			TargetVersion *int   `json:"target_version"`
+		}
+		if err := decodeParams(req.Params, &params); err != nil {
+			return nil, err
+		}
+		if params.Schema != "" {
+			return nil, unsupported(errors.New("SQLite conformance does not support custom schemas"))
+		}
+		migrator, err := rivermigrate.New(riversqlite.New(s.pool), &rivermigrate.Config{Logger: adapterLogger()})
+		if err != nil {
+			return nil, err
+		}
+		direction := rivermigrate.DirectionUp
+		if params.Direction != "" {
+			direction = rivermigrate.Direction(params.Direction)
+		}
+		var opts *rivermigrate.MigrateOpts
+		if params.DryRun || params.MaxSteps != nil || params.TargetVersion != nil {
+			opts = &rivermigrate.MigrateOpts{DryRun: params.DryRun}
+			if params.MaxSteps != nil {
+				opts.MaxSteps = *params.MaxSteps
+			}
+			if params.TargetVersion != nil {
+				opts.TargetVersion = *params.TargetVersion
+			}
+		}
+		result, err := migrator.Migrate(ctx, direction, opts)
+		if err != nil {
+			return nil, err
+		}
+		versions := make([]int, len(result.Versions))
+		for i, version := range result.Versions {
+			versions[i] = version.Version
+		}
+		existingMigrations, err := migrator.ExistingVersions(ctx)
+		if err != nil {
+			return nil, err
+		}
+		existing := make([]int, len(existingMigrations))
+		for i, migration := range existingMigrations {
+			existing[i] = migration.Version
+		}
+		validation, err := migrator.Validate(ctx, nil)
+		if err != nil {
+			return nil, err
+		}
+		return map[string]any{"applied": versions, "existing": existing, "valid": validation.OK}, nil
+
+	case "reset":
+		if len(s.transactions) > 0 {
+			return nil, errors.New("reset requires no open transaction")
+		}
+		for _, table := range []string{
+			"river_notification", "river_job", "river_queue", "river_leader",
+		} {
+			// #nosec G202 -- Table names are fixed constants above, never request input.
+			if _, err := s.pool.ExecContext(ctx, "DELETE FROM "+table); err != nil {
+				return nil, err
+			}
+		}
+		return map[string]any{}, nil
+
+	case "clock_set":
+		var params struct {
+			Now time.Time `json:"now"`
+		}
+		if err := decodeParams(req.Params, &params); err != nil {
+			return nil, err
+		}
+		s.clock = &params.Now
+		return map[string]any{}, nil
+
+	case "rng_seed":
+		var params struct {
+			Seed uint64 `json:"seed"`
+		}
+		if err := decodeParams(req.Params, &params); err != nil {
+			return nil, err
+		}
+		s.rngSeed = params.Seed
+		return map[string]any{}, nil
+
+	case "cron_next":
+		return handleCronNext(req.Params)
+
+	case "retry_delay":
+		if s.clock == nil {
+			return nil, errors.New("clock_set is required before retry_delay")
+		}
+		var params struct {
+			ErrorCount uint32 `json:"error_count"`
+			JobID      int64  `json:"job_id"`
+		}
+		if err := decodeParams(req.Params, &params); err != nil {
+			return nil, err
+		}
+		if params.ErrorCount < 1 {
+			return nil, errors.New("error_count must be positive")
+		}
+		return map[string]any{"delay_ns": defaultRetryDelay(*s.clock, params.JobID, params.ErrorCount).Nanoseconds()}, nil
+
+	case "unique_key":
+		return handleUniqueKey(req.Params)
+
+	case "insert":
+		var params insertParams
+		if err := decodeParams(req.Params, &params); err != nil {
+			return nil, err
+		}
+		if err := (insertParams{Behavior: params.Behavior, Kind: params.Kind}).rejectRawOnlyFields(); err != nil {
+			return nil, err
+		}
+		if params.Schema != "" {
+			return nil, unsupported(errors.New("SQLite conformance does not support custom schemas"))
+		}
+		opts, err := params.Opts.opts()
+		if err != nil {
+			return nil, err
+		}
+		result, err := s.client().Insert(ctx, params.args(), opts)
+		if err != nil {
+			return nil, err
+		}
+		return normalizeJob(result.Job), nil
+
+	case "insert_many":
+		jobs, err := decodeInsertManyParams(req.Params)
+		if err != nil {
+			return nil, err
+		}
+		results, err := s.client().InsertMany(ctx, jobs)
+		if err != nil {
+			return nil, err
+		}
+		return normalizeInsertManyResults(results), nil
+
+	case "raw_insert_no_notify":
+		var params insertParams
+		if err := decodeParams(req.Params, &params); err != nil {
+			return nil, err
+		}
+		if err := (insertParams{Behavior: params.Behavior, Schema: params.Schema}).rejectRawOnlyFields(); err != nil {
+			return nil, err
+		}
+		encodedArgs, err := json.Marshal(params.args())
+		if err != nil {
+			return nil, err
+		}
+		kind := params.Kind
+		if kind == "" {
+			kind = "conformance_echo"
+		}
+		maxAttempts := 25
+		if params.Opts.MaxAttempts != nil {
+			maxAttempts = *params.Opts.MaxAttempts
+		}
+		var id int64
+		err = s.pool.QueryRowContext(ctx,
+			"INSERT INTO river_job (args, kind, max_attempts) VALUES (jsonb(?), ?, ?) RETURNING id",
+			string(encodedArgs), kind, maxAttempts,
+		).Scan(&id)
+		if err != nil {
+			return nil, err
+		}
+		job, err := s.client().JobGet(ctx, id)
+		if err != nil {
+			return nil, err
+		}
+		return normalizeJob(job), nil
+
+	case "raw_insert_exact_json":
+		var params struct {
+			ID           *int64  `json:"id"`
+			MetadataJSON *string `json:"metadata_json"`
+		}
+		if err := decodeParams(req.Params, &params); err != nil {
+			return nil, err
+		}
+		var id int64
+		err := s.pool.QueryRowContext(ctx, `
+			INSERT INTO river_job (id, args, kind, max_attempts, metadata)
+			VALUES (
+				?,
+				jsonb('{"decimal":0.12345678901234567890123456789,"integer":9223372036854775807}'),
+				'conformance_exact_json', 25,
+				jsonb(COALESCE(?, '{"negative":-9223372036854775808}'))
+			) RETURNING id`, params.ID, params.MetadataJSON).Scan(&id)
+		return map[string]any{"id": id}, err
+
+	case "get": //nolint:usestdlibvars // JSON-RPC method names are lowercase protocol values.
+		var params struct {
+			ID     int64  `json:"id"`
+			Schema string `json:"schema"`
+		}
+		if err := decodeParams(req.Params, &params); err != nil {
+			return nil, err
+		}
+		if params.Schema != "" {
+			return nil, unsupported(errors.New("SQLite conformance does not support custom schemas"))
+		}
+		job, err := s.client().JobGet(ctx, params.ID)
+		if err != nil {
+			return nil, err
+		}
+		return normalizeJob(job), nil
+
+	case "list":
+		params, _, err := makeJobListParams(req.Params, false)
+		if err != nil {
+			return nil, err
+		}
+		result, err := s.client().JobList(ctx, params)
+		if err != nil {
+			return nil, err
+		}
+		return normalizeJobListResult(result)
+
+	case "cancel", "delete", "retry": //nolint:usestdlibvars // JSON-RPC method names are lowercase protocol values.
+		id, err := requestID(req.Params)
+		if err != nil {
+			return nil, err
+		}
+		client := s.client()
+		var job *rivertype.JobRow
+		switch req.Method {
+		case "cancel":
+			job, err = client.JobCancel(ctx, id)
+		case "delete": //nolint:usestdlibvars // JSON-RPC method names are lowercase protocol values.
+			job, err = client.JobDelete(ctx, id)
+		case "retry":
+			job, err = client.JobRetry(ctx, id)
+		}
+		if err != nil {
+			return nil, err
+		}
+		return normalizeJob(job), nil
+
+	case "delete_finalized":
+		params, err := makeJobDeleteBeforeParams(req.Params)
+		if err != nil {
+			return nil, err
+		}
+		deleted, err := riversqlite.New(s.pool).GetExecutor().JobDeleteBefore(ctx, params)
+		if err != nil {
+			return nil, err
+		}
+		return map[string]any{"deleted": deleted}, nil
+
+	case "delete_many":
+		params, _, err := makeJobDeleteManyParams(req.Params, false)
+		if err != nil {
+			return nil, err
+		}
+		result, err := s.client().JobDeleteMany(ctx, params)
+		if err != nil {
+			return nil, err
+		}
+		return map[string]any{"jobs": normalizeJobs(result.Jobs)}, nil
+
+	case "update":
+		var params struct {
+			ID     int64 `json:"id"`
+			Output any   `json:"output"`
+		}
+		if err := decodeParams(req.Params, &params); err != nil {
+			return nil, err
+		}
+		job, err := s.client().JobUpdate(ctx, params.ID, &river.JobUpdateParams{Output: params.Output})
+		if err != nil {
+			return nil, err
+		}
+		return normalizeJob(job), nil
+
+	case "raw_finalize":
+		var params struct {
+			ID       int64          `json:"id"`
+			Metadata map[string]any `json:"metadata"`
+			State    string         `json:"state"`
+		}
+		if err := decodeParams(req.Params, &params); err != nil {
+			return nil, err
+		}
+		if params.State != "completed" && params.State != "discarded" {
+			return nil, invalidParams(errors.New("state must be completed or discarded"))
+		}
+		metadata, err := json.Marshal(params.Metadata)
+		if err != nil {
+			return nil, err
+		}
+		attemptError, err := json.Marshal(map[string]any{
+			"at":      "2026-02-03T04:05:06.789Z",
+			"attempt": 1,
+			"error":   "external discard",
+			"trace":   "external trace",
+		})
+		if err != nil {
+			return nil, err
+		}
+		result, err := s.pool.ExecContext(ctx, `
+			UPDATE river_job
+			SET errors = CASE WHEN ? = 'discarded'
+					THEN jsonb(json_insert(json(coalesce(errors, jsonb('[]'))), '$[#]', json(?)))
+					ELSE errors END,
+				finalized_at = strftime('%Y-%m-%d %H:%M:%f', 'now'),
+				metadata = jsonb_patch(json(metadata), json(?)),
+				state = ?
+			WHERE id = ? AND state = 'running'`,
+			params.State, string(attemptError),
+			string(metadata), params.State, params.ID,
+		)
+		if err != nil {
+			return nil, err
+		}
+		rowsAffected, err := result.RowsAffected()
+		if err != nil {
+			return nil, err
+		}
+		if rowsAffected != 1 {
+			return nil, notFound(errors.New("running job not found"))
+		}
+		job, err := s.client().JobGet(ctx, params.ID)
+		if err != nil {
+			return nil, err
+		}
+		return normalizeJob(job), nil
+
+	case "raw_job_row":
+		id, err := requestID(req.Params)
+		if err != nil {
+			return nil, err
+		}
+		var row rawJobRow
+		err = s.pool.QueryRowContext(ctx, `
+			SELECT json(args), CAST(attempted_at AS TEXT), json(attempted_by), CAST(created_at AS TEXT),
+				json(errors), CAST(finalized_at AS TEXT), json(metadata), CAST(scheduled_at AS TEXT), json(tags),
+				CASE WHEN unique_key IS NULL THEN NULL ELSE hex(unique_key) END, CAST(unique_states AS TEXT)
+			FROM river_job
+			WHERE id = ?`, id).Scan(row.scanTargets()...)
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, notFound(err)
+		}
+		if err != nil {
+			return nil, err
+		}
+		row.JSONB = &rawJSONBColumns{}
+		err = s.pool.QueryRowContext(ctx, `
+			SELECT hex(args),
+				CASE WHEN attempted_by IS NULL THEN NULL ELSE hex(attempted_by) END,
+				CASE WHEN errors IS NULL THEN NULL ELSE hex(errors) END,
+				hex(metadata), hex(tags)
+			FROM river_job
+			WHERE id = ?`, id).Scan(&row.JSONB.Args, &row.JSONB.AttemptedBy, &row.JSONB.Errors, &row.JSONB.Metadata, &row.JSONB.Tags)
+		if err != nil {
+			return nil, err
+		}
+		err = s.pool.QueryRowContext(ctx, `
+			SELECT
+				CASE WHEN unique_key IS NULL THEN NULL ELSE typeof(unique_key) END,
+				CASE WHEN unique_states IS NULL THEN NULL ELSE typeof(unique_states) END
+			FROM river_job
+			WHERE id = ?`, id).Scan(&row.UniqueKeyType, &row.UniqueStatesType)
+		return row, err
+
+	case "raw_notifications":
+		var params struct {
+			AfterID *int64 `json:"after_id"`
+		}
+		if err := decodeParams(req.Params, &params); err != nil {
+			return nil, err
+		}
+		if params.AfterID == nil || *params.AfterID < 0 {
+			return nil, invalidParams(errors.New("after_id must be a non-negative integer"))
+		}
+		rows, err := s.pool.QueryContext(ctx, `
+			SELECT id, payload, typeof(payload), topic
+			FROM river_notification
+			WHERE id > ?
+			ORDER BY id`, *params.AfterID)
+		if err != nil {
+			return nil, err
+		}
+		defer rows.Close()
+		notifications := []map[string]any{}
+		for rows.Next() {
+			var (
+				id                          int64
+				payload, payloadType, topic string
+			)
+			if err := rows.Scan(&id, &payload, &payloadType, &topic); err != nil {
+				return nil, err
+			}
+			notifications = append(notifications, map[string]any{
+				"id": id, "payload": payload, "payload_type": payloadType, "topic": topic,
+			})
+		}
+		if err := rows.Err(); err != nil {
+			return nil, err
+		}
+		return map[string]any{"notifications": notifications}, nil
+
+	case "raw_replace_json_text":
+		var params struct {
+			Column string  `json:"column"`
+			ID     int64   `json:"id"`
+			Text   *string `json:"text"`
+		}
+		if err := decodeParams(req.Params, &params); err != nil {
+			return nil, err
+		}
+		statements, ok := sqliteJSONColumnStatements[params.Column]
+		if !ok {
+			return nil, invalidParams(fmt.Errorf("unknown JSON column %q", params.Column))
+		}
+		tx, err := s.pool.BeginTx(ctx, nil)
+		if err != nil {
+			return nil, err
+		}
+		defer func() { _ = tx.Rollback() }()
+		var (
+			previous     *string
+			previousType string
+		)
+		if err := tx.QueryRowContext(ctx, statements.get, params.ID).Scan(&previous, &previousType); err != nil {
+			return nil, err
+		}
+		if _, err := tx.ExecContext(ctx, statements.set, params.Text, params.ID); err != nil {
+			return nil, err
+		}
+		if err := tx.Commit(); err != nil {
+			return nil, err
+		}
+		return map[string]any{"previous": previous, "previous_type": previousType}, nil
+
+	case "raw_set_kind":
+		var params rawSetKindParams
+		if err := decodeParams(req.Params, &params); err != nil {
+			return nil, err
+		}
+		if params.Kind == "" {
+			return nil, invalidParams(errors.New("kind is required"))
+		}
+		result, err := s.pool.ExecContext(ctx, "UPDATE river_job SET kind = ? WHERE id = ?", params.Kind, params.ID)
+		if err != nil {
+			return nil, err
+		}
+		rowsAffected, err := result.RowsAffected()
+		if err != nil {
+			return nil, err
+		}
+		if rowsAffected != 1 {
+			return nil, notFound(errors.New("job not found"))
+		}
+		job, err := s.client().JobGet(ctx, params.ID)
+		if err != nil {
+			return nil, err
+		}
+		return normalizeJob(job), nil
+
+	case "raw_job_timestamps":
+		id, err := requestID(req.Params)
+		if err != nil {
+			return nil, err
+		}
+		var createdAt, scheduledAt string
+		err = s.pool.QueryRowContext(ctx, `
+			SELECT CAST(created_at AS TEXT), CAST(scheduled_at AS TEXT)
+			FROM river_job
+			WHERE id = ?`, id).Scan(&createdAt, &scheduledAt)
+		return map[string]any{"created_at": createdAt, "scheduled_at": scheduledAt}, err
+
+	case "raw_job_exact_json":
+		id, err := requestID(req.Params)
+		if err != nil {
+			return nil, err
+		}
+		job, err := s.client().JobGet(ctx, id)
+		if err != nil {
+			return nil, err
+		}
+		return exactJSONTokens(job)
+
+	case "barrier_create", "barrier_release":
+		var params struct {
+			Name string `json:"name"`
+		}
+		if err := decodeParams(req.Params, &params); err != nil {
+			return nil, err
+		}
+		if req.Method == "barrier_create" {
+			return map[string]any{}, s.barriers.create(params.Name)
+		}
+		return map[string]any{}, s.barriers.release(params.Name)
+
+	case "queue_add":
+		if s.running == nil {
+			return nil, errors.New("queue_add requires a running client")
+		}
+		return handleQueueAdd(ctx, req.Params, s.running.client.Queues().Add, s.running.client.Queues().Remove)
+
+	case "queue_get":
+		var params struct {
+			Name string `json:"name"`
+		}
+		if err := decodeParams(req.Params, &params); err != nil {
+			return nil, err
+		}
+		queue, err := s.client().QueueGet(ctx, params.Name)
+		if err != nil {
+			return nil, err
+		}
+		return normalizeQueue(queue), nil
+
+	case "queue_list":
+		var params struct {
+			Limit int `json:"limit"`
+		}
+		if err := decodeParams(req.Params, &params); err != nil {
+			return nil, err
+		}
+		if params.Limit == 0 {
+			params.Limit = 100
+		}
+		result, err := s.client().QueueList(ctx, river.NewQueueListParams().First(params.Limit))
+		if err != nil {
+			return nil, err
+		}
+		queues := make([]any, len(result.Queues))
+		for i, queue := range result.Queues {
+			queues[i] = normalizeQueue(queue)
+		}
+		return map[string]any{"queues": queues}, nil
+
+	case "queue_pause", "queue_resume":
+		var params struct {
+			Name string `json:"name"`
+		}
+		if err := decodeParams(req.Params, &params); err != nil {
+			return nil, err
+		}
+		if req.Method == "queue_pause" {
+			return map[string]any{}, s.client().QueuePause(ctx, params.Name, nil)
+		}
+		return map[string]any{}, s.client().QueueResume(ctx, params.Name, nil)
+
+	case "queue_remove":
+		if s.running == nil {
+			return nil, errors.New("queue_remove requires a running client")
+		}
+		var params struct {
+			Name string `json:"name"`
+		}
+		if err := decodeParams(req.Params, &params); err != nil {
+			return nil, err
+		}
+		return map[string]any{}, s.running.client.Queues().Remove(ctx, params.Name)
+
+	case "queue_update":
+		var params struct {
+			Metadata json.RawMessage `json:"metadata"`
+			Name     string          `json:"name"`
+		}
+		if err := decodeParams(req.Params, &params); err != nil {
+			return nil, err
+		}
+		queue, err := s.client().QueueUpdate(ctx, params.Name, &river.QueueUpdateParams{Metadata: params.Metadata})
+		if err != nil {
+			return nil, err
+		}
+		return normalizeQueue(queue), nil
+
+	case "leader":
+		var leaderID string
+		var electedAt time.Time
+		err := s.pool.QueryRowContext(ctx,
+			"SELECT leader_id, elected_at FROM river_leader WHERE name = 'default' AND expires_at >= CURRENT_TIMESTAMP",
+		).Scan(&leaderID, &electedAt)
+		if errors.Is(err, sql.ErrNoRows) {
+			return map[string]any{"elected_at": nil, "leader_id": nil}, nil
+		}
+		return map[string]any{"elected_at": formatTime(electedAt), "leader_id": leaderID}, err
+
+	case "request_resign":
+		var params struct {
+			Handle string `json:"handle"`
+		}
+		if err := decodeParams(req.Params, &params); err != nil {
+			return nil, err
+		}
+		if params.Handle != "" {
+			tx, ok := s.transactions[params.Handle]
+			if !ok {
+				return nil, transactionNotFound(params.Handle)
+			}
+			return map[string]any{}, s.client().Notify().RequestResignTx(ctx, tx)
+		}
+		return map[string]any{}, s.client().Notify().RequestResign(ctx)
+
+	case "start":
+		if s.running != nil {
+			return nil, errors.New("client already running")
+		}
+		var params struct {
+			maintenanceParams
+			startTuningParams
+
+			ClaimBarrier           string   `json:"claim_barrier"`
+			ClientID               string   `json:"client_id"`
+			ErrorHandlerCancel     bool     `json:"error_handler_cancel"`
+			FetchOnlyKnownKinds    bool     `json:"fetch_only_known_kinds"`
+			FetchPollIntervalMS    *uint64  `json:"fetch_poll_interval_ms"`
+			Instrumented           bool     `json:"instrumented"`
+			JobStuckThresholdMS    *uint64  `json:"job_stuck_threshold_ms"`
+			JobTimeoutMS           *uint64  `json:"job_timeout_ms"`
+			LeaderElectionDisabled bool     `json:"leader_election_disabled"`
+			MaxWorkers             int      `json:"max_workers"`
+			PeriodicRunOnStart     bool     `json:"periodic_run_on_start"`
+			PeriodicUnique         bool     `json:"periodic_unique"`
+			PollOnly               bool     `json:"poll_only"`
+			Queue                  string   `json:"queue"`
+			RescueAfterMS          *uint64  `json:"rescue_after_ms"`
+			RetryDelayMS           *uint64  `json:"retry_delay_ms"`
+			Schema                 string   `json:"schema"`
+			WorkerKinds            []string `json:"worker_kinds"`
+		}
+		if err := decodeParams(req.Params, &params); err != nil {
+			return nil, err
+		}
+		if err := params.reject(); err != nil {
+			return nil, err
+		}
+		if params.ClaimBarrier != "" && !s.barriers.exists(params.ClaimBarrier) {
+			return nil, invalidParams(fmt.Errorf("claim_barrier %q does not exist", params.ClaimBarrier))
+		}
+		if params.Schema != "" {
+			return nil, unsupported(errors.New("SQLite conformance does not support custom schemas"))
+		}
+		if params.MaxWorkers == 0 {
+			params.MaxWorkers = 4
+		}
+		if params.Queue == "" {
+			params.Queue = river.QueueDefault
+		}
+		probe := &runtimeProbe{}
+		client, err := newSQLiteWorkerClient(s.pool, s.barriers, workerClientConfig{
+			claimBarrier:       params.ClaimBarrier,
+			errorHandlerCancel: params.ErrorHandlerCancel, fetchOnlyKnownKinds: params.FetchOnlyKnownKinds,
+			fetchPollIntervalMS: params.FetchPollIntervalMS, id: params.ClientID, instrumented: params.Instrumented,
+			jobStuckThresholdMS: params.JobStuckThresholdMS, jobTimeoutMS: params.JobTimeoutMS,
+			leaderElectionDisabled: params.LeaderElectionDisabled, maintenance: params.maintenanceParams,
+			maxWorkers: params.MaxWorkers, periodicRunOnStart: params.PeriodicRunOnStart,
+			periodicUnique: params.PeriodicUnique, pollOnly: params.PollOnly, probe: probe, queue: params.Queue, rescueAfterMS: params.RescueAfterMS,
+			retryDelayMS: params.RetryDelayMS, workerKinds: params.WorkerKinds,
+		})
+		if err != nil {
+			return nil, err
+		}
+		subscription, subscriptionCancel := client.Subscribe(
+			river.EventKindJobCancelled, river.EventKindJobCompleted, river.EventKindJobFailed,
+			river.EventKindJobInterrupted, river.EventKindJobSnoozed,
+			river.EventKindQueuePaused, river.EventKindQueueResumed,
+		)
+		if err := client.Start(ctx); err != nil {
+			subscriptionCancel()
+			return nil, err
+		}
+		s.running = &sqliteRunningClient{
+			claimBarrier: params.ClaimBarrier, client: client, probe: probe,
+			subscription: subscription, subscriptionCancel: subscriptionCancel,
+		}
+		return map[string]any{}, nil
+
+	case "stop":
+		if s.running == nil {
+			return nil, errors.New("client is not running")
+		}
+		var params struct {
+			Cancel bool `json:"cancel"`
+		}
+		if err := decodeParams(req.Params, &params); err != nil {
+			return nil, err
+		}
+		// A claim held on the barrier would keep the client from stopping.
+		if s.running.claimBarrier != "" {
+			s.barriers.releaseIfPresent(s.running.claimBarrier)
+		}
+		stopCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+		defer cancel()
+		var err error
+		if params.Cancel {
+			err = s.running.client.StopAndCancel(stopCtx)
+		} else {
+			err = s.running.client.Stop(stopCtx)
+		}
+		s.running.subscriptionCancel()
+		s.running = nil
+		return map[string]any{}, err
+
+	case "runtime_stats":
+		if s.running == nil {
+			return nil, errors.New("runtime_stats requires a running client")
+		}
+		for {
+			select {
+			case event := <-s.running.subscription:
+				if event != nil {
+					s.running.probe.addEvent(event.Kind)
+				}
+			default:
+				return s.running.probe.snapshot(), nil
+			}
+		}
+
+	case "wait":
+		var params struct {
+			ID     int64                `json:"id"`
+			States []rivertype.JobState `json:"states"`
+		}
+		if err := decodeParams(req.Params, &params); err != nil {
+			return nil, err
+		}
+		job, err := waitForStates(ctx, s.client(), params.ID, params.States)
+		if err != nil {
+			return nil, err
+		}
+		return normalizeJob(job), nil
+
+	case "work":
+		var params struct {
+			ClientID string `json:"client_id"`
+			ID       int64  `json:"id"`
+		}
+		if err := decodeParams(req.Params, &params); err != nil {
+			return nil, err
+		}
+		if params.ClientID == "" {
+			params.ClientID = "go-conformance-adapter"
+		}
+		probe := &runtimeProbe{}
+		client, err := newSQLiteWorkerClient(s.pool, s.barriers, workerClientConfig{
+			id: params.ClientID, maxWorkers: 1, probe: probe, queue: river.QueueDefault,
+		})
+		if err != nil {
+			return nil, err
+		}
+		if err := client.Start(ctx); err != nil {
+			return nil, err
+		}
+		job, waitErr := waitForStates(ctx, client, params.ID, nil)
+		stopCtx, stopCancel := context.WithTimeout(ctx, 10*time.Second)
+		defer stopCancel()
+		stopErr := client.Stop(stopCtx)
+		if waitErr != nil {
+			return nil, waitErr
+		}
+		if stopErr != nil {
+			return nil, stopErr
+		}
+		return normalizeJob(job), nil
+
+	case "tx_begin":
+		handle, err := requestHandle(req.Params)
+		if err != nil {
+			return nil, err
+		}
+		if _, ok := s.transactions[handle]; ok {
+			return nil, fmt.Errorf("transaction %q already exists", handle)
+		}
+		tx, err := s.pool.BeginTx(ctx, nil)
+		if err != nil {
+			return nil, err
+		}
+		s.transactions[handle] = tx
+		return map[string]any{}, nil
+
+	case "tx_insert":
+		var params struct {
+			Handle string       `json:"handle"`
+			Job    insertParams `json:"job"`
+		}
+		if err := decodeParams(req.Params, &params); err != nil {
+			return nil, err
+		}
+		if err := params.Job.rejectRawOnlyFields(); err != nil {
+			return nil, err
+		}
+		tx, ok := s.transactions[params.Handle]
+		if !ok {
+			return nil, transactionNotFound(params.Handle)
+		}
+		opts, err := params.Job.Opts.opts()
+		if err != nil {
+			return nil, err
+		}
+		result, err := s.client().InsertTx(ctx, tx, params.Job.args(), opts)
+		if err != nil {
+			return nil, err
+		}
+		return normalizeJob(result.Job), nil
+
+	case "tx_insert_many":
+		var params struct {
+			Handle string          `json:"handle"`
+			Jobs   json.RawMessage `json:"jobs"`
+		}
+		if err := decodeParams(req.Params, &params); err != nil {
+			return nil, err
+		}
+		tx, ok := s.transactions[params.Handle]
+		if !ok {
+			return nil, transactionNotFound(params.Handle)
+		}
+		jobs, err := decodeInsertManyParams(params.Jobs)
+		if err != nil {
+			return nil, err
+		}
+		results, err := s.client().InsertManyTx(ctx, tx, jobs)
+		if err != nil {
+			return nil, err
+		}
+		return normalizeInsertManyResults(results), nil
+
+	case "tx_get", "tx_cancel", "tx_delete", "tx_retry":
+		var params struct {
+			Handle string `json:"handle"`
+			ID     int64  `json:"id"`
+		}
+		if err := decodeParams(req.Params, &params); err != nil {
+			return nil, err
+		}
+		tx, ok := s.transactions[params.Handle]
+		if !ok {
+			return nil, transactionNotFound(params.Handle)
+		}
+		client := s.client()
+		var job *rivertype.JobRow
+		var err error
+		switch req.Method {
+		case "tx_cancel":
+			job, err = client.JobCancelTx(ctx, tx, params.ID)
+		case "tx_delete":
+			job, err = client.JobDeleteTx(ctx, tx, params.ID)
+		case "tx_get":
+			job, err = client.JobGetTx(ctx, tx, params.ID)
+		case "tx_retry":
+			job, err = client.JobRetryTx(ctx, tx, params.ID)
+		}
+		if err != nil {
+			return nil, err
+		}
+		return normalizeJob(job), nil
+
+	case "tx_update":
+		var params struct {
+			Handle string `json:"handle"`
+			ID     int64  `json:"id"`
+			Output any    `json:"output"`
+		}
+		if err := decodeParams(req.Params, &params); err != nil {
+			return nil, err
+		}
+		tx, ok := s.transactions[params.Handle]
+		if !ok {
+			return nil, transactionNotFound(params.Handle)
+		}
+		job, err := s.client().JobUpdateTx(ctx, tx, params.ID, &river.JobUpdateParams{Output: params.Output})
+		if err != nil {
+			return nil, err
+		}
+		return normalizeJob(job), nil
+
+	case "tx_list":
+		params, handle, err := makeJobListParams(req.Params, true)
+		if err != nil {
+			return nil, err
+		}
+		tx, ok := s.transactions[handle]
+		if !ok {
+			return nil, transactionNotFound(handle)
+		}
+		result, err := s.client().JobListTx(ctx, tx, params)
+		if err != nil {
+			return nil, err
+		}
+		return normalizeJobListResult(result)
+
+	case "tx_delete_many":
+		params, handle, err := makeJobDeleteManyParams(req.Params, true)
+		if err != nil {
+			return nil, err
+		}
+		tx, ok := s.transactions[handle]
+		if !ok {
+			return nil, transactionNotFound(handle)
+		}
+		result, err := s.client().JobDeleteManyTx(ctx, tx, params)
+		if err != nil {
+			return nil, err
+		}
+		return map[string]any{"jobs": normalizeJobs(result.Jobs)}, nil
+
+	case "tx_queue_get":
+		var params struct {
+			Handle string `json:"handle"`
+			Name   string `json:"name"`
+		}
+		if err := decodeParams(req.Params, &params); err != nil {
+			return nil, err
+		}
+		tx, ok := s.transactions[params.Handle]
+		if !ok {
+			return nil, transactionNotFound(params.Handle)
+		}
+		queue, err := s.client().QueueGetTx(ctx, tx, params.Name)
+		if err != nil {
+			return nil, err
+		}
+		return normalizeQueue(queue), nil
+
+	case "tx_queue_list":
+		var params struct {
+			Handle string `json:"handle"`
+			Limit  int    `json:"limit"`
+		}
+		if err := decodeParams(req.Params, &params); err != nil {
+			return nil, err
+		}
+		if params.Limit == 0 {
+			params.Limit = 100
+		}
+		tx, ok := s.transactions[params.Handle]
+		if !ok {
+			return nil, transactionNotFound(params.Handle)
+		}
+		result, err := s.client().QueueListTx(ctx, tx, river.NewQueueListParams().First(params.Limit))
+		if err != nil {
+			return nil, err
+		}
+		queues := make([]any, len(result.Queues))
+		for i, queue := range result.Queues {
+			queues[i] = normalizeQueue(queue)
+		}
+		return map[string]any{"queues": queues}, nil
+
+	case "tx_queue_pause", "tx_queue_resume":
+		var params struct {
+			Handle string `json:"handle"`
+			Name   string `json:"name"`
+		}
+		if err := decodeParams(req.Params, &params); err != nil {
+			return nil, err
+		}
+		tx, ok := s.transactions[params.Handle]
+		if !ok {
+			return nil, transactionNotFound(params.Handle)
+		}
+		var err error
+		if req.Method == "tx_queue_pause" {
+			err = s.client().QueuePauseTx(ctx, tx, params.Name, nil)
+		} else {
+			err = s.client().QueueResumeTx(ctx, tx, params.Name, nil)
+		}
+		return map[string]any{}, err
+
+	case "tx_queue_update":
+		var params struct {
+			Handle   string          `json:"handle"`
+			Metadata json.RawMessage `json:"metadata"`
+			Name     string          `json:"name"`
+		}
+		if err := decodeParams(req.Params, &params); err != nil {
+			return nil, err
+		}
+		tx, ok := s.transactions[params.Handle]
+		if !ok {
+			return nil, transactionNotFound(params.Handle)
+		}
+		queue, err := s.client().QueueUpdateTx(ctx, tx, params.Name, &river.QueueUpdateParams{Metadata: params.Metadata})
+		if err != nil {
+			return nil, err
+		}
+		return normalizeQueue(queue), nil
+
+	case "tx_commit", "tx_rollback":
+		handle, err := requestHandle(req.Params)
+		if err != nil {
+			return nil, err
+		}
+		tx, ok := s.transactions[handle]
+		if !ok {
+			return nil, transactionNotFound(handle)
+		}
+		delete(s.transactions, handle)
+		if req.Method == "tx_commit" {
+			return map[string]any{}, tx.Commit()
+		}
+		return map[string]any{}, tx.Rollback()
+	}
+
+	return nil, methodNotFound(req.Method)
+}
+
+func (s *sqliteAdapterState) client() *river.Client[*sql.Tx] {
+	if s.running != nil {
+		return s.running.client
+	}
+	client, err := river.NewClient(riversqlite.New(s.pool), &river.Config{Logger: adapterLogger()})
+	if err != nil {
+		panic(fmt.Sprintf("build SQLite conformance client: %v", err))
+	}
+	return client
+}
+
+// defaultRetryDelay evaluates River's production default retry policy for a
+// job with errorCount-1 recorded errors. Its jitter is process-random, so
+// the rng_seed control does not apply to the Go reference.
+func defaultRetryDelay(now time.Time, jobID int64, errorCount uint32) time.Duration {
+	job := &rivertype.JobRow{ID: jobID, Errors: make([]rivertype.AttemptError, errorCount-1)}
+	return retrypolicy.NextRetryAt(now, job).Sub(now)
+}
+
+func durationFromMilliseconds(milliseconds uint64) (time.Duration, error) {
+	duration, err := time.ParseDuration(strconv.FormatUint(milliseconds, 10) + "ms")
+	if err != nil {
+		return 0, fmt.Errorf("milliseconds out of range: %w", err)
+	}
+	return duration, nil
+}
+
+func (s *adapterState) client() (*river.Client[pgx.Tx], error) {
+	return s.clientForSchema("")
+}
+
+func (s *adapterState) clientForSchema(schema string) (*river.Client[pgx.Tx], error) {
+	if s.running != nil {
+		if s.running.client.Schema() != schema {
+			return nil, fmt.Errorf("running client schema %q does not match requested schema %q", s.running.client.Schema(), schema)
+		}
+		return s.running.client, nil
+	}
+	return river.NewClient(riverpgxv5.New(s.pool), &river.Config{Logger: adapterLogger(), Schema: schema})
+}
+
+type workerClientConfig struct {
+	claimBarrier           string
+	errorHandlerCancel     bool
+	fetchOnlyKnownKinds    bool
+	fetchPollIntervalMS    *uint64
+	id                     string
+	instrumented           bool
+	jobStuckThresholdMS    *uint64
+	jobTimeoutMS           *uint64
+	leaderElectionDisabled bool
+	maintenance            maintenanceParams
+	maxWorkers             int
+	periodicRunOnStart     bool
+	periodicUnique         bool
+	pollOnly               bool
+	probe                  *runtimeProbe
+	queue                  string
+	rescueAfterMS          *uint64
+	retryDelayMS           *uint64
+	schema                 string
+	workerKinds            []string
+}
+
+// maintenanceParams are optional `start` parameters that tune leader-owned
+// maintenance. Parameters River Go does not expose, such as elect or cleaner
+// intervals, are accepted by other adapters and ignored here because Go runs
+// each service once as soon as it gains leadership.
+type maintenanceParams struct {
+	CancelledJobRetentionMS *int64 `json:"cancelled_job_retention_ms"`
+	CompletedJobRetentionMS *int64 `json:"completed_job_retention_ms"`
+	DiscardedJobRetentionMS *int64 `json:"discarded_job_retention_ms"`
+
+	// River Go doesn't expose the cleaners' intervals. The contract lets an
+	// adapter ignore these, so the Go reference accepts and ignores them.
+	JobCleanerIntervalMS   *uint64 `json:"job_cleaner_interval_ms"`
+	QueueCleanerIntervalMS *uint64 `json:"queue_cleaner_interval_ms"`
+
+	JobTimeoutDisabled  bool     `json:"job_timeout_disabled"`
+	ReindexerIndexNames []string `json:"reindexer_index_names"`
+	ReindexerIntervalMS *uint64  `json:"reindexer_interval_ms"`
+}
+
+func (p maintenanceParams) apply(config *river.Config) error {
+	retention := func(milliseconds *int64, target *time.Duration) error {
+		switch {
+		case milliseconds == nil:
+			return nil
+		case *milliseconds == -1:
+			*target = -1
+			return nil
+		case *milliseconds < 0:
+			return errors.New("job retention must be -1 or non-negative")
+		default:
+			duration, err := durationFromMilliseconds(uint64(*milliseconds))
+			*target = duration
+			return err
+		}
+	}
+	if err := retention(p.CancelledJobRetentionMS, &config.CancelledJobRetentionPeriod); err != nil {
+		return err
+	}
+	if err := retention(p.CompletedJobRetentionMS, &config.CompletedJobRetentionPeriod); err != nil {
+		return err
+	}
+	if err := retention(p.DiscardedJobRetentionMS, &config.DiscardedJobRetentionPeriod); err != nil {
+		return err
+	}
+	if p.JobTimeoutDisabled {
+		config.JobTimeout = -1
+	}
+	if p.ReindexerIndexNames != nil {
+		config.ReindexerIndexNames = p.ReindexerIndexNames
+	}
+	if p.ReindexerIntervalMS != nil {
+		interval, err := durationFromMilliseconds(*p.ReindexerIntervalMS)
+		if err != nil {
+			return err
+		}
+		config.ReindexerSchedule = river.PeriodicInterval(interval)
+	}
+	return nil
+}
+
+// handleCronNext evaluates River Go's documented cron syntax, robfig/cron's
+// `ParseStandard`, from a reference time in that time's own offset.
+func handleCronNext(rawParams json.RawMessage) (any, error) {
+	var params struct {
+		Count      int       `json:"count"`
+		Expression string    `json:"expression"`
+		From       time.Time `json:"from"`
+	}
+	if err := json.Unmarshal(rawParams, &params); err != nil {
+		return nil, err
+	}
+	if params.Count < 1 {
+		return nil, errors.New("count must be positive")
+	}
+	schedule, err := cron.ParseStandard(params.Expression)
+	if err != nil {
+		return nil, err
+	}
+	// The schedule is evaluated in `from`'s fixed offset. Decoding a time
+	// whose offset matches the host's zone yields `time.Local` instead, which
+	// would move occurrences across that zone's DST changes and make the
+	// result depend on the host.
+	_, offset := params.From.Zone()
+	next := make([]string, 0, params.Count)
+	current := params.From.In(time.FixedZone("", offset))
+	for range params.Count {
+		current = schedule.Next(current)
+		if current.IsZero() {
+			break
+		}
+		next = append(next, current.Format(time.RFC3339Nano))
+	}
+	return map[string]any{"next": next}, nil
+}
+
+func newWorkerClient(pool *pgxpool.Pool, barriers *barrierRegistry, config workerClientConfig) (*river.Client[pgx.Tx], error) {
+	riverConfig, err := newWorkerConfig(pool, barriers, config)
+	if err != nil {
+		return nil, err
+	}
+	return river.NewClient(withClaimBarrier[pgx.Tx](riverpgxv5.New(pool), barriers, config.claimBarrier), riverConfig)
+}
+
+func newSQLiteWorkerClient(pool *sql.DB, barriers *barrierRegistry, config workerClientConfig) (*river.Client[*sql.Tx], error) {
+	riverConfig, err := newWorkerConfig(nil, barriers, config)
+	if err != nil {
+		return nil, err
+	}
+	return river.NewClient(withClaimBarrier[*sql.Tx](riversqlite.New(pool), barriers, config.claimBarrier), riverConfig)
+}
+
+// claimBarrierDriver installs a claimBarrierPilot through the driver plugin
+// hook River's client checks for when it's built.
+type claimBarrierDriver[TTx any] struct {
+	riverdriver.Driver[TTx]
+
+	pilot *claimBarrierPilot
+}
+
+func (d *claimBarrierDriver[TTx]) PluginInit(*baseservice.Archetype) {}
+
+func (d *claimBarrierDriver[TTx]) PluginPilot() riverpilot.Pilot { return d.pilot }
+
+// claimBarrierPilot is River's standard pilot, except that its first claim
+// returning jobs holds them until the named barrier is released. The claim
+// has already committed, so the jobs are running without an executor while
+// the producer keeps handling notifications, such as a cancellation.
+type claimBarrierPilot struct {
+	riverpilot.StandardPilot
+
+	barriers *barrierRegistry
+	name     string
+	waited   atomic.Bool
+}
+
+func (p *claimBarrierPilot) JobGetAvailable(ctx context.Context, exec riverdriver.Executor, state riverpilot.ProducerState, params *riverdriver.JobGetAvailableParams) (*riverdriver.JobGetAvailableResult, error) {
+	res, err := p.StandardPilot.JobGetAvailable(ctx, exec, state, params)
+	if err != nil || len(res.Jobs) == 0 || p.waited.Swap(true) {
+		return res, err
+	}
+	// The jobs are claimed either way, so they're returned however the wait
+	// ends. Stopping the client releases the barrier.
+	_ = p.barriers.wait(ctx, p.name)
+	return res, nil
+}
+
+// withClaimBarrier returns driver unchanged without a barrier name, and
+// otherwise wraps it to install a claimBarrierPilot.
+func withClaimBarrier[TTx any](driver riverdriver.Driver[TTx], barriers *barrierRegistry, name string) riverdriver.Driver[TTx] {
+	if name == "" {
+		return driver
+	}
+	return &claimBarrierDriver[TTx]{Driver: driver, pilot: &claimBarrierPilot{barriers: barriers, name: name}}
+}
+
+func newWorkerConfig(pool *pgxpool.Pool, barriers *barrierRegistry, config workerClientConfig) (*river.Config, error) {
+	workers := river.NewWorkers()
+	if err := addConformanceWorkers(workers, &conformanceWorker{barriers: barriers, pool: pool, probe: config.probe}, config.workerKinds); err != nil {
+		return nil, err
+	}
+	riverConfig := &river.Config{
+		ErrorHandler:           nil,
+		FetchCooldown:          time.Millisecond,
+		FetchOnlyKnownKinds:    config.fetchOnlyKnownKinds,
+		FetchPollInterval:      10 * time.Millisecond,
+		ID:                     config.id,
+		LeaderElectionDisabled: config.leaderElectionDisabled,
+		Logger:                 adapterLogger(),
+		PollOnly:               config.pollOnly,
+		Queues: map[string]river.QueueConfig{
+			config.queue: {MaxWorkers: config.maxWorkers},
+		},
+		Schema:   config.schema,
+		TestOnly: true,
+		Workers:  workers,
+	}
+	riverConfig.JobStuckHandler = func(context.Context, river.JobStuckHandlerParams) river.JobStuckHandlerResult {
+		config.probe.incrementStuckJobs()
+		return river.JobStuckHandlerResult{}
+	}
+	if config.rescueAfterMS != nil {
+		duration, err := durationFromMilliseconds(*config.rescueAfterMS)
+		if err != nil {
+			return nil, err
+		}
+		riverConfig.RescueStuckJobsAfter = duration
+	}
+	if config.fetchPollIntervalMS != nil {
+		duration, err := durationFromMilliseconds(*config.fetchPollIntervalMS)
+		if err != nil {
+			return nil, err
+		}
+		riverConfig.FetchPollInterval = duration
+	}
+	if config.errorHandlerCancel {
+		riverConfig.ErrorHandler = &conformanceErrorHandler{probe: config.probe}
+	}
+	if config.instrumented {
+		riverConfig.Plugins = []rivertype.Plugin{&conformancePlugin{probe: config.probe}}
+	}
+	if config.jobStuckThresholdMS != nil {
+		duration, err := durationFromMilliseconds(*config.jobStuckThresholdMS)
+		if err != nil {
+			return nil, err
+		}
+		riverConfig.JobStuckThreshold = duration
+	}
+	if config.jobTimeoutMS != nil {
+		duration, err := durationFromMilliseconds(*config.jobTimeoutMS)
+		if err != nil {
+			return nil, err
+		}
+		riverConfig.JobTimeout = duration
+	}
+	if err := config.maintenance.apply(riverConfig); err != nil {
+		return nil, err
+	}
+	if config.periodicUnique && !config.periodicRunOnStart {
+		return nil, invalidParams(errors.New("periodic_unique requires periodic_run_on_start"))
+	}
+	if config.periodicRunOnStart {
+		var uniqueOpts river.UniqueOpts
+		if config.periodicUnique {
+			uniqueOpts = river.UniqueOpts{ByArgs: true, ByQueue: true}
+		}
+		riverConfig.PeriodicJobs = []*river.PeriodicJob{river.NewPeriodicJob(
+			river.PeriodicInterval(time.Hour),
+			func() (river.JobArgs, *river.InsertOpts) {
+				return conformanceArgs{Message: "periodic run on start"}, &river.InsertOpts{
+					Metadata:   []byte(`{"periodic":true}`),
+					UniqueOpts: uniqueOpts,
+				}
+			},
+			&river.PeriodicJobOpts{ID: "conformance-periodic", RunOnStart: true},
+		)}
+		if config.periodicUnique {
+			// Added after the unique job, so its insertion shows the unique
+			// job's insertion was attempted.
+			riverConfig.PeriodicJobs = append(riverConfig.PeriodicJobs, river.NewPeriodicJob(
+				river.PeriodicInterval(time.Hour),
+				func() (river.JobArgs, *river.InsertOpts) {
+					return conformanceArgs{Message: "periodic marker"}, &river.InsertOpts{
+						Metadata: []byte(`{"periodic":true}`),
+					}
+				},
+				&river.PeriodicJobOpts{ID: "conformance-periodic-marker", RunOnStart: true},
+			))
+		}
+	}
+	if config.retryDelayMS != nil {
+		duration, err := durationFromMilliseconds(*config.retryDelayMS)
+		if err != nil {
+			return nil, err
+		}
+		riverConfig.RetryPolicy = fixedRetryPolicy{delay: duration}
+	}
+	return riverConfig, nil
+}
+
+func adapterLogger() *slog.Logger {
+	return slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelWarn}))
+}
+
+func errorResponse(id any, code int, err error) response {
+	return response{
+		Error:   &responseError{Code: code, Message: err.Error()},
+		ID:      id,
+		JSONRPC: "2.0",
+	}
+}
+
+func exactJSONTokens(job *rivertype.JobRow) (map[string]any, error) {
+	var args map[string]json.RawMessage
+	if err := json.Unmarshal(job.EncodedArgs, &args); err != nil {
+		return nil, fmt.Errorf("decode exact args: %w", err)
+	}
+	var metadata map[string]json.RawMessage
+	if err := json.Unmarshal(job.Metadata, &metadata); err != nil {
+		return nil, fmt.Errorf("decode exact metadata: %w", err)
+	}
+	requiredToken := func(source map[string]json.RawMessage, key string) (string, error) {
+		raw, ok := source[key]
+		if !ok {
+			return "", fmt.Errorf("exact JSON key %q not found", key)
+		}
+		return string(raw), nil
+	}
+	decimal, err := requiredToken(args, "decimal")
+	if err != nil {
+		return nil, err
+	}
+	integer, err := requiredToken(args, "integer")
+	if err != nil {
+		return nil, err
+	}
+	negative, err := requiredToken(metadata, "negative")
+	if err != nil {
+		return nil, err
+	}
+	result := map[string]any{
+		"decimal":  decimal,
+		"integer":  integer,
+		"negative": negative,
+	}
+	for _, key := range []string{"big_integer", "beyond_float", "long_decimal"} {
+		if value, ok := metadata[key]; ok {
+			result[key] = string(value)
+		}
+	}
+	return result, nil
+}
+
+func normalizeJob(job *rivertype.JobRow) map[string]any {
+	var args any
+	if err := json.Unmarshal(job.EncodedArgs, &args); err != nil {
+		args = nil
+	}
+	var metadata any
+	if err := json.Unmarshal(job.Metadata, &metadata); err != nil {
+		metadata = nil
+	}
+	if metadataObject, ok := metadata.(map[string]any); ok {
+		delete(metadataObject, "river:unique_nonce")
+	}
+	attemptedBy := job.AttemptedBy
+	if attemptedBy == nil {
+		attemptedBy = []string{}
+	}
+	errorsNormalized := make([]any, len(job.Errors))
+	for i, attemptErr := range job.Errors {
+		errorsNormalized[i] = map[string]any{
+			"at":      formatTime(attemptErr.At),
+			"attempt": attemptErr.Attempt,
+			"error":   attemptErr.Error,
+			"trace":   attemptErr.Trace,
+		}
+	}
+	var uniqueKey any
+	if job.UniqueKey != nil {
+		uniqueKey = hex.EncodeToString(job.UniqueKey)
+	}
+	return map[string]any{
+		"args":          args,
+		"attempt":       job.Attempt,
+		"attempted_at":  formatOptionalTime(job.AttemptedAt),
+		"attempted_by":  attemptedBy,
+		"created_at":    formatTime(job.CreatedAt),
+		"errors":        errorsNormalized,
+		"finalized_at":  formatOptionalTime(job.FinalizedAt),
+		"id":            job.ID,
+		"kind":          job.Kind,
+		"max_attempts":  job.MaxAttempts,
+		"metadata":      metadata,
+		"priority":      job.Priority,
+		"queue":         job.Queue,
+		"scheduled_at":  formatTime(job.ScheduledAt),
+		"state":         job.State,
+		"tags":          valueOrEmpty(job.Tags),
+		"unique_key":    uniqueKey,
+		"unique_states": job.UniqueStates,
+	}
+}
+
+func normalizeJobs(jobs []*rivertype.JobRow) []any {
+	normalized := make([]any, len(jobs))
+	for i, job := range jobs {
+		normalized[i] = normalizeJob(job)
+	}
+	return normalized
+}
+
+func decodeInsertManyParams(encoded json.RawMessage) ([]river.InsertManyParams, error) {
+	var envelope struct {
+		Jobs []insertParams `json:"jobs"`
+	}
+	if len(encoded) > 0 && encoded[0] == '[' {
+		if err := decodeParams(encoded, &envelope.Jobs); err != nil {
+			return nil, err
+		}
+	} else if err := decodeParams(encoded, &envelope); err != nil {
+		return nil, err
+	}
+	jobs := make([]river.InsertManyParams, len(envelope.Jobs))
+	for i, job := range envelope.Jobs {
+		if err := job.rejectRawOnlyFields(); err != nil {
+			return nil, err
+		}
+		opts, err := job.Opts.opts()
+		if err != nil {
+			return nil, err
+		}
+		jobs[i] = river.InsertManyParams{Args: job.args(), InsertOpts: opts}
+	}
+	return jobs, nil
+}
+
+func normalizeInsertManyResults(results []*rivertype.JobInsertResult) map[string]any {
+	normalized := make([]any, len(results))
+	for i, result := range results {
+		normalized[i] = map[string]any{
+			"job":                         normalizeJob(result.Job),
+			"unique_skipped_as_duplicate": result.UniqueSkippedAsDuplicate,
+		}
+	}
+	return map[string]any{"results": normalized}
+}
+
+func normalizeJobListResult(result *river.JobListResult) (map[string]any, error) {
+	var cursor any
+	if result.LastCursor != nil {
+		encoded, err := result.LastCursor.MarshalText()
+		if err != nil {
+			return nil, err
+		}
+		cursor = string(encoded)
+	}
+	return map[string]any{"cursor": cursor, "jobs": normalizeJobs(result.Jobs)}, nil
+}
+
+func normalizeQueue(queue *rivertype.Queue) map[string]any {
+	var metadata any
+	if err := json.Unmarshal(queue.Metadata, &metadata); err != nil {
+		metadata = nil
+	}
+	return map[string]any{
+		"created_at": formatTime(queue.CreatedAt),
+		"metadata":   metadata,
+		"name":       queue.Name,
+		"paused_at":  formatOptionalTime(queue.PausedAt),
+		"updated_at": formatTime(queue.UpdatedAt),
+	}
+}
+
+func formatTime(value time.Time) string { return value.UTC().Format(time.RFC3339Nano) }
+
+func formatOptionalTime(value *time.Time) any {
+	if value == nil {
+		return nil
+	}
+	return formatTime(*value)
+}
+
+func requestID(paramsJSON json.RawMessage) (int64, error) {
+	var params struct {
+		ID int64 `json:"id"`
+	}
+	if err := decodeParams(paramsJSON, &params); err != nil {
+		return 0, err
+	}
+	if params.ID < 1 {
+		return 0, invalidParams(errors.New("id must be positive"))
+	}
+	return params.ID, nil
+}
+
+func requestHandle(paramsJSON json.RawMessage) (string, error) {
+	var params struct {
+		Handle string `json:"handle"`
+	}
+	if err := decodeParams(paramsJSON, &params); err != nil {
+		return "", err
+	}
+	if params.Handle == "" {
+		return "", invalidParams(errors.New("handle is required"))
+	}
+	return params.Handle, nil
+}
+
+func waitForStates[TTx any](ctx context.Context, client *river.Client[TTx], id int64, states []rivertype.JobState) (*rivertype.JobRow, error) {
+	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+	if len(states) == 0 {
+		states = []rivertype.JobState{
+			rivertype.JobStateCancelled,
+			rivertype.JobStateCompleted,
+			rivertype.JobStateDiscarded,
+		}
+	}
+	for {
+		job, err := client.JobGet(ctx, id)
+		if err != nil {
+			return nil, err
+		}
+		if slices.Contains(states, job.State) {
+			return job, nil
+		}
+		select {
+		case <-ctx.Done():
+			return nil, fmt.Errorf("job %d did not reach %v from state %s: %w", id, states, job.State, ctx.Err())
+		case <-time.After(10 * time.Millisecond):
+		}
+	}
+}
+
+// makeJobListParams decodes list filters and the transaction handle, which
+// only tx_list accepts.
+func makeJobListParams(raw json.RawMessage, transactional bool) (*river.JobListParams, string, error) {
+	var params struct {
+		After      string               `json:"after"`
+		Direction  string               `json:"direction"`
+		IDs        []int64              `json:"ids"`
+		Kinds      []string             `json:"kinds"`
+		Limit      int                  `json:"limit"`
+		Metadata   json.RawMessage      `json:"metadata"`
+		OrderBy    string               `json:"order_by"`
+		Priorities []int16              `json:"priorities"`
+		Queues     []string             `json:"queues"`
+		States     []rivertype.JobState `json:"states"`
+		Handle     string               `json:"handle"`
+		TagsAll    []string             `json:"tags_all"`
+		TagsAny    []string             `json:"tags_any"`
+	}
+	if err := decodeParams(raw, &params); err != nil {
+		return nil, "", err
+	}
+	if err := checkHandle(params.Handle, transactional); err != nil {
+		return nil, "", err
+	}
+	if params.Limit == 0 {
+		params.Limit = 100
+	}
+	result := river.NewJobListParams().First(params.Limit)
+	if params.IDs != nil {
+		result = result.IDs(params.IDs...)
+	}
+	if params.Kinds != nil {
+		result = result.Kinds(params.Kinds...)
+	}
+	if params.Metadata != nil {
+		result = result.Metadata(string(params.Metadata))
+	}
+	if params.OrderBy != "" || params.Direction != "" {
+		field := river.JobListOrderByID
+		switch params.OrderBy {
+		case "", string(river.JobListOrderByID):
+		case string(river.JobListOrderByFinalizedAt):
+			field = river.JobListOrderByFinalizedAt
+		case string(river.JobListOrderByScheduledAt):
+			field = river.JobListOrderByScheduledAt
+		case string(river.JobListOrderByTime):
+			field = river.JobListOrderByTime
+		default:
+			return nil, "", invalidParams(fmt.Errorf("unsupported order_by %q", params.OrderBy))
+		}
+		direction := river.SortOrderAsc
+		switch params.Direction {
+		case "", "asc":
+		case "desc":
+			direction = river.SortOrderDesc
+		default:
+			return nil, "", invalidParams(fmt.Errorf("unsupported direction %q", params.Direction))
+		}
+		result = result.OrderBy(field, direction)
+	}
+	if params.Priorities != nil {
+		result = result.Priorities(params.Priorities...)
+	}
+	if params.Queues != nil {
+		result = result.Queues(params.Queues...)
+	}
+	if params.States != nil {
+		result = result.States(params.States...)
+	}
+	if params.TagsAll != nil {
+		result = result.TagsAll(params.TagsAll...)
+	}
+	if params.TagsAny != nil {
+		result = result.TagsAny(params.TagsAny...)
+	}
+	if params.After != "" {
+		var cursor river.JobListCursor
+		if err := cursor.UnmarshalText([]byte(params.After)); err != nil {
+			return nil, "", rejected(err)
+		}
+		result = result.After(&cursor)
+	}
+	return result, params.Handle, nil
+}
+
+// makeJobDeleteBeforeParams decodes delete_finalized params into one batch
+// of the job cleaner's deletion, covering every finalized state. A null or
+// absent `queues_included` decodes as nil, which matches every queue, while
+// an empty list stays non-nil and matches none.
+func makeJobDeleteBeforeParams(raw json.RawMessage) (*riverdriver.JobDeleteBeforeParams, error) {
+	var params struct {
+		Before         time.Time `json:"before"`
+		Limit          int       `json:"limit"`
+		QueuesExcluded []string  `json:"queues_excluded"`
+		QueuesIncluded []string  `json:"queues_included"`
+	}
+	if err := decodeParams(raw, &params); err != nil {
+		return nil, err
+	}
+	if params.Before.IsZero() {
+		return nil, invalidParams(errors.New("before is required"))
+	}
+	if params.Limit < 1 {
+		return nil, invalidParams(errors.New("limit must be positive"))
+	}
+	return &riverdriver.JobDeleteBeforeParams{
+		CancelledDoDelete:           true,
+		CancelledFinalizedAtHorizon: params.Before,
+		CompletedDoDelete:           true,
+		CompletedFinalizedAtHorizon: params.Before,
+		DiscardedDoDelete:           true,
+		DiscardedFinalizedAtHorizon: params.Before,
+		Max:                         params.Limit,
+		QueuesExcluded:              params.QueuesExcluded,
+		QueuesIncluded:              params.QueuesIncluded,
+	}, nil
+}
+
+// makeJobDeleteManyParams decodes bulk delete filters and the transaction
+// handle, which only tx_delete_many accepts.
+func makeJobDeleteManyParams(raw json.RawMessage, transactional bool) (*river.JobDeleteManyParams, string, error) {
+	var params struct {
+		All    bool                 `json:"all"`
+		Handle string               `json:"handle"`
+		IDs    []int64              `json:"ids"`
+		Kinds  []string             `json:"kinds"`
+		Limit  int                  `json:"limit"`
+		Queues []string             `json:"queues"`
+		States []rivertype.JobState `json:"states"`
+	}
+	if err := decodeParams(raw, &params); err != nil {
+		return nil, "", err
+	}
+	if err := checkHandle(params.Handle, transactional); err != nil {
+		return nil, "", err
+	}
+	if params.Limit == 0 {
+		params.Limit = 100
+	}
+	result := river.NewJobDeleteManyParams().First(params.Limit)
+	if params.All {
+		return result.UnsafeAll(), params.Handle, nil
+	}
+	if params.IDs != nil {
+		result = result.IDs(params.IDs...)
+	}
+	if params.Kinds != nil {
+		result = result.Kinds(params.Kinds...)
+	}
+	if params.Queues != nil {
+		result = result.Queues(params.Queues...)
+	}
+	if params.States != nil {
+		result = result.States(params.States...)
+	}
+	return result, params.Handle, nil
+}
+
+func valueOrZero[T any](value *T) T {
+	if value == nil {
+		var zero T
+		return zero
+	}
+	return *value
+}
+
+func valueOrEmpty[T any](values []T) []T {
+	if values == nil {
+		return []T{}
+	}
+	return values
+}
