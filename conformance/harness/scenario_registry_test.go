@@ -74,6 +74,7 @@ var scenarioRegistry = map[string]scenarioBinding{ //nolint:gochecknoglobals // 
 	"resumable_validation":                           {owner: scenarioOwnerMixed, tier: "runtime"},
 	"rolling_deployment_same_protocol":               {owner: scenarioOwnerMixed, tier: "mixed"},
 	"scheduler_unique_conflict_discard":              {owner: scenarioOwnerMixed, tier: "mixed"},
+	"simulated_yugabyte_polling":                     {owner: scenarioOwnerMixed, tier: "mixed"},
 	"single_implementation_worker_outcomes":          {owner: scenarioOwnerMixed, tier: "runtime"},
 	"snooze_once_metadata_transition":                {owner: scenarioOwnerMixed, tier: "runtime"},
 	"stuck_job_detection":                            {owner: scenarioOwnerMixed, tier: "runtime"},
