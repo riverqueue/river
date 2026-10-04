@@ -1,0 +1,52 @@
+[package]
+name = "riverqueue"
+description = "Fast and reliable background jobs for Rust"
+keywords = ["background", "jobs", "postgres", "queue", "sqlite"]
+categories = ["asynchronous", "database"]
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+readme = "README.md"
+repository.workspace = true
+homepage.workspace = true
+
+[package.metadata.docs.rs]
+all-features = true
+
+[features]
+default = ["postgres"]
+# Resolves IANA zone names such as `America/New_York` in cron `CRON_TZ=`
+# prefixes from a bundled time zone database.
+chrono-tz = ["dep:chrono-tz"]
+postgres = ["riverqueue-migrate/postgres", "sqlx/postgres"]
+sqlite = ["riverqueue-migrate/sqlite", "sqlx/sqlite"]
+
+[dependencies]
+async-trait.workspace = true
+base64.workspace = true
+chrono.workspace = true
+chrono-tz = { version = "0.10.4", optional = true }
+futures-util.workspace = true
+riverqueue-migrate = { path = "../riverqueue-migrate", version = "=0.49.0-alpha.1", default-features = false }
+riverqueue-macros = { path = "../riverqueue-macros", version = "=0.49.0-alpha.1" }
+rand = { workspace = true }
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+sqlx = { workspace = true, features = ["chrono", "derive", "json"] }
+thiserror.workspace = true
+tokio.workspace = true
+tokio-util.workspace = true
+tracing.workspace = true
+
+[dev-dependencies]
+anyhow = "1.0.104"
+riverqueue-migrate = { path = "../riverqueue-migrate", version = "=0.49.0-alpha.1", features = ["postgres", "sqlite"] }
+serde.workspace = true
+tracing-subscriber = { version = "0.3.20", default-features = false, features = ["registry", "std"] }
+# Fault-injection tests proxy database connections.
+tokio = { workspace = true, features = ["io-util", "net", "rt-multi-thread", "signal", "test-util"] }
+
+[lints]
+workspace = true

@@ -1,0 +1,540 @@
+//! Database-backed client, insertion, and worker runtime.
+
+mod attempts;
+mod backoff;
+mod builder;
+mod completer;
+mod executor;
+mod extension;
+mod insert;
+mod jobs;
+mod local_queues;
+mod notifier;
+mod notify_limiter;
+mod peers;
+mod producer;
+mod queues;
+mod record;
+mod request;
+mod resign;
+mod run;
+#[cfg(test)]
+mod tests;
+mod validate;
+
+pub(crate) use self::backoff::SERVICE_RESTART_RESET_AFTER;
+pub use self::builder::{ClientBuilder, MaintenanceConfig, QueueConfig, Retention};
+pub use self::extension::{ExtensionClient, PreparedInsertRequest, RawInsertRequest};
+pub use self::insert::{InsertBatchRequest, InsertManyItem, InsertManyRequest, InsertRequest};
+pub use self::jobs::{
+    JobCancelRequest, JobCompleteRequest, JobCompleteTxRequest, JobDeleteManyRequest,
+    JobDeleteRequest, JobGetRequest, JobListRequest, JobRetryRequest, JobUpdateRequest, Jobs,
+};
+pub use self::local_queues::LocalQueues;
+pub(crate) use self::peers::PeerLedger;
+pub use self::queues::{
+    QueueGetRequest, QueueListRequest, QueuePauseRequest, QueueResumeRequest, QueueUpdateRequest,
+    Queues,
+};
+#[cfg(feature = "sqlite")]
+pub(crate) use self::record::FieldErrors;
+pub(crate) use self::record::{DecodedJob, UndecodableJob, saturating_i16, tolerant_row};
+#[cfg(feature = "postgres")]
+pub(crate) use self::record::{JobRecord, decode_job_row, job_projection};
+pub use self::resign::ResignRequest;
+pub use self::run::{RunHandle, Stopper};
+pub(crate) use self::{
+    completer::after_jobs_set_state, executor::default_retry_delay, notifier::RuntimeNotification,
+    producer::standard_claim, validate::validate_queue,
+};
+use std::{
+    collections::HashMap,
+    sync::{
+        Arc, Mutex, RwLock, Weak,
+        atomic::{AtomicBool, AtomicU64, Ordering},
+    },
+    time::Duration,
+};
+
+use chrono::{DateTime, Utc};
+use tokio::sync::{broadcast, mpsc, watch};
+use tokio_util::sync::CancellationToken;
+
+use self::completer::CompletionUpdate;
+pub(crate) use self::notify_limiter::InsertNotifyLimiter;
+use crate::__private::{
+    DatabaseConfig as PilotDatabaseConfig, DatabaseConnection as PilotDatabaseConnection,
+    DatabasePool as PilotDatabasePool, NoopPilot, Pilot,
+};
+#[cfg(feature = "postgres")]
+use crate::SchemaName;
+use crate::maintenance::LeadershipWakeup;
+use crate::{
+    DefaultRetryPolicy, Error, Event, EventKind, EventReceiver, FETCH_COOLDOWN_DEFAULT,
+    JOB_STUCK_THRESHOLD_DEFAULT, JOB_TIMEOUT_DEFAULT, MAX_ATTEMPTS_DEFAULT, RetryPolicy,
+    SubscribeConfig, WorkerRegistry,
+    database::{ClientDatabase, Database, DatabasePool, DatabaseTransactionExecutor, IntoDatabase},
+    periodic::PeriodicJobs,
+};
+
+pub(crate) const ATTEMPTED_BY_MAX: i32 = 100;
+const EVENT_BUFFER_CAPACITY: usize = 10_000;
+const PENDING_CANCELLATION_LIMIT: usize = 10_000;
+const PENDING_CANCELLATION_RETENTION: Duration = Duration::from_mins(1);
+// Large queues otherwise become limited by a single PostgreSQL claim round trip.
+// Concurrent `SKIP LOCKED` claims safely divide the available worker slots.
+const PARALLEL_FETCH_MINIMUM: usize = 1_000;
+const QUEUE_CONFIG_POLL_INTERVAL: Duration = Duration::from_secs(2);
+const QUEUE_HEARTBEAT_INTERVAL: Duration = Duration::from_secs(30);
+/// How often producers report to an extension's session, like Go's
+/// `ProducerReportInterval` default.
+const PRODUCER_REPORT_INTERVAL_DEFAULT: Duration = Duration::from_secs(30);
+/// How long a producer's report may run, like Go's
+/// `reportProducerStatusOnce` timeout.
+const PRODUCER_REPORT_TIMEOUT: Duration = Duration::from_secs(10);
+/// Peers that haven't reported for this long are stale, like Go's
+/// `StaleProducerRetentionPeriod`.
+const PRODUCER_STALE_RETENTION: Duration = Duration::from_mins(5);
+
+#[allow(
+    clippy::struct_excessive_bools,
+    reason = "each flag is an independent configuration option, not a state"
+)]
+pub(crate) struct ClientInner {
+    allow_legacy_job_kinds: bool,
+    allow_unregistered_job_kinds: bool,
+    completion_sender: Mutex<Option<mpsc::WeakSender<CompletionUpdate>>>,
+    pub(crate) database: Database,
+    default_max_attempts: i16,
+    error_handler: Option<Arc<dyn crate::extension::DynErrorHandler>>,
+    pub(crate) events: broadcast::Sender<Event>,
+    /// Minimum delay between fetches for queues without their own, and the
+    /// window in which repeated insert notifications for a queue are
+    /// skipped.
+    pub(crate) fetch_cooldown: Duration,
+    /// Kinds claims are restricted to, including aliases, or `None` to claim
+    /// every kind.
+    pub(crate) fetch_kinds: Option<Arc<[String]>>,
+    fetch_registration_windows: AtomicU64,
+    pub(crate) hooks: Vec<Arc<dyn crate::extension::DynHook>>,
+    pub(crate) id: String,
+    insert_middleware: Vec<Arc<dyn crate::extension::DynInsertMiddleware>>,
+    /// Skips a queue's insert notification sent within the fetch cooldown
+    /// of the previous one.
+    pub(crate) insert_notify_limiter: InsertNotifyLimiter,
+    job_stuck_threshold: Duration,
+    pub(crate) job_timeout: Option<Duration>,
+    leader_election_disabled: bool,
+    /// Leadership notifications for the elector, kept off the busier
+    /// producer channel so that insert wakeups can't crowd out a resignation
+    /// request.
+    pub(crate) leadership_wakeups: broadcast::Sender<LeadershipWakeup>,
+    /// Queues whose producers are running or draining, which keep their
+    /// names reserved until they stop.
+    live_queues: watch::Sender<std::collections::HashSet<String>>,
+    pub(crate) maintenance: MaintenanceConfig,
+    /// Notification listener starts that panic before doing anything, so
+    /// tests can exercise the supervisor's restart path.
+    #[cfg(test)]
+    notifier_start_panics: AtomicU64,
+    /// Peer jobs owned by running attempts, mapped to their ledger.
+    peer_owners: Mutex<HashMap<i64, u64>>,
+    pending_cancellations: Mutex<HashMap<i64, std::time::Instant>>,
+    pub(crate) periodic_jobs: PeriodicJobs,
+    pub(crate) pilot: Arc<dyn Pilot>,
+    poll_only: bool,
+    producer_report_interval: Duration,
+    queue_changes: watch::Sender<u64>,
+    queue_notifications: broadcast::Sender<RuntimeNotification>,
+    queues: RwLock<HashMap<String, QueueConfig>>,
+    pub(crate) retry_policy: Arc<dyn RetryPolicy>,
+    running: Mutex<HashMap<i64, CancellationToken>>,
+    #[cfg(feature = "postgres")]
+    pub(crate) schema: SchemaName,
+    soft_stop_timeout: Option<Duration>,
+    started: AtomicBool,
+    work_middleware: Vec<Arc<dyn crate::extension::DynWorkMiddleware>>,
+    pub(crate) workers: WorkerRegistry,
+}
+
+#[cfg(feature = "sqlite")]
+fn sqlite_backend_error(error: crate::database::sqlite::BackendError) -> Error {
+    Error::Database(error.into())
+}
+
+impl ClientInner {
+    /// Borrows a caller-managed transaction's connection, rejecting a
+    /// transaction from another backend.
+    pub(crate) fn transaction_connection<'executor, E>(
+        &self,
+        transaction: E,
+    ) -> Result<PilotDatabaseConnection<'executor>, Error>
+    where
+        E: DatabaseTransactionExecutor<'executor>,
+    {
+        Ok(self.database.connection(transaction)?)
+    }
+
+    #[cfg(feature = "postgres")]
+    pub(crate) const fn database(&self) -> &Database {
+        &self.database
+    }
+
+    /// Returns the PostgreSQL server's capabilities, detecting them with
+    /// `executor` the first time.
+    #[cfg(feature = "postgres")]
+    pub(crate) async fn postgres_capabilities<'e>(
+        &self,
+        executor: impl sqlx::PgExecutor<'e>,
+    ) -> Result<crate::database::postgres_capabilities::PostgresCapabilities, Error> {
+        Ok(
+            crate::database::postgres_capabilities::CapabilitiesCache::load_or_detect(
+                self.database.postgres_capabilities(),
+                executor,
+            )
+            .await?,
+        )
+    }
+
+    /// Whether this client hears committed notifications through a notifier,
+    /// a PostgreSQL listener or SQLite outbox poller, like River Go's client
+    /// notifier. A poll-only client has none, and neither does a client of a
+    /// PostgreSQL server without `LISTEN`/`NOTIFY` once that's detected.
+    pub(crate) fn has_notifier(&self) -> bool {
+        !self.poll_only && self.database.delivers_notifications()
+    }
+
+    /// Whether this client receives notifications from other clients, which
+    /// needs a backend listener and a client that isn't poll-only. When it
+    /// doesn't, it wakes its own runtime directly after committing a change,
+    /// like Go's `notifyProducerWithoutListener*` helpers.
+    pub(crate) fn listens_for_notifications(&self) -> bool {
+        self.database.supports_listener() && !self.poll_only
+    }
+
+    pub(crate) fn pilot_database_config(&self) -> PilotDatabaseConfig {
+        match self.database.pool() {
+            #[cfg(feature = "postgres")]
+            DatabasePool::Postgres(_) => PilotDatabaseConfig::Postgres {
+                #[cfg(feature = "postgres")]
+                schema: self.schema.clone(),
+            },
+            #[cfg(feature = "sqlite")]
+            DatabasePool::Sqlite(_) => PilotDatabaseConfig::Sqlite,
+        }
+    }
+
+    /// The client's database as an extension sees it.
+    pub(crate) fn pilot_database(&self) -> crate::__private::PilotDatabase {
+        crate::__private::PilotDatabase::new(
+            self.pilot_database_pool(),
+            self.pilot_database_config(),
+        )
+    }
+
+    pub(crate) fn pilot_database_pool(&self) -> PilotDatabasePool {
+        match self.database.pool() {
+            #[cfg(feature = "postgres")]
+            DatabasePool::Postgres(pool) => PilotDatabasePool::Postgres(pool.clone()),
+            #[cfg(feature = "sqlite")]
+            DatabasePool::Sqlite(pool) => PilotDatabasePool::Sqlite(pool.clone()),
+        }
+    }
+}
+
+/// A River client backed by a caller-owned pool for a built-in database.
+#[derive(Clone)]
+pub struct Client {
+    pub(crate) inner: Arc<ClientInner>,
+}
+
+impl std::fmt::Debug for Client {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("Client")
+            .field("database_kind", &self.database().kind())
+            .field("id", &self.id())
+            .field("started", &self.inner.started.load(Ordering::Acquire))
+            .finish_non_exhaustive()
+    }
+}
+
+/// Non-owning handle used by extension services.
+#[derive(Clone)]
+pub struct WeakClient {
+    inner: Weak<ClientInner>,
+}
+
+impl std::fmt::Debug for WeakClient {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("WeakClient")
+            .field("alive", &(self.inner.strong_count() > 0))
+            .finish_non_exhaustive()
+    }
+}
+
+impl WeakClient {
+    pub(crate) fn new(inner: &Arc<ClientInner>) -> Self {
+        Self {
+            inner: Arc::downgrade(inner),
+        }
+    }
+
+    /// Upgrades the handle while its originating client remains alive.
+    #[must_use]
+    pub fn upgrade(&self) -> Option<Client> {
+        self.inner.upgrade().map(|inner| Client { inner })
+    }
+}
+
+impl Client {
+    /// Creates a client builder for `database`, such as an SQLx pool or a
+    /// [`PostgresDatabase`](crate::database::PostgresDatabase). A client
+    /// built without queues only inserts and manages jobs; add queues and
+    /// workers to work them.
+    #[must_use]
+    pub fn builder<D>(database: D) -> ClientBuilder
+    where
+        D: IntoDatabase,
+    {
+        let database = Database::from_source(database);
+        ClientBuilder {
+            allow_legacy_job_kinds: false,
+            allow_unregistered_job_kinds: false,
+            database,
+            default_max_attempts: MAX_ATTEMPTS_DEFAULT,
+            error_handler: None,
+            fetch_cooldown: FETCH_COOLDOWN_DEFAULT,
+            fetch_only_known_kinds: false,
+            hooks: Vec::new(),
+            id: default_client_id(),
+            insert_middleware: Vec::new(),
+            job_stuck_threshold: JOB_STUCK_THRESHOLD_DEFAULT,
+            job_timeout: Some(JOB_TIMEOUT_DEFAULT),
+            leader_election_disabled: false,
+            maintenance: MaintenanceConfig::default(),
+            periodic_jobs: Vec::new(),
+            pilot: Arc::new(NoopPilot),
+            poll_only: false,
+            producer_report_interval: PRODUCER_REPORT_INTERVAL_DEFAULT,
+            queues: HashMap::new(),
+            retry_policy: Arc::new(DefaultRetryPolicy::default()),
+            soft_stop_timeout: None,
+            work_middleware: Vec::new(),
+            workers: WorkerRegistry::new(),
+        }
+    }
+
+    /// Creates a non-owning handle for an extension service.
+    #[must_use]
+    pub(crate) fn downgrade(&self) -> WeakClient {
+        WeakClient {
+            inner: Arc::downgrade(&self.inner),
+        }
+    }
+
+    /// Stable identifier recorded in `attempted_by`.
+    #[must_use]
+    pub fn id(&self) -> &str {
+        &self.inner.id
+    }
+}
+
+impl Client {
+    /// Returns the dynamic periodic-job bundle for this client.
+    ///
+    /// Only the elected leader enqueues periodic jobs, so jobs added here
+    /// take effect only while this client leads. To fully enable or disable a
+    /// periodic job, change it on every client eligible for leader election.
+    /// A client built with
+    /// [`without_leader_election`](ClientBuilder::without_leader_election)
+    /// rejects additions.
+    #[must_use]
+    pub fn periodic_jobs(&self) -> PeriodicJobs {
+        self.inner.periodic_jobs.clone()
+    }
+
+    /// Returns the database this client was built with, with its pool and
+    /// backend-specific options.
+    #[must_use]
+    pub fn database(&self) -> ClientDatabase<'_> {
+        self.inner.database.client_database()
+    }
+
+    /// Subscribes to selected local client events with a bounded buffer.
+    ///
+    /// # Errors
+    ///
+    /// Returns the errors of [`Client::subscribe_config`], and an error when
+    /// `kinds` is empty.
+    pub fn subscribe(&self, kinds: &[EventKind]) -> Result<EventReceiver, Error> {
+        self.subscribe_config(SubscribeConfig::new(kinds.iter().copied())?)
+    }
+
+    /// Subscribes with an explicit bounded-buffer capacity. When the receiver
+    /// falls behind, the next receive reports how many events were dropped.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::Configuration`] when the client works no queues, and
+    /// [`Error::RuntimeUnavailable`] outside a Tokio runtime.
+    pub fn subscribe_config(&self, config: SubscribeConfig) -> Result<EventReceiver, Error> {
+        let (buffer_capacity, kinds) = config.into_parts();
+        if self
+            .inner
+            .queues
+            .read()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .is_empty()
+        {
+            return Err(Error::configuration(
+                "event subscriptions require a client configured to work queues".to_owned(),
+            ));
+        }
+        let kinds = crate::event::validate_kinds(&kinds)?;
+        let mut source = self.inner.events.subscribe();
+        let (sender, receiver) = mpsc::channel(buffer_capacity.get());
+        let dropped = Arc::new(AtomicU64::new(0));
+        let dropped_for_task = Arc::clone(&dropped);
+        tokio::runtime::Handle::try_current().map_err(|_| Error::RuntimeUnavailable {
+            operation: "event subscriptions",
+        })?;
+        tokio::spawn(async move {
+            loop {
+                // Stop forwarding as soon as the subscriber drops its
+                // receiver, rather than at the next matching event.
+                let next = tokio::select! {
+                    () = sender.closed() => break,
+                    next = source.recv() => next,
+                };
+                match next {
+                    Ok(event) if kinds.contains(&event.kind()) => match sender.try_send(event) {
+                        Ok(()) => {}
+                        Err(mpsc::error::TrySendError::Full(_)) => {
+                            dropped_for_task.fetch_add(1, Ordering::Relaxed);
+                        }
+                        Err(mpsc::error::TrySendError::Closed(_)) => break,
+                    },
+                    Ok(_) => {}
+                    Err(broadcast::error::RecvError::Lagged(count)) => {
+                        dropped_for_task.fetch_add(count, Ordering::Relaxed);
+                    }
+                    Err(broadcast::error::RecvError::Closed) => break,
+                }
+            }
+        });
+        Ok(EventReceiver::new(dropped, receiver))
+    }
+}
+
+impl Client {
+    pub(crate) fn default_max_attempts(&self) -> i16 {
+        self.inner.default_max_attempts
+    }
+
+    pub(crate) fn signal_queue_control(&self, queue: &str) {
+        let _ = self
+            .inner
+            .queue_notifications
+            .send(RuntimeNotification::QueueControl(queue.to_owned()));
+    }
+}
+
+impl Client {
+    fn validate_known_kind(&self, kind: &str) -> Result<(), Error> {
+        if !self.inner.allow_unregistered_job_kinds
+            && !self.inner.workers.kinds().is_empty()
+            && !self.inner.workers.contains_kind(kind)
+        {
+            return Err(Error::UnknownJobKind {
+                kind: kind.to_owned(),
+            });
+        }
+        Ok(())
+    }
+}
+
+/// Formats a time as River Go's `time.Time` JSON (RFC 3339 with nanoseconds
+/// and trailing zeros trimmed, in UTC), which River stores for
+/// `cancel_attempted_at`.
+pub(crate) fn go_time_json(time: DateTime<Utc>) -> String {
+    let formatted = time.to_rfc3339_opts(chrono::SecondsFormat::Nanos, true);
+    let Some((seconds, fraction)) = formatted.trim_end_matches('Z').split_once('.') else {
+        return formatted;
+    };
+    let fraction = fraction.trim_end_matches('0');
+    if fraction.is_empty() {
+        format!("{seconds}Z")
+    } else {
+        format!("{seconds}.{fraction}Z")
+    }
+}
+
+/// Generates a client ID unique to this `Client` instance.
+///
+/// Like Go, the ID combines the host name (dots replaced by underscores and
+/// truncated to 60 bytes) with the creation time to the microsecond. A random
+/// suffix keeps IDs distinct when several clients start in the same
+/// microsecond or containers report identical host names, because a shared ID
+/// would let two clients renew one leadership lease.
+fn default_client_id() -> String {
+    default_client_id_with_host(&host_name(), Utc::now(), crate::maintenance::random_u64())
+}
+
+fn default_client_id_with_host(host: &str, created_at: DateTime<Utc>, random: u64) -> String {
+    const MAX_HOST_LENGTH: usize = 60;
+
+    let mut host = host.replace('.', "_");
+    if host.len() > MAX_HOST_LENGTH {
+        let mut end = MAX_HOST_LENGTH;
+        while !host.is_char_boundary(end) {
+            end -= 1;
+        }
+        host.truncate(end);
+    }
+    format!(
+        "{host}_{}_{:08x}",
+        created_at.format("%Y_%m_%dT%H_%M_%S_%6f"),
+        random & 0xffff_ffff
+    )
+}
+
+fn host_name() -> String {
+    std::env::var("HOSTNAME")
+        .ok()
+        .or_else(|| std::fs::read_to_string("/proc/sys/kernel/hostname").ok())
+        .or_else(|| std::fs::read_to_string("/etc/hostname").ok())
+        .map(|host| host.trim().to_owned())
+        .filter(|host| !host.is_empty())
+        .unwrap_or_else(|| "unknown_host".to_owned())
+}
+
+#[cfg(test)]
+mod default_client_id_tests {
+    use chrono::{TimeZone, Timelike};
+
+    use super::*;
+
+    #[test]
+    fn default_client_id_matches_go_shape_and_is_unique() {
+        let created_at = Utc
+            .with_ymd_and_hms(2026, 1, 2, 3, 4, 5)
+            .unwrap()
+            .with_nanosecond(678_901_000)
+            .unwrap();
+        assert_eq!(
+            default_client_id_with_host("worker.example.com", created_at, 0xdead_beef),
+            "worker_example_com_2026_01_02T03_04_05_678901_deadbeef"
+        );
+        let long = "h".repeat(80);
+        let id = default_client_id_with_host(&long, created_at, 1);
+        assert!(id.starts_with(&"h".repeat(60)));
+        assert!(!id.starts_with(&"h".repeat(61)));
+        assert!(id.len() <= 100, "client IDs are limited to 100 bytes");
+
+        let first = default_client_id();
+        let second = default_client_id();
+        assert_ne!(first, second);
+    }
+}

@@ -1,5 +1,6 @@
 [workspace]
 members = [
+    "riverqueue",
     "riverqueue-macros",
     "riverqueue-migrate",
 ]
