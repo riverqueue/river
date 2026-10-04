@@ -5,6 +5,21 @@
 
 version: 2
 updates:
+  - package-ecosystem: "cargo"
+    directory: "/rust"
+    cooldown:
+      default-days: 7
+    groups:
+      rust-dependencies:
+        update-types:
+          - "minor"
+          - "patch"
+    schedule:
+      interval: "weekly"
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
   - package-ecosystem: "gomod"
     directories:
       - "**/*"
