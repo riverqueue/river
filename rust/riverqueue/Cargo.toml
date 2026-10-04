@@ -48,6 +48,46 @@ tracing-subscriber = { version = "0.3.20", default-features = false, features = 
 # Fault-injection tests proxy database connections.
 tokio = { workspace = true, features = ["io-util", "net", "rt-multi-thread", "signal", "test-util"] }
 
+[[example]]
+name = "basic_worker"
+required-features = ["postgres"]
+
+[[example]]
+name = "cancellation"
+required-features = ["postgres"]
+
+[[example]]
+name = "custom_schema"
+required-features = ["postgres"]
+
+[[example]]
+name = "events"
+required-features = ["postgres"]
+
+[[example]]
+name = "graceful_shutdown"
+required-features = ["postgres"]
+
+[[example]]
+name = "mixed_go_rust"
+required-features = ["postgres"]
+
+[[example]]
+name = "periodic"
+required-features = ["postgres"]
+
+[[example]]
+name = "sqlite"
+required-features = ["sqlite"]
+
+[[example]]
+name = "transactions"
+required-features = ["postgres"]
+
+[[example]]
+name = "unique"
+required-features = ["postgres"]
+
 [[test]]
 name = "lifecycle"
 required-features = ["sqlite"]
