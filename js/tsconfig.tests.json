@@ -8,11 +8,15 @@
       ],
       "@riverqueue/driver-prisma": [
         "./driver/prisma/src/index.ts"
+      ],
+      "@riverqueue/migrate": [
+        "./migrate/src/index.ts"
       ]
     }
   },
   "include": [
     "src",
-    "driver/*/src"
+    "driver/*/src",
+    "migrate/src"
   ]
 }

@@ -1,0 +1,141 @@
+{
+  "backends": {
+    "postgres": [
+      {
+        "file": "001_create_river_migration.down.sql",
+        "sha256": "34c87dc594bf7520bc3ae69f6f0da8d2d9a472616ab38b37e63d4e3838da06d2"
+      },
+      {
+        "file": "001_create_river_migration.up.sql",
+        "sha256": "79def9ab1643beee7776c499559ec199a03b5b26036c122dc3ba13ec3d078dc0"
+      },
+      {
+        "file": "002_initial_schema.down.sql",
+        "sha256": "8e7e73755b3e9cd1d46f0dffeadd427b86af13cea2f41f3d30af1624329db9b9"
+      },
+      {
+        "file": "002_initial_schema.up.sql",
+        "sha256": "8915c00d08ed98625865c705b6fd0bd14c113b7cdd0cb218ee894eca1d32ad03"
+      },
+      {
+        "file": "003_river_job_tags_non_null.down.sql",
+        "sha256": "bca44f6f0e926411c9e26e7ce2598bbdb5102b286f380135d9a5bcd96a77cbb8"
+      },
+      {
+        "file": "003_river_job_tags_non_null.up.sql",
+        "sha256": "dedb183bb302c005bc72caf2901ff693bbab11413308c5e0567ddffb51e667ef"
+      },
+      {
+        "file": "004_pending_and_more.down.sql",
+        "sha256": "91b5ced7b9d707a0de73f5b312596935950b70229f58aa9bf3ca362aa7a408c8"
+      },
+      {
+        "file": "004_pending_and_more.up.sql",
+        "sha256": "3f7418b0cf78ede9a9ec730bdfc4389a84e05989531b205fc4ece0d2bb10e390"
+      },
+      {
+        "file": "005_migration_unique_client.down.sql",
+        "sha256": "de84dca49a5d618d2a4973b13a69830fbebb0f9635babfa50c6f19577193425b"
+      },
+      {
+        "file": "005_migration_unique_client.up.sql",
+        "sha256": "b760f487152c7d92102869d46b8a64dc1e2094d5675e690ffbe52a747eee8431"
+      },
+      {
+        "file": "006_bulk_unique.down.sql",
+        "sha256": "726483f6e5aa7dd02cdd974cd7bf716973a8d0a97ba6dbc5dc5304aaf54c7ad7"
+      },
+      {
+        "file": "006_bulk_unique.up.sql",
+        "sha256": "3b133f7ce4662d3dc8bd4a57628e0e116a300b2635a79315557aa1369849f0fb"
+      },
+      {
+        "file": "007_notification_outbox_sqlite_jsonb_and_sql_cleanup.down.sql",
+        "sha256": "9131aae235187dbdaaa822dab2a475a884e917d9af05e3c98fb95c152eaa769a"
+      },
+      {
+        "file": "007_notification_outbox_sqlite_jsonb_and_sql_cleanup.up.sql",
+        "sha256": "47ec8031b88e69004de2def5bc3109d969f71ee4c33a1e7dac2fb8c9dd19182d"
+      },
+      {
+        "file": "008_job_id_autoincrement.down.sql",
+        "sha256": "0c3750a947d6494db07d56f5d3735a5e49a2cbfa1f7a09771227c31c8147bf70"
+      },
+      {
+        "file": "008_job_id_autoincrement.up.sql",
+        "sha256": "0c3750a947d6494db07d56f5d3735a5e49a2cbfa1f7a09771227c31c8147bf70"
+      }
+    ],
+    "sqlite": [
+      {
+        "file": "001_create_river_migration.down.sql",
+        "sha256": "34c87dc594bf7520bc3ae69f6f0da8d2d9a472616ab38b37e63d4e3838da06d2"
+      },
+      {
+        "file": "001_create_river_migration.up.sql",
+        "sha256": "d15597cb0bb884fb0727d2a29ad8313842708b55fd561a5fe62e37aad5f34298"
+      },
+      {
+        "file": "002_initial_schema.down.sql",
+        "sha256": "900508ba08d0ca3c8451eb2854cd9ab837166ef55736393524253b6228438470"
+      },
+      {
+        "file": "002_initial_schema.up.sql",
+        "sha256": "58bc64db39fa813ab1eee92b5c3f6e4463f88ac1de85df731d959cdede7d4f35"
+      },
+      {
+        "file": "003_river_job_tags_non_null.down.sql",
+        "sha256": "223eb849addf451228e7f057c2e29b005aaf63ddf25c51a7a088426d139d9dd9"
+      },
+      {
+        "file": "003_river_job_tags_non_null.up.sql",
+        "sha256": "ae9961ea15b2fbe88298c687dd524ada29e018f8fbc493db517e988d9d0b61c2"
+      },
+      {
+        "file": "004_pending_and_more.down.sql",
+        "sha256": "28065bbe82dbaa187d8705861d8fec558f210eb739feba63e7913a09a5e9ae3f"
+      },
+      {
+        "file": "004_pending_and_more.up.sql",
+        "sha256": "8c11c8d2bf63200e2cfe58dca1e5d30131fed0f99cb74146b3116fa1286a93f5"
+      },
+      {
+        "file": "005_migration_unique_client.down.sql",
+        "sha256": "9960dc49a2293a9bdbdb32ca61dc2971cde5b49ac658ef21ed7f96ec6e011997"
+      },
+      {
+        "file": "005_migration_unique_client.up.sql",
+        "sha256": "67c32e81494b62baf1e6b0fb6025e882a7b1be7c9ed2236799d17d00912213c4"
+      },
+      {
+        "file": "006_bulk_unique.down.sql",
+        "sha256": "b9e778134d15e815cf0694f06444f738cde072c2d297978eb30d7bd7bdb2802c"
+      },
+      {
+        "file": "006_bulk_unique.up.sql",
+        "sha256": "96713f4832bcf9343df30b62c6c35b03daca23aa9a02adbd7eb0091556df3659"
+      },
+      {
+        "file": "007_notification_outbox_sqlite_jsonb_and_sql_cleanup.down.sql",
+        "sha256": "55bffeb528b40dffc0cbec2f22d1463aef37a8b3d7977f83729cc505bb77c745"
+      },
+      {
+        "file": "007_notification_outbox_sqlite_jsonb_and_sql_cleanup.up.sql",
+        "sha256": "441a05e1d9aa4f151877ccf725b0b0a86f27013442297d4b621c05676270d0b0"
+      },
+      {
+        "file": "008_job_id_autoincrement.down.sql",
+        "sha256": "04871283fe5d4cab4ac70da28d8509aa7ba765994d528c2dcc7ebe0ee596710c"
+      },
+      {
+        "file": "008_job_id_autoincrement.up.sql",
+        "sha256": "049c9bf615f24a326bcc31ddc87b46f76e3de11e3eea3b2b9e1358131b3f3bed"
+      }
+    ]
+  },
+  "format": 1,
+  "sources": {
+    "postgres": "riverdriver/riverpgxv5/migration/main",
+    "sqlite": "riverdriver/riversqlite/migration/main"
+  }
+}

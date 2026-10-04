@@ -26,18 +26,20 @@
   ],
   "scripts": {
     "build": "node node_modules/typescript/bin/tsc",
-    "build:all": "pnpm run build && pnpm --filter='./driver/*' run build",
+    "build:all": "pnpm run build && pnpm --filter=@riverqueue/migrate run build && pnpm --filter='./driver/*' run build",
     "clean": "rm -rf dist",
-    "clean:all": "pnpm run clean && pnpm --filter='./driver/*' run clean",
-    "fmt": "prettier --write 'src/**/*.ts' 'driver/**/src/**/*.ts' 'scripts/**/*.mjs' 'examples/*/src/*.ts' 'examples/*/{README.md,package.json,tsconfig.json}' 'examples/tsconfig.json' '{README.md,package.json}'",
-    "fmt:check": "prettier --check 'src/**/*.ts' 'driver/**/src/**/*.ts' 'scripts/**/*.mjs' 'examples/*/src/*.ts' 'examples/*/{README.md,package.json,tsconfig.json}' 'examples/tsconfig.json' '{README.md,package.json}'",
-    "lint": "eslint 'src/**/*.ts' 'driver/**/src/**/*.ts' 'scripts/**/*.mjs' 'examples/*/src/*.ts'",
-    "lint:fix": "eslint --fix 'src/**/*.ts' 'driver/**/src/**/*.ts' 'scripts/**/*.mjs' 'examples/*/src/*.ts'",
+    "clean:all": "pnpm run clean && pnpm --filter=@riverqueue/migrate run clean && pnpm --filter='./driver/*' run clean",
+    "fmt": "prettier --write 'src/**/*.ts' 'driver/**/src/**/*.ts' 'migrate/src/**/*.ts' 'scripts/**/*.mjs' 'examples/*/src/*.ts' 'examples/*/{README.md,package.json,tsconfig.json}' 'examples/tsconfig.json' '{README.md,package.json}'",
+    "fmt:check": "prettier --check 'src/**/*.ts' 'driver/**/src/**/*.ts' 'migrate/src/**/*.ts' 'scripts/**/*.mjs' 'examples/*/src/*.ts' 'examples/*/{README.md,package.json,tsconfig.json}' 'examples/tsconfig.json' '{README.md,package.json}'",
+    "generate:migrations": "node scripts/sync-migrations.mjs",
+    "lint": "eslint 'src/**/*.ts' 'driver/**/src/**/*.ts' 'migrate/src/**/*.ts' 'scripts/**/*.mjs' 'examples/*/src/*.ts'",
+    "lint:fix": "eslint --fix 'src/**/*.ts' 'driver/**/src/**/*.ts' 'migrate/src/**/*.ts' 'scripts/**/*.mjs' 'examples/*/src/*.ts'",
     "prepublishOnly": "pnpm run clean && pnpm run build",
     "test": "vitest run --passWithNoTests",
     "test:coverage": "vitest run --coverage",
     "test:integration": "vitest run --passWithNoTests --config vitest.integration.config.ts",
-    "typecheck:tests": "node node_modules/typescript/bin/tsc -p tsconfig.tests.json"
+    "typecheck:tests": "node node_modules/typescript/bin/tsc -p tsconfig.tests.json",
+    "verify:migrations": "node scripts/sync-migrations.mjs --check"
   },
   "repository": {
     "type": "git",
