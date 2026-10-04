@@ -1,5 +1,7 @@
 .DEFAULT_GOAL := help
 
+SQLC ?= sqlc
+
 .PHONY: db/reset
 db/reset: ## Drop, create, and migrate dev and test databases
 db/reset: db/reset/dev
@@ -31,9 +33,9 @@ generate/rust-migrations: ## Sync database migrations and hashes to Rust
 
 .PHONY: generate/sqlc
 generate/sqlc: ## Generate sqlc
-	cd riverdriver/riverdatabasesql/internal/dbsqlc && sqlc generate
-	cd riverdriver/riverpgxv5/internal/dbsqlc && sqlc generate
-	cd riverdriver/riversqlite/internal/dbsqlc && sqlc generate
+	cd riverdriver/riverdatabasesql/internal/dbsqlc && $(SQLC) generate
+	cd riverdriver/riverpgxv5/internal/dbsqlc && $(SQLC) generate
+	cd riverdriver/riversqlite/internal/dbsqlc && $(SQLC) generate
 
 # Looks at comments using ## on targets and uses them to produce a help output.
 .PHONY: help
@@ -47,6 +49,8 @@ help: ## Print this message
 submodules := $(shell go list -f '{{.Dir}}' -m)
 
 ITERATIONS ?= 100
+RUST_BENCH_ARGS ?=
+RUST_SEMVER_BASELINE_REV ?= $(shell git tag --list 'riverqueue-v*' --sort=-v:refname | head -n 1)
 
 TEST_DATABASE ?= all
 
@@ -77,6 +81,16 @@ define lint-target
 endef
 $(foreach mod,$(submodules),$(eval $(call lint-target,$(mod))))
 
+# Rust targets are separate from `lint` and `test` so Go-only contributors and
+# the Go CI jobs do not need a Rust toolchain; the Rust workflow runs them.
+.PHONY: lint/rust
+lint/rust: ## Run Rust formatting and clippy checks, including single-backend builds
+	cd rust && cargo fmt --all -- --check
+	cd rust && cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
+	cd rust && cargo clippy -p riverqueue -p riverqueue-migrate -p riverqueue-cli -p riverqueue-test --no-default-features --features postgres --all-targets --locked -- -D warnings
+	cd rust && cargo clippy -p riverqueue -p riverqueue-migrate -p riverqueue-cli -p riverqueue-test --no-default-features --features sqlite --all-targets --locked -- -D warnings
+	cd rust && $(RUST_POSTGRES_TESTS_ENV) cargo clippy -p riverqueue -p riverqueue-migrate --all-targets --all-features --locked -- -D warnings
+
 .PHONY: test
 test:: ## Run tests (TEST_DATABASE=all, postgres, or sqlite)
 define test-target
@@ -89,6 +103,74 @@ test:: ; cd ./riverdriver/riverdrivertest && RIVER_USE_LEGACY_SUBTRANSACTIONS=1 
 ifneq ($(TEST_DATABASE),sqlite)
 test:: ; cd ./riverdriver/riverdrivertest && RIVER_USE_LEGACY_SUBTRANSACTIONS=1 go test . -run '^TestDriverRiverPgxV5$$/.*/WithTx$$' -timeout 2m
 endif
+
+# `--cfg river_postgres_tests` builds the Rust PostgreSQL integration tests.
+# It goes to both rustc and rustdoc so any doctest gated on it runs too, and
+# into its own target directory so switching it on and off doesn't rebuild
+# the ordinary build's artifacts. The default is absolute: trybuild resolves a
+# relative target directory from the macros crate's directory.
+RUST_POSTGRES_TESTS_ENV = RUSTFLAGS="$$RUSTFLAGS --cfg river_postgres_tests" \
+	RUSTDOCFLAGS="$$RUSTDOCFLAGS --cfg river_postgres_tests" \
+	CARGO_TARGET_DIR="$${CARGO_TARGET_DIR:-$(CURDIR)/rust/target}/postgres-tests"
+
+# PostgreSQL integration tests need RIVER_RUST_DATABASE_URL. Without it
+# test/rust still runs unit, doc, and SQLite integration tests, and fails in CI
+# so a missing URL cannot turn the PostgreSQL suite into a silent pass.
+.PHONY: test/rust
+test/rust: ## Run Rust unit and SQLite tests, plus PostgreSQL tests when RIVER_RUST_DATABASE_URL is set
+	@if [ -n "$$RIVER_RUST_DATABASE_URL" ]; then \
+		cd rust && $(RUST_POSTGRES_TESTS_ENV) cargo test --workspace --all-features --locked; \
+	elif [ -n "$$CI" ]; then \
+		echo "RIVER_RUST_DATABASE_URL is required in CI to run the Rust PostgreSQL tests" >&2; exit 1; \
+	else \
+		echo "RIVER_RUST_DATABASE_URL is unset; skipping Rust PostgreSQL integration tests"; \
+		cd rust && cargo test --workspace --features riverqueue/sqlite,riverqueue-migrate/sqlite --locked; \
+	fi
+
+.PHONY: test/rust/postgres
+test/rust/postgres: ## Run all Rust tests, including PostgreSQL integration tests (requires RIVER_RUST_DATABASE_URL)
+	@test -n "$$RIVER_RUST_DATABASE_URL" || { echo "RIVER_RUST_DATABASE_URL is required" >&2; exit 1; }
+	cd rust && $(RUST_POSTGRES_TESTS_ENV) cargo test --workspace --all-features --locked
+
+.PHONY: test/rust/sqlite
+test/rust/sqlite: ## Run Rust unit, doc, and SQLite integration tests without a PostgreSQL database
+	cd rust && cargo test --workspace --features riverqueue/sqlite,riverqueue-migrate/sqlite --locked
+
+.PHONY: doc/rust
+doc/rust: ## Build Rust API documentation, compiled examples, and doctests for each backend feature set
+	cd rust && RUSTDOCFLAGS="-D warnings" cargo doc --workspace --all-features --no-deps --locked
+	cd rust && RUSTDOCFLAGS="-D warnings" cargo test --workspace --all-features --doc --locked
+	cd rust && RUSTDOCFLAGS="-D warnings" cargo test -p riverqueue -p riverqueue-migrate -p riverqueue-cli -p riverqueue-test --no-default-features --features postgres --doc --locked
+	cd rust && RUSTDOCFLAGS="-D warnings" cargo test -p riverqueue -p riverqueue-migrate -p riverqueue-cli -p riverqueue-test --no-default-features --features sqlite --doc --locked
+	cd rust && cargo check --workspace --examples --all-features --locked
+
+.PHONY: doc/rust/docsrs
+doc/rust/docsrs: ## Build Rust API documentation as docs.rs does (nightly toolchain, `--cfg docsrs`)
+	cd rust && RUSTDOCFLAGS="--cfg docsrs -D warnings" CARGO_TARGET_DIR="$${CARGO_TARGET_DIR:-target}/docsrs" cargo +nightly doc -p riverqueue -p riverqueue-migrate -p riverqueue-test --all-features --no-deps --locked
+
+.PHONY: check/rust/dependencies
+check/rust/dependencies: ## Audit Rust advisories, licenses, bans, and sources
+	cd rust && cargo deny check
+
+.PHONY: check/rust/package
+check/rust/package: ## Build and verify publishable crate archives without publishing
+	cd rust && cargo package --workspace --allow-dirty --locked
+
+# The baseline is the latest published riverqueue-v* tag, and
+# cargo-semver-checks infers the allowed change from the version bump. It
+# skips every lint while the workspace version is a pre-release, so
+# comparing unreleased revisions with each other checks nothing. Until a
+# Rust release is tagged the check reports that there is no baseline. Set
+# RUST_SEMVER_BASELINE_REV to compare with another revision.
+.PHONY: check/rust/semver
+check/rust/semver: ## Check Rust APIs against RUST_SEMVER_BASELINE_REV (default: latest Rust tag)
+	@if test -z "$(RUST_SEMVER_BASELINE_REV)"; then \
+		echo "No published Rust release tag (riverqueue-v*); no public API baseline to compare"; \
+	elif ! git cat-file -e "$(RUST_SEMVER_BASELINE_REV):rust/Cargo.toml" 2>/dev/null; then \
+		echo "Baseline $(RUST_SEMVER_BASELINE_REV) predates the Rust crates; no public API to compare"; \
+	else \
+		cd rust && cargo semver-checks --workspace --baseline-rev "$(RUST_SEMVER_BASELINE_REV)"; \
+	fi
 
 .PHONY: test/race
 test/race:: ## Run tests with race detector (TEST_DATABASE=all, postgres, or sqlite)
@@ -108,6 +190,10 @@ define bench-target
     bench:: ; cd $1 && go test -bench=. -benchtime=$(ITERATIONS)x -run=a^ ./...
 endef
 $(foreach mod,$(submodules),$(eval $(call bench-target,$(mod))))
+
+.PHONY: bench/rust
+bench/rust: ## Run the destructive Rust PostgreSQL throughput benchmark
+	cd rust && cargo run --release --locked -p riverqueue-cli --bin riverqueue -- bench $(if $(DATABASE_URL),--database-url "$(DATABASE_URL)") $(RUST_BENCH_ARGS)
 
 .PHONY: tidy
 tidy:: ## Run `go mod tidy` for all submodules
@@ -140,6 +226,6 @@ verify/rust-migrations: ## Verify Rust migrations and protocol hashes
 
 .PHONY: verify/sqlc
 verify/sqlc: ## Verify generated sqlc
-	cd riverdriver/riverdatabasesql/internal/dbsqlc && sqlc diff
-	cd riverdriver/riverpgxv5/internal/dbsqlc && sqlc diff
-	cd riverdriver/riversqlite/internal/dbsqlc && sqlc diff
+	cd riverdriver/riverdatabasesql/internal/dbsqlc && $(SQLC) diff
+	cd riverdriver/riverpgxv5/internal/dbsqlc && $(SQLC) diff
+	cd riverdriver/riversqlite/internal/dbsqlc && $(SQLC) diff

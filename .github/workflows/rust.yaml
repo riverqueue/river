@@ -1,0 +1,140 @@
+name: Rust
+
+on:
+  push:
+    branches:
+      - master
+  pull_request:
+
+permissions:
+  contents: read
+
+env:
+  # Keep the cross-run cache small; Cargo still reuses compiled dependencies.
+  CARGO_INCREMENTAL: "0"
+
+jobs:
+  quality:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+      - uses: dtolnay/rust-toolchain@stable
+        id: rust
+        with:
+          components: clippy,rustfmt
+      - name: Cache Rust dependencies and build artifacts
+        uses: actions/cache@v5
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+            rust/target
+          key: rust-v1-${{ runner.os }}-${{ runner.arch }}-${{ github.job }}-${{ steps.rust.outputs.cachekey }}-${{ hashFiles('rust/**/Cargo.toml', 'rust/Cargo.lock') }}
+          restore-keys: rust-v1-${{ runner.os }}-${{ runner.arch }}-${{ github.job }}-${{ steps.rust.outputs.cachekey }}-
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-deny@0.20.2
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-semver-checks@0.49.0
+
+      - name: Lint, including PostgreSQL-only and SQLite-only builds
+        run: make lint/rust
+
+      - name: Documentation and examples
+        run: make doc/rust
+
+      - name: Dependency and license policy
+        run: make check/rust/dependencies
+
+      - name: Package archives
+        run: make check/rust/package
+
+      # Compare with the latest published Rust release tag, which the full
+      # checkout above includes. Before the first release there is no
+      # baseline and the step reports that instead of failing.
+      - name: Public API compatibility
+        run: make check/rust/semver
+
+      # docs.rs builds with a nightly toolchain and `--cfg docsrs`, which
+      # enables the crates' `doc_cfg` feature badges. Last, since installing
+      # nightly makes it the default toolchain for later steps.
+      - uses: dtolnay/rust-toolchain@nightly
+      - name: Documentation as docs.rs builds it
+        run: make doc/rust/docsrs
+
+  msrv:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        rust-version: ["1.95", "1.96", "1.97"]
+
+    steps:
+      - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@master
+        id: rust
+        with:
+          toolchain: ${{ matrix.rust-version }}
+      - name: Cache Rust dependencies and build artifacts
+        uses: actions/cache@v5
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+            rust/target
+          key: rust-v1-${{ runner.os }}-${{ runner.arch }}-${{ github.job }}-${{ steps.rust.outputs.cachekey }}-${{ hashFiles('rust/**/Cargo.toml', 'rust/Cargo.lock') }}
+          restore-keys: rust-v1-${{ runner.os }}-${{ runner.arch }}-${{ github.job }}-${{ steps.rust.outputs.cachekey }}-
+      - name: Check every target and feature
+        run: cargo check --manifest-path rust/Cargo.toml --workspace --all-targets --all-features --locked
+      - name: Unit, doc, and SQLite tests
+        run: make test/rust/sqlite
+
+  postgres:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        postgres-version: [14, 15, 16, 17, 18]
+    env:
+      RIVER_RUST_DATABASE_URL: postgres://postgres:postgres@localhost:5432/river_rust_test?sslmode=disable
+
+    services:
+      postgres:
+        image: postgres:${{ matrix.postgres-version }}
+        env:
+          POSTGRES_PASSWORD: postgres
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 2s
+          --health-timeout 5s
+          --health-retries 5
+        ports:
+          - 5432:5432
+
+    steps:
+      - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@stable
+        id: rust
+      - name: Cache Rust dependencies and build artifacts
+        uses: actions/cache@v5
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+            rust/target
+          key: rust-v1-${{ runner.os }}-${{ runner.arch }}-${{ github.job }}-${{ steps.rust.outputs.cachekey }}-${{ hashFiles('rust/**/Cargo.toml', 'rust/Cargo.lock') }}
+          restore-keys: rust-v1-${{ runner.os }}-${{ runner.arch }}-${{ github.job }}-${{ steps.rust.outputs.cachekey }}-
+      - name: Create test database
+        run: PGPASSWORD=postgres createdb -h localhost -U postgres river_rust_test
+      - name: Rust unit, SQLite, and PostgreSQL tests
+        run: make test/rust
