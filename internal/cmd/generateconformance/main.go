@@ -30,6 +30,10 @@ const (
 	featureInventoryPath = "conformance/feature-inventory.json"
 	protocolFixturePath  = "conformance/fixtures/protocol_values.json"
 	uniqueFixturePath    = "conformance/fixtures/unique_keys.json"
+
+	// rustFixtureDir holds copies of the fixtures inside the publishable
+	// Rust crate, whose tests can't read files outside its package.
+	rustFixtureDir = "rust/riverqueue/tests/fixtures"
 )
 
 // errorNameRejected is the adapter contract error for a request River
@@ -678,6 +682,7 @@ func main() {
 		{uniqueFixturePath, generated},
 	} {
 		writeGenerated(*check, fixture.path, fixture.value)
+		writeGenerated(*check, filepath.Join(rustFixtureDir, filepath.Base(fixture.path)), fixture.value)
 	}
 }
 

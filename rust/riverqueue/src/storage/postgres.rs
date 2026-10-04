@@ -1,0 +1,502 @@
+//! PostgreSQL implementation of River's storage operations.
+
+use chrono::{DateTime, Utc};
+use serde_json::{Map, Value};
+use sqlx::{AssertSqlSafe, FromRow, PgConnection, Postgres, types::Json};
+
+use super::Backend;
+use crate::__private::DatabaseConnection;
+use crate::client::{JobRecord, go_time_json, job_projection};
+use crate::database::postgres_capabilities::CapabilitiesCache;
+use crate::query::{JobListSqlPart, JobListTimeField};
+use crate::{Error, JobListParams, JobRow, JobState, Queue, SchemaName};
+
+/// PostgreSQL storage bound to one connection.
+pub(super) struct PostgresBackend<'c> {
+    /// The database's detected server capabilities, or `None` to detect
+    /// them for each statement that needs them.
+    pub(super) capabilities: Option<&'c CapabilitiesCache>,
+    pub(super) connection: &'c mut PgConnection,
+    pub(super) schema: &'c SchemaName,
+}
+
+impl PostgresBackend<'_> {
+    /// Whether `pg_notify` reaches listeners on this server.
+    async fn supports_listen_notify(&mut self) -> Result<bool, Error> {
+        Ok(
+            CapabilitiesCache::load_or_detect(self.capabilities, &mut *self.connection)
+                .await?
+                .supports_listen_notify,
+        )
+    }
+}
+
+impl Backend for PostgresBackend<'_> {
+    fn connection(&mut self) -> DatabaseConnection<'_> {
+        DatabaseConnection::Postgres(self.connection)
+    }
+
+    // The fallback arm of `job_cancel` and `job_retry` returns the row when the
+    // update matched nothing, as when a concurrent cancel or retry won. Like
+    // River Go, it locks the row so it reads the winner's committed version
+    // rather than this statement's older snapshot.
+    async fn job_cancel(&mut self, id: i64) -> Result<Option<JobRow>, Error> {
+        let notify = self.supports_listen_notify().await?;
+        let table = self.schema.qualify("river_job");
+        let sql = format!(
+            "WITH locked AS (\
+                SELECT id, queue, state, finalized_at FROM {table} WHERE id = $1 FOR UPDATE\
+             ), notified AS (\
+                SELECT id, CASE WHEN $5::boolean THEN pg_notify(concat(coalesce($2::text, current_schema()), '.', $3::text), json_build_object('action', 'cancel', 'job_id', id, 'queue', queue)::text) END \
+                FROM locked WHERE state NOT IN ('cancelled', 'completed', 'discarded') AND finalized_at IS NULL\
+             ), updated AS (\
+                UPDATE {table} AS job SET \
+                    state = CASE WHEN state = 'running' THEN state ELSE 'cancelled' END, \
+                    finalized_at = CASE WHEN state = 'running' THEN finalized_at ELSE now() END, \
+                    metadata = jsonb_set(metadata, '{{cancel_attempted_at}}'::text[], to_jsonb($4::text), true) \
+                FROM notified WHERE job.id = notified.id RETURNING job.*\
+             ) \
+             SELECT {}, false AS unique_skipped_as_duplicate FROM updated AS job \
+             UNION ALL \
+             SELECT {}, false AS unique_skipped_as_duplicate \
+             FROM (SELECT * FROM {table} WHERE id = $1 FOR UPDATE) AS job \
+             WHERE NOT EXISTS (SELECT 1 FROM updated) LIMIT 1",
+            job_projection("job"),
+            job_projection("job")
+        );
+        sqlx::query_as::<_, JobRecord>(AssertSqlSafe(sql))
+            .bind(id)
+            .bind(self.schema.as_deref())
+            .bind(crate::NOTIFICATION_TOPIC_CONTROL)
+            .bind(go_time_json(Utc::now()))
+            .bind(notify)
+            .fetch_optional(&mut *self.connection)
+            .await?
+            .map(JobRecord::into_job_row)
+            .transpose()
+    }
+
+    async fn job_cancel_requested(&mut self, ids: &[i64]) -> Result<Vec<i64>, Error> {
+        let table = self.schema.qualify("river_job");
+        let sql = format!(
+            "SELECT id FROM {table} \
+             WHERE id = any($1) AND metadata ? 'cancel_attempted_at' AND state = 'running' \
+             ORDER BY id"
+        );
+        Ok(sqlx::query_scalar(AssertSqlSafe(sql))
+            .bind(ids)
+            .fetch_all(&mut *self.connection)
+            .await?)
+    }
+
+    async fn job_complete(
+        &mut self,
+        id: i64,
+        metadata_updates: &Map<String, Value>,
+    ) -> Result<JobRow, Error> {
+        let table = self.schema.qualify("river_job");
+        let state: Option<String> = sqlx::query_scalar(AssertSqlSafe(format!(
+            "SELECT state::text FROM {table} WHERE id = $1 FOR UPDATE"
+        )))
+        .bind(id)
+        .fetch_optional(&mut *self.connection)
+        .await?;
+        match state.as_deref() {
+            None => return Err(Error::NotFound(crate::Record::Job(id))),
+            Some("running") => {}
+            Some(state) => {
+                return Err(super::job_not_running(
+                    state
+                        .parse()
+                        .map_err(|error| sqlx::Error::Decode(Box::new(error)))?,
+                ));
+            }
+        }
+        let sql = format!(
+            "UPDATE {table} AS job SET state = 'completed', finalized_at = now(), \
+             metadata = metadata || $2::jsonb \
+             WHERE id = $1 AND state = 'running' \
+             RETURNING {}, false AS unique_skipped_as_duplicate",
+            job_projection("job")
+        );
+        sqlx::query_as::<_, JobRecord>(AssertSqlSafe(sql))
+            .bind(id)
+            .bind(Json(metadata_updates))
+            .fetch_optional(&mut *self.connection)
+            .await?
+            .ok_or(Error::NotFound(crate::Record::Job(id)))?
+            .into_job_row()
+    }
+
+    async fn job_delete(&mut self, id: i64) -> Result<JobRow, Error> {
+        let table = self.schema.qualify("river_job");
+        let state: Option<String> = sqlx::query_scalar(AssertSqlSafe(format!(
+            "SELECT state::text FROM {table} WHERE id = $1 FOR UPDATE"
+        )))
+        .bind(id)
+        .fetch_optional(&mut *self.connection)
+        .await?;
+        match state.as_deref() {
+            None => return Err(Error::NotFound(crate::Record::Job(id))),
+            Some("running") => return Err(Error::JobRunning),
+            Some(_) => {}
+        }
+        let sql = format!(
+            "DELETE FROM {table} AS job WHERE id = $1 RETURNING {}, false AS unique_skipped_as_duplicate",
+            job_projection("job")
+        );
+        sqlx::query_as::<_, JobRecord>(AssertSqlSafe(sql))
+            .bind(id)
+            .fetch_one(&mut *self.connection)
+            .await?
+            .into_job_row()
+    }
+
+    async fn job_delete_many(&mut self, filter: &JobListParams) -> Result<Vec<JobRow>, Error> {
+        let table = self.schema.qualify("river_job");
+        let parts = job_list_sql_parts(self.schema, filter, false);
+        // Mirrors Go's `JobDeleteMany`: running jobs are excluded before the
+        // limit applies, candidates already locked by another transaction are
+        // skipped rather than waited on, and rows come back in the list order.
+        let sql = format!(
+            "WITH jobs_to_delete AS (\
+                SELECT id FROM {table} AS job WHERE {where_sql} AND state != 'running' \
+                ORDER BY {order_sql} LIMIT $11 FOR UPDATE SKIP LOCKED\
+             ), deleted AS (\
+                DELETE FROM {table} WHERE id IN (SELECT id FROM jobs_to_delete) RETURNING *\
+             ) \
+             SELECT {}, false AS unique_skipped_as_duplicate FROM deleted AS job ORDER BY {order_sql}",
+            job_projection("job"),
+            where_sql = parts.where_sql,
+            order_sql = parts.order_sql,
+        );
+        let records = bind_job_list(sqlx::query_as::<_, JobRecord>(AssertSqlSafe(sql)), filter)
+            .fetch_all(&mut *self.connection)
+            .await?;
+        records.into_iter().map(JobRecord::into_job_row).collect()
+    }
+
+    async fn job_get(&mut self, id: i64) -> Result<Option<JobRow>, Error> {
+        let table = self.schema.qualify("river_job");
+        let sql = format!(
+            "SELECT {}, false AS unique_skipped_as_duplicate FROM {table} AS job WHERE id = $1 LIMIT 1",
+            job_projection("job")
+        );
+        sqlx::query_as::<_, JobRecord>(AssertSqlSafe(sql))
+            .bind(id)
+            .fetch_optional(&mut *self.connection)
+            .await?
+            .map(JobRecord::into_job_row)
+            .transpose()
+    }
+
+    async fn job_list(&mut self, params: &JobListParams) -> Result<Vec<JobRow>, Error> {
+        let table = self.schema.qualify("river_job");
+        let parts = job_list_sql_parts(self.schema, params, true);
+        let sql = format!(
+            "SELECT {}, false AS unique_skipped_as_duplicate FROM {table} AS job \
+             WHERE {} ORDER BY {} LIMIT $11",
+            job_projection("job"),
+            parts.where_sql,
+            parts.order_sql,
+        );
+        let records = bind_job_list(sqlx::query_as::<_, JobRecord>(AssertSqlSafe(sql)), params)
+            .fetch_all(&mut *self.connection)
+            .await?;
+        records.into_iter().map(JobRecord::into_job_row).collect()
+    }
+
+    async fn job_claim(
+        &mut self,
+        id: i64,
+        client_id: &str,
+        max_attempted_by: i32,
+    ) -> Result<Option<JobRow>, Error> {
+        let table = self.schema.qualify("river_job");
+        let sql = format!(
+            "UPDATE {table} AS job SET state = 'running', attempt = job.attempt + 1, \
+             attempted_at = now(), attempted_by = array_append(\
+                 CASE WHEN array_length(job.attempted_by, 1) >= $3 \
+                      THEN job.attempted_by[array_length(job.attempted_by, 1) + 2 - $3:] \
+                      ELSE job.attempted_by END, $2) \
+             WHERE id = $1 AND state = 'available' \
+             RETURNING {}, false AS unique_skipped_as_duplicate",
+            job_projection("job")
+        );
+        sqlx::query_as::<_, JobRecord>(AssertSqlSafe(sql))
+            .bind(id)
+            .bind(client_id)
+            .bind(max_attempted_by)
+            .fetch_optional(&mut *self.connection)
+            .await?
+            .map(JobRecord::into_job_row)
+            .transpose()
+    }
+
+    async fn job_retry(&mut self, id: i64) -> Result<Option<JobRow>, Error> {
+        let table = self.schema.qualify("river_job");
+        let sql = format!(
+            "WITH locked AS (SELECT id FROM {table} WHERE id = $1 FOR UPDATE), \
+             updated AS (UPDATE {table} AS job SET state = 'available', \
+                 max_attempts = CASE WHEN attempt = max_attempts THEN max_attempts + 1 ELSE max_attempts END, \
+                 finalized_at = NULL, scheduled_at = now() \
+                 FROM locked WHERE job.id = locked.id AND job.state != 'running' \
+                   AND NOT (job.state = 'available' AND job.scheduled_at < now()) RETURNING job.*) \
+             SELECT {}, false AS unique_skipped_as_duplicate FROM updated AS job \
+             UNION ALL SELECT {}, false AS unique_skipped_as_duplicate \
+                 FROM (SELECT * FROM {table} WHERE id = $1 FOR UPDATE) AS job \
+                 WHERE NOT EXISTS (SELECT 1 FROM updated) LIMIT 1",
+            job_projection("job"),
+            job_projection("job")
+        );
+        // Like Go's `JobRetry`, a retry sends no insert notification;
+        // producers find the job on their next poll.
+        sqlx::query_as::<_, JobRecord>(AssertSqlSafe(sql))
+            .bind(id)
+            .fetch_optional(&mut *self.connection)
+            .await?
+            .map(JobRecord::into_job_row)
+            .transpose()
+    }
+
+    async fn job_update(
+        &mut self,
+        id: i64,
+        metadata: &Map<String, Value>,
+    ) -> Result<Option<JobRow>, Error> {
+        let table = self.schema.qualify("river_job");
+        let sql = format!(
+            "UPDATE {table} AS job SET metadata = metadata || $2::jsonb WHERE id = $1 \
+             RETURNING {}, false AS unique_skipped_as_duplicate",
+            job_projection("job")
+        );
+        sqlx::query_as::<_, JobRecord>(AssertSqlSafe(sql))
+            .bind(id)
+            .bind(Json(metadata))
+            .fetch_optional(&mut *self.connection)
+            .await?
+            .map(JobRecord::into_job_row)
+            .transpose()
+    }
+
+    async fn notify(&mut self, topic: &str, payload: &str) -> Result<(), Error> {
+        if !self.supports_listen_notify().await? {
+            return Ok(());
+        }
+        sqlx::query(
+            "SELECT pg_notify(concat(coalesce($1::text, current_schema()), '.', $2::text), $3::text)",
+        )
+        .bind(self.schema.as_deref())
+        .bind(topic)
+        .bind(payload)
+        .execute(&mut *self.connection)
+        .await?;
+        Ok(())
+    }
+
+    async fn queue_get(&mut self, name: &str) -> Result<Option<Queue>, Error> {
+        let table = self.schema.qualify("river_queue");
+        sqlx::query_as::<_, QueueRecord>(AssertSqlSafe(format!(
+            "SELECT {QUEUE_COLUMNS} FROM {table} WHERE name = $1"
+        )))
+        .bind(name)
+        .fetch_optional(&mut *self.connection)
+        .await?
+        .map(QueueRecord::into_queue)
+        .transpose()
+    }
+
+    async fn queue_list(&mut self, limit: u32) -> Result<Vec<Queue>, Error> {
+        let table = self.schema.qualify("river_queue");
+        sqlx::query_as::<_, QueueRecord>(AssertSqlSafe(format!(
+            "SELECT {QUEUE_COLUMNS} FROM {table} ORDER BY name LIMIT $1"
+        )))
+        .bind(i64::from(limit))
+        .fetch_all(&mut *self.connection)
+        .await?
+        .into_iter()
+        .map(QueueRecord::into_queue)
+        .collect()
+    }
+
+    async fn queue_set_paused(&mut self, name: &str, paused: bool) -> Result<u64, Error> {
+        let table = self.schema.qualify("river_queue");
+        let sql = if paused {
+            format!(
+                "UPDATE {table} SET paused_at = coalesce(paused_at, now()), \
+                 updated_at = CASE WHEN paused_at IS NULL THEN now() ELSE updated_at END \
+                 WHERE $1 = '*' OR name = $1"
+            )
+        } else {
+            format!(
+                "UPDATE {table} SET updated_at = CASE WHEN paused_at IS NOT NULL THEN now() ELSE updated_at END, \
+                 paused_at = NULL WHERE $1 = '*' OR name = $1"
+            )
+        };
+        Ok(sqlx::query(AssertSqlSafe(sql))
+            .bind(name)
+            .execute(&mut *self.connection)
+            .await?
+            .rows_affected())
+    }
+
+    async fn queue_touch(&mut self, name: &str) -> Result<Queue, Error> {
+        let table = self.schema.qualify("river_queue");
+        let sql = format!(
+            "INSERT INTO {table} (name, metadata, updated_at) VALUES ($1, '{{}}'::jsonb, now()) \
+             ON CONFLICT (name) DO UPDATE SET updated_at = excluded.updated_at RETURNING {QUEUE_COLUMNS}"
+        );
+        sqlx::query_as::<_, QueueRecord>(AssertSqlSafe(sql))
+            .bind(name)
+            .fetch_one(&mut *self.connection)
+            .await?
+            .into_queue()
+    }
+
+    async fn queue_update(
+        &mut self,
+        name: &str,
+        metadata: Option<&Map<String, Value>>,
+    ) -> Result<Option<Queue>, Error> {
+        let table = self.schema.qualify("river_queue");
+        let sql = format!(
+            "UPDATE {table} SET metadata = CASE WHEN $2::boolean THEN $3::jsonb ELSE metadata END, \
+             updated_at = now() WHERE name = $1 RETURNING {QUEUE_COLUMNS}"
+        );
+        sqlx::query_as::<_, QueueRecord>(AssertSqlSafe(sql))
+            .bind(name)
+            .bind(metadata.is_some())
+            .bind(metadata.map(Json))
+            .fetch_optional(&mut *self.connection)
+            .await?
+            .map(QueueRecord::into_queue)
+            .transpose()
+    }
+}
+
+/// The columns of a queue row, with its metadata's stored text.
+const QUEUE_COLUMNS: &str =
+    "created_at, metadata, metadata::text AS metadata_text, name, paused_at, updated_at";
+
+#[derive(FromRow)]
+struct QueueRecord {
+    created_at: DateTime<Utc>,
+    metadata: Json<Value>,
+    metadata_text: String,
+    name: String,
+    paused_at: Option<DateTime<Utc>>,
+    updated_at: DateTime<Utc>,
+}
+
+impl QueueRecord {
+    fn into_queue(self) -> Result<Queue, Error> {
+        Ok(Queue {
+            created_at: self.created_at,
+            metadata: self.metadata.0.as_object().cloned().ok_or_else(|| {
+                Error::invalid_job_context(
+                    "storage parameters",
+                    format!("queue {:?} metadata is not an object", self.name),
+                )
+            })?,
+            metadata_text: self.metadata_text,
+            name: self.name,
+            paused_at: self.paused_at,
+            updated_at: self.updated_at,
+        })
+    }
+}
+
+/// SQL fragments shared by job listing and bulk deletion. Both bind the same
+/// eleven positional parameters through [`bind_job_list`].
+struct JobListSqlParts {
+    order_sql: String,
+    where_sql: String,
+}
+
+fn job_list_sql_parts(
+    schema: &SchemaName,
+    params: &JobListParams,
+    optimize_single_state: bool,
+) -> JobListSqlParts {
+    let keyset = params.keyset();
+    let cursor_predicate = keyset.after_sql().map_or_else(
+        || "true".to_owned(),
+        |parts| {
+            parts
+                .into_iter()
+                .map(|part| match part {
+                    JobListSqlPart::AfterId => "$10".to_owned(),
+                    JobListSqlPart::AfterTime => "$9".to_owned(),
+                    JobListSqlPart::Sql(sql) => sql,
+                })
+                .collect::<String>()
+        },
+    );
+    let state_type = schema.qualify("river_job_state");
+    // Like Go (upstream 35c4eab8), a single-state list without metadata
+    // predicates compares state with equality so PostgreSQL can use the
+    // `(state, <time>)` index ordering, and a single finalized state ordered by
+    // `finalized_at` states the non-null invariant that the partial
+    // finalized-time index requires. Bulk deletion keeps the generic form.
+    let state_predicate =
+        if optimize_single_state && params.states.len() == 1 && params.metadata.is_none() {
+            let finalized = keyset.time_field == Some(JobListTimeField::Finalized)
+                && matches!(
+                    params.states[0],
+                    JobState::Cancelled | JobState::Completed | JobState::Discarded
+                );
+            format!(
+                "state = ($4::text[])[1]::{state_type}{}",
+                if finalized {
+                    " AND finalized_at IS NOT NULL"
+                } else {
+                    ""
+                }
+            )
+        } else {
+            format!("(cardinality($4::text[]) = 0 OR state = ANY($4::text[]::{state_type}[]))")
+        };
+    let where_sql = format!(
+        "(cardinality($1::bigint[]) = 0 OR id = ANY($1)) \
+         AND (cardinality($2::text[]) = 0 OR kind = ANY($2)) \
+         AND (cardinality($3::text[]) = 0 OR queue = ANY($3)) \
+         AND {state_predicate} \
+         AND (cardinality($5::smallint[]) = 0 OR priority = ANY($5)) \
+         AND (cardinality($6::varchar[]) = 0 OR tags @> $6::varchar[]) \
+         AND (cardinality($7::varchar[]) = 0 OR tags && $7::varchar[]) \
+         AND ($8::jsonb IS NULL OR metadata @> $8) \
+         AND {cursor_predicate}"
+    );
+    JobListSqlParts {
+        order_sql: keyset.order_sql(),
+        where_sql,
+    }
+}
+
+fn bind_job_list<'query>(
+    query: sqlx::query::QueryAs<'query, Postgres, JobRecord, sqlx::postgres::PgArguments>,
+    params: &'query JobListParams,
+) -> sqlx::query::QueryAs<'query, Postgres, JobRecord, sqlx::postgres::PgArguments> {
+    let states = params
+        .states
+        .iter()
+        .map(|state| state.as_str().to_owned())
+        .collect::<Vec<_>>();
+    let metadata = params
+        .metadata
+        .as_ref()
+        .map(|metadata| Json(Value::Object(metadata.clone())));
+    let keyset = params.keyset();
+    query
+        .bind(&params.ids)
+        .bind(&params.kinds)
+        .bind(&params.queues)
+        .bind(states)
+        .bind(&params.priorities)
+        .bind(&params.tags_all)
+        .bind(&params.tags_any)
+        .bind(metadata)
+        .bind(keyset.after_time())
+        .bind(keyset.after_id())
+        .bind(i64::from(params.limit))
+}
