@@ -295,6 +295,53 @@ func TestMixedConformance(t *testing.T) {
 
 		verifyResumableInteroperability(t, goAdapter, candidateAdapter)
 	})
+	t.Run("notification_only_wakeups", func(t *testing.T) {
+		defer scenarios.record(t)
+
+		pair.eachDirection(func(controller, worker *adapter) { verifyInsertNotificationWakeup(t, controller, worker) })
+	})
+	t.Run("pause_resume_notification", func(t *testing.T) {
+		defer scenarios.record(t)
+
+		pair.eachDirection(func(controller, worker *adapter) { verifyPauseResumeNotification(t, controller, worker) })
+	})
+	t.Run("remote_cancel_notification", func(t *testing.T) {
+		defer scenarios.record(t)
+
+		pair.eachDirection(func(controller, worker *adapter) { verifyRemoteCancelNotification(t, controller, worker) })
+	})
+	t.Run("poll_only_remote_cancellation", func(t *testing.T) {
+		defer scenarios.record(t)
+
+		pair.eachDirection(func(controller, worker *adapter) { verifyPollOnlyRemoteCancellation(t, controller, worker) })
+	})
+	t.Run("cooperative_remote_cancellation", func(t *testing.T) {
+		defer scenarios.record(t)
+
+		pair.eachDirection(func(controller, worker *adapter) { verifyCooperativeRemoteCancellation(t, controller, worker) })
+	})
+	t.Run("claim_time_cancellation", func(t *testing.T) {
+		defer scenarios.record(t)
+
+		pair.eachDirection(func(canceller, claimer *adapter) { verifyClaimTimeCancellation(t, canceller, claimer, true) })
+	})
+	t.Run("notification_payloads", func(t *testing.T) {
+		defer scenarios.record(t)
+
+		verifyNotificationPayloads(t, goAdapter, candidateAdapter, func(*adapter) notificationCapture {
+			return newPostgresNotificationCapture(t, observer)
+		})
+	})
+	t.Run("remote_queue_subscription_events", func(t *testing.T) {
+		defer scenarios.record(t)
+
+		verifyRemoteQueueSubscriptionEvents(t, goAdapter, candidateAdapter)
+	})
+	t.Run("transactional_insert_notification_commit_only", func(t *testing.T) {
+		defer scenarios.record(t)
+
+		verifyTransactionalNotificationWakeups(t, observer, goAdapter, candidateAdapter)
+	})
 	t.Run("refetched_attempt_cancellation", func(t *testing.T) {
 		defer scenarios.record(t)
 
