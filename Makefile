@@ -18,11 +18,16 @@ db/reset/test: ## Drop, create, and migrate test databases
 .PHONY: generate
 generate: ## Generate generated artifacts
 generate: generate/migrations
+generate: generate/rust-migrations
 generate: generate/sqlc
 
 .PHONY: generate/migrations
 generate/migrations: ## Sync changes of pgxv5 migrations to database/sql
 	rsync -au --delete "riverdriver/riverpgxv5/migration/" "riverdriver/riverdatabasesql/migration/"
+
+.PHONY: generate/rust-migrations
+generate/rust-migrations: ## Sync database migrations and hashes to Rust
+	go run ./internal/cmd/syncrustmigrations
 
 .PHONY: generate/sqlc
 generate/sqlc: ## Generate sqlc
@@ -122,11 +127,16 @@ update-mod-version: ## Update River packages in all submodules to $VERSION
 .PHONY: verify
 verify: ## Verify generated artifacts
 verify: verify/migrations
+verify: verify/rust-migrations
 verify: verify/sqlc
 
 .PHONY: verify/migrations
 verify/migrations: ## Verify synced migrations
 	diff -qr riverdriver/riverpgxv5/migration riverdriver/riverdatabasesql/migration
+
+.PHONY: verify/rust-migrations
+verify/rust-migrations: ## Verify Rust migrations and protocol hashes
+	go run ./internal/cmd/syncrustmigrations -check
 
 .PHONY: verify/sqlc
 verify/sqlc: ## Verify generated sqlc
