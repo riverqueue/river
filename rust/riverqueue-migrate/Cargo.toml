@@ -1,0 +1,46 @@
+[package]
+name = "riverqueue-migrate"
+description = "Database migrations for River's Rust client"
+keywords = ["background", "jobs", "migrations", "postgres", "sqlite"]
+categories = ["database"]
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+readme = "README.md"
+repository.workspace = true
+homepage.workspace = true
+
+[package.metadata.docs.rs]
+all-features = true
+
+[features]
+default = ["postgres"]
+postgres = ["sqlx/postgres"]
+sqlite = ["sqlx/sqlite"]
+
+[dependencies]
+sqlx.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+
+[[example]]
+name = "migrate"
+required-features = ["postgres"]
+
+[[test]]
+name = "postgres"
+required-features = ["postgres"]
+
+[[test]]
+name = "sqlite"
+required-features = ["sqlite"]
+
+[dev-dependencies]
+serde_json.workspace = true
+# The PostgreSQL tests decode schema snapshots as JSON.
+sqlx = { workspace = true, features = ["json"] }
+tokio = { workspace = true, features = ["rt-multi-thread"] }
+
+[lints]
+workspace = true
