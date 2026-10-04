@@ -10,6 +10,67 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+// verifyUnknownKind checks that a job whose kind has no registered worker is
+// fetched and failed with the canonical unknown-kind error rather than being
+// skipped. The error is retryable, so a job with attempts left is retried.
+func verifyUnknownKind(t *testing.T, goAdapter, candidateAdapter *adapter) {
+	t.Helper()
+
+	for _, pair := range []struct {
+		inserter *adapter
+		worker   *adapter
+	}{
+		{inserter: goAdapter, worker: candidateAdapter},
+		{inserter: candidateAdapter, worker: goAdapter},
+	} {
+		pair.inserter.call(t, "reset", map[string]any{}, nil)
+		var discarded, retryable normalizedJob
+		pair.inserter.call(t, "raw_insert_no_notify", map[string]any{
+			"kind": "conformance_unregistered", "message": "must fail compatibly",
+			"opts": map[string]any{"max_attempts": 1},
+		}, &discarded)
+		pair.inserter.call(t, "raw_insert_no_notify", map[string]any{
+			"kind": "conformance_unregistered", "message": "must be retried",
+			"opts": map[string]any{"max_attempts": 5},
+		}, &retryable)
+		workerID := pair.worker.name + "-unknown-kind"
+		pair.worker.call(t, "start", map[string]any{
+			"client_id": workerID, "max_workers": 1,
+		}, nil)
+		var known normalizedJob
+		pair.inserter.call(t, "insert", map[string]any{"message": "known kind from " + pair.inserter.name}, &known)
+		pair.worker.call(t, "wait", map[string]any{"id": known.ID}, &known)
+		require.Equal(t, "completed", known.State)
+
+		pair.worker.call(t, "wait", map[string]any{
+			"id": discarded.ID, "states": []string{"discarded"},
+		}, &discarded)
+		require.Equal(t, 1, discarded.Attempt)
+		require.Equal(t, []string{workerID}, discarded.AttemptedBy)
+		require.Len(t, discarded.Errors, 1)
+		require.Equal(t,
+			"job kind is not registered in the client's Workers bundle: conformance_unregistered",
+			discarded.Errors[0].Error,
+		)
+
+		// The first retry delay (about one second) is inside the scheduler
+		// interval, so the failed job is made available again immediately
+		// and retried. The second delay (about sixteen seconds) is not, so
+		// the job then waits as retryable.
+		pair.worker.call(t, "wait", map[string]any{
+			"id": retryable.ID, "states": []string{"retryable"},
+		}, &retryable)
+		require.Equal(t, 2, retryable.Attempt)
+		require.Equal(t, []string{workerID, workerID}, retryable.AttemptedBy)
+		require.Len(t, retryable.Errors, 2)
+		for _, attemptError := range retryable.Errors {
+			require.Equal(t, discarded.Errors[0].Error, attemptError.Error)
+		}
+		require.Nil(t, retryable.FinalizedAt)
+		pair.worker.call(t, "stop", map[string]any{}, nil)
+	}
+}
+
 // verifyClaimOrder checks the order in which a client claims available
 // jobs, which every implementation writes in its own SQL: Go claims by
 // priority, then scheduled_at, then ID. One implementation inserts jobs
