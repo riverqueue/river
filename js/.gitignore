@@ -4,3 +4,9 @@ dist/
 examples/prisma/src/generated/prisma/
 *.tsbuildinfo
 .DS_Store
+# Package LICENSE copies generated from the root LICENSE at build time.
+/cli/LICENSE
+/driver/*/LICENSE
+/migrate/LICENSE
+/test/LICENSE
+/worker-threads/LICENSE

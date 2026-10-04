@@ -1,86 +1,88 @@
+import { randomUUID } from "node:crypto";
+
 import { PrismaPg } from "@prisma/adapter-pg";
-import { Client, InsertManyParams } from "riverqueue";
-import type { JobArgs, InsertOpts } from "riverqueue";
 import { PrismaDriver } from "@riverqueue/driver-prisma";
+import { Client, defineJob } from "riverqueue";
 import { PrismaClient } from "./generated/prisma/client.js";
+import { z } from "zod";
 
-// Define a job that sorts strings. `kind` uniquely identifies the job type and
-// must match the worker name on the Go side.
-class SortArgs implements JobArgs {
-  kind = "sort";
+const sort = defineJob<{ strings: string[] }>()({ kind: "sort" });
+const syncAccount = defineJob({
+  kind: "sync_account",
+  schema: z.object({ accountId: z.string().min(1) }),
+});
 
-  strings: string[];
-
-  constructor(strings: string[]) {
-    this.strings = strings;
-  }
-
-  toJSON() {
-    return { strings: this.strings };
-  }
-}
-
-// A job with default insert options baked in.
-class SendEmailArgs implements JobArgs {
-  kind = "send_email";
-
-  insertOpts: InsertOpts = {
-    maxAttempts: 5,
-    queue: "email",
-    priority: 2,
-  };
-
-  to: string;
-  subject: string;
+const sendEmail = defineJob<{
   body: string;
-
-  constructor(to: string, subject: string, body: string) {
-    this.to = to;
-    this.subject = subject;
-    this.body = body;
-  }
-
-  toJSON() {
-    return { to: this.to, subject: this.subject, body: this.body };
-  }
-}
+  subject: string;
+  to: string;
+}>()({
+  defaults: {
+    maxAttempts: 5,
+    priority: 2,
+    queue: "email",
+  },
+  kind: "send_email",
+});
 
 async function main() {
   const connectionString =
     process.env.DATABASE_URL ?? "postgres://localhost:5432/river_dev";
-  const adapter = new PrismaPg({ connectionString });
-  const prisma = new PrismaClient({ adapter });
-
+  const prisma = new PrismaClient({
+    adapter: new PrismaPg({ connectionString }),
+  });
   const client = new Client(new PrismaDriver(prisma));
 
-  // Insert a single job.
-  const sortResult = await client.insert(
-    new SortArgs(["whale", "tiger", "bear"])
-  );
+  const sortResult = await client.insert(sort, {
+    strings: ["whale", "tiger", "bear"],
+  });
   console.log(`Inserted sort job with ID: ${sortResult.job.id}`);
 
-  // Insert with options, scheduling for 1 hour in the future.
   const emailResult = await client.insert(
-    new SendEmailArgs("user@example.com", "Hello", "Welcome aboard!"),
-    { scheduledAt: new Date(Date.now() + 60 * 60 * 1000) }
+    sendEmail,
+    {
+      body: "Welcome aboard!",
+      subject: "Hello",
+      to: "user@example.com",
+    },
+    {
+      scheduledAt: Temporal.Now.instant().add({ hours: 1 }),
+    }
   );
   console.log(
-    `Inserted email job with ID: ${emailResult.job.id}, scheduled for: ${emailResult.job.scheduledAt}`
+    `Inserted email job with ID: ${emailResult.job.id}, ` +
+      `scheduled for: ${emailResult.job.scheduledAt}`
   );
 
-  // Insert many jobs at once.
   const batchResults = await client.insertMany([
-    new SortArgs(["alpha", "gamma", "beta"]),
-    new InsertManyParams(new SortArgs(["one", "two", "three"]), {
-      priority: 3,
-    }),
+    { args: { strings: ["alpha", "gamma", "beta"] }, job: sort },
+    {
+      args: { strings: ["one", "two", "three"] },
+      job: sort,
+      options: { priority: 3 },
+    },
   ]);
   console.log(`Batch inserted ${batchResults.length} jobs`);
+
+  await prisma.$executeRaw`
+    CREATE TABLE IF NOT EXISTS riverqueue_example_account (
+      id text PRIMARY KEY,
+      created_at timestamptz NOT NULL DEFAULT now()
+    )
+  `;
+  const accountId = `prisma_${randomUUID()}`;
+  await prisma.$transaction(async (tx) => {
+    await tx.$executeRaw`
+      INSERT INTO riverqueue_example_account (id) VALUES (${accountId})
+    `;
+    await client.insert(syncAccount, { accountId }, { tx });
+  });
+  console.log(`Committed account ${accountId} and its job atomically`);
 
   await prisma.$disconnect();
 }
 
-main().catch((err) => {
-  console.error(err);
-  process.exit(1);
+main().catch((error: unknown) => {
+  console.error(error);
+  process.exitCode = 1;
 });

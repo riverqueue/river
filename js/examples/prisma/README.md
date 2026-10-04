@@ -2,11 +2,13 @@
 
 A minimal example demonstrating how to use the [River](https://github.com/riverqueue/river/tree/master/js) TypeScript client with [Prisma](https://www.prisma.io/) to insert background jobs into PostgreSQL.
 
-The example defines two job types (`SortArgs` and `SendEmailArgs`) and shows single job insertion, insertion with scheduling options, and batch insertion.
+The example defines typed jobs and shows single insertion, scheduling, batch
+insertion, and a caller-owned Prisma interactive transaction that commits an
+application row and its River job atomically.
 
 ## Prerequisites
 
-- Node.js ^20.19, ^22.12, or >= 24
+- Node.js >= 26
 - pnpm
 - PostgreSQL with [River's schema](https://riverqueue.com/docs) migrated
 

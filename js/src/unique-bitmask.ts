@@ -1,28 +1,19 @@
 import type { JobState } from "./job.js";
-import {
-  JOB_STATE_AVAILABLE,
-  JOB_STATE_CANCELLED,
-  JOB_STATE_COMPLETED,
-  JOB_STATE_DISCARDED,
-  JOB_STATE_PENDING,
-  JOB_STATE_RETRYABLE,
-  JOB_STATE_RUNNING,
-  JOB_STATE_SCHEDULED,
-} from "./job.js";
+import { JOB_STATE } from "./job.js";
 
 const JOB_STATE_BIT_POSITIONS: Record<JobState, number> = {
-  [JOB_STATE_AVAILABLE]: 7,
-  [JOB_STATE_CANCELLED]: 6,
-  [JOB_STATE_COMPLETED]: 5,
-  [JOB_STATE_DISCARDED]: 4,
-  [JOB_STATE_PENDING]: 3,
-  [JOB_STATE_RETRYABLE]: 2,
-  [JOB_STATE_RUNNING]: 1,
-  [JOB_STATE_SCHEDULED]: 0,
+  [JOB_STATE.available]: 7,
+  [JOB_STATE.cancelled]: 6,
+  [JOB_STATE.completed]: 5,
+  [JOB_STATE.discarded]: 4,
+  [JOB_STATE.pending]: 3,
+  [JOB_STATE.retryable]: 2,
+  [JOB_STATE.running]: 1,
+  [JOB_STATE.scheduled]: 0,
 };
 
 /** Convert an array of job states to an 8-bit bitmask string. */
-export function uniqueBitmaskFromStates(states: JobState[]): string {
+export function uniqueBitmaskFromStates(states: readonly JobState[]): string {
   let val = 0;
   for (const state of states) {
     const bitIndex = JOB_STATE_BIT_POSITIONS[state];

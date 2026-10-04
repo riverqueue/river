@@ -7,13 +7,17 @@
     "moduleResolution": "NodeNext",
     "declaration": true,
     "declarationMap": true,
+    "exactOptionalPropertyTypes": true,
     "sourceMap": true,
+    "stripInternal": true,
     "strict": true,
     "esModuleInterop": true,
     "noImplicitOverride": true,
+    "noUncheckedIndexedAccess": true,
     "noUncheckedSideEffectImports": true,
     "skipLibCheck": true,
     "forceConsistentCasingInFileNames": true,
-    "useUnknownInCatchVariables": true
+    "useUnknownInCatchVariables": true,
+    "verbatimModuleSyntax": true
   }
 }
