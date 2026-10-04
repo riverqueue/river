@@ -3,6 +3,10 @@
 package harness_test
 
 import (
+	"encoding/json"
+	"fmt"
+	"strconv"
+	"strings"
 	"testing"
 	"time"
 
@@ -87,6 +91,228 @@ func verifyUniqueColumnBytes(t *testing.T, goAdapter, candidateAdapter *adapter)
 	params := map[string]any{"message": "not unique"}
 	require.Equal(t, uniqueColumns{}, write(goAdapter, params))
 	require.Equal(t, uniqueColumns{}, write(candidateAdapter, params))
+}
+
+// verifyClaimTimeCancellation cancels a job from canceller between the moment
+// claimer's claim of it commits and the moment claimer starts working it.
+// The claimer holds its claim on a barrier, so the job is already running
+// but has no executor when the cancellation arrives. The claimer must start
+// the job's worker already cancelled, which its runtime stats report, so a
+// cancellation that only arrived after the claim was released fails the
+// scenario instead of passing through the ordinary cancellation path.
+func verifyClaimTimeCancellation(t *testing.T, canceller, claimer *adapter, listens bool) {
+	t.Helper()
+
+	claimer.call(t, "reset", map[string]any{}, nil)
+	barrier := "claim-time-cancel-" + claimer.name
+	claimer.call(t, "barrier_create", map[string]any{"name": barrier}, nil)
+	clientID := claimer.name + "-claim-time-cancel"
+	claimer.call(t, "start", map[string]any{
+		"claim_barrier": barrier, "client_id": clientID, "max_workers": 1,
+	}, nil)
+	if listens {
+		// Remote cancellation arrives by notification, so the claimer must
+		// be listening before the claim it holds.
+		waitForListener(t, claimer)
+	}
+
+	var job normalizedJob
+	canceller.call(t, "insert", map[string]any{
+		"behavior": "cooperative_cancel", "message": "claim-time cancellation from " + canceller.name,
+	}, &job)
+	canceller.call(t, "wait", map[string]any{"id": job.ID, "states": []string{"running"}}, &job)
+	require.Equal(t, []string{clientID}, job.AttemptedBy)
+
+	var requested normalizedJob
+	canceller.call(t, "cancel", map[string]any{"id": job.ID}, &requested)
+	require.Equal(t, "running", requested.State, "cancelling a claimed job only requests cancellation")
+	// Give the claimer time to receive the notification while it still holds
+	// the claim. SQLite listeners poll every 50 ms, and PostgreSQL delivers
+	// notifications at commit.
+	time.Sleep(time.Second)
+	claimer.call(t, "barrier_release", map[string]any{"name": barrier}, nil)
+
+	canceller.call(t, "wait", map[string]any{"id": job.ID}, &job)
+	require.Equal(t, "cancelled", job.State, "%s did not cancel a job %s cancelled during its claim", claimer.name, canceller.name)
+	require.Equal(t, 1, job.Attempt)
+	require.Len(t, job.Errors, 1)
+	require.Equal(t, "JobCancelError: job cancelled remotely", job.Errors[0].Error)
+	var stats runtimeStats
+	claimer.call(t, "runtime_stats", map[string]any{}, &stats)
+	require.Equal(t, 1, stats.CancelledAtStart,
+		"%s started a job %s cancelled during its claim without its cancellation", claimer.name, canceller.name)
+	claimer.call(t, "stop", map[string]any{}, nil)
+}
+
+// notificationCapture reads the notifications published since its previous
+// read.
+type notificationCapture interface {
+	next(t *testing.T) []rawNotification
+}
+
+// postgresNotificationCapture listens to River's PostgreSQL channels on
+// harness connections. Payloads are grouped by channel, each in commit order.
+type postgresNotificationCapture struct {
+	listeners []*postgresNotificationListener
+	marker    int
+	observer  *postgresObserver
+	schema    string
+}
+
+func newPostgresNotificationCapture(t *testing.T, observer *postgresObserver) *postgresNotificationCapture {
+	t.Helper()
+
+	capture := &postgresNotificationCapture{observer: observer, schema: observer.currentSchema(t)}
+	for _, topic := range []string{"river_control", "river_insert", "river_leadership"} {
+		capture.listeners = append(capture.listeners, observer.listen(t, capture.schema+"."+topic))
+	}
+	return capture
+}
+
+func (capture *postgresNotificationCapture) next(t *testing.T) []rawNotification {
+	t.Helper()
+
+	var notifications []rawNotification
+	for _, listener := range capture.listeners {
+		capture.marker++
+		marker := fmt.Sprintf("notification-capture-marker-%d", capture.marker)
+		for _, payload := range listener.receiveUntilMarker(t, capture.observer, marker) {
+			notifications = append(notifications, rawNotification{
+				Payload: payload, Topic: strings.TrimPrefix(listener.channel, capture.schema+"."),
+			})
+		}
+	}
+	return notifications
+}
+
+// notificationOperation is the notifications one operation published.
+type notificationOperation struct {
+	name          string
+	notifications []semanticNotification
+}
+
+// notificationQueueMetadata is the metadata a queue update sets, which its
+// `metadata_changed` notification carries.
+const notificationQueueMetadata = `{"zeta":"z","alpha":1}`
+
+// semanticNotification is a notification compared as JSON rather than as
+// text: its topic, its SQLite storage type, and its decoded payload with any
+// job ID cleared once checked.
+type semanticNotification struct {
+	Payload     any
+	PayloadType string
+	Topic       string
+}
+
+// semanticNotifications decodes each notification's payload, requiring it
+// to be JSON. A payload's job ID, which differs between writers, must be
+// the JSON integer jobID and is then cleared.
+func semanticNotifications(t *testing.T, notifications []rawNotification, jobID int64) []semanticNotification {
+	t.Helper()
+
+	semantic := make([]semanticNotification, len(notifications))
+	for index, notification := range notifications {
+		var payload any
+		require.NoError(t, json.Unmarshal([]byte(notification.Payload), &payload),
+			"%s notification payload isn't JSON: %s", notification.Topic, notification.Payload)
+		if fields, ok := payload.(map[string]any); ok {
+			if _, ok := fields["job_id"]; ok {
+				var raw struct {
+					JobID json.RawMessage `json:"job_id"`
+				}
+				require.NoError(t, json.Unmarshal([]byte(notification.Payload), &raw))
+				id, err := strconv.ParseInt(string(raw.JobID), 10, 64)
+				require.NoError(t, err, "%s notification's job_id isn't a JSON integer: %s", notification.Topic, notification.Payload)
+				require.Equal(t, jobID, id, "%s notification names another job: %s", notification.Topic, notification.Payload)
+				fields["job_id"] = 0
+			}
+		}
+		semantic[index] = semanticNotification{
+			Payload: payload, PayloadType: notification.PayloadType, Topic: notification.Topic,
+		}
+	}
+	return semantic
+}
+
+// publishNotificationOperations has actor perform every operation that
+// publishes a notification and returns what each published, decoded, with
+// job IDs checked and cleared. The client it starts uses a fixed ID, so
+// leadership payloads name the same leader whichever implementation runs it.
+func publishNotificationOperations(t *testing.T, actor *adapter, capture notificationCapture) []notificationOperation {
+	t.Helper()
+
+	var (
+		job        normalizedJob
+		operations []notificationOperation
+	)
+	record := func(name string) {
+		t.Helper()
+
+		operations = append(operations, notificationOperation{name: name, notifications: semanticNotifications(t, capture.next(t), job.ID)})
+	}
+
+	actor.call(t, "reset", map[string]any{}, nil)
+	_ = capture.next(t)
+	actor.call(t, "insert", map[string]any{
+		"message": "notification payloads", "opts": map[string]any{"queue": "notification_payloads"},
+	}, &job)
+	record("insert")
+	actor.call(t, "cancel", map[string]any{"id": job.ID}, nil)
+	record("cancel")
+	// Outlast any insert notification throttling, so a retry that notifies
+	// isn't suppressed by the insertion above.
+	time.Sleep(250 * time.Millisecond)
+	actor.call(t, "retry", map[string]any{"id": job.ID}, nil)
+	record("retry")
+
+	const clientID = "notification-payloads"
+	actor.call(t, "start", map[string]any{"client_id": clientID, "max_workers": 1}, nil)
+	require.Equal(t, clientID, waitForLeader(t, actor, ""))
+	record("start")
+	actor.call(t, "queue_update", map[string]any{
+		"metadata": json.RawMessage(notificationQueueMetadata), "name": "default",
+	}, nil)
+	record("queue_update")
+	actor.call(t, "queue_pause", map[string]any{"name": "default"}, nil)
+	record("queue_pause")
+	actor.call(t, "queue_resume", map[string]any{"name": "default"}, nil)
+	record("queue_resume")
+	term := readLeader(t, actor)
+	actor.call(t, "request_resign", map[string]any{}, nil)
+	_ = waitForLeaderTerm(t, actor, term.ElectedAt)
+	record("request_resign")
+	actor.call(t, "stop", map[string]any{}, nil)
+	record("stop")
+	return operations
+}
+
+// verifyNotificationPayloads has each implementation perform the same
+// operations and requires the notifications they publish (insert, cancel,
+// retry, queue metadata changes, pause, resume, resignation requests, and
+// resignations) to match Go's: whether each is sent, how many and in which
+// order, the topic, on SQLite the payload's storage type, and the payload
+// as JSON, so key order, escaping, and whitespace don't matter.
+func verifyNotificationPayloads(t *testing.T, goAdapter, candidateAdapter *adapter, newCapture func(actor *adapter) notificationCapture) {
+	t.Helper()
+
+	reference := publishNotificationOperations(t, goAdapter, newCapture(goAdapter))
+	candidate := publishNotificationOperations(t, candidateAdapter, newCapture(candidateAdapter))
+	require.Len(t, candidate, len(reference))
+	byName := make(map[string][]semanticNotification, len(reference))
+	for _, operation := range reference {
+		byName[operation.name] = operation.notifications
+	}
+	require.Len(t, byName["insert"], 1, "Go published no insert notification")
+	for _, name := range []string{"cancel", "queue_update", "queue_pause", "queue_resume", "request_resign"} {
+		require.NotEmpty(t, byName[name], "Go published no notification for %s", name)
+	}
+
+	for index, expected := range reference {
+		actual := candidate[index]
+		require.Equal(t, expected.name, actual.name)
+		require.Equal(t, expected.notifications, actual.notifications,
+			"%s: %s and %s published different notifications", expected.name, goAdapter.name, candidateAdapter.name)
+	}
 }
 
 // verifyUniquePeriodicJob has one implementation's leader insert a unique

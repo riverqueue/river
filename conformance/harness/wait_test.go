@@ -3,8 +3,11 @@
 package harness_test
 
 import (
+	"encoding/json"
 	"testing"
 	"time"
+
+	"github.com/stretchr/testify/require"
 )
 
 func normalizedJobIDs(jobs []normalizedJob) []int64 {
@@ -31,6 +34,12 @@ func waitForListedJob(t *testing.T, adapter *adapter, params map[string]any) nor
 	}
 	t.Fatalf("%s adapter did not list a matching job", adapter.name)
 	return normalizedJob{}
+}
+
+func waitForListedJobCount(t *testing.T, adapter *adapter, params map[string]any, count int) []normalizedJob {
+	t.Helper()
+
+	return waitForListedJobCountWithin(t, adapter, params, count, 5*time.Second)
 }
 
 // waitForListedJobCountWithin polls a job list until it contains exactly
@@ -67,6 +76,16 @@ func waitForRuntimeStats(t *testing.T, adapter *adapter, predicate func(runtimeS
 	}
 	t.Fatalf("%s adapter runtime observations did not converge: %+v", adapter.name, stats)
 	return runtimeStats{}
+}
+
+func countRuntimeEvent(stats runtimeStats, kind string) int {
+	count := 0
+	for _, event := range stats.Events {
+		if event == kind {
+			count++
+		}
+	}
+	return count
 }
 
 func requireOrderedSubsequence(t *testing.T, values, expected []string) {
@@ -129,4 +148,60 @@ func waitForLeader(t *testing.T, observer *adapter, previous string) string {
 	}
 	t.Fatalf("leader did not change from %q; observations=%v; %s adapter stderr: %s", previous, observations, observer.name, observer.stderr.String())
 	return ""
+}
+
+type leaderTerm struct {
+	ElectedAt string
+	LeaderID  string
+}
+
+func readLeader(t *testing.T, observer *adapter) leaderTerm {
+	t.Helper()
+
+	var result struct {
+		ElectedAt *string `json:"elected_at"`
+		LeaderID  *string `json:"leader_id"`
+	}
+	observer.call(t, "leader", map[string]any{}, &result)
+	if result.ElectedAt == nil || result.LeaderID == nil {
+		return leaderTerm{}
+	}
+	return leaderTerm{ElectedAt: *result.ElectedAt, LeaderID: *result.LeaderID}
+}
+
+func waitForLeaderTerm(t *testing.T, observer *adapter, previousElectedAt string) leaderTerm {
+	t.Helper()
+
+	deadline := time.Now().Add(12 * time.Second)
+	for time.Now().Before(deadline) {
+		term := readLeader(t, observer)
+		if term.ElectedAt != "" && term.ElectedAt != previousElectedAt {
+			return term
+		}
+		time.Sleep(25 * time.Millisecond)
+	}
+	t.Fatalf("leadership term did not change from %q", previousElectedAt)
+	return leaderTerm{}
+}
+
+func waitForListener(t *testing.T, observer *adapter) {
+	t.Helper()
+
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		var result struct {
+			Count int `json:"count"`
+		}
+		response := observer.callResponse(t, "listener_count", map[string]any{})
+		if response.Error != nil {
+			time.Sleep(25 * time.Millisecond)
+			continue
+		}
+		require.NoError(t, json.Unmarshal(response.Result, &result))
+		if result.Count > 0 {
+			return
+		}
+		time.Sleep(25 * time.Millisecond)
+	}
+	t.Fatalf("%s adapter did not establish a LISTEN connection", observer.name)
 }
