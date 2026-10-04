@@ -72,6 +72,12 @@ define lint-target
 endef
 $(foreach mod,$(submodules),$(eval $(call lint-target,$(mod))))
 
+.PHONY: lint/conformance
+lint/conformance: ## Lint the opt-in shared interoperability suite
+	golangci-lint run --build-tags riverconformance ./conformance/harness
+
+lint:: lint/conformance
+
 .PHONY: test
 test:: ## Run tests (TEST_DATABASE=all, postgres, or sqlite)
 define test-target
@@ -84,6 +90,18 @@ test:: ; cd ./riverdriver/riverdrivertest && RIVER_USE_LEGACY_SUBTRANSACTIONS=1 
 ifneq ($(TEST_DATABASE),sqlite)
 test:: ; cd ./riverdriver/riverdrivertest && RIVER_USE_LEGACY_SUBTRANSACTIONS=1 go test . -run '^TestDriverRiverPgxV5$$/.*/WithTx$$' -timeout 2m
 endif
+
+# `go test -timeout` backstops for the conformance targets. The harness bounds
+# each adapter request (two minutes) and exit (thirty seconds) itself, so a
+# hung adapter fails with a message naming it long before these fire. Soaks
+# check at startup that their duration plus five minutes to finish fits in
+# CONFORMANCE_SOAK_TIMEOUT, so raise it with the soak duration.
+CONFORMANCE_TIMEOUT ?= 30m
+CONFORMANCE_SOAK_TIMEOUT ?= 6h20m
+
+.PHONY: test/conformance
+test/conformance: ## Run Go and configured candidate conformance (requires database URL)
+	go test -tags riverconformance ./conformance/harness -run '^Test(Maintenance|Mixed|Resilience)Conformance$$' -count=1 -timeout $(CONFORMANCE_TIMEOUT)
 
 .PHONY: test/race
 test/race:: ## Run tests with race detector (TEST_DATABASE=all, postgres, or sqlite)
