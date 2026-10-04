@@ -1,0 +1,26 @@
+{
+  "name": "@riverqueue/conformance-internal",
+  "version": "0.50.0-alpha.1",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=26"
+  },
+  "bin": {
+    "riverqueue-conformance": "./dist/bin.js"
+  },
+  "scripts": {
+    "build": "node ../node_modules/typescript/bin/tsc",
+    "clean": "rm -rf dist",
+    "test": "vitest run src"
+  },
+  "dependencies": {
+    "@riverqueue/driver-pg": "workspace:0.50.0-alpha.1",
+    "@riverqueue/driver-prisma": "workspace:0.50.0-alpha.1",
+    "@riverqueue/driver-sqlite": "workspace:0.50.0-alpha.1",
+    "@riverqueue/migrate": "workspace:0.50.0-alpha.1",
+    "@riverqueue/worker-threads": "workspace:0.50.0-alpha.1",
+    "pg": "^8.22.0",
+    "riverqueue": "workspace:0.50.0-alpha.1"
+  }
+}

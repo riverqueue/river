@@ -28,6 +28,7 @@ export default defineConfig({
       exclude: ["**/*.test.ts", "**/testdata/**", "examples/**"],
       include: [
         "cli/src/**/*.ts",
+        "conformance/src/**/*.ts",
         "driver/*/src/**/*.ts",
         "migrate/src/**/*.ts",
         "src/**/*.ts",

@@ -1,0 +1,17 @@
+{
+  "application_name": "river-conformance-javascript",
+  "command": ["node", "js/conformance/dist/bin.js"],
+  "implementation": "javascript",
+  "performance": {
+    "enqueue": { "max_p95_ratio": 3, "min_throughput_ratio": 0.25 },
+    "mixed": { "max_p95_ratio": 2, "min_throughput_ratio": 0.5 },
+    "worker": { "max_p95_ratio": 2, "min_throughput_ratio": 0.5 }
+  },
+  "profiles": ["portable-storage-v1", "sqlite-runtime-v1"],
+  "start_options": [
+    "elect_interval_ms",
+    "rescuer_interval_ms",
+    "scheduler_interval_ms"
+  ],
+  "version": "0.50.0-alpha.1"
+}

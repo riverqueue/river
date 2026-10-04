@@ -105,6 +105,30 @@ importers:
         specifier: ^6.0.3
         version: 6.0.3
 
+  conformance:
+    dependencies:
+      '@riverqueue/driver-pg':
+        specifier: workspace:0.50.0-alpha.1
+        version: link:../driver/pg
+      '@riverqueue/driver-prisma':
+        specifier: workspace:0.50.0-alpha.1
+        version: link:../driver/prisma
+      '@riverqueue/driver-sqlite':
+        specifier: workspace:0.50.0-alpha.1
+        version: link:../driver/sqlite
+      '@riverqueue/migrate':
+        specifier: workspace:0.50.0-alpha.1
+        version: link:../migrate
+      '@riverqueue/worker-threads':
+        specifier: workspace:0.50.0-alpha.1
+        version: link:../worker-threads
+      pg:
+        specifier: ^8.22.0
+        version: 8.22.0
+      riverqueue:
+        specifier: workspace:0.50.0-alpha.1
+        version: link:..
+
   driver/pg:
     dependencies:
       postgres-array:
