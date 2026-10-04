@@ -1,0 +1,16 @@
+{
+  "extends": "../tsconfig.base.json",
+  "compilerOptions": {
+    "rootDir": "src",
+    "outDir": "dist",
+    "paths": {
+      "riverqueue": ["../dist/index.d.ts"]
+    }
+  },
+  "exclude": [
+    "src/**/*.integration.test.ts",
+    "src/**/*.test.ts",
+    "src/testdata"
+  ],
+  "include": ["src"]
+}
