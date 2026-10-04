@@ -36,6 +36,8 @@
     "clean:all": "pnpm run clean && pnpm --filter=@riverqueue/migrate run clean && pnpm --filter='./driver/*' run clean && pnpm --filter=@riverqueue/worker-threads run clean && pnpm --filter=@riverqueue/test run clean && pnpm --filter=@riverqueue/cli run clean && pnpm --filter=@riverqueue/conformance-internal run clean",
     "api:check": "node scripts/api-reports.mjs --check",
     "api:report": "node scripts/api-reports.mjs",
+    "coverage:scenarios": "node scripts/scenario-coverage.mjs",
+    "coverage:scenarios:write": "node scripts/scenario-coverage.mjs --write",
     "docs:api": "typedoc --options typedoc.json",
     "docs:snippets": "node scripts/check-readme-snippets.mjs",
     "fmt": "prettier --write 'src/**/*.ts' 'driver/**/src/**/*.ts' 'migrate/src/**/*.ts' 'worker-threads/src/**/*.ts' 'test/src/**/*.ts' 'cli/src/**/*.ts' 'conformance/src/**/*.ts' 'scripts/**/*.mjs' 'examples/*/src/*.ts' 'examples/*/{README.md,package.json,tsconfig.json}' 'examples/tsconfig.json' '{README.md,package.json}' 'conformance/candidate.json' 'docs/*.md' 'driver/*/README.md' '{cli,migrate,test,worker-threads}/README.md'",
