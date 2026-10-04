@@ -25,6 +25,7 @@
   },
   "include": [
     "src",
+    "cli/src",
     "driver/*/src",
     "migrate/src",
     "test/src",

@@ -1,4 +1,5 @@
 packages:
+  - "cli"
   - "driver/*"
   - "examples/*"
   - "migrate"
