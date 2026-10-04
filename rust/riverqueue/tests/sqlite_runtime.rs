@@ -1,0 +1,1856 @@
+use std::{
+    convert::Infallible,
+    sync::{
+        Arc, Mutex,
+        atomic::{AtomicUsize, Ordering},
+    },
+    time::Duration,
+};
+
+use async_trait::async_trait;
+use riverqueue::__private::{
+    ClaimedJob, DatabaseConnection, JobInsertParams, JobSetStateParams, Pilot, PilotError,
+    PilotProducer, ProducerClaimContext, ProducerClaimNext, ProducerStartContext, RescueParams,
+};
+use riverqueue::__private::{ClientBuilderExt, ExtensionClient, PreparedInsertParams};
+use riverqueue::__private::{MaintenanceService, MaintenanceServiceContext};
+use riverqueue::{
+    BoxError, Client, EventKind, Hook, InsertBatch, InsertOpts, Job, JobArgs, JobRow, JobState,
+    MaintenanceConfig, QueueConfig, UniqueOpts, WorkContext, WorkOutcome, WorkerRegistry,
+    database::DatabaseKind,
+};
+use riverqueue_migrate::SqliteMigrator;
+use serde::{Deserialize, Serialize};
+use sqlx::sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePoolOptions};
+use tokio::sync::Semaphore;
+
+#[derive(Clone, Debug, Deserialize, JobArgs, Serialize)]
+#[river(kind = "rust_sqlite_runtime")]
+struct RuntimeArgs {
+    value: i64,
+}
+
+#[derive(Clone, Debug, Deserialize, JobArgs, Serialize)]
+#[river(kind = "rust_sqlite_cancel")]
+struct CancelArgs {}
+
+#[derive(Clone, Debug, Deserialize, JobArgs, Serialize)]
+#[river(kind = "rust_sqlite_cancel_ignored")]
+struct CancelIgnoredArgs {}
+
+#[derive(Clone, Debug, Deserialize, JobArgs, Serialize)]
+#[river(kind = "rust_sqlite_unknown")]
+struct UnknownArgs {}
+
+struct WrapperTransformHook(&'static str);
+
+#[allow(
+    clippy::unused_async_trait_impl,
+    reason = "these extensions only record state synchronously"
+)]
+impl Hook for WrapperTransformHook {
+    async fn decode_insert_result(&self, job: &mut JobRow) -> Result<(), BoxError> {
+        // Unwrap without reparsing the inner arguments so their exact bytes
+        // are preserved.
+        let mut outer: std::collections::HashMap<String, Box<serde_json::value::RawValue>> =
+            job.decode_args()?;
+        job.encoded_args = outer
+            .remove(self.0)
+            .ok_or_else(|| format!("missing outer insertion wrapper {:?}", self.0))?;
+        Ok(())
+    }
+
+    async fn insert_begin(&self, insert: &mut riverqueue::InsertContext) -> Result<(), BoxError> {
+        // As a hook that wraps arguments must, leave arguments that already
+        // carry the outermost wrapper alone, so a stored job inserted again
+        // keeps its arguments.
+        if let Ok(outer) = serde_json::from_str::<
+            std::collections::HashMap<String, Box<serde_json::value::RawValue>>,
+        >(insert.encoded_args.get())
+            && outer.len() == 1
+            && outer.contains_key("B")
+        {
+            return Ok(());
+        }
+        insert.encoded_args = serde_json::value::RawValue::from_string(format!(
+            "{{{}:{}}}",
+            serde_json::to_string(self.0)?,
+            insert.encoded_args.get()
+        ))?;
+        Ok(())
+    }
+}
+
+#[derive(Clone, Copy)]
+enum CompletionBehavior {
+    Continue,
+    Fail,
+    Mark,
+}
+
+#[derive(Clone, Copy)]
+enum SelectionBehavior {
+    Fail,
+    FailFirst,
+    Success,
+}
+
+#[derive(Clone)]
+struct SqlitePilot {
+    completion: Option<CompletionBehavior>,
+    completion_calls: Arc<AtomicUsize>,
+    fetch: Option<SelectionBehavior>,
+    fetch_calls: Arc<AtomicUsize>,
+    insert: Option<SelectionBehavior>,
+    insert_calls: Arc<AtomicUsize>,
+    maintenance_service: Option<Arc<LeadershipServiceState>>,
+    rescue: Option<SelectionBehavior>,
+    rescue_calls: Arc<AtomicUsize>,
+}
+
+impl SqlitePilot {
+    fn new() -> Self {
+        Self {
+            completion: None,
+            completion_calls: Arc::new(AtomicUsize::new(0)),
+            fetch: None,
+            fetch_calls: Arc::new(AtomicUsize::new(0)),
+            insert: None,
+            insert_calls: Arc::new(AtomicUsize::new(0)),
+            maintenance_service: None,
+            rescue: None,
+            rescue_calls: Arc::new(AtomicUsize::new(0)),
+        }
+    }
+}
+
+#[async_trait]
+impl Pilot for SqlitePilot {
+    fn intercepts_insert(&self) -> bool {
+        self.insert.is_some()
+    }
+
+    fn intercepts_job_set_state(&self) -> bool {
+        self.completion.is_some()
+    }
+
+    fn intercepts_rescue(&self) -> bool {
+        self.rescue.is_some()
+    }
+
+    fn maintenance_services(&self) -> Vec<Arc<dyn MaintenanceService>> {
+        self.maintenance_service
+            .as_ref()
+            .map(|state| {
+                vec![Arc::new(LeadershipService(Arc::clone(state))) as Arc<dyn MaintenanceService>]
+            })
+            .unwrap_or_default()
+    }
+
+    async fn after_jobs_set_state(
+        &self,
+        connection: DatabaseConnection<'_>,
+        params: &JobSetStateParams,
+    ) -> Result<(), PilotError> {
+        self.completion_calls.fetch_add(1, Ordering::SeqCst);
+        let connection = connection
+            .into_sqlite()
+            .ok_or_else(|| std::io::Error::other("expected SQLite completion connection"))?;
+        for job in params.jobs {
+            sqlx::query("INSERT INTO pilot_effect (operation, job_id) VALUES ('completion', ?)")
+                .bind(job.id)
+                .execute(&mut *connection)
+                .await?;
+        }
+        match self.completion.expect("completion interception is enabled") {
+            CompletionBehavior::Fail => {
+                Err(std::io::Error::other("completion interception failed").into())
+            }
+            CompletionBehavior::Continue => Ok(()),
+            CompletionBehavior::Mark => {
+                for job in params.jobs {
+                    sqlx::query(
+                        "UPDATE river_job SET \
+                         metadata = jsonb_set(metadata, '$.pilot_handled', jsonb('true')) \
+                         WHERE id = ?",
+                    )
+                    .bind(job.id)
+                    .execute(&mut *connection)
+                    .await?;
+                }
+                Ok(())
+            }
+        }
+    }
+
+    async fn before_job_insert(
+        &self,
+        connection: DatabaseConnection<'_>,
+        params: &mut JobInsertParams<'_>,
+    ) -> Result<(), PilotError> {
+        self.insert_calls.fetch_add(1, Ordering::SeqCst);
+        let connection = connection
+            .into_sqlite()
+            .ok_or_else(|| std::io::Error::other("expected SQLite insertion connection"))?;
+        let marker: String =
+            sqlx::query_scalar("SELECT marker FROM pilot_insert_config WHERE queue = ?")
+                .bind(&*params.queue)
+                .fetch_one(&mut *connection)
+                .await?;
+        params.metadata.insert("pilot_insert", marker)?;
+        sqlx::query("INSERT INTO pilot_effect (operation, job_id) VALUES ('insert', 0)")
+            .execute(&mut *connection)
+            .await?;
+        if matches!(self.insert, Some(SelectionBehavior::Fail)) {
+            return Err(std::io::Error::other("insert interception failed").into());
+        }
+        Ok(())
+    }
+
+    async fn start_producer(
+        &self,
+        _context: ProducerStartContext,
+    ) -> Result<Option<Box<dyn PilotProducer>>, PilotError> {
+        Ok(self
+            .fetch
+            .map(|_| Box::new(SqliteFetchSession(self.clone())) as Box<dyn PilotProducer>))
+    }
+
+    async fn select_rescue_job_ids(
+        &self,
+        connection: DatabaseConnection<'_>,
+        params: &RescueParams,
+    ) -> Result<Option<Vec<i64>>, PilotError> {
+        // River bounds the selection like its own rescuer reads.
+        if params.timeout != Duration::from_secs(30) {
+            return Err(std::io::Error::other("unexpected rescue timeout").into());
+        }
+        self.rescue_calls.fetch_add(1, Ordering::SeqCst);
+        let connection = connection
+            .into_sqlite()
+            .ok_or_else(|| std::io::Error::other("expected SQLite rescue connection"))?;
+        let ids = sqlx::query_scalar(
+            "SELECT id FROM river_job WHERE state = 'running' ORDER BY id LIMIT ?",
+        )
+        .bind(params.maximum)
+        .fetch_all(&mut *connection)
+        .await?;
+        for id in &ids {
+            sqlx::query("INSERT INTO pilot_effect (operation, job_id) VALUES ('rescue', ?)")
+                .bind(id)
+                .execute(&mut *connection)
+                .await?;
+        }
+        if matches!(self.rescue, Some(SelectionBehavior::Fail)) {
+            return Err(std::io::Error::other("rescue interception failed").into());
+        }
+        Ok(Some(ids))
+    }
+}
+
+#[derive(Default)]
+struct LeadershipServiceState {
+    starts: AtomicUsize,
+    stops: AtomicUsize,
+}
+
+struct LeadershipService(Arc<LeadershipServiceState>);
+
+/// Claims for [`SqlitePilot`]: records a side effect in each claim's
+/// transaction, fails as configured, and otherwise runs River's claim.
+struct SqliteFetchSession(SqlitePilot);
+
+#[async_trait]
+impl PilotProducer for SqliteFetchSession {
+    fn intercepts_claim(&self) -> bool {
+        true
+    }
+
+    async fn claim(
+        &self,
+        context: ProducerClaimContext<'_>,
+        next: ProducerClaimNext<'_>,
+    ) -> Result<Vec<ClaimedJob>, PilotError> {
+        let pilot = &self.0;
+        pilot.fetch_calls.fetch_add(1, Ordering::SeqCst);
+        let mut transaction = context.database.begin().await?;
+        let connection = transaction
+            .connection()
+            .into_sqlite()
+            .ok_or_else(|| std::io::Error::other("expected SQLite fetch connection"))?;
+        sqlx::query("INSERT INTO pilot_effect (operation, job_id) VALUES ('fetch', 0)")
+            .execute(&mut *connection)
+            .await?;
+        if matches!(pilot.fetch, Some(SelectionBehavior::Fail))
+            || matches!(pilot.fetch, Some(SelectionBehavior::FailFirst))
+                && pilot.fetch_calls.load(Ordering::SeqCst) == 1
+        {
+            return Err(std::io::Error::other("fetch interception failed").into());
+        }
+        let jobs = next.claim(transaction.connection()).await?;
+        transaction.commit().await?;
+        Ok(jobs)
+    }
+}
+
+#[async_trait]
+impl MaintenanceService for LeadershipService {
+    async fn run(&self, context: MaintenanceServiceContext) -> Result<(), PilotError> {
+        let cancellation = context.term.token;
+        self.0.starts.fetch_add(1, Ordering::SeqCst);
+        cancellation.cancelled().await;
+        self.0.stops.fetch_add(1, Ordering::SeqCst);
+        Ok(())
+    }
+}
+
+/// The current leader's lease expiry, which each successful renewal moves.
+#[tokio::test]
+async fn sqlite_database_errors_are_sqlx_errors() {
+    let pool = setup().await;
+    let client = Client::builder(pool.clone()).build().unwrap();
+    let inserted = client.insert(UnknownArgs {}).await.unwrap();
+    sqlx::query("UPDATE river_job SET metadata = jsonb('[]') WHERE id = ?")
+        .bind(inserted.job.row.id)
+        .execute(&pool)
+        .await
+        .unwrap();
+
+    let error = client.jobs().get(inserted.job.row.id).await.unwrap_err();
+    assert!(
+        matches!(&error, riverqueue::Error::Database(sqlx::Error::Decode(_))),
+        "{error:?}"
+    );
+
+    pool.close().await;
+    let error = client.jobs().get(inserted.job.row.id).await.unwrap_err();
+    assert!(
+        matches!(error, riverqueue::Error::Database(sqlx::Error::PoolClosed)),
+        "{error:?}"
+    );
+}
+
+async fn leader_expires_at(pool: &sqlx::SqlitePool) -> Option<String> {
+    sqlx::query_scalar("SELECT CAST(expires_at AS TEXT) FROM river_leader")
+        .fetch_optional(pool)
+        .await
+        .unwrap()
+}
+
+async fn setup() -> sqlx::SqlitePool {
+    let options = SqliteConnectOptions::new()
+        .filename(":memory:")
+        .create_if_missing(true)
+        .journal_mode(SqliteJournalMode::Wal);
+    let pool = SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect_with(options)
+        .await
+        .unwrap();
+    SqliteMigrator::new(pool.clone())
+        .migrate_up()
+        .await
+        .unwrap();
+    sqlx::query("CREATE TABLE pilot_effect (operation TEXT NOT NULL, job_id INTEGER NOT NULL)")
+        .execute(&pool)
+        .await
+        .unwrap();
+    sqlx::query("CREATE TABLE pilot_insert_config (queue TEXT PRIMARY KEY, marker TEXT NOT NULL)")
+        .execute(&pool)
+        .await
+        .unwrap();
+    sqlx::query("INSERT INTO pilot_insert_config (queue, marker) VALUES ('default', 'default')")
+        .execute(&pool)
+        .await
+        .unwrap();
+    pool
+}
+
+async fn setup_file_pool(busy_timeout: Duration) -> (sqlx::SqlitePool, std::path::PathBuf) {
+    static DATABASE_NONCE: AtomicUsize = AtomicUsize::new(0);
+    let database_path = std::env::temp_dir().join(format!(
+        "river-sqlite-runtime-{}-{}.sqlite",
+        std::process::id(),
+        DATABASE_NONCE.fetch_add(1, Ordering::Relaxed)
+    ));
+    let options = SqliteConnectOptions::new()
+        .filename(&database_path)
+        .create_if_missing(true)
+        .journal_mode(SqliteJournalMode::Wal)
+        .busy_timeout(busy_timeout);
+    let pool = SqlitePoolOptions::new()
+        .max_connections(4)
+        .connect_with(options)
+        .await
+        .unwrap();
+    SqliteMigrator::new(pool.clone())
+        .migrate_up()
+        .await
+        .unwrap();
+    (pool, database_path)
+}
+
+fn remove_sqlite_files(database_path: &std::path::Path) {
+    let _ = std::fs::remove_file(database_path);
+    for suffix in ["-shm", "-wal"] {
+        let mut path = database_path.as_os_str().to_owned();
+        path.push(suffix);
+        let _ = std::fs::remove_file(path);
+    }
+}
+
+fn runtime_workers(worked: Arc<Semaphore>) -> WorkerRegistry {
+    let mut workers = WorkerRegistry::new();
+    workers
+        .register_fn(move |_context: WorkContext, _job: Job<RuntimeArgs>| {
+            let worked = Arc::clone(&worked);
+            async move {
+                worked.add_permits(1);
+                Ok::<_, Infallible>(WorkOutcome::Complete)
+            }
+        })
+        .unwrap();
+    workers
+}
+
+#[tokio::test]
+async fn sqlite_pilot_completion_continue_and_mark_are_atomic() {
+    for behavior in [CompletionBehavior::Continue, CompletionBehavior::Mark] {
+        let pool = setup().await;
+        let worked = Arc::new(Semaphore::new(0));
+        let mut pilot = SqlitePilot::new();
+        pilot.completion = Some(behavior);
+        pilot.fetch = Some(SelectionBehavior::Success);
+        let client = Client::builder(pool.clone())
+            .id("sqlite-pilot-completion")
+            .pilot(pilot.clone())
+            .workers(runtime_workers(Arc::clone(&worked)))
+            .queue(
+                "default",
+                QueueConfig::new(1)
+                    .with_fetch_cooldown(Duration::from_millis(1))
+                    .with_fetch_poll_interval(Duration::from_millis(10)),
+            )
+            .build()
+            .unwrap();
+        let mut events = client.subscribe(&[EventKind::JobCompleted]).unwrap();
+        let mut run = client.start().unwrap();
+        run.wait_ready().await.unwrap();
+
+        let inserted = client.insert(RuntimeArgs { value: 1 }).await.unwrap();
+        tokio::time::timeout(Duration::from_secs(5), worked.acquire())
+            .await
+            .unwrap()
+            .unwrap()
+            .forget();
+        let event = tokio::time::timeout(Duration::from_secs(5), events.recv())
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            event.as_job().map(|event| event.job.id),
+            Some(inserted.job.row.id)
+        );
+
+        let row = client.jobs().get(inserted.job.row.id).await.unwrap();
+        assert_eq!(row.state, JobState::Completed);
+        assert_eq!(
+            row.metadata.get::<bool>("pilot_handled").unwrap(),
+            matches!(behavior, CompletionBehavior::Mark).then_some(true)
+        );
+        let effects: i64 = sqlx::query_scalar(
+            "SELECT count(*) FROM pilot_effect WHERE operation = 'completion' AND job_id = ?",
+        )
+        .bind(inserted.job.row.id)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(effects, 1);
+        assert!(pilot.fetch_calls.load(Ordering::SeqCst) >= 1);
+        assert_eq!(pilot.completion_calls.load(Ordering::SeqCst), 1);
+
+        run.shutdown().await.unwrap();
+    }
+}
+
+#[tokio::test]
+async fn sqlite_pilot_completion_error_rolls_back_side_effects() {
+    let pool = setup().await;
+    let worked = Arc::new(Semaphore::new(0));
+    let mut pilot = SqlitePilot::new();
+    pilot.completion = Some(CompletionBehavior::Fail);
+    let client = Client::builder(pool.clone())
+        .id("sqlite-pilot-completion-error")
+        .pilot(pilot.clone())
+        .workers(runtime_workers(Arc::clone(&worked)))
+        .queue(
+            "default",
+            QueueConfig::new(1)
+                .with_fetch_cooldown(Duration::from_millis(1))
+                .with_fetch_poll_interval(Duration::from_millis(10)),
+        )
+        .build()
+        .unwrap();
+    let mut run = client.start().unwrap();
+    run.wait_ready().await.unwrap();
+
+    let inserted = client.insert(RuntimeArgs { value: 1 }).await.unwrap();
+    tokio::time::timeout(Duration::from_secs(5), worked.acquire())
+        .await
+        .unwrap()
+        .unwrap()
+        .forget();
+    tokio::time::timeout(Duration::from_secs(5), async {
+        while pilot.completion_calls.load(Ordering::SeqCst) == 0 {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .unwrap();
+    let effects: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM pilot_effect WHERE operation = 'completion' AND job_id = ?",
+    )
+    .bind(inserted.job.row.id)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(effects, 0);
+    assert_eq!(
+        client.jobs().get(inserted.job.row.id).await.unwrap().state,
+        JobState::Running
+    );
+
+    run.shutdown_now().await.unwrap();
+}
+
+#[tokio::test]
+async fn sqlite_pilot_fetch_error_rolls_back_selection_side_effects() {
+    let pool = setup().await;
+    let mut pilot = SqlitePilot::new();
+    pilot.fetch = Some(SelectionBehavior::Fail);
+    let client = Client::builder(pool.clone())
+        .id("sqlite-pilot-fetch-error")
+        .pilot(pilot.clone())
+        .workers(runtime_workers(Arc::new(Semaphore::new(0))))
+        .queue(
+            "default",
+            QueueConfig::new(1)
+                .with_fetch_cooldown(Duration::from_millis(1))
+                .with_fetch_poll_interval(Duration::from_millis(10)),
+        )
+        .build()
+        .unwrap();
+    let inserted = client.insert(RuntimeArgs { value: 1 }).await.unwrap();
+    let mut run = client.start().unwrap();
+    run.wait_ready().await.unwrap();
+
+    tokio::time::timeout(Duration::from_secs(5), async {
+        while pilot.fetch_calls.load(Ordering::SeqCst) == 0 {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .unwrap();
+    let effects: i64 =
+        sqlx::query_scalar("SELECT count(*) FROM pilot_effect WHERE operation = 'fetch'")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(effects, 0);
+    assert_eq!(
+        client.jobs().get(inserted.job.row.id).await.unwrap().state,
+        JobState::Available
+    );
+
+    let _ = run.shutdown_now().await;
+}
+
+#[tokio::test]
+async fn sqlite_pilot_fetch_transient_error_retries_without_stopping_the_queue() {
+    let pool = setup().await;
+    let worked = Arc::new(Semaphore::new(0));
+    let mut pilot = SqlitePilot::new();
+    pilot.fetch = Some(SelectionBehavior::FailFirst);
+    let client = Client::builder(pool.clone())
+        .id("sqlite-pilot-fetch-retry")
+        .pilot(pilot.clone())
+        .workers(runtime_workers(Arc::clone(&worked)))
+        .queue(
+            "default",
+            QueueConfig::new(1)
+                .with_fetch_cooldown(Duration::from_millis(1))
+                .with_fetch_poll_interval(Duration::from_millis(10)),
+        )
+        .build()
+        .unwrap();
+    let inserted = client.insert(RuntimeArgs { value: 1 }).await.unwrap();
+    let mut run = client.start().unwrap();
+    run.wait_ready().await.unwrap();
+
+    tokio::time::timeout(Duration::from_secs(5), worked.acquire())
+        .await
+        .unwrap()
+        .unwrap()
+        .forget();
+    tokio::time::timeout(Duration::from_secs(5), async {
+        while client.jobs().get(inserted.job.row.id).await.unwrap().state != JobState::Completed {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .unwrap();
+    run.shutdown().await.unwrap();
+
+    let fetch_calls = pilot.fetch_calls.load(Ordering::SeqCst);
+    let effects: i64 =
+        sqlx::query_scalar("SELECT count(*) FROM pilot_effect WHERE operation = 'fetch'")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert!(fetch_calls >= 2);
+    assert_eq!(usize::try_from(effects).unwrap() + 1, fetch_calls);
+}
+
+#[tokio::test]
+async fn sqlite_queue_start_retries_transient_write_contention() {
+    let (pool, database_path) = setup_file_pool(Duration::from_millis(1)).await;
+    let worked = Arc::new(Semaphore::new(0));
+    let client = Client::builder(pool.clone())
+        .id("sqlite-queue-start-retry")
+        .workers(runtime_workers(Arc::clone(&worked)))
+        .queue(
+            "default",
+            QueueConfig::new(1)
+                .with_fetch_cooldown(Duration::from_millis(1))
+                .with_fetch_poll_interval(Duration::from_millis(10)),
+        )
+        .build()
+        .unwrap();
+    let inserted = client.insert(RuntimeArgs { value: 1 }).await.unwrap();
+    let writer = pool.begin_with("BEGIN IMMEDIATE").await.unwrap();
+    let release_writer = tokio::spawn(async move {
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        writer.rollback().await.unwrap();
+    });
+
+    let mut run = client.start().unwrap();
+    run.wait_ready().await.unwrap();
+    release_writer.await.unwrap();
+    tokio::time::timeout(Duration::from_secs(5), worked.acquire())
+        .await
+        .unwrap()
+        .unwrap()
+        .forget();
+    tokio::time::timeout(Duration::from_secs(5), async {
+        while client.jobs().get(inserted.job.row.id).await.unwrap().state != JobState::Completed {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .unwrap();
+
+    run.shutdown().await.unwrap();
+    pool.close().await;
+    remove_sqlite_files(&database_path);
+}
+
+#[tokio::test]
+async fn sqlite_transient_renewal_contention_preserves_leadership_services() {
+    let (pool, database_path) = setup_file_pool(Duration::from_millis(5)).await;
+    let service = Arc::new(LeadershipServiceState::default());
+    let mut pilot = SqlitePilot::new();
+    pilot.maintenance_service = Some(Arc::clone(&service));
+    let client = Client::builder(pool.clone())
+        .id("sqlite-contention-leader")
+        .maintenance(MaintenanceConfig::default().with_elect_interval(Duration::from_millis(10)))
+        .pilot(pilot)
+        .queue(
+            "default",
+            QueueConfig::new(1).with_fetch_poll_interval(Duration::from_mins(1)),
+        )
+        .workers(runtime_workers(Arc::new(Semaphore::new(0))))
+        .build()
+        .unwrap();
+    let mut run = client.start().unwrap();
+    run.wait_ready().await.unwrap();
+    // The client is the only one bidding, so it wins the first election.
+    // Requesting resignations here would churn leadership and leave
+    // requests in the outbox that could arrive during the contention below.
+    let startup_deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+    while service.starts.load(Ordering::SeqCst) == 0 {
+        assert!(
+            tokio::time::Instant::now() < startup_deadline,
+            "leadership services never started"
+        );
+        tokio::time::sleep(Duration::from_millis(5)).await;
+    }
+    let starts_before_contention = service.starts.load(Ordering::SeqCst);
+    let stops_before_contention = service.stops.load(Ordering::SeqCst);
+    let lease_before_contention = leader_expires_at(&pool).await;
+    let mut writer = pool.begin_with("BEGIN IMMEDIATE").await.unwrap();
+    sqlx::query("UPDATE river_queue SET updated_at = updated_at WHERE name = 'default'")
+        .execute(&mut *writer)
+        .await
+        .unwrap();
+    // Hold the write lock across several 10 ms renewal attempts.
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    writer.rollback().await.unwrap();
+
+    // Once a renewal after the contention has succeeded, the services have
+    // been through the whole contention; the counters show whether they
+    // stopped at any point.
+    let renewal_deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+    while leader_expires_at(&pool).await == lease_before_contention {
+        assert!(
+            tokio::time::Instant::now() < renewal_deadline,
+            "leadership was never renewed after the contention"
+        );
+        tokio::time::sleep(Duration::from_millis(5)).await;
+    }
+    assert_eq!(
+        service.starts.load(Ordering::SeqCst),
+        starts_before_contention
+    );
+    assert_eq!(
+        service.stops.load(Ordering::SeqCst),
+        stops_before_contention
+    );
+
+    // A renewal that failed during the contention backs off for about a
+    // second before the leader reads its next wakeup.
+    client.request_resign().await.unwrap();
+    tokio::time::timeout(Duration::from_secs(5), async {
+        while service.stops.load(Ordering::SeqCst) == stops_before_contention {
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+    })
+    .await
+    .expect("leader resigns on request");
+
+    run.shutdown_now().await.unwrap();
+    assert!(service.stops.load(Ordering::SeqCst) >= 1);
+    pool.close().await;
+    remove_sqlite_files(&database_path);
+}
+
+#[tokio::test]
+async fn sqlite_pilot_insert_uses_the_insertion_transaction() {
+    let pool = setup().await;
+    let mut pilot = SqlitePilot::new();
+    pilot.insert = Some(SelectionBehavior::Success);
+    let client = Client::builder(pool.clone())
+        .pilot(pilot.clone())
+        .build()
+        .unwrap();
+
+    let mut transaction = pool.begin_with("BEGIN IMMEDIATE").await.unwrap();
+    sqlx::query("UPDATE pilot_insert_config SET marker = 'uncommitted' WHERE queue = 'default'")
+        .execute(&mut *transaction)
+        .await
+        .unwrap();
+    let inserted = client
+        .insert(RuntimeArgs { value: 31 })
+        .tx(&mut transaction)
+        .await
+        .unwrap();
+    assert_eq!(
+        inserted
+            .job
+            .row
+            .metadata
+            .get::<String>("pilot_insert")
+            .unwrap()
+            .as_deref(),
+        Some("uncommitted")
+    );
+    transaction.commit().await.unwrap();
+
+    assert_eq!(pilot.insert_calls.load(Ordering::SeqCst), 1);
+    let effects: i64 =
+        sqlx::query_scalar("SELECT count(*) FROM pilot_effect WHERE operation = 'insert'")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(effects, 1);
+
+    let mut failing_pilot = SqlitePilot::new();
+    failing_pilot.insert = Some(SelectionBehavior::Fail);
+    let failing_client = Client::builder(pool.clone())
+        .pilot(failing_pilot.clone())
+        .build()
+        .unwrap();
+    let error = failing_client
+        .insert(RuntimeArgs { value: 32 })
+        .await
+        .unwrap_err();
+    assert!(
+        matches!(
+            &error,
+            riverqueue::Error::Extension {
+                phase: riverqueue::ExtensionPhase::AddOn { operation: "job insertion" },
+                source,
+            } if source.to_string().contains("insert interception failed")
+        ),
+        "{error:?}"
+    );
+    let failed_jobs: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM river_job WHERE json_extract(args, '$.value') = 32",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(failed_jobs, 0);
+    let effects_after_failure: i64 =
+        sqlx::query_scalar("SELECT count(*) FROM pilot_effect WHERE operation = 'insert'")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(effects_after_failure, 1);
+    assert_eq!(failing_pilot.insert_calls.load(Ordering::SeqCst), 1);
+}
+
+#[tokio::test]
+#[allow(
+    clippy::too_many_lines,
+    reason = "one exact-version insertion regression verifies every preserved/reset wire field and hook phase"
+)]
+async fn sqlite_reinsert_preserves_wire_fields_and_runs_the_canonical_pipeline() {
+    let pool = setup().await;
+    let producer = Client::builder(pool.clone())
+        .hook(WrapperTransformHook("A"))
+        .hook(WrapperTransformHook("B"))
+        .build()
+        .unwrap();
+    let mut pilot = SqlitePilot::new();
+    pilot.insert = Some(SelectionBehavior::Success);
+    let mut workers = WorkerRegistry::new();
+    workers
+        .register_fn(|_context: WorkContext, _job: Job<CancelArgs>| async move {
+            Ok::<_, Infallible>(WorkOutcome::Complete)
+        })
+        .unwrap();
+    let client = Client::builder(pool.clone())
+        .hook(WrapperTransformHook("A"))
+        .hook(WrapperTransformHook("B"))
+        .pilot(pilot.clone())
+        .workers(workers)
+        .build()
+        .unwrap();
+    let scheduled_at = chrono::Utc::now() + chrono::Duration::hours(2);
+    let raw = riverqueue::__private::ExtensionClient::new(&client)
+        .insert_raw(
+            CancelArgs::KIND,
+            &[],
+            serde_json::value::to_raw_value(&serde_json::json!({"raw": true})).unwrap(),
+            InsertOpts::default().with_pending(true),
+        )
+        .await
+        .unwrap();
+    assert_eq!(raw.job.encoded_args.get(), r#"{"raw":true}"#);
+    let stored_raw_args: String =
+        sqlx::query_scalar("SELECT json(args) FROM river_job WHERE id = ?")
+            .bind(raw.job.id)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    let stored_raw_args: serde_json::Value = serde_json::from_str(&stored_raw_args).unwrap();
+    assert_eq!(stored_raw_args["B"]["A"]["raw"], true);
+    let mut original = producer
+        .insert(RuntimeArgs { value: 41 })
+        .opts(
+            InsertOpts::default()
+                .with_metadata(serde_json::Map::from_iter([(
+                    "source".to_owned(),
+                    serde_json::json!(true),
+                )]))
+                .with_scheduled_at(scheduled_at)
+                .with_tags(["reinserted"])
+                .with_unique(UniqueOpts::new().with_by_args(true)),
+        )
+        .await
+        .unwrap()
+        .job
+        .row;
+    sqlx::query("UPDATE river_job SET metadata = jsonb_patch(metadata, jsonb('{\"beyond_float\":1e400}')) WHERE id = ?")
+        .bind(original.id)
+        .execute(&pool)
+        .await
+        .unwrap();
+    original.metadata = producer.jobs().get(original.id).await.unwrap().metadata;
+    assert_eq!(
+        original.metadata.get_raw("beyond_float").unwrap().get(),
+        "1e400"
+    );
+    assert_eq!(original.encoded_args.get(), r#"{"value":41}"#);
+    let stored_source_args: String =
+        sqlx::query_scalar("SELECT json(args) FROM river_job WHERE id = ?")
+            .bind(original.id)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    let stored_source_args = serde_json::value::RawValue::from_string(stored_source_args).unwrap();
+    assert_eq!(
+        serde_json::from_str::<serde_json::Value>(stored_source_args.get()).unwrap()["B"]["A"]["value"],
+        41
+    );
+    let sentinel = producer
+        .insert(RuntimeArgs { value: 42 })
+        .opts(InsertOpts::default().with_scheduled_at(scheduled_at))
+        .await
+        .unwrap();
+
+    let mut transaction = pool.begin_with("BEGIN IMMEDIATE").await.unwrap();
+    sqlx::query("DELETE FROM river_job WHERE id = ?")
+        .bind(original.id)
+        .execute(&mut *transaction)
+        .await
+        .unwrap();
+    let reinserted = ExtensionClient::new(&client)
+        .insert_prepared(vec![PreparedInsertParams {
+            created_at: original.created_at,
+            encoded_args: stored_source_args,
+            kind: "x".to_owned(),
+            max_attempts: original.max_attempts,
+            metadata: original.metadata.clone(),
+            priority: original.priority,
+            queue: original.queue.clone(),
+            scheduled_at: original.scheduled_at,
+            tags: original.tags.clone(),
+            unique_key: original.unique_key.clone(),
+            unique_states: original.unique_states.clone(),
+        }])
+        .tx(&mut transaction)
+        .await
+        .unwrap()
+        .remove(0);
+    transaction.commit().await.unwrap();
+
+    assert_ne!(reinserted.job.id, original.id);
+    assert!(reinserted.job.id > sentinel.job.row.id);
+    assert_eq!(reinserted.job.attempt, 0);
+    assert!(reinserted.job.attempted_at.is_none());
+    assert_eq!(reinserted.job.attempted_by, Vec::<String>::new());
+    assert_eq!(reinserted.job.created_at, original.created_at);
+    assert_eq!(reinserted.job.errors, []);
+    assert!(reinserted.job.finalized_at.is_none());
+    assert_eq!(reinserted.job.scheduled_at, original.scheduled_at);
+    assert_eq!(reinserted.job.state, JobState::Available);
+    assert_eq!(reinserted.job.kind, "x");
+    assert_eq!(reinserted.job.unique_key, original.unique_key);
+    assert_eq!(reinserted.job.unique_states, original.unique_states);
+    assert_eq!(
+        reinserted
+            .job
+            .metadata
+            .get_raw("beyond_float")
+            .unwrap()
+            .get(),
+        "1e400"
+    );
+    assert_eq!(
+        reinserted.job.metadata.get::<bool>("source").unwrap(),
+        Some(true)
+    );
+    assert_eq!(
+        reinserted
+            .job
+            .metadata
+            .get::<String>("pilot_insert")
+            .unwrap()
+            .as_deref(),
+        Some("default")
+    );
+    assert!(!reinserted.unique_skipped_as_duplicate);
+    assert_eq!(pilot.insert_calls.load(Ordering::SeqCst), 2);
+
+    assert_eq!(reinserted.job.encoded_args.get(), r#"{"value":41}"#);
+    let stored_args: String = sqlx::query_scalar("SELECT json(args) FROM river_job WHERE id = ?")
+        .bind(reinserted.job.id)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    let stored_args: serde_json::Value = serde_json::from_str(&stored_args).unwrap();
+    assert_eq!(stored_args["B"]["A"]["value"], 41);
+
+    let notifications: i64 =
+        sqlx::query_scalar("SELECT count(*) FROM river_notification WHERE topic = 'river_insert'")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(notifications, 1);
+}
+
+#[tokio::test]
+async fn sqlite_pilot_rescue_selection_and_update_share_a_transaction() {
+    let pool = setup().await;
+    let mut pilot = SqlitePilot::new();
+    pilot.rescue = Some(SelectionBehavior::Success);
+    let client = Client::builder(pool.clone())
+        .id("sqlite-pilot-rescue")
+        .maintenance(
+            MaintenanceConfig::default()
+                .with_elect_interval(Duration::from_millis(10))
+                .with_rescue_after(Duration::from_mins(1))
+                .with_rescuer_interval(Duration::from_millis(10)),
+        )
+        .pilot(pilot.clone())
+        .queue(
+            "default",
+            QueueConfig::new(1).with_fetch_poll_interval(Duration::from_mins(1)),
+        )
+        .workers(runtime_workers(Arc::new(Semaphore::new(0))))
+        .build()
+        .unwrap();
+    let inserted = client.insert(RuntimeArgs { value: 1 }).await.unwrap();
+    sqlx::query(
+        "UPDATE river_job SET state = 'running', attempt = 1, \
+         attempted_at = '2000-01-01 00:00:00.000' WHERE id = ?",
+    )
+    .bind(inserted.job.row.id)
+    .execute(&pool)
+    .await
+    .unwrap();
+    let mut run = client.start().unwrap();
+    run.wait_ready().await.unwrap();
+
+    // Wait for the rescue's recorded error rather than the `retryable` state,
+    // which the scheduler ends about a second later and a loaded poll can miss.
+    let rescued = tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            let row = client.jobs().get(inserted.job.row.id).await.unwrap();
+            if !row.errors.is_empty() {
+                break row;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .unwrap();
+    assert_eq!(rescued.errors[0].error, "Stuck job rescued by JobRescuer");
+    let effects: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM pilot_effect WHERE operation = 'rescue' AND job_id = ?",
+    )
+    .bind(inserted.job.row.id)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(effects, 1);
+    assert!(pilot.rescue_calls.load(Ordering::SeqCst) >= 1);
+
+    run.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn sqlite_pilot_rescue_error_rolls_back_selection_side_effects() {
+    let pool = setup().await;
+    let mut pilot = SqlitePilot::new();
+    pilot.rescue = Some(SelectionBehavior::Fail);
+    let client = Client::builder(pool.clone())
+        .id("sqlite-pilot-rescue-error")
+        .maintenance(
+            MaintenanceConfig::default()
+                .with_elect_interval(Duration::from_millis(10))
+                .with_rescue_after(Duration::from_mins(1))
+                .with_rescuer_interval(Duration::from_millis(10)),
+        )
+        .pilot(pilot.clone())
+        .queue(
+            "default",
+            QueueConfig::new(1).with_fetch_poll_interval(Duration::from_mins(1)),
+        )
+        .workers(runtime_workers(Arc::new(Semaphore::new(0))))
+        .build()
+        .unwrap();
+    let inserted = client.insert(RuntimeArgs { value: 1 }).await.unwrap();
+    sqlx::query(
+        "UPDATE river_job SET state = 'running', attempt = 1, \
+         attempted_at = '2000-01-01 00:00:00.000' WHERE id = ?",
+    )
+    .bind(inserted.job.row.id)
+    .execute(&pool)
+    .await
+    .unwrap();
+    let mut run = client.start().unwrap();
+    run.wait_ready().await.unwrap();
+
+    tokio::time::timeout(Duration::from_secs(5), async {
+        while pilot.rescue_calls.load(Ordering::SeqCst) == 0 {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .unwrap();
+    let effects: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM pilot_effect WHERE operation = 'rescue' AND job_id = ?",
+    )
+    .bind(inserted.job.row.id)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(effects, 0);
+    assert_eq!(
+        client.jobs().get(inserted.job.row.id).await.unwrap().state,
+        JobState::Running
+    );
+
+    run.shutdown_now().await.unwrap();
+}
+
+#[tokio::test]
+async fn sqlite_queue_events_are_emitted_once_per_transition() {
+    let pool = setup().await;
+    let client = Client::builder(pool)
+        .workers(runtime_workers(Arc::new(Semaphore::new(0))))
+        .queue(
+            "default",
+            QueueConfig::new(1)
+                .with_fetch_cooldown(Duration::from_millis(1))
+                .with_fetch_poll_interval(Duration::from_millis(10)),
+        )
+        .build()
+        .unwrap();
+    let mut events = client
+        .subscribe(&[EventKind::QueuePaused, EventKind::QueueResumed])
+        .unwrap();
+    let mut run = client.start().unwrap();
+    run.wait_ready().await.unwrap();
+
+    client.queues().pause("default").await.unwrap();
+    let paused = tokio::time::timeout(Duration::from_secs(5), events.recv())
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(paused.kind(), EventKind::QueuePaused);
+    assert!(paused.as_queue().unwrap().queue.paused_at.is_some());
+    assert!(
+        tokio::time::timeout(Duration::from_millis(300), events.recv())
+            .await
+            .is_err()
+    );
+
+    client.queues().pause("default").await.unwrap();
+    assert!(
+        tokio::time::timeout(Duration::from_millis(300), events.recv())
+            .await
+            .is_err()
+    );
+
+    client.queues().resume("default").await.unwrap();
+    let resumed = tokio::time::timeout(Duration::from_secs(5), events.recv())
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(resumed.kind(), EventKind::QueueResumed);
+    assert!(resumed.as_queue().unwrap().queue.paused_at.is_none());
+    assert!(
+        tokio::time::timeout(Duration::from_millis(300), events.recv())
+            .await
+            .is_err()
+    );
+
+    client.queues().resume("default").await.unwrap();
+    assert!(
+        tokio::time::timeout(Duration::from_millis(300), events.recv())
+            .await
+            .is_err()
+    );
+
+    run.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn sqlite_runs_jobs_and_persists_output() {
+    let pool = setup().await;
+    let worked = Arc::new(Semaphore::new(0));
+    let worked_for_worker = Arc::clone(&worked);
+    let mut workers = WorkerRegistry::new();
+    workers
+        .register_fn(move |context: WorkContext, job: Job<RuntimeArgs>| {
+            let worked = Arc::clone(&worked_for_worker);
+            async move {
+                context
+                    .record_output(serde_json::json!({"doubled": job.args.value * 2}))
+                    .unwrap();
+                worked.add_permits(1);
+                Ok::<_, Infallible>(WorkOutcome::Complete)
+            }
+        })
+        .unwrap();
+    let client = Client::builder(pool.clone())
+        .id("sqlite-runtime")
+        .workers(workers)
+        .queue(
+            "default",
+            QueueConfig::new(4)
+                .with_fetch_cooldown(Duration::from_millis(1))
+                .with_fetch_poll_interval(Duration::from_millis(10)),
+        )
+        .build()
+        .unwrap();
+    assert_eq!(client.database().kind(), DatabaseKind::Sqlite);
+    let mut events = client.subscribe(&[EventKind::JobCompleted]).unwrap();
+    let mut run = client.start().unwrap();
+    run.wait_ready().await.unwrap();
+
+    let inserted = client.insert(RuntimeArgs { value: 21 }).await.unwrap();
+    tokio::time::timeout(Duration::from_secs(5), worked.acquire())
+        .await
+        .unwrap()
+        .unwrap()
+        .forget();
+    let event = tokio::time::timeout(Duration::from_secs(5), events.recv())
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        event.as_job().map(|job_event| job_event.job.id),
+        Some(inserted.job.row.id)
+    );
+    let row = client.jobs().get(inserted.job.row.id).await.unwrap();
+    assert_eq!(row.state, JobState::Completed);
+    assert_eq!(
+        row.output().map(serde_json::value::RawValue::get),
+        Some(r#"{"doubled":42}"#)
+    );
+
+    run.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn sqlite_worker_cancelling_its_own_token_fails_the_attempt_normally() {
+    #[derive(Debug, thiserror::Error)]
+    #[error("worker gave up")]
+    struct GaveUp;
+
+    let pool = setup().await;
+    let mut workers = WorkerRegistry::new();
+    workers
+        .register_fn(|context: WorkContext, _job: Job<CancelArgs>| async move {
+            // Like a worker that cancels its subtasks through a drop guard
+            // on its own token before returning.
+            drop(context.cancellation_token().clone().drop_guard());
+            Err::<WorkOutcome, _>(GaveUp)
+        })
+        .unwrap();
+    let client = Client::builder(pool.clone())
+        .workers(workers)
+        .queue(
+            "default",
+            QueueConfig::new(1)
+                .with_fetch_cooldown(Duration::from_millis(1))
+                .with_fetch_poll_interval(Duration::from_millis(10)),
+        )
+        .build()
+        .unwrap();
+    let mut events = client
+        .subscribe(&[EventKind::JobCancelled, EventKind::JobFailed])
+        .unwrap();
+    let mut run = client.start().unwrap();
+    run.wait_ready().await.unwrap();
+
+    let inserted = client.insert(CancelArgs {}).await.unwrap();
+    let event = tokio::time::timeout(Duration::from_secs(5), events.recv())
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        event.as_job().map(|job_event| job_event.kind),
+        Some(riverqueue::JobEventKind::Failed)
+    );
+    let row = client.jobs().get(inserted.job.row.id).await.unwrap();
+    // The first retry is due soon enough that, like Go, the row goes
+    // straight back to `available`.
+    assert!(
+        matches!(row.state, JobState::Available | JobState::Retryable),
+        "{:?}",
+        row.state
+    );
+    assert_eq!(row.errors.len(), 1);
+    assert_eq!(row.errors[0].error, "worker gave up");
+
+    run.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn sqlite_attempt_errors_record_when_the_attempt_started() {
+    #[derive(Debug, thiserror::Error)]
+    #[error("worker failed late")]
+    struct FailedLate;
+
+    let pool = setup().await;
+    let worker_started = Arc::new(Mutex::new(None));
+    let worker_started_for_worker = Arc::clone(&worker_started);
+    let mut workers = WorkerRegistry::new();
+    workers
+        .register_fn(move |_context: WorkContext, _job: Job<CancelArgs>| {
+            let worker_started = Arc::clone(&worker_started_for_worker);
+            async move {
+                *worker_started.lock().unwrap() = Some(chrono::Utc::now());
+                tokio::time::sleep(Duration::from_millis(200)).await;
+                Err::<WorkOutcome, _>(FailedLate)
+            }
+        })
+        .unwrap();
+    let client = Client::builder(pool.clone())
+        .workers(workers)
+        .queue(
+            "default",
+            QueueConfig::new(1)
+                .with_fetch_cooldown(Duration::from_millis(1))
+                .with_fetch_poll_interval(Duration::from_millis(10)),
+        )
+        .build()
+        .unwrap();
+    let mut events = client.subscribe(&[EventKind::JobFailed]).unwrap();
+    let mut run = client.start().unwrap();
+    run.wait_ready().await.unwrap();
+
+    let inserted = client.insert(CancelArgs {}).await.unwrap();
+    tokio::time::timeout(Duration::from_secs(5), events.recv())
+        .await
+        .unwrap()
+        .unwrap();
+    let row = client.jobs().get(inserted.job.row.id).await.unwrap();
+    let worker_started = worker_started.lock().unwrap().unwrap();
+    // Like Go's executor, the error's time is when the attempt started, not
+    // when the worker returned. SQLite stores milliseconds.
+    let at = row.errors[0].at;
+    assert!(
+        at <= worker_started && at > worker_started - chrono::Duration::milliseconds(100),
+        "error at {at}, worker started at {worker_started}"
+    );
+
+    run.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn sqlite_returning_insert_nonce_matches_go() {
+    let pool = setup().await;
+    let client = Client::builder(pool).build().unwrap();
+
+    let first = client.insert(RuntimeArgs { value: 1 }).await.unwrap();
+    let second = client.insert(RuntimeArgs { value: 2 }).await.unwrap();
+    let first_nonce = first
+        .job
+        .row
+        .metadata
+        .get::<String>("river:unique_nonce")
+        .unwrap()
+        .unwrap();
+    let second_nonce = second
+        .job
+        .row
+        .metadata
+        .get::<String>("river:unique_nonce")
+        .unwrap()
+        .unwrap();
+    assert_eq!(first_nonce.len(), 16);
+    assert!(
+        first_nonce
+            .bytes()
+            .all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase())
+    );
+    assert_ne!(first_nonce, second_nonce);
+    assert_eq!(
+        client
+            .jobs()
+            .get(first.job.row.id)
+            .await
+            .unwrap()
+            .metadata
+            .get::<String>("river:unique_nonce")
+            .unwrap(),
+        Some(first_nonce)
+    );
+}
+
+#[tokio::test]
+async fn sqlite_transaction_insert_respects_rollback() {
+    let pool = setup().await;
+    let client = Client::builder(pool.clone()).build().unwrap();
+    let mut transaction = pool.begin().await.unwrap();
+    let inserted = client
+        .insert(RuntimeArgs { value: 1 })
+        .tx(&mut transaction)
+        .await
+        .unwrap();
+    transaction.rollback().await.unwrap();
+
+    let error = client.jobs().get(inserted.job.row.id).await.unwrap_err();
+    assert!(matches!(error, riverqueue::Error::NotFound(_)));
+}
+
+#[tokio::test]
+async fn sqlite_inserts_heterogeneous_batch_in_order() {
+    let pool = setup().await;
+    let client = Client::builder(pool).build().unwrap();
+    let mut batch = InsertBatch::new();
+    batch.push(RuntimeArgs { value: 7 }).push_with(
+        CancelArgs {},
+        InsertOpts::default().with_queue("heterogeneous-queue"),
+    );
+
+    let results = client.insert_batch(batch).await.unwrap();
+
+    assert_eq!(results.len(), 2);
+    assert_eq!(results[0].job.kind, RuntimeArgs::KIND);
+    assert_eq!(results[1].job.kind, CancelArgs::KIND);
+    assert_eq!(results[1].job.queue, "heterogeneous-queue");
+    assert!(results[0].job.id < results[1].job.id);
+}
+
+#[tokio::test]
+async fn sqlite_transaction_batches_roll_back_only_the_failed_batch() {
+    let pool = setup().await;
+    let client = Client::builder(pool.clone()).build().unwrap();
+
+    let mut transaction = pool.begin().await.unwrap();
+    client
+        .insert(RuntimeArgs { value: 100 })
+        .tx(&mut transaction)
+        .await
+        .unwrap();
+    let result = client
+        .insert_many([
+            (
+                RuntimeArgs { value: 101 },
+                InsertOpts::default().with_tags(["ordinary-failed-batch"]),
+            ),
+            (
+                RuntimeArgs { value: 102 },
+                InsertOpts::default().with_priority(0),
+            ),
+        ])
+        .tx(&mut transaction)
+        .await;
+    assert!(result.is_err());
+    transaction.commit().await.unwrap();
+
+    let control_count: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM river_job WHERE json_extract(args, '$.value') = 100",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    let batch_count: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM river_job WHERE json_extract(args, '$.value') = 101",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(control_count, 1);
+    assert_eq!(batch_count, 0);
+}
+
+#[tokio::test]
+async fn sqlite_long_fetch_cooldown_still_fetches_first() {
+    let pool = setup().await;
+    let worked = Arc::new(Semaphore::new(0));
+    // Longer than the monotonic clock has run on any host.
+    let ten_years = Duration::from_hours(24 * 365 * 10);
+    let client = Client::builder(pool)
+        .queue(
+            "default",
+            QueueConfig::new(1)
+                .with_fetch_cooldown(ten_years)
+                .with_fetch_poll_interval(ten_years),
+        )
+        .workers(runtime_workers(Arc::clone(&worked)))
+        .build()
+        .unwrap();
+    client.insert(RuntimeArgs { value: 1 }).await.unwrap();
+    let mut run = client.start().unwrap();
+    run.wait_ready().await.unwrap();
+
+    tokio::time::timeout(Duration::from_secs(5), worked.acquire())
+        .await
+        .expect("the first fetch doesn't wait for a cooldown")
+        .unwrap()
+        .forget();
+    run.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn sqlite_outbox_cancels_work_from_another_client() {
+    let pool = setup().await;
+    let started = Arc::new(Semaphore::new(0));
+    let started_for_worker = Arc::clone(&started);
+    let mut workers = WorkerRegistry::new();
+    workers
+        .register_fn(move |context: WorkContext, _job: Job<CancelArgs>| {
+            let started = Arc::clone(&started_for_worker);
+            async move {
+                started.add_permits(1);
+                context.cancellation_token().cancelled().await;
+                Ok::<_, Infallible>(WorkOutcome::Snooze(Duration::from_mins(1)))
+            }
+        })
+        .unwrap();
+    let worker_client = Client::builder(pool.clone())
+        .id("sqlite-worker")
+        .workers(workers)
+        .queue(
+            "default",
+            QueueConfig::new(1)
+                .with_fetch_cooldown(Duration::from_millis(1))
+                .with_fetch_poll_interval(Duration::from_millis(10)),
+        )
+        .build()
+        .unwrap();
+    let cancelling_client = Client::builder(pool)
+        .id("sqlite-canceller")
+        .build()
+        .unwrap();
+    let mut cancelled = worker_client.subscribe(&[EventKind::JobCancelled]).unwrap();
+    let mut run = worker_client.start().unwrap();
+    run.wait_ready().await.unwrap();
+
+    let inserted = worker_client.insert(CancelArgs {}).await.unwrap();
+    tokio::time::timeout(Duration::from_secs(5), started.acquire())
+        .await
+        .unwrap()
+        .unwrap()
+        .forget();
+    let running = worker_client.jobs().get(inserted.job.row.id).await.unwrap();
+    assert_eq!(running.state, JobState::Running);
+    cancelling_client.jobs().cancel(running.id).await.unwrap();
+    let event = tokio::time::timeout(Duration::from_secs(5), cancelled.recv())
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        event.as_job().map(|job_event| job_event.job.id),
+        Some(running.id)
+    );
+    assert_eq!(
+        worker_client.jobs().get(running.id).await.unwrap().state,
+        JobState::Cancelled
+    );
+
+    run.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn sqlite_completion_event_follows_external_cancelled_state() {
+    let pool = setup().await;
+    let finish = Arc::new(Semaphore::new(0));
+    let started = Arc::new(Semaphore::new(0));
+    let mut workers = WorkerRegistry::new();
+    workers
+        .register_fn({
+            let finish = Arc::clone(&finish);
+            let started = Arc::clone(&started);
+            move |_context: WorkContext, _job: Job<CancelIgnoredArgs>| {
+                let finish = Arc::clone(&finish);
+                let started = Arc::clone(&started);
+                async move {
+                    started.add_permits(1);
+                    finish.acquire().await.unwrap().forget();
+                    Ok::<_, Infallible>(WorkOutcome::Complete)
+                }
+            }
+        })
+        .unwrap();
+    let worker_client = Client::builder(pool.clone())
+        .id("sqlite-worker-cancel-ignored")
+        .workers(workers)
+        .queue(
+            "default",
+            QueueConfig::new(1)
+                .with_fetch_cooldown(Duration::from_millis(1))
+                .with_fetch_poll_interval(Duration::from_millis(10)),
+        )
+        .build()
+        .unwrap();
+    let mut cancelled = worker_client.subscribe(&[EventKind::JobCancelled]).unwrap();
+    let mut run = worker_client.start().unwrap();
+    run.wait_ready().await.unwrap();
+
+    let inserted = worker_client.insert(CancelIgnoredArgs {}).await.unwrap();
+    tokio::time::timeout(Duration::from_secs(5), started.acquire())
+        .await
+        .unwrap()
+        .unwrap()
+        .forget();
+    sqlx::query(
+        "UPDATE river_job SET state = 'cancelled', \
+         finalized_at = strftime('%Y-%m-%d %H:%M:%f', 'now') WHERE id = ?",
+    )
+    .bind(inserted.job.row.id)
+    .execute(&pool)
+    .await
+    .unwrap();
+    finish.add_permits(1);
+    let event = tokio::time::timeout(Duration::from_secs(5), cancelled.recv())
+        .await
+        .unwrap()
+        .unwrap();
+    let event = event.as_job().unwrap();
+    assert_eq!(event.job.id, inserted.job.row.id);
+    assert_eq!(event.job.state, JobState::Cancelled);
+
+    run.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn sqlite_fetches_and_discards_unregistered_kinds() {
+    let pool = setup().await;
+    let producer = Client::builder(pool.clone()).build().unwrap();
+    let inserted = producer
+        .insert(UnknownArgs {})
+        .opts(InsertOpts::default().with_max_attempts(1))
+        .await
+        .unwrap();
+    let mut workers = WorkerRegistry::new();
+    workers
+        .register_fn(|_context: WorkContext, _job: Job<RuntimeArgs>| async move {
+            Ok::<_, Infallible>(WorkOutcome::Complete)
+        })
+        .unwrap();
+    let worker = Client::builder(pool)
+        .workers(workers)
+        .queue(
+            "default",
+            QueueConfig::new(1)
+                .with_fetch_cooldown(Duration::from_millis(1))
+                .with_fetch_poll_interval(Duration::from_millis(10)),
+        )
+        .build()
+        .unwrap();
+    let mut run = worker.start().unwrap();
+
+    tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            if worker.jobs().get(inserted.job.row.id).await.unwrap().state == JobState::Discarded {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .unwrap();
+
+    run.shutdown().await.unwrap();
+}
+
+/// An extension that claims every available job itself and records the jobs
+/// its set-state hook sees and the attempts that finished.
+#[derive(Clone, Default)]
+struct ClaimingPilot {
+    finished: Arc<Mutex<Vec<i64>>>,
+    set_state_ids: Arc<Mutex<Vec<i64>>>,
+    set_state_rows: Arc<Mutex<Vec<i64>>>,
+}
+
+#[async_trait]
+impl Pilot for ClaimingPilot {
+    fn intercepts_job_set_state(&self) -> bool {
+        true
+    }
+
+    async fn start_producer(
+        &self,
+        _context: ProducerStartContext,
+    ) -> Result<Option<Box<dyn PilotProducer>>, PilotError> {
+        Ok(Some(Box::new(self.clone())))
+    }
+
+    async fn after_jobs_set_state(
+        &self,
+        _connection: DatabaseConnection<'_>,
+        params: &JobSetStateParams,
+    ) -> Result<(), PilotError> {
+        self.set_state_ids
+            .lock()
+            .unwrap()
+            .extend_from_slice(params.job_ids);
+        self.set_state_rows
+            .lock()
+            .unwrap()
+            .extend(params.jobs.iter().map(|job| job.id));
+        Ok(())
+    }
+}
+
+#[async_trait]
+impl PilotProducer for ClaimingPilot {
+    fn intercepts_claim(&self) -> bool {
+        true
+    }
+
+    async fn claim(
+        &self,
+        context: ProducerClaimContext<'_>,
+        _next: ProducerClaimNext<'_>,
+    ) -> Result<Vec<ClaimedJob>, PilotError> {
+        use sqlx::Row as _;
+
+        let mut transaction = context.database.begin().await?;
+        let connection = transaction
+            .connection()
+            .into_sqlite()
+            .ok_or_else(|| std::io::Error::other("expected a SQLite connection"))?;
+        let ids: Vec<i64> = sqlx::query_scalar(
+            "SELECT id FROM river_job WHERE state = 'available' AND queue = ? \
+             ORDER BY priority, scheduled_at, id LIMIT ?",
+        )
+        .bind(context.queue)
+        .bind(i64::try_from(context.limit)?)
+        .fetch_all(&mut *connection)
+        .await?;
+        let mut claimed = Vec::new();
+        for id in ids {
+            sqlx::query(
+                "UPDATE river_job SET state = 'running', attempt = attempt + 1, \
+                 attempted_at = ?, \
+                 attempted_by = jsonb_insert(coalesce(attempted_by, jsonb('[]')), '$[#]', ?) \
+                 WHERE id = ?",
+            )
+            .bind(riverqueue::__private::sqlite_timestamp(chrono::Utc::now()))
+            .bind(context.client_id)
+            .bind(id)
+            .execute(&mut *connection)
+            .await?;
+            let row = sqlx::query(sqlx::AssertSqlSafe(format!(
+                "SELECT {} FROM river_job WHERE id = ?",
+                riverqueue::__private::SQLITE_JOB_COLUMNS
+            )))
+            .bind(id)
+            .fetch_one(&mut *connection)
+            .await?;
+            assert_eq!(row.get::<i64, _>("id"), id);
+            claimed.push(riverqueue::__private::claimed_sqlite_job(&row));
+        }
+        transaction.commit().await?;
+        Ok(claimed)
+    }
+
+    fn job_finished(&self, job: &JobRow) {
+        self.finished.lock().unwrap().push(job.id);
+    }
+}
+
+#[derive(Clone, Debug, Deserialize, JobArgs, Serialize)]
+#[river(kind = "rust_sqlite_self_deleting")]
+struct SelfDeletingArgs {}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn extension_claimed_rows_fail_undecodable_attempts_like_river_claims() {
+    let (pool, database_path) = setup_file_pool(Duration::from_secs(5)).await;
+    let pilot = ClaimingPilot::default();
+    let client = Client::builder(pool.clone())
+        .id("sqlite-extension-claimer")
+        .pilot(pilot.clone())
+        .queue(
+            "default",
+            QueueConfig::new(2)
+                .with_fetch_cooldown(Duration::from_millis(1))
+                .with_fetch_poll_interval(Duration::from_millis(10)),
+        )
+        .workers(runtime_workers(Arc::new(Semaphore::new(0))))
+        .build()
+        .unwrap();
+    let good = client.insert(RuntimeArgs { value: 1 }).await.unwrap();
+    let bad = client
+        .insert(RuntimeArgs { value: 2 })
+        .opts(InsertOpts::default().with_max_attempts(1))
+        .await
+        .unwrap();
+    sqlx::query("UPDATE river_job SET tags = jsonb('{\"not\":\"an array\"}') WHERE id = ?")
+        .bind(bad.id())
+        .execute(&pool)
+        .await
+        .unwrap();
+
+    let mut failed = client.subscribe(&[EventKind::JobFailed]).unwrap();
+    let mut run = client.start().unwrap();
+    let event = tokio::time::timeout(Duration::from_secs(10), failed.recv())
+        .await
+        .expect("undecodable claimed job did not fail")
+        .unwrap();
+    let event = event.as_job().unwrap();
+    assert_eq!(event.job.id, bad.id());
+    let (state, errors): (String, String) =
+        sqlx::query_as("SELECT state, json(errors) FROM river_job WHERE id = ?")
+            .bind(bad.id())
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(state, "discarded");
+    assert!(
+        errors.contains("job row couldn't be decoded: "),
+        "unexpected attempt errors {errors}"
+    );
+    tokio::time::timeout(Duration::from_secs(10), async {
+        loop {
+            let state: String = sqlx::query_scalar("SELECT state FROM river_job WHERE id = ?")
+                .bind(good.id())
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+            if state == "completed" {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("decodable claimed job did not complete");
+    run.shutdown().await.unwrap();
+    // Both attempts, including the undecodable row's, finished once.
+    let mut finished = pilot.finished.lock().unwrap().clone();
+    finished.sort_unstable();
+    let mut expected = vec![good.id(), bad.id()];
+    expected.sort_unstable();
+    assert_eq!(finished, expected);
+    pool.close().await;
+    remove_sqlite_files(&database_path);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn set_state_extension_sees_jobs_deleted_while_worked() {
+    let (pool, database_path) = setup_file_pool(Duration::from_secs(5)).await;
+    let pilot = ClaimingPilot::default();
+    let mut workers = WorkerRegistry::new();
+    let delete_pool = pool.clone();
+    workers
+        .register_fn(move |_context: WorkContext, job: Job<SelfDeletingArgs>| {
+            let pool = delete_pool.clone();
+            async move {
+                sqlx::query("DELETE FROM river_job WHERE id = ?")
+                    .bind(job.row.id)
+                    .execute(&pool)
+                    .await?;
+                Ok::<_, sqlx::Error>(WorkOutcome::Complete)
+            }
+        })
+        .unwrap();
+    let client = Client::builder(pool.clone())
+        .id("sqlite-set-state-deleted")
+        .pilot(pilot.clone())
+        .queue(
+            "default",
+            QueueConfig::new(1)
+                .with_fetch_cooldown(Duration::from_millis(1))
+                .with_fetch_poll_interval(Duration::from_millis(10)),
+        )
+        .workers(workers)
+        .build()
+        .unwrap();
+    let deleted = client.insert(SelfDeletingArgs {}).await.unwrap();
+
+    let mut run = client.start().unwrap();
+    tokio::time::timeout(Duration::from_secs(10), async {
+        while !pilot.set_state_ids.lock().unwrap().contains(&deleted.id()) {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("set-state extension never saw the deleted job");
+    run.shutdown().await.unwrap();
+
+    // The job's row is gone, so only its ID reaches the extension.
+    assert!(!pilot.set_state_rows.lock().unwrap().contains(&deleted.id()));
+    pool.close().await;
+    remove_sqlite_files(&database_path);
+}
