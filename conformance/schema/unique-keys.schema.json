@@ -1,0 +1,80 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "$schema": { "type": "string" },
+    "cases": {
+      "description": "Goldens every implementation's adapter must reproduce.",
+      "items": {
+        "additionalProperties": false,
+        "properties": {
+          "args": {},
+          "expected_error": {
+            "description": "Contract error the adapter must report instead of a key; set only when expected_sha256 is absent.",
+            "enum": ["rejected"]
+          },
+          "expected_sha256": { "pattern": "^[0-9a-f]{64}$", "type": "string" },
+          "expected_state_mask": { "maximum": 255, "minimum": 0, "type": "integer" },
+          "kind": { "minLength": 1, "type": "string" },
+          "name": { "minLength": 1, "type": "string" },
+          "now": { "format": "date-time", "type": "string" },
+          "options": {
+            "additionalProperties": false,
+            "properties": {
+              "by_args": { "type": "boolean" },
+              "by_period_nanos": { "minimum": 0, "type": "integer" },
+              "by_queue": { "type": "boolean" },
+              "by_state": {
+                "items": {
+                  "enum": ["available", "cancelled", "completed", "discarded", "pending", "retryable", "running", "scheduled"]
+                },
+                "type": "array"
+              },
+              "exclude_kind": { "type": "boolean" }
+            },
+            "required": ["by_args", "by_period_nanos", "by_queue", "exclude_kind"],
+            "type": "object"
+          },
+          "queue": { "minLength": 1, "type": "string" },
+          "scheduled_at": {
+            "oneOf": [
+              { "format": "date-time", "type": "string" },
+              { "type": "null" }
+            ]
+          },
+          "selected_unique_components": {
+            "items": {
+              "items": { "type": "string" },
+              "minItems": 1,
+              "type": "array"
+            },
+            "type": "array"
+          },
+          "selected_unique_paths": {
+            "oneOf": [
+              { "items": { "minLength": 1, "type": "string" }, "type": "array" },
+              { "type": "null" }
+            ]
+          }
+        },
+        "oneOf": [
+          { "required": ["expected_sha256"] },
+          { "required": ["expected_error"] }
+        ],
+        "required": ["args", "expected_state_mask", "kind", "name", "now", "options", "queue", "scheduled_at", "selected_unique_paths"],
+        "type": "object"
+      },
+      "minItems": 1,
+      "type": "array"
+    },
+    "protocol_revision": { "minimum": 1, "type": "integer" },
+    "typed_only_cases": {
+      "description": "Goldens a producer built on dynamic objects can't reproduce, such as duplicate keys or a map with integer-like keys, which JavaScript objects enumerate first in ascending numeric order. Implementations with typed serializers assert them in their own tests; the shared adapter scenario uses only `cases`.",
+      "items": { "$ref": "#/properties/cases/items" },
+      "type": "array"
+    }
+  },
+  "required": ["$schema", "cases", "protocol_revision", "typed_only_cases"],
+  "title": "River unique-key compatibility goldens",
+  "type": "object"
+}

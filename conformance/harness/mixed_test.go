@@ -41,6 +41,16 @@ func TestMixedConformance(t *testing.T) {
 
 		verifyPostgresHandshakes(t, repositoryRoot, candidateSpec, goAdapter, candidateAdapter)
 	})
+	t.Run("deterministic_retry_clock_rng", func(t *testing.T) {
+		defer scenarios.record(t)
+
+		verifyDeterministicControls(t, repositoryRoot, goAdapter, candidateAdapter)
+	})
+	t.Run("unique_hash_goldens", func(t *testing.T) {
+		defer scenarios.record(t)
+
+		verifyUniqueKeyGoldens(t, repositoryRoot, goAdapter, candidateAdapter)
+	})
 	t.Run("historical_migration_down_up", func(t *testing.T) {
 		defer scenarios.record(t)
 
@@ -425,6 +435,11 @@ func TestMixedConformance(t *testing.T) {
 
 		pair.eachDirection(func(inserter, worker *adapter) { verifyClockBoundaries(t, inserter, worker) })
 	})
+	t.Run("default_retry_policy_schedule", func(t *testing.T) {
+		defer scenarios.record(t)
+
+		pair.eachDirection(func(worker, observer *adapter) { verifyDefaultRetrySchedule(t, repositoryRoot, worker, observer) })
+	})
 	t.Run("stuck_job_detection", func(t *testing.T) {
 		defer scenarios.record(t)
 
@@ -434,6 +449,11 @@ func TestMixedConformance(t *testing.T) {
 		defer scenarios.record(t)
 
 		verifyPoolPressure(t, goAdapter, candidateAdapter)
+	})
+	t.Run("reserved_metadata_cross_engine", func(t *testing.T) {
+		defer scenarios.record(t)
+
+		pair.eachDirection(func(worker, controller *adapter) { verifyReservedMetadata(t, repositoryRoot, worker, controller) })
 	})
 	t.Run("process_kill_restart_and_rescue", func(t *testing.T) {
 		defer scenarios.record(t)

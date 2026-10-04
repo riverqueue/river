@@ -53,6 +53,12 @@ func TestInsertOnlyConformance(t *testing.T) {
 
 		verifyInsertOnlyTransactions(t, observer, candidate, reference)
 	})
+	t.Run("insert_only_unique_insert", func(t *testing.T) {
+		defer scenarios.record(t)
+
+		verifyUniqueKeyGoldens(t, repositoryRoot, candidate)
+		verifyInsertOnlyUnique(t, candidate, reference)
+	})
 	t.Run("insert_only_insert_notification", func(t *testing.T) {
 		defer scenarios.record(t)
 
@@ -207,6 +213,29 @@ func verifyInsertOnlyTransactions(t *testing.T, observer *postgresObserver, cand
 			require.Empty(t, listener.receiveUntilMarker(t, observer, handle+"-marker"), "rollback published an insert notification")
 			reference.call(t, "list", map[string]any{"tags_all": []string{tag}}, &listed)
 			require.Empty(t, listed.Jobs)
+		}
+	}
+}
+
+// verifyInsertOnlyUnique checks that unique inserts from the candidate and
+// the reference resolve to the same row in both orders and for each unique
+// dimension.
+func verifyInsertOnlyUnique(t *testing.T, candidate, reference *adapter) {
+	t.Helper()
+
+	for _, opts := range []map[string]any{
+		{"unique": map[string]any{"by_args": true}},
+		{"scheduled_at": time.Now().Add(-time.Minute).UTC().Format(time.RFC3339Nano), "unique": map[string]any{"by_period_ms": 60_000}},
+		{"queue": "unique_queue", "unique": map[string]any{"by_queue": true}},
+	} {
+		for _, order := range [][2]*adapter{{candidate, reference}, {reference, candidate}} {
+			reference.call(t, "reset", map[string]any{}, nil)
+			params := map[string]any{"message": "insert-only unique", "opts": opts}
+			var first, second normalizedJob
+			order[0].call(t, "insert", params, &first)
+			order[1].call(t, "insert", params, &second)
+			require.Equal(t, first, second, "%s then %s with %v", order[0].name, order[1].name, opts)
+			require.NotNil(t, first.UniqueKey)
 		}
 	}
 }

@@ -37,6 +37,12 @@ func TestMixedSQLiteConformance(t *testing.T) {
 
 		verifyProfileHandshakes(t, repositoryRoot, "conformance/adapter/profiles/sqlite.json", candidateSpec, goAdapter, candidateAdapter)
 	})
+	t.Run("sqlite_deterministic_retry_unique", func(t *testing.T) {
+		defer scenarios.record(t)
+
+		verifyDeterministicControls(t, repositoryRoot, goAdapter, candidateAdapter)
+		verifyUniqueKeyGoldens(t, repositoryRoot, goAdapter, candidateAdapter)
+	})
 	t.Run("sqlite_migration_cross_language", func(t *testing.T) {
 		defer scenarios.record(t)
 

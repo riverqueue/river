@@ -321,6 +321,9 @@ func TestCompatibilityArtifacts(t *testing.T) {
 		require.NoError(t, err)
 		for _, required := range []string{
 			"conformance/adapter/contract.json",
+			"conformance/fixtures/maintenance_values.json",
+			"conformance/fixtures/protocol_values.json",
+			"conformance/fixtures/unique_keys.json",
 			"conformance/manifest.json",
 			"conformance/scenarios/core.json",
 		} {
