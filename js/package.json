@@ -22,7 +22,12 @@
     "node": ">=26"
   },
   "files": [
-    "dist"
+    "dist",
+    "src",
+    "!src/**/*.test.ts",
+    "!src/testdata",
+    "README.md",
+    "LICENSE"
   ],
   "scripts": {
     "build": "node node_modules/typescript/bin/tsc",
@@ -36,8 +41,11 @@
     "generate:migrations": "node scripts/sync-migrations.mjs",
     "lint": "eslint 'src/**/*.ts' 'driver/**/src/**/*.ts' 'migrate/src/**/*.ts' 'worker-threads/src/**/*.ts' 'test/src/**/*.ts' 'cli/src/**/*.ts' 'scripts/**/*.mjs' 'examples/*/src/*.ts'",
     "lint:fix": "eslint --fix 'src/**/*.ts' 'driver/**/src/**/*.ts' 'migrate/src/**/*.ts' 'worker-threads/src/**/*.ts' 'test/src/**/*.ts' 'cli/src/**/*.ts' 'scripts/**/*.mjs' 'examples/*/src/*.ts'",
+    "license:check": "node scripts/check-licenses.mjs",
     "migration:legacy": "node scripts/check-legacy-fixture.mjs",
-    "prepublishOnly": "pnpm run clean && pnpm run build",
+    "package:check": "node scripts/check-packages.mjs",
+    "package:examples": "node scripts/check-packages.mjs --examples-only",
+    "prepack": "pnpm run clean && pnpm run build",
     "test": "vitest run --passWithNoTests",
     "test:coverage": "vitest run --coverage",
     "test:integration": "vitest run --passWithNoTests --config vitest.integration.config.ts",
@@ -49,7 +57,7 @@
     "url": "git+https://github.com/riverqueue/river.git",
     "directory": "js"
   },
-  "authors": [
+  "contributors": [
     "Brandur Leach",
     "Blake Gentry"
   ],
@@ -58,6 +66,10 @@
     "url": "https://github.com/riverqueue/river/issues"
   },
   "homepage": "https://github.com/riverqueue/river/tree/master/js#readme",
+  "publishConfig": {
+    "access": "public",
+    "provenance": true
+  },
   "peerDependencies": {
     "@types/node": ">=26"
   },
@@ -67,6 +79,7 @@
     }
   },
   "devDependencies": {
+    "@arethetypeswrong/cli": "^0.18.5",
     "@eslint/js": "^10.0.1",
     "@types/node": "^26.1.1",
     "@types/pg": "^8.20.0",
@@ -74,9 +87,11 @@
     "eslint": "^10.8.0",
     "eslint-config-prettier": "^10.1.8",
     "fast-check": "^4.10.2",
+    "license-checker-rseidelsohn": "^5.0.1",
     "pg": "^8.22.0",
     "pino": "^10.3.1",
     "prettier": "^3.9.6",
+    "publint": "^0.3.24",
     "typedoc": "^0.28.20",
     "typescript": "^6.0.3",
     "typescript-eslint": "^8.65.0",
