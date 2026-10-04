@@ -326,6 +326,24 @@ type batchCompleterSetState struct {
 	Stats     *jobstats.JobStatistics
 }
 
+func completionConcurrency(exec riverdriver.Executor, pilot riverpilot.Pilot) int {
+	const maxConcurrency = 2
+
+	execProvider, ok := exec.(riverdriver.ExecutorJobCompletionConcurrency)
+	if !ok {
+		return 1
+	}
+	pilotProvider, ok := pilot.(riverpilot.PilotJobCompletionConcurrency)
+	if !ok {
+		return 1
+	}
+	return min(
+		maxConcurrency,
+		max(execProvider.JobSetStateIfRunningManyConcurrency(), 1),
+		max(pilotProvider.JobSetStateIfRunningManyConcurrency(), 1),
+	)
+}
+
 // BatchCompleter accumulates incoming completions, and instead of completing
 // them immediately, every so often complete many of them as a single efficient
 // batch. To minimize the amount of driver surface area we need, the batching is
@@ -336,19 +354,22 @@ type BatchCompleter struct {
 	baseservice.BaseService
 	startstop.BaseStartStop
 
-	backlogWaitThreshold int // configurable for testing purposes; backlog at which completions start waiting for the completer to catch up
-	batchReadyChan       chan struct{}
-	completionMaxSize    int  // configurable for testing purposes; max jobs to complete in single database operation
-	disableSleep         bool // disable sleep in testing
-	maxBacklog           int  // configurable for testing purposes; emergency backlog threshold where a warning is logged
-	exec                 riverdriver.Executor
-	pilot                riverpilot.Pilot
-	schema               string
-	setStateParams       map[int64]batchCompleterSetState
-	setStateParamsMu     sync.RWMutex
-	subscribeCh          SubscribeChan
-	waitOnBacklogChan    chan struct{}
-	waitOnBacklogWaiting bool
+	backlogWaitThreshold   int // configurable for testing purposes; backlog at which completions start waiting for the completer to catch up
+	batchReadyChan         chan struct{}
+	completionConcurrency  int // configurable for testing purposes; max concurrent database completion batches
+	completionMaxSize      int // configurable for testing purposes; max jobs to complete in single database operation
+	deferredSetStateParams map[int64]batchCompleterSetState
+	disableSleep           bool // disable sleep in testing
+	maxBacklog             int  // configurable for testing purposes; emergency backlog threshold where a warning is logged
+	exec                   riverdriver.Executor
+	inFlightIDs            map[int64]struct{}
+	pilot                  riverpilot.Pilot
+	schema                 string
+	setStateParams         map[int64]batchCompleterSetState
+	setStateParamsMu       sync.RWMutex
+	subscribeCh            SubscribeChan
+	waitOnBacklogChan      chan struct{}
+	waitOnBacklogWaiting   bool
 }
 
 func NewBatchCompleter(archetype *baseservice.Archetype, schema string, exec riverdriver.Executor, pilot riverpilot.Pilot, subscribeCh SubscribeChan) *BatchCompleter {
@@ -359,15 +380,18 @@ func NewBatchCompleter(archetype *baseservice.Archetype, schema string, exec riv
 	)
 
 	return baseservice.Init(archetype, &BatchCompleter{
-		backlogWaitThreshold: backlogWaitThreshold,
-		batchReadyChan:       make(chan struct{}, 1),
-		completionMaxSize:    completionMaxSize,
-		exec:                 exec,
-		maxBacklog:           maxBacklog,
-		pilot:                pilot,
-		schema:               schema,
-		setStateParams:       make(map[int64]batchCompleterSetState),
-		subscribeCh:          subscribeCh,
+		backlogWaitThreshold:   backlogWaitThreshold,
+		batchReadyChan:         make(chan struct{}, 1),
+		completionConcurrency:  completionConcurrency(exec, pilot),
+		completionMaxSize:      completionMaxSize,
+		deferredSetStateParams: make(map[int64]batchCompleterSetState),
+		exec:                   exec,
+		inFlightIDs:            make(map[int64]struct{}),
+		maxBacklog:             maxBacklog,
+		pilot:                  pilot,
+		schema:                 schema,
+		setStateParams:         make(map[int64]batchCompleterSetState),
+		subscribeCh:            subscribeCh,
 	})
 }
 
@@ -395,50 +419,94 @@ func (c *BatchCompleter) Start(ctx context.Context) error {
 
 		ticker := time.NewTicker(50 * time.Millisecond)
 		defer ticker.Stop()
+		batchDoneChan := make(chan error, max(c.completionConcurrency, 1))
+		numInFlight := 0
 
-		backlogSize := func() int {
+		readyBacklogSize := func() int {
 			c.setStateParamsMu.RLock()
 			defer c.setStateParamsMu.RUnlock()
 			return len(c.setStateParams)
 		}
 
-		for numTicks := 0; ; numTicks++ {
+		startBatch := func() bool {
+			setStateBatch := c.takeBatch(c.completionMaxSize)
+			if len(setStateBatch) == 0 {
+				return false
+			}
+
+			numInFlight++
+			go func() {
+				batchDoneChan <- c.handleSetStateBatch(ctx, setStateBatch)
+			}()
+			return true
+		}
+
+		const batchCompleterStartThreshold = 100
+		startReadyBatches := func(force bool) {
+			for numInFlight < max(c.completionConcurrency, 1) {
+				backlogSize := readyBacklogSize()
+				if backlogSize == 0 {
+					return
+				}
+				if numInFlight > 0 {
+					// Preserve a full-size query for the concurrent path. Sparse
+					// completions continue coalescing until the active query exits.
+					if backlogSize < c.batchReadyThreshold() {
+						return
+					}
+				} else if backlogSize < min(c.backlogWaitThresholdEffective(), batchCompleterStartThreshold) && !force {
+					return
+				}
+				if !startBatch() {
+					return
+				}
+				force = false
+			}
+		}
+
+		logBatchError := func(err error) {
+			if err != nil {
+				c.Logger.ErrorContext(ctx, c.Name+": Error completing batch", "err", err)
+			}
+		}
+
+		numTicks := 0
+		for {
 			select {
 			case <-stopCtx.Done():
-				// Try to insert last batch before leaving. Note we use the
-				// original context so operations aren't immediately cancelled.
-				if err := c.handleBatch(ctx); err != nil {
-					c.Logger.ErrorContext(ctx, c.Name+": Error completing batch", "err", err)
+				// Finish active queries, then flush any deferred per-job results.
+				// Keep using the original context so operations aren't immediately
+				// cancelled by the service stop context. Stop on the first error so
+				// a requeued batch can't make shutdown retry indefinitely.
+				for numInFlight > 0 {
+					logBatchError(<-batchDoneChan)
+					numInFlight--
+				}
+				for {
+					err := c.handleBatch(ctx)
+					logBatchError(err)
+					if err != nil || readyBacklogSize() == 0 {
+						break
+					}
 				}
 				return
 
 			case <-c.batchReadyChan:
+				startReadyBatches(false)
 			case <-ticker.C:
-			}
-
-			// The ticker fires quite often to make sure that given a huge glut
-			// of jobs, we don't accidentally build up too much of a backlog by
-			// waiting too long. However, don't start a complete operation until
-			// we reach a minimum threshold unless we're on a tick that's a
-			// multiple of 5. So, jobs will be completed every 250ms even if the
-			// threshold hasn't been met.
-			const batchCompleterStartThreshold = 100
-			if backlogSize() < min(c.backlogWaitThresholdEffective(), batchCompleterStartThreshold) && numTicks != 0 && numTicks%5 != 0 {
-				continue
-			}
-
-			for {
-				if err := c.handleBatch(ctx); err != nil {
-					c.Logger.ErrorContext(ctx, c.Name+": Error completing batch", "err", err)
-				}
-
-				// New jobs to complete may have come in while working the batch
-				// above. If enough have to bring us above the minimum complete
-				// threshold, loop again and do another batch. Otherwise, break
-				// and listen for a new tick.
-				if backlogSize() < batchCompleterStartThreshold {
-					break
-				}
+				// The ticker fires quite often to make sure that given a huge
+				// glut of jobs, we don't accidentally build up too much of a
+				// backlog by waiting too long. However, don't start a complete
+				// operation until we reach a minimum threshold unless this is a
+				// periodic flush tick. Sparse second batches are never forced to
+				// run concurrently with a first batch.
+				force := numTicks == 0 || numTicks%5 == 0
+				startReadyBatches(force)
+				numTicks++
+			case err := <-batchDoneChan:
+				numInFlight--
+				logBatchError(err)
+				startReadyBatches(false)
 			}
 		}
 	}()
@@ -446,32 +514,53 @@ func (c *BatchCompleter) Start(ctx context.Context) error {
 	return nil
 }
 
-func (c *BatchCompleter) handleBatch(ctx context.Context) error {
-	var setStateBatch map[int64]batchCompleterSetState
-	func() {
-		c.setStateParamsMu.Lock()
-		defer c.setStateParamsMu.Unlock()
+func (c *BatchCompleter) takeBatch(maxSize int) map[int64]batchCompleterSetState {
+	c.setStateParamsMu.Lock()
+	defer c.setStateParamsMu.Unlock()
 
-		setStateBatch = c.setStateParams
-
-		// Don't bother resetting the map if there's nothing to process,
-		// allowing the completer to idle efficiently.
-		if len(setStateBatch) > 0 {
-			c.setStateParams = make(map[int64]batchCompleterSetState)
-		} else {
-			// Set nil to avoid a data race below in case the map is set as a
-			// new job comes in.
-			setStateBatch = nil
+	if len(c.setStateParams) == 0 {
+		return nil
+	}
+	if len(c.inFlightIDs) == 0 && (maxSize <= 0 || len(c.setStateParams) <= maxSize) {
+		setStateBatch := c.setStateParams
+		c.setStateParams = make(map[int64]batchCompleterSetState)
+		for id := range setStateBatch {
+			c.inFlightIDs[id] = struct{}{}
 		}
-	}()
+		return setStateBatch
+	}
 
+	batchCapacity := len(c.setStateParams)
+	if maxSize > 0 {
+		batchCapacity = min(batchCapacity, maxSize)
+	}
+	setStateBatch := make(map[int64]batchCompleterSetState, batchCapacity)
+	for id, setState := range c.setStateParams {
+		if _, inFlight := c.inFlightIDs[id]; inFlight {
+			continue
+		}
+		setStateBatch[id] = setState
+		delete(c.setStateParams, id)
+		c.inFlightIDs[id] = struct{}{}
+		if maxSize > 0 && len(setStateBatch) == maxSize {
+			break
+		}
+	}
+	return setStateBatch
+}
+
+func (c *BatchCompleter) handleBatch(ctx context.Context) error {
+	return c.handleSetStateBatch(ctx, c.takeBatch(0))
+}
+
+func (c *BatchCompleter) handleSetStateBatch(ctx context.Context, setStateBatch map[int64]batchCompleterSetState) error {
 	if len(setStateBatch) < 1 {
 		return nil
 	}
 
 	handleBatchError := func(err error) error {
 		if isNonRetryableCompleterError(err) {
-			c.releaseBacklogWaitIfReady(ctx)
+			c.finishBatch(ctx, setStateBatch)
 			return err
 		}
 
@@ -580,26 +669,32 @@ func (c *BatchCompleter) handleBatch(ctx context.Context) error {
 	if len(events) > 0 {
 		c.subscribeCh <- events
 	}
-
-	func() {
-		c.setStateParamsMu.Lock()
-		defer c.setStateParamsMu.Unlock()
-
-		if c.waitOnBacklogWaiting && len(c.setStateParams) < c.backlogResumeThreshold() {
-			c.Logger.DebugContext(ctx, c.Name+": Disabling waitOnBacklog; ready to complete more jobs")
-			close(c.waitOnBacklogChan)
-			c.waitOnBacklogWaiting = false
-		}
-	}()
+	c.finishBatch(ctx, setStateBatch)
 
 	return nil
 }
 
-func (c *BatchCompleter) releaseBacklogWaitIfReady(ctx context.Context) {
+func (c *BatchCompleter) finishBatch(ctx context.Context, setStateBatch map[int64]batchCompleterSetState) {
 	c.setStateParamsMu.Lock()
-	defer c.setStateParamsMu.Unlock()
+	for id := range setStateBatch {
+		delete(c.inFlightIDs, id)
+		if deferred, exists := c.deferredSetStateParams[id]; exists {
+			c.setStateParams[id] = deferred
+			delete(c.deferredSetStateParams, id)
+		}
+	}
+	backlogSize := c.backlogSizeLocked()
+	c.releaseBacklogWaitIfReadyLocked(ctx, backlogSize)
+	readyBacklogSize := len(c.setStateParams)
+	c.setStateParamsMu.Unlock()
 
-	if c.waitOnBacklogWaiting && len(c.setStateParams) < c.backlogResumeThreshold() {
+	if readyBacklogSize >= c.batchReadyThreshold() {
+		c.signalBatchReady()
+	}
+}
+
+func (c *BatchCompleter) releaseBacklogWaitIfReadyLocked(ctx context.Context, backlogSize int) {
+	if c.waitOnBacklogWaiting && backlogSize < c.backlogResumeThreshold() {
 		c.Logger.DebugContext(ctx, c.Name+": Disabling waitOnBacklog; ready to complete more jobs")
 		close(c.waitOnBacklogChan)
 		c.waitOnBacklogWaiting = false
@@ -609,20 +704,27 @@ func (c *BatchCompleter) releaseBacklogWaitIfReady(ctx context.Context) {
 func (c *BatchCompleter) requeueBatch(ctx context.Context, setStateBatch map[int64]batchCompleterSetState) {
 	c.setStateParamsMu.Lock()
 	for id, setState := range setStateBatch {
-		if _, exists := c.setStateParams[id]; exists {
+		delete(c.inFlightIDs, id)
+
+		// A result that arrived for the same job while this batch was in
+		// flight comes from a later execution, so it supersedes the failed
+		// result rather than queueing behind it. Retrying the stale result
+		// first could overwrite the later attempt's running row and turn the
+		// newer result into a no-op.
+		if deferred, exists := c.deferredSetStateParams[id]; exists {
+			c.setStateParams[id] = deferred
+			delete(c.deferredSetStateParams, id)
 			continue
 		}
+
 		c.setStateParams[id] = setState
 	}
-	backlogSize := len(c.setStateParams)
-	if c.waitOnBacklogWaiting && backlogSize < c.backlogResumeThreshold() {
-		c.Logger.DebugContext(ctx, c.Name+": Disabling waitOnBacklog; ready to complete more jobs")
-		close(c.waitOnBacklogChan)
-		c.waitOnBacklogWaiting = false
-	}
+	backlogSize := c.backlogSizeLocked()
+	c.releaseBacklogWaitIfReadyLocked(ctx, backlogSize)
+	readyBacklogSize := len(c.setStateParams)
 	c.setStateParamsMu.Unlock()
 
-	if backlogSize >= c.batchReadyThreshold() {
+	if readyBacklogSize >= c.batchReadyThreshold() {
 		c.signalBatchReady()
 	}
 
@@ -662,7 +764,7 @@ func (c *BatchCompleter) tryEnqueueSetState(ctx context.Context, now time.Time, 
 	}
 
 	var (
-		backlogSize = len(c.setStateParams)
+		backlogSize = c.backlogSizeLocked()
 		waitAt      = c.backlogWaitThresholdEffective()
 	)
 	if backlogSize >= waitAt {
@@ -670,9 +772,22 @@ func (c *BatchCompleter) tryEnqueueSetState(ctx context.Context, now time.Time, 
 	}
 
 	statsSnapshot := *stats
-	c.setStateParams[params.ID] = batchCompleterSetState{Params: params, StartTime: now, Stats: &statsSnapshot}
+	setState := batchCompleterSetState{Params: params, StartTime: now, Stats: &statsSnapshot}
+	// A result for a job whose earlier result is still being persisted waits
+	// behind it so that concurrent batches can't apply the two out of order.
+	// A queued result that isn't in flight yet, including one requeued after
+	// a failed batch, is simply replaced by the newer one.
+	if _, inFlight := c.inFlightIDs[params.ID]; inFlight {
+		c.deferredSetStateParams[params.ID] = setState
+	} else {
+		c.setStateParams[params.ID] = setState
+	}
 
 	return len(c.setStateParams), nil
+}
+
+func (c *BatchCompleter) backlogSizeLocked() int {
+	return len(c.setStateParams) + len(c.deferredSetStateParams)
 }
 
 // backlogResumeThreshold returns the low-water mark below which waiting
