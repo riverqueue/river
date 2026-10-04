@@ -3,17 +3,22 @@
   "version": "0.0.0",
   "private": true,
   "type": "module",
+  "engines": {
+    "node": ">=26"
+  },
   "scripts": {
     "build": "tsc",
     "start": "node dist/index.js"
   },
   "dependencies": {
-    "riverqueue": "workspace:*",
     "@riverqueue/driver-pg": "workspace:*",
-    "pg": "^8.22.0"
+    "pg": "^8.22.0",
+    "riverqueue": "workspace:*",
+    "zod": "^4.6.5"
   },
   "devDependencies": {
+    "@types/node": "^26.1.1",
     "@types/pg": "^8.11.0",
-    "typescript": "^5.8.0"
+    "typescript": "^6.0.3"
   }
 }

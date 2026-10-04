@@ -1,40 +1,64 @@
 {
   "name": "@riverqueue/driver-pg",
-  "version": "0.1.0",
-  "description": "node-postgres (pg) driver for the riverqueue TypeScript client.",
+  "version": "0.50.0-alpha.1",
+  "description": "Complete node-postgres backend for River's TypeScript runtime.",
   "type": "module",
+  "sideEffects": false,
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
   "exports": {
     ".": {
       "types": "./dist/index.d.ts",
-      "import": "./dist/index.js"
+      "import": "./dist/index.js",
+      "default": "./dist/index.js"
     }
   },
+  "engines": {
+    "node": ">=26"
+  },
   "files": [
-    "dist"
+    "dist",
+    "src",
+    "!src/**/*.test.ts",
+    "README.md",
+    "LICENSE"
   ],
   "scripts": {
-    "build": "tsc",
+    "build": "node ../../node_modules/typescript/bin/tsc && node ../../scripts/copy-license.mjs",
     "clean": "rm -rf dist",
-    "prepublishOnly": "pnpm run clean && pnpm run build"
+    "prepack": "pnpm run clean && pnpm run build"
   },
   "repository": {
     "type": "git",
     "url": "git+https://github.com/riverqueue/river.git",
     "directory": "js/driver/pg"
   },
-  "authors": ["Brandur Leach", "Blake Gentry"],
+  "contributors": [
+    "Brandur Leach",
+    "Blake Gentry"
+  ],
   "license": "LGPL-3.0-or-later",
+  "publishConfig": {
+    "access": "public",
+    "provenance": true
+  },
   "dependencies": {
-    "riverqueue": "workspace:*"
+    "postgres-array": "^3.0.4"
   },
   "peerDependencies": {
-    "pg": ">=8.0.0"
+    "@types/pg": ">=8",
+    "pg": ">=8.0.0",
+    "riverqueue": "workspace:0.50.0-alpha.1"
+  },
+  "peerDependenciesMeta": {
+    "@types/pg": {
+      "optional": true
+    }
   },
   "devDependencies": {
-    "@types/pg": "^8.11.0",
+    "@types/pg": "^8.20.0",
     "pg": "^8.22.0",
+    "riverqueue": "workspace:0.50.0-alpha.1",
     "typescript": "^6.0.3"
   },
   "keywords": [

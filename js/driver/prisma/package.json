@@ -1,40 +1,56 @@
 {
   "name": "@riverqueue/driver-prisma",
-  "version": "0.1.0",
+  "version": "0.50.0-alpha.1",
   "description": "Prisma driver for the riverqueue TypeScript client.",
   "type": "module",
+  "sideEffects": false,
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
   "exports": {
     ".": {
       "types": "./dist/index.d.ts",
-      "import": "./dist/index.js"
+      "import": "./dist/index.js",
+      "default": "./dist/index.js"
     }
   },
+  "engines": {
+    "node": ">=26"
+  },
   "files": [
-    "dist"
+    "dist",
+    "src",
+    "!src/**/*.test.ts",
+    "README.md",
+    "LICENSE"
   ],
   "scripts": {
-    "build": "tsc",
+    "build": "node ../../node_modules/typescript/bin/tsc && node ../../scripts/copy-license.mjs",
     "clean": "rm -rf dist",
-    "prepublishOnly": "pnpm run clean && pnpm run build"
+    "prepack": "pnpm run clean && pnpm run build"
   },
   "repository": {
     "type": "git",
     "url": "git+https://github.com/riverqueue/river.git",
     "directory": "js/driver/prisma"
   },
-  "authors": ["Brandur Leach", "Blake Gentry"],
+  "contributors": [
+    "Brandur Leach",
+    "Blake Gentry"
+  ],
   "license": "LGPL-3.0-or-later",
-  "dependencies": {
-    "riverqueue": "workspace:*"
+  "publishConfig": {
+    "access": "public",
+    "provenance": true
   },
   "peerDependencies": {
-    "@prisma/client": ">=5.0.0"
+    "@prisma/client": ">=5.0.0",
+    "riverqueue": "workspace:0.50.0-alpha.1"
   },
   "devDependencies": {
+    "@prisma/adapter-pg": "7.9.1",
     "@prisma/client": "7.9.1",
     "prisma": "7.9.1",
+    "riverqueue": "workspace:0.50.0-alpha.1",
     "typescript": "^6.0.3"
   },
   "keywords": [

@@ -1,14 +1,21 @@
 {
   "name": "riverqueue",
-  "version": "0.1.0",
-  "description": "TypeScript client for River, a fast and reliable background job framework for PostgreSQL.",
+  "version": "0.50.0-alpha.1",
+  "description": "TypeScript implementation of River, a fast and reliable background job system.",
   "type": "module",
+  "sideEffects": false,
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
   "exports": {
     ".": {
       "types": "./dist/index.d.ts",
-      "import": "./dist/index.js"
+      "import": "./dist/index.js",
+      "default": "./dist/index.js"
+    },
+    "./unstable-driver": {
+      "types": "./dist/unstable-driver.d.ts",
+      "import": "./dist/unstable-driver.js",
+      "default": "./dist/unstable-driver.js"
     }
   },
   "engines": {
@@ -22,10 +29,10 @@
     "build:all": "pnpm run build && pnpm --filter='./driver/*' run build",
     "clean": "rm -rf dist",
     "clean:all": "pnpm run clean && pnpm --filter='./driver/*' run clean",
-    "fmt": "prettier --write 'src/**/*.ts' 'driver/**/src/**/*.ts' 'scripts/**/*.mjs'",
-    "fmt:check": "prettier --check 'src/**/*.ts' 'driver/**/src/**/*.ts' 'scripts/**/*.mjs'",
-    "lint": "eslint 'src/**/*.ts' 'driver/**/src/**/*.ts' 'scripts/**/*.mjs'",
-    "lint:fix": "eslint --fix 'src/**/*.ts' 'driver/**/src/**/*.ts' 'scripts/**/*.mjs'",
+    "fmt": "prettier --write 'src/**/*.ts' 'driver/**/src/**/*.ts' 'scripts/**/*.mjs' 'examples/*/src/*.ts' 'examples/*/{README.md,package.json,tsconfig.json}' 'examples/tsconfig.json' '{README.md,package.json}'",
+    "fmt:check": "prettier --check 'src/**/*.ts' 'driver/**/src/**/*.ts' 'scripts/**/*.mjs' 'examples/*/src/*.ts' 'examples/*/{README.md,package.json,tsconfig.json}' 'examples/tsconfig.json' '{README.md,package.json}'",
+    "lint": "eslint 'src/**/*.ts' 'driver/**/src/**/*.ts' 'scripts/**/*.mjs' 'examples/*/src/*.ts'",
+    "lint:fix": "eslint --fix 'src/**/*.ts' 'driver/**/src/**/*.ts' 'scripts/**/*.mjs' 'examples/*/src/*.ts'",
     "prepublishOnly": "pnpm run clean && pnpm run build",
     "test": "vitest run --passWithNoTests",
     "test:coverage": "vitest run --coverage",
@@ -46,6 +53,14 @@
     "url": "https://github.com/riverqueue/river/issues"
   },
   "homepage": "https://github.com/riverqueue/river/tree/master/js#readme",
+  "peerDependencies": {
+    "@types/node": ">=26"
+  },
+  "peerDependenciesMeta": {
+    "@types/node": {
+      "optional": true
+    }
+  },
   "devDependencies": {
     "@eslint/js": "^10.0.1",
     "@types/node": "^26.1.1",
@@ -59,8 +74,10 @@
     "prettier": "^3.9.6",
     "typescript": "^6.0.3",
     "typescript-eslint": "^8.65.0",
+    "valibot": "^1.5.0",
     "vite": "^8.0.16",
-    "vitest": "^4.1.11"
+    "vitest": "^4.1.11",
+    "zod": "^4.6.5"
   },
   "packageManager": "pnpm@10.22.0",
   "pnpm": {
