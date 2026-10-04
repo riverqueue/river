@@ -21,6 +21,7 @@ import (
 
 // Profile names a candidate descriptor may declare.
 const (
+	profileInsertOnly      = "insert-only-v1"
 	profilePortableStorage = "portable-storage-v1"
 	profilePostgresFull    = "postgres-full-v1"
 	profileSQLiteRuntime   = "sqlite-runtime-v1"
