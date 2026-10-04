@@ -64,6 +64,7 @@ jobs:
         run: make bench ITERATIONS=1
 
   build_and_test:
+    name: build_and_test (${{ matrix.go-version }}, ${{ matrix.postgres-version }}${{ matrix.primary && ', race' || '' }})
     env:
       # The special value "local" tells Go to use the bundled Go version rather
       # than trying to fetch one according to a `toolchain` value in `go.mod`.
@@ -74,9 +75,11 @@ jobs:
     strategy:
       matrix:
         include:
-          # Run the latest Go version against all supported Postgres versions:
+          # Run the latest Go version against all supported Postgres versions.
+          # Only the newest Go/Postgres combination runs with the race detector.
           - go-version: "1.27"
             postgres-version: 18
+            primary: true
           - go-version: "1.27"
             postgres-version: 17
           - go-version: "1.27"
@@ -128,10 +131,16 @@ jobs:
       - name: Set up database
         run: psql -c "CREATE DATABASE river_test" $ADMIN_DATABASE_URL
 
-      - name: Test
+      - name: Test with race detector
+        if: matrix.primary
         run: make test/race TEST_DATABASE=postgres
 
+      - name: Test
+        if: ${{ !matrix.primary }}
+        run: make test TEST_DATABASE=postgres
+
   build_and_test_sqlite:
+    name: build_and_test_sqlite (${{ matrix.go-version }}${{ matrix.primary && ', race' || '' }})
     env:
       GOTOOLCHAIN: local
     runs-on: ubuntu-latest
@@ -140,6 +149,10 @@ jobs:
         # Keep both supported Go versions covered without repeating SQLite,
         # libSQL, and Turso tests for every PostgreSQL version.
         go-version: ["1.27", "1.26"]
+        include:
+          # Only the newest Go version runs with the race detector.
+          - go-version: "1.27"
+            primary: true
       fail-fast: false
     timeout-minutes: 5
 
@@ -151,8 +164,13 @@ jobs:
         with:
           go-version: ${{ matrix.go-version }}
 
-      - name: Test
+      - name: Test with race detector
+        if: matrix.primary
         run: make test/race TEST_DATABASE=sqlite
+
+      - name: Test
+        if: ${{ !matrix.primary }}
+        run: make test TEST_DATABASE=sqlite
 
   cli:
     strategy:

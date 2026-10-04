@@ -23,7 +23,8 @@ To run the regular suite with the SQLite driver tests excluded:
 
 `TEST_DATABASE` also applies to `make test/race`. CI separates these suites so
 the PostgreSQL version matrix doesn't repeat the SQLite tests. Each suite still
-runs on both supported Go versions.
+runs on both supported Go versions. Only the latest combination in each matrix
+uses the race detector, marked `race` in its job title.
 
 ## Run lint
 
