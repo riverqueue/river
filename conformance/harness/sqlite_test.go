@@ -90,6 +90,207 @@ func TestMixedSQLiteConformance(t *testing.T) {
 	})
 }
 
+//nolint:paralleltest,tparallel // Scenarios share one database and adapter processes, so they run sequentially.
+func TestMixedSQLiteRuntimeConformance(t *testing.T) {
+	t.Parallel()
+
+	scenarios := newScenarioTracker(t, scenarioOwnerSQLiteRuntime)
+	repositoryRoot := repoRoot(t)
+	databaseURL := filepath.Join(t.TempDir(), "river-conformance-runtime.sqlite")
+	const profileName = "sqlite-runtime-v1"
+	goAdapter := startReferenceAdapterForProfile(t, repositoryRoot, databaseURL, "sqlite", profileName, "go")
+	candidateSpec := conformanceCandidateSpec(t, repositoryRoot, false)
+	candidateSpec.requireProfile(t, profileSQLiteRuntime)
+	candidateAdapter := startAdapterCommandForProfile(
+		t, repositoryRoot, databaseURL, "sqlite", profileName,
+		candidateSpec.Implementation, candidateSpec, candidateSpec.Command,
+	)
+	scenarios.attach(goAdapter, candidateAdapter)
+	pair := mixedPair{candidate: candidateAdapter, candidateSpec: candidateSpec, reference: goAdapter}
+
+	t.Run("sqlite_runtime_profile_handshake", func(t *testing.T) {
+		defer scenarios.record(t)
+
+		verifyProfileHandshakes(t, repositoryRoot, "conformance/adapter/profiles/sqlite-runtime.json", candidateSpec, goAdapter, candidateAdapter)
+	})
+	goAdapter.call(t, "migrate", map[string]any{}, nil)
+	t.Run("sqlite_runtime_cross_language_work", func(t *testing.T) {
+		defer scenarios.record(t)
+
+		verifySQLiteCrossLanguageWork(t, goAdapter, candidateAdapter)
+	})
+	t.Run("sqlite_runtime_external_terminal_completion_race", func(t *testing.T) {
+		defer scenarios.record(t)
+
+		verifyExternalTerminalCompletionRace(t, goAdapter, candidateAdapter)
+		verifyExternalTerminalCompletionRace(t, candidateAdapter, goAdapter)
+	})
+	t.Run("sqlite_runtime_claim_order", func(t *testing.T) {
+		defer scenarios.record(t)
+
+		verifyClaimOrder(t, goAdapter, candidateAdapter)
+	})
+	t.Run("sqlite_runtime_scheduler_unique_conflict_discard", func(t *testing.T) {
+		defer scenarios.record(t)
+
+		verifySchedulerUniqueConflictDiscard(t, goAdapter, candidateAdapter)
+	})
+	t.Run("sqlite_runtime_exhausted_job_retry", func(t *testing.T) {
+		defer scenarios.record(t)
+
+		verifyExhaustedJobRetry(t, goAdapter, candidateAdapter)
+	})
+	t.Run("sqlite_runtime_kind_alias_rename", func(t *testing.T) {
+		defer scenarios.record(t)
+
+		verifyKindAliasRename(t, goAdapter, candidateAdapter)
+	})
+	t.Run("sqlite_runtime_heterogeneous_fleet_known_kinds", func(t *testing.T) {
+		defer scenarios.record(t)
+
+		verifyHeterogeneousFleet(t, goAdapter, candidateAdapter)
+	})
+	t.Run("sqlite_runtime_rescuer_unknown_kind_discard", func(t *testing.T) {
+		defer scenarios.record(t)
+
+		verifyRescuerUnknownKind(t, goAdapter, candidateAdapter, func(t *testing.T, name string) *adapter {
+			t.Helper()
+
+			return startReferenceAdapterForProfile(t, repositoryRoot, databaseURL, "sqlite", profileName, name)
+		})
+	})
+	t.Run("sqlite_runtime_unknown_kind_error", func(t *testing.T) {
+		defer scenarios.record(t)
+
+		verifyUnknownKind(t, goAdapter, candidateAdapter)
+	})
+	t.Run("sqlite_runtime_unique_skip_keeps_existing_kind", func(t *testing.T) {
+		defer scenarios.record(t)
+
+		verifyUniqueSkipKeepsExistingKind(t, goAdapter, candidateAdapter)
+	})
+	t.Run("sqlite_runtime_attempted_by_ordering", func(t *testing.T) {
+		defer scenarios.record(t)
+
+		verifySQLiteAttemptedByHistory(t, goAdapter, candidateAdapter)
+	})
+	t.Run("sqlite_runtime_competing_workers", func(t *testing.T) {
+		defer scenarios.record(t)
+
+		verifySQLiteCompetingWorkers(t, goAdapter, candidateAdapter)
+	})
+	t.Run("sqlite_runtime_queue_crud_reconfigure_pause", func(t *testing.T) {
+		defer scenarios.record(t)
+
+		verifySQLiteQueues(t, goAdapter, candidateAdapter)
+	})
+	t.Run("sqlite_runtime_job_cleaner_queue_filters", func(t *testing.T) {
+		defer scenarios.record(t)
+
+		verifyJobCleanerQueueFilters(t, goAdapter, candidateAdapter)
+	})
+	t.Run("sqlite_runtime_notification_wakeups", func(t *testing.T) {
+		defer scenarios.record(t)
+
+		pair.eachDirection(func(controller, worker *adapter) {
+			verifyInsertNotificationWakeup(t, controller, worker)
+			verifyPauseResumeNotification(t, controller, worker)
+		})
+	})
+	t.Run("sqlite_runtime_remote_cancellation", func(t *testing.T) {
+		defer scenarios.record(t)
+
+		pair.eachDirection(func(controller, worker *adapter) {
+			verifyRemoteCancelNotification(t, controller, worker)
+			verifyCooperativeRemoteCancellation(t, controller, worker)
+			verifyPollOnlyRemoteCancellation(t, controller, worker)
+		})
+		verifySQLiteCancelNotifications(t, goAdapter, candidateAdapter)
+	})
+	t.Run("sqlite_runtime_claim_time_cancellation", func(t *testing.T) {
+		defer scenarios.record(t)
+
+		pair.eachDirection(func(canceller, claimer *adapter) { verifyClaimTimeCancellation(t, canceller, claimer, false) })
+	})
+	t.Run("sqlite_runtime_notification_payloads", func(t *testing.T) {
+		defer scenarios.record(t)
+
+		verifyNotificationPayloads(t, goAdapter, candidateAdapter, func(actor *adapter) notificationCapture {
+			observer := goAdapter
+			if actor == goAdapter {
+				observer = candidateAdapter
+			}
+			return newSQLiteNotificationCapture(t, observer)
+		})
+	})
+	t.Run("sqlite_runtime_remote_queue_subscription_events", func(t *testing.T) {
+		defer scenarios.record(t)
+
+		verifyRemoteQueueSubscriptionEvents(t, goAdapter, candidateAdapter)
+	})
+	t.Run("sqlite_runtime_transactional_notification", func(t *testing.T) {
+		defer scenarios.record(t)
+
+		verifySQLiteTransactionalNotification(t, goAdapter, candidateAdapter)
+	})
+	t.Run("sqlite_runtime_job_rows", func(t *testing.T) {
+		defer scenarios.record(t)
+
+		verifySQLiteWorkedJobRows(t, goAdapter, candidateAdapter)
+		verifySQLiteRuntimeJobRows(t, repositoryRoot, databaseURL, profileName, goAdapter, candidateAdapter)
+	})
+	t.Run("sqlite_runtime_job_list_cursor_interchange", func(t *testing.T) {
+		defer scenarios.record(t)
+
+		verifyJobListCursorInterchange(t, goAdapter, candidateAdapter)
+	})
+	t.Run("sqlite_runtime_leadership_failover", func(t *testing.T) {
+		defer scenarios.record(t)
+
+		verifySQLiteLeadershipFailover(t, goAdapter, candidateAdapter)
+	})
+	t.Run("sqlite_runtime_leader_election_disabled", func(t *testing.T) {
+		defer scenarios.record(t)
+
+		pair.eachDirection(func(disabled, eligible *adapter) { verifyLeaderElectionDisabled(t, disabled, eligible) })
+	})
+	t.Run("sqlite_runtime_periodic_scheduler", func(t *testing.T) {
+		defer scenarios.record(t)
+
+		verifySQLitePeriodicScheduler(t, goAdapter, candidateAdapter)
+	})
+	t.Run("sqlite_runtime_periodic_unique", func(t *testing.T) {
+		defer scenarios.record(t)
+
+		verifyUniquePeriodicJob(t, goAdapter, candidateAdapter)
+	})
+	t.Run("sqlite_runtime_extensions_resumable_subscriptions", func(t *testing.T) {
+		defer scenarios.record(t)
+
+		pair.eachAdapter(func(current *adapter) { verifySQLiteAdvancedRuntime(t, current) })
+	})
+	t.Run("sqlite_runtime_resumable_validation", func(t *testing.T) {
+		defer scenarios.record(t)
+
+		pair.eachAdapter(func(current *adapter) { verifyResumableValidation(t, current) })
+	})
+	t.Run("sqlite_runtime_resumable_cross_engine_cursor", func(t *testing.T) {
+		defer scenarios.record(t)
+
+		verifyResumableInteroperability(t, goAdapter, candidateAdapter)
+	})
+	t.Run("sqlite_runtime_poll_only_recovery", func(t *testing.T) {
+		defer scenarios.record(t)
+
+		verifySQLitePollOnly(t, goAdapter, candidateAdapter)
+	})
+	t.Run("sqlite_runtime_lifecycle_shutdown", func(t *testing.T) {
+		defer scenarios.record(t)
+
+		verifySQLiteLifecycle(t, goAdapter, candidateAdapter)
+	})
+}
+
 // verifyProfileHandshakes checks that the reference and candidate advertise
 // exactly the named profile's capabilities and methods.
 func verifyProfileHandshakes(t *testing.T, repositoryRoot, profilePath string, candidateSpec adapterSpec, goAdapter, candidateAdapter *adapter) {
@@ -127,6 +328,391 @@ func verifyProfileHandshakes(t *testing.T, repositoryRoot, profilePath string, c
 				current.requireUnvalidatedCallError(t, method, map[string]any{}, "method_not_found")
 			}
 		}
+	}
+}
+
+func verifySQLiteCompetingWorkers(t *testing.T, goAdapter, candidateAdapter *adapter) {
+	t.Helper()
+
+	goAdapter.call(t, "reset", map[string]any{}, nil)
+	goAdapter.call(t, "start", map[string]any{
+		"client_id": "go-sqlite-competitor", "max_workers": 2,
+	}, nil)
+	candidateAdapter.call(t, "start", map[string]any{
+		"client_id": "candidate-sqlite-competitor", "max_workers": 2,
+	}, nil)
+	const jobCount = 40
+	jobs := make([]map[string]any, jobCount)
+	for index := range jobs {
+		jobs[index] = map[string]any{
+			"behavior": "sleep", "duration_ms": 20,
+			"message": fmt.Sprintf("SQLite competing worker %d", index),
+			"opts":    map[string]any{"tags": []string{"sqlite_competing_workers"}},
+		}
+	}
+	var inserted struct {
+		Results []normalizedInsertResult `json:"results"`
+	}
+	goAdapter.call(t, "insert_many", map[string]any{"jobs": jobs}, &inserted)
+	require.Len(t, inserted.Results, jobCount)
+	worked := waitForListedJobCount(t, candidateAdapter, map[string]any{
+		"states": []string{"completed"}, "tags_all": []string{"sqlite_competing_workers"},
+	}, jobCount)
+	workerIDs := make(map[string]bool)
+	for _, job := range worked {
+		for _, workerID := range job.AttemptedBy {
+			workerIDs[workerID] = true
+		}
+	}
+	require.True(t, workerIDs["go-sqlite-competitor"], "Go worker claimed no jobs")
+	require.True(t, workerIDs["candidate-sqlite-competitor"], "Candidate worker claimed no jobs")
+	goAdapter.call(t, "stop", map[string]any{}, nil)
+	candidateAdapter.call(t, "stop", map[string]any{}, nil)
+}
+
+func verifySQLiteAdvancedRuntime(t *testing.T, adapter *adapter) {
+	t.Helper()
+
+	adapter.call(t, "reset", map[string]any{}, nil)
+	adapter.call(t, "start", map[string]any{
+		"client_id": adapter.name + "-sqlite-advanced-runtime", "instrumented": true,
+		"max_workers": 2, "retry_delay_ms": 5,
+	}, nil)
+
+	var ordinary normalizedJob
+	adapter.call(t, "insert", map[string]any{"message": "SQLite extension order"}, &ordinary)
+	adapter.call(t, "wait", map[string]any{"id": ordinary.ID}, &ordinary)
+	require.Equal(t, "completed", ordinary.State)
+
+	var resumable normalizedJob
+	adapter.call(t, "insert", map[string]any{
+		"behavior": "resumable", "message": "SQLite resumable",
+		"opts": map[string]any{"max_attempts": 2},
+	}, &resumable)
+	adapter.call(t, "wait", map[string]any{"id": resumable.ID}, &resumable)
+	require.Equal(t, "completed", resumable.State)
+	require.Len(t, resumable.Errors, 1)
+	require.Equal(t, "first", resumable.Metadata["river:resumable_step"])
+
+	adapter.call(t, "queue_pause", map[string]any{"name": "default"}, nil)
+	_ = waitForRuntimeStats(t, adapter, func(stats runtimeStats) bool {
+		return slices.Contains(stats.Events, "queue_paused")
+	})
+	adapter.call(t, "queue_resume", map[string]any{"name": "default"}, nil)
+	stats := waitForRuntimeStats(t, adapter, func(stats runtimeStats) bool {
+		return stats.ResumableFirstRuns == 1 && stats.ResumableSecondRuns == 2 &&
+			slices.Contains(stats.Events, "job_completed") &&
+			slices.Contains(stats.Events, "job_failed") &&
+			slices.Contains(stats.Events, "queue_paused") &&
+			slices.Contains(stats.Events, "queue_resumed")
+	})
+	requireOrderedSubsequence(t, stats.Trace, []string{
+		"hook:insert_begin",
+		"middleware:insert_before",
+		"middleware:insert_after",
+	})
+	requireOrderedSubsequence(t, stats.Trace, []string{
+		"hook:work_begin",
+		"hook:work_end",
+	})
+	requireOrderedSubsequence(t, stats.Trace, []string{
+		"middleware:work_before",
+		"middleware:work_after",
+	})
+	adapter.call(t, "stop", map[string]any{}, nil)
+}
+
+func verifySQLiteAttemptedByHistory(t *testing.T, inserter, worker *adapter) {
+	t.Helper()
+
+	inserter.call(t, "reset", map[string]any{}, nil)
+	var job normalizedJob
+	inserter.call(t, "insert", map[string]any{
+		"behavior": "error", "message": "SQLite attempted_by history",
+		"opts": map[string]any{"max_attempts": 200},
+	}, &job)
+	const attemptCount = 102
+	workerIDs := make([]string, attemptCount)
+	for attempt := range attemptCount {
+		workerIDs[attempt] = fmt.Sprintf("%s-sqlite-history-%03d", worker.name, attempt)
+		worker.call(t, "start", map[string]any{
+			"client_id": workerIDs[attempt], "max_workers": 1, "retry_delay_ms": 60_000,
+		}, nil)
+		worker.call(t, "wait", map[string]any{
+			"id": job.ID, "states": []string{"retryable"},
+		}, &job)
+		require.Equal(t, attempt+1, job.Attempt)
+		worker.call(t, "stop", map[string]any{}, nil)
+		if attempt+1 < attemptCount {
+			inserter.call(t, "retry", map[string]any{"id": job.ID}, &job)
+			require.Equal(t, "available", job.State)
+		}
+	}
+	for _, observer := range []*adapter{inserter, worker} {
+		observer.call(t, "get", map[string]any{"id": job.ID}, &job)
+		require.Equal(t, workerIDs[attemptCount-100:], job.AttemptedBy)
+	}
+}
+
+func verifySQLiteCrossLanguageWork(t *testing.T, goAdapter, candidateAdapter *adapter) {
+	t.Helper()
+
+	for _, pair := range []struct {
+		inserter *adapter
+		worker   *adapter
+	}{
+		{inserter: goAdapter, worker: candidateAdapter},
+		{inserter: candidateAdapter, worker: goAdapter},
+	} {
+		pair.inserter.call(t, "reset", map[string]any{}, nil)
+		var inserted, worked normalizedJob
+		pair.inserter.call(t, "insert", map[string]any{
+			"message": "SQLite cross-language work " + pair.inserter.name,
+		}, &inserted)
+		pair.worker.call(t, "work", map[string]any{
+			"client_id": pair.worker.name + "-sqlite-worker", "id": inserted.ID,
+		}, &worked)
+		require.Equal(t, "completed", worked.State)
+		require.Equal(t, []string{pair.worker.name + "-sqlite-worker"}, worked.AttemptedBy)
+	}
+}
+
+func verifySQLiteLeadershipFailover(t *testing.T, goAdapter, candidateAdapter *adapter) {
+	t.Helper()
+
+	verifyLeadershipRequestLifecycle(t, nil, goAdapter, candidateAdapter)
+
+	goAdapter.call(t, "reset", map[string]any{}, nil)
+	goAdapter.call(t, "start", map[string]any{
+		"client_id": "go-sqlite-leader", "max_workers": 1,
+	}, nil)
+	candidateAdapter.call(t, "start", map[string]any{
+		"client_id": "candidate-sqlite-leader", "max_workers": 1,
+	}, nil)
+	first := waitForLeader(t, goAdapter, "")
+	var leader, follower *adapter
+	var followerID string
+	if first == "go-sqlite-leader" {
+		leader, follower, followerID = goAdapter, candidateAdapter, "candidate-sqlite-leader"
+	} else {
+		require.Equal(t, "candidate-sqlite-leader", first)
+		leader, follower, followerID = candidateAdapter, goAdapter, "go-sqlite-leader"
+	}
+	leader.call(t, "stop", map[string]any{}, nil)
+	require.Equal(t, followerID, waitForLeader(t, follower, first))
+	term := readLeader(t, follower)
+	follower.call(t, "request_resign", map[string]any{}, nil)
+	_ = waitForLeaderTerm(t, follower, term.ElectedAt)
+	follower.call(t, "stop", map[string]any{}, nil)
+}
+
+func verifySQLiteLifecycle(t *testing.T, goAdapter, candidateAdapter *adapter) {
+	t.Helper()
+
+	for _, worker := range []*adapter{goAdapter, candidateAdapter} {
+		worker.call(t, "reset", map[string]any{}, nil)
+		worker.call(t, "start", map[string]any{
+			"client_id": worker.name + "-sqlite-lifecycle", "max_workers": 1,
+		}, nil)
+		var job normalizedJob
+		worker.call(t, "insert", map[string]any{
+			"behavior": "sleep", "duration_ms": 150, "message": "graceful SQLite shutdown",
+		}, &job)
+		worker.call(t, "wait", map[string]any{
+			"id": job.ID, "states": []string{"running"},
+		}, &job)
+		worker.call(t, "stop", map[string]any{}, nil)
+		worker.call(t, "get", map[string]any{"id": job.ID}, &job)
+		require.Equal(t, "completed", job.State)
+	}
+}
+
+func verifySQLitePeriodicScheduler(t *testing.T, goAdapter, candidateAdapter *adapter) {
+	t.Helper()
+
+	for _, worker := range []*adapter{goAdapter, candidateAdapter} {
+		worker.call(t, "reset", map[string]any{}, nil)
+		worker.startWithTuning(t, map[string]any{
+			"client_id": worker.name + "-sqlite-maintenance", "instrumented": true,
+			"max_workers": 1, "periodic_run_on_start": true,
+		}, map[string]any{"scheduler_interval_ms": 20})
+		var scheduled normalizedJob
+		worker.call(t, "insert", map[string]any{
+			"message": "SQLite scheduled job",
+			"opts": map[string]any{
+				"scheduled_at": time.Now().Add(150 * time.Millisecond).UTC().Format(time.RFC3339Nano),
+				"tags":         []string{"sqlite_scheduler"},
+			},
+		}, &scheduled)
+		worker.call(t, "wait", map[string]any{"id": scheduled.ID}, &scheduled)
+		require.Equal(t, "completed", scheduled.State)
+
+		periodic := waitForListedJob(t, worker, map[string]any{})
+		deadline := time.Now().Add(10 * time.Second)
+		for periodic.Metadata["river:periodic_job_id"] != "conformance-periodic" && time.Now().Before(deadline) {
+			var listed struct {
+				Jobs []normalizedJob `json:"jobs"`
+			}
+			worker.call(t, "list", map[string]any{}, &listed)
+			for _, candidate := range listed.Jobs {
+				if candidate.Metadata["river:periodic_job_id"] == "conformance-periodic" {
+					periodic = candidate
+					break
+				}
+			}
+			if periodic.Metadata["river:periodic_job_id"] != "conformance-periodic" {
+				time.Sleep(10 * time.Millisecond)
+			}
+		}
+		require.Equal(t, "conformance-periodic", periodic.Metadata["river:periodic_job_id"])
+		worker.call(t, "wait", map[string]any{"id": periodic.ID}, &periodic)
+		require.Equal(t, "completed", periodic.State)
+		stats := waitForRuntimeStats(t, worker, func(stats runtimeStats) bool {
+			return stats.PeriodicStarts == 1
+		})
+		require.Equal(t, 1, stats.PeriodicStarts)
+		worker.call(t, "stop", map[string]any{}, nil)
+	}
+}
+
+func verifySQLitePollOnly(t *testing.T, goAdapter, candidateAdapter *adapter) {
+	t.Helper()
+
+	for _, pair := range []struct {
+		inserter *adapter
+		worker   *adapter
+	}{
+		{inserter: goAdapter, worker: candidateAdapter},
+		{inserter: candidateAdapter, worker: goAdapter},
+	} {
+		pair.worker.call(t, "reset", map[string]any{}, nil)
+		pair.worker.call(t, "start", map[string]any{
+			"client_id": pair.worker.name + "-sqlite-poll-only", "fetch_poll_interval_ms": 20,
+			"max_workers": 1, "poll_only": true,
+		}, nil)
+		var job normalizedJob
+		pair.inserter.call(t, "insert", map[string]any{
+			"message": "SQLite poll-only recovery " + pair.inserter.name,
+		}, &job)
+		pair.worker.call(t, "wait", map[string]any{"id": job.ID}, &job)
+		require.Equal(t, "completed", job.State)
+		pair.worker.call(t, "stop", map[string]any{}, nil)
+	}
+}
+
+func verifySQLiteQueues(t *testing.T, goAdapter, candidateAdapter *adapter) {
+	t.Helper()
+
+	for _, pair := range []struct {
+		observer *adapter
+		writer   *adapter
+	}{
+		{observer: candidateAdapter, writer: goAdapter},
+		{observer: goAdapter, writer: candidateAdapter},
+	} {
+		pair.writer.call(t, "reset", map[string]any{}, nil)
+		pair.writer.call(t, "start", map[string]any{
+			"client_id": pair.writer.name + "-sqlite-queue-crud", "max_workers": 1,
+		}, nil)
+		pair.writer.call(t, "stop", map[string]any{}, nil)
+		var observed, updated, written normalizedQueue
+		pair.writer.call(t, "queue_get", map[string]any{"name": "default"}, &written)
+		pair.observer.call(t, "queue_get", map[string]any{"name": "default"}, &observed)
+		require.Equal(t, written, observed)
+		pair.observer.call(t, "queue_update", map[string]any{
+			"metadata": map[string]any{"updated_by": pair.observer.name}, "name": "default",
+		}, &updated)
+		pair.writer.call(t, "queue_get", map[string]any{"name": "default"}, &observed)
+		require.Equal(t, updated, observed)
+		var queues struct {
+			Queues []normalizedQueue `json:"queues"`
+		}
+		pair.writer.call(t, "queue_list", map[string]any{}, &queues)
+		require.Contains(t, queues.Queues, updated)
+	}
+	verifyTransactionalJobCRUD(t, goAdapter, candidateAdapter)
+	verifyTransactionalQueueOperations(t, goAdapter, candidateAdapter)
+	for _, worker := range []*adapter{goAdapter, candidateAdapter} {
+		worker.call(t, "reset", map[string]any{}, nil)
+		worker.call(t, "start", map[string]any{
+			"client_id": worker.name + "-sqlite-dynamic-queue", "instrumented": true,
+			"max_workers": 1,
+		}, nil)
+		worker.call(t, "queue_add", map[string]any{"max_workers": 1, "name": "dynamic"}, nil)
+		worker.call(t, "queue_add", map[string]any{"max_workers": 2, "name": "dynamic"}, nil)
+		var warmup normalizedJob
+		worker.call(t, "insert", map[string]any{
+			"message": "activate SQLite dynamic queue",
+			"opts":    map[string]any{"queue": "dynamic"},
+		}, &warmup)
+		worker.call(t, "wait", map[string]any{"id": warmup.ID}, &warmup)
+		require.Equal(t, "completed", warmup.State)
+		worker.call(t, "queue_pause", map[string]any{"name": "dynamic"}, nil)
+		_ = waitForRuntimeStats(t, worker, func(stats runtimeStats) bool {
+			return slices.Contains(stats.Events, "queue_paused")
+		})
+		// A default-queue marker inserted after the paused job proves the
+		// worker kept fetching while the dynamic queue held its job.
+		var job, marker normalizedJob
+		worker.call(t, "insert", map[string]any{
+			"message": "SQLite dynamic queue", "opts": map[string]any{"queue": "dynamic"},
+		}, &job)
+		worker.call(t, "insert", map[string]any{"message": "SQLite default queue marker"}, &marker)
+		worker.call(t, "wait", map[string]any{"id": marker.ID}, &marker)
+		require.Equal(t, "completed", marker.State)
+		worker.call(t, "get", map[string]any{"id": job.ID}, &job)
+		require.Equal(t, "available", job.State)
+		worker.call(t, "queue_resume", map[string]any{"name": "dynamic"}, nil)
+		var queue normalizedQueue
+		worker.call(t, "queue_get", map[string]any{"name": "dynamic"}, &queue)
+		worker.call(t, "wait", map[string]any{"id": job.ID}, &job)
+		require.Equal(t, "completed", job.State)
+		require.NotNil(t, job.AttemptedAt)
+		require.False(t, parseTime(t, *job.AttemptedAt).Before(parseTime(t, queue.UpdatedAt)),
+			"paused dynamic queue job attempted before it resumed")
+		worker.call(t, "queue_remove", map[string]any{"name": "dynamic"}, nil)
+		worker.call(t, "stop", map[string]any{}, nil)
+	}
+}
+
+func verifySQLiteTransactionalNotification(t *testing.T, goAdapter, candidateAdapter *adapter) {
+	t.Helper()
+
+	for _, pair := range []struct {
+		controller *adapter
+		worker     *adapter
+	}{
+		{controller: candidateAdapter, worker: goAdapter},
+		{controller: goAdapter, worker: candidateAdapter},
+	} {
+		pair.worker.call(t, "reset", map[string]any{}, nil)
+		pair.worker.call(t, "start", map[string]any{
+			"client_id":              pair.worker.name + "-sqlite-transaction-notification",
+			"fetch_poll_interval_ms": 60_000, "max_workers": 2,
+		}, nil)
+		handle := "sqlite-notification-" + pair.controller.name
+		tag := strings.ReplaceAll(handle, "-", "_")
+		pair.controller.call(t, "tx_begin", map[string]any{"handle": handle}, nil)
+		var inserted struct {
+			Results []normalizedInsertResult `json:"results"`
+		}
+		pair.controller.call(t, "tx_insert_many", map[string]any{
+			"handle": handle,
+			"jobs": []map[string]any{
+				{"message": handle + " first", "opts": map[string]any{"tags": []string{tag}}},
+				{"message": handle + " second", "opts": map[string]any{"tags": []string{tag}}},
+			},
+		}, &inserted)
+		require.Len(t, inserted.Results, 2)
+		// The worker polls once a minute, so prompt completion after commit
+		// proves the committed outbox notification woke it.
+		startedAt := time.Now()
+		pair.controller.call(t, "tx_commit", map[string]any{"handle": handle}, nil)
+		waitForListedJobCount(t, pair.worker, map[string]any{
+			"states": []string{"completed"}, "tags_all": []string{tag},
+		}, 2)
+		require.Less(t, time.Since(startedAt), 5*time.Second)
+		pair.worker.call(t, "stop", map[string]any{}, nil)
 	}
 }
 
@@ -396,4 +982,96 @@ type rawNotification struct {
 	Payload     string `json:"payload"`
 	PayloadType string `json:"payload_type"`
 	Topic       string `json:"topic"`
+}
+
+// rawNotificationsAfter returns the outbox rows after afterID, read by
+// observer.
+func rawNotificationsAfter(t *testing.T, observer *adapter, afterID int64) []rawNotification {
+	t.Helper()
+
+	var result struct {
+		Notifications []rawNotification `json:"notifications"`
+	}
+	observer.call(t, "raw_notifications", map[string]any{"after_id": afterID}, &result)
+	return result.Notifications
+}
+
+// verifySQLiteCancelNotifications has each engine cancel jobs and checks the
+// control notification it writes to the SQLite outbox against Go's: the
+// topic, the payload's storage type, and the payload as JSON. A cancellation
+// publishes only when its transaction commits, both engines see the other's
+// rows, and cancelling a finalized job publishes nothing. The insert
+// notifications written along the way must match too.
+func verifySQLiteCancelNotifications(t *testing.T, goAdapter, candidateAdapter *adapter) {
+	t.Helper()
+
+	lastID := func() int64 {
+		notifications := rawNotificationsAfter(t, goAdapter, 0)
+		if len(notifications) == 0 {
+			return 0
+		}
+		return notifications[len(notifications)-1].ID
+	}
+	requireCancelNotification := func(actor *adapter, after int64, job normalizedJob) int64 {
+		t.Helper()
+
+		var id int64
+		for _, observer := range []*adapter{goAdapter, candidateAdapter} {
+			notifications := rawNotificationsAfter(t, observer, after)
+			require.Len(t, notifications, 1, "%s cancellation read by %s", actor.name, observer.name)
+			require.Equal(t, "river_control", notifications[0].Topic)
+			require.Equal(t, "text", notifications[0].PayloadType)
+			require.JSONEq(t, fmt.Sprintf(`{"action":"cancel","job_id":%d,"queue":%q}`, job.ID, job.Queue),
+				notifications[0].Payload, "%s cancellation read by %s", actor.name, observer.name)
+			id = notifications[0].ID
+		}
+		return id
+	}
+
+	insertNotifications := map[string]rawNotification{}
+	insertedJobIDs := map[string]int64{}
+	for _, pair := range []struct {
+		actor, observer *adapter
+	}{
+		{actor: goAdapter, observer: candidateAdapter},
+		{actor: candidateAdapter, observer: goAdapter},
+	} {
+		pair.actor.call(t, "reset", map[string]any{}, nil)
+		var job normalizedJob
+		pair.actor.call(t, "insert", map[string]any{"message": "cancel notifications"}, &job)
+
+		after := lastID()
+		handle := "sqlite-cancel-notification-rollback-" + pair.actor.name
+		pair.actor.call(t, "tx_begin", map[string]any{"handle": handle}, nil)
+		pair.actor.call(t, "tx_cancel", map[string]any{"handle": handle, "id": job.ID}, nil)
+		require.Empty(t, rawNotificationsAfter(t, pair.observer, after), "uncommitted cancellation published")
+		pair.actor.call(t, "tx_rollback", map[string]any{"handle": handle}, nil)
+		require.Empty(t, rawNotificationsAfter(t, pair.observer, after), "rolled-back cancellation published")
+
+		handle = "sqlite-cancel-notification-commit-" + pair.actor.name
+		pair.actor.call(t, "tx_begin", map[string]any{"handle": handle}, nil)
+		pair.actor.call(t, "tx_cancel", map[string]any{"handle": handle, "id": job.ID}, nil)
+		pair.actor.call(t, "tx_commit", map[string]any{"handle": handle}, nil)
+		after = requireCancelNotification(pair.actor, after, job)
+
+		// The job is finalized now, so cancelling it again changes nothing
+		// and publishes nothing.
+		pair.actor.call(t, "cancel", map[string]any{"id": job.ID}, nil)
+		require.Empty(t, rawNotificationsAfter(t, pair.observer, after), "cancelling a finalized job published")
+
+		pair.actor.call(t, "insert", map[string]any{"message": "cancel notifications"}, &job)
+		inserted := rawNotificationsAfter(t, pair.observer, after)
+		require.Len(t, inserted, 1, "%s insertion", pair.actor.name)
+		insertNotifications[pair.actor.name] = inserted[0]
+		insertedJobIDs[pair.actor.name] = job.ID
+		pair.actor.call(t, "cancel", map[string]any{"id": job.ID}, nil)
+		requireCancelNotification(pair.actor, inserted[0].ID, job)
+	}
+
+	// Insert notifications aren't the subject here, but the same outbox read
+	// compares them too.
+	require.Equal(t,
+		semanticNotifications(t, []rawNotification{insertNotifications[goAdapter.name]}, insertedJobIDs[goAdapter.name]),
+		semanticNotifications(t, []rawNotification{insertNotifications[candidateAdapter.name]}, insertedJobIDs[candidateAdapter.name]),
+		"insert notifications differ")
 }

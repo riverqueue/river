@@ -7,6 +7,7 @@ import (
 	"io"
 	"net"
 	"net/url"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
@@ -385,6 +386,166 @@ func requireUndecodableRowOutcome(ctx context.Context, t *testing.T, database *p
 		require.True(t, finalized, "%s job %d", workerName, id)
 	}
 	return true
+}
+
+// TestResilienceSQLiteConformance checks SQLite behavior under a foreign
+// writer and Go-sized integers, using only the sqlite-runtime-v1 profile.
+func TestResilienceSQLiteConformance(t *testing.T) { //nolint:tparallel // Subtests share one SQLite database and run in order.
+	t.Parallel()
+	scenarios := newScenarioTracker(t, scenarioOwnerSQLiteResilience)
+
+	repositoryRoot := repoRoot(t)
+	databaseURL := filepath.Join(t.TempDir(), "river-conformance-resilience.sqlite")
+	const profileName = "sqlite-runtime-v1"
+	goAdapter := startReferenceAdapterForProfile(
+		t, repositoryRoot, databaseURL, "sqlite", profileName, "go",
+	)
+	candidateSpec := conformanceCandidateSpec(t, repositoryRoot, false)
+	candidateAdapter := startAdapterCommandForProfile(
+		t, repositoryRoot, databaseURL, "sqlite", profileName,
+		candidateSpec.Implementation, candidateSpec, candidateSpec.Command,
+	)
+	scenarios.attach(goAdapter, candidateAdapter)
+	goAdapter.call(t, "migrate", map[string]any{}, nil)
+
+	t.Run("sqlite_runtime_go_integer_ranges", func(t *testing.T) { //nolint:paralleltest // Shares the SQLite database.
+		defer scenarios.record(t)
+
+		// River Go stores native integers on SQLite, so `max_attempts` can
+		// exceed a 16-bit integer. Every implementation must still work it.
+		for _, pair := range []struct{ inserter, worker *adapter }{
+			{inserter: goAdapter, worker: candidateAdapter},
+			{inserter: goAdapter, worker: goAdapter},
+		} {
+			var inserted, worked, stored normalizedJob
+			pair.inserter.call(t, "insert", map[string]any{
+				"message": "wide max attempts", "opts": map[string]any{"max_attempts": 40_000},
+			}, &inserted)
+			pair.worker.call(t, "work", map[string]any{
+				"client_id": pair.worker.name + "-wide-integers", "id": inserted.ID,
+			}, &worked)
+			require.Equal(t, "completed", worked.State, pair.worker.name)
+			pair.inserter.call(t, "get", map[string]any{"id": inserted.ID}, &stored)
+			require.Equal(t, 40_000, stored.MaxAttempts, "working the job must not rewrite max_attempts")
+		}
+	})
+
+	// A JSON column changed out of band to text that isn't valid JSON must
+	// not stall its queue. Like River Go, an implementation fails such a
+	// job's attempt without working it, as it fails any row it can't decode,
+	// leaves the value in place, and works the other jobs. An `errors` value
+	// that isn't valid JSON is wrapped in an array, as a string, so the
+	// attempt error can still be appended.
+	t.Run("sqlite_runtime_invalid_json_columns", func(t *testing.T) { //nolint:paralleltest // Shares the SQLite database.
+		defer scenarios.record(t)
+
+		type replacedText struct {
+			Previous     *string `json:"previous"`
+			PreviousType string  `json:"previous_type"`
+		}
+		columns := []string{"args", "attempted_by", "errors", "metadata", "tags"}
+		for _, worker := range []*adapter{candidateAdapter, goAdapter} {
+			goAdapter.call(t, "reset", map[string]any{}, nil)
+			var ordinary normalizedJob
+			goAdapter.call(t, "insert", map[string]any{"message": "ordinary"}, &ordinary)
+			invalid := make(map[string]int64, len(columns))
+			originals := make(map[string]*string, len(columns))
+			for _, column := range columns {
+				var job normalizedJob
+				goAdapter.call(t, "insert", map[string]any{"message": "invalid " + column}, &job)
+				var replaced replacedText
+				goAdapter.call(t, "raw_replace_json_text", map[string]any{
+					"column": column, "id": job.ID, "text": "not json",
+				}, &replaced)
+				invalid[column] = job.ID
+				originals[column] = replaced.Previous
+			}
+
+			worker.call(t, "start", map[string]any{
+				"client_id":      worker.name + "-invalid-json",
+				"retry_delay_ms": time.Hour.Milliseconds(),
+			}, nil)
+			var completed normalizedJob
+			worker.call(t, "wait", map[string]any{"id": ordinary.ID, "states": []string{"completed"}}, &completed)
+			waitForRuntimeStats(t, worker, func(stats runtimeStats) bool {
+				return countRuntimeEvent(stats, "job_failed") == len(columns)
+			})
+			worker.call(t, "stop", map[string]any{}, nil)
+
+			for _, column := range columns {
+				id := invalid[column]
+				// Restore a readable value, getting back the one the worker
+				// left.
+				var left replacedText
+				restore := originals[column]
+				if column == "errors" {
+					// The wrapped errors are valid JSON; keep them to check.
+					goAdapter.call(t, "raw_replace_json_text", map[string]any{
+						"column": column, "id": id, "text": nil,
+					}, &left)
+					restore = left.Previous
+				}
+				var restored replacedText
+				goAdapter.call(t, "raw_replace_json_text", map[string]any{
+					"column": column, "id": id, "text": restore,
+				}, &restored)
+				if column != "errors" {
+					left = restored
+					require.Equal(t, "text", left.PreviousType, "%s %s", worker.name, column)
+					require.Equal(t, "not json", *left.Previous, "%s rewrote invalid %s", worker.name, column)
+				}
+
+				var failed normalizedJob
+				goAdapter.call(t, "get", map[string]any{"id": id}, &failed)
+				require.Equal(t, "retryable", failed.State, "%s %s", worker.name, column)
+				require.Equal(t, 1, failed.Attempt, "%s %s", worker.name, column)
+				require.NotEmpty(t, failed.Errors, "%s %s", worker.name, column)
+				attemptError := failed.Errors[len(failed.Errors)-1]
+				require.Equal(t, 1, attemptError.Attempt, "%s %s", worker.name, column)
+				require.True(t, strings.HasPrefix(attemptError.Error, "job row couldn't be decoded: "),
+					"%s %s: %s", worker.name, column, attemptError.Error)
+				if column == "errors" {
+					require.Len(t, failed.Errors, 2, worker.name)
+					require.Equal(t, "not json", failed.Errors[0].Error, worker.name)
+				}
+			}
+		}
+	})
+
+	t.Run("sqlite_runtime_completion_under_writer_lock", func(t *testing.T) { //nolint:paralleltest // Shares the SQLite database.
+		defer scenarios.record(t)
+
+		for _, pair := range []struct{ locker, worker *adapter }{
+			{locker: goAdapter, worker: candidateAdapter},
+			{locker: candidateAdapter, worker: goAdapter},
+		} {
+			pair.worker.call(t, "start", map[string]any{"client_id": pair.worker.name + "-writer-lock"}, nil)
+			barrier := pair.worker.name + "-writer-lock"
+			pair.worker.call(t, "barrier_create", map[string]any{"name": barrier}, nil)
+			var inserted, observed normalizedJob
+			pair.worker.call(t, "insert", map[string]any{"behavior": "barrier_wait", "message": barrier}, &inserted)
+			pair.worker.call(t, "wait", map[string]any{"id": inserted.ID, "states": []string{"running"}}, &observed)
+
+			// A write inside an open transaction holds SQLite's write lock.
+			// Keep it past the adapters' five-second busy timeout while the
+			// job finishes, so the first completion write fails.
+			handle := pair.worker.name + "-writer-lock"
+			pair.locker.call(t, "tx_begin", map[string]any{"handle": handle}, nil)
+			pair.locker.call(t, "tx_insert", map[string]any{
+				"handle": handle, "job": map[string]any{"message": "foreign writer"},
+			}, nil)
+			pair.worker.call(t, "barrier_release", map[string]any{"name": barrier}, nil)
+			time.Sleep(6 * time.Second) // The fault is the lock's duration, not a wait for an outcome.
+			pair.locker.call(t, "tx_rollback", map[string]any{"handle": handle}, nil)
+
+			pollUntil(t, time.Minute, pair.worker.name+" completion after the foreign lock", func() bool {
+				var job normalizedJob
+				pair.locker.call(t, "get", map[string]any{"id": inserted.ID}, &job)
+				return job.State == "completed"
+			})
+			pair.worker.call(t, "stop", map[string]any{}, nil)
+		}
+	})
 }
 
 type resilienceWorker struct {
