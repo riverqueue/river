@@ -1,0 +1,1862 @@
+{
+  "reference_revision": "eb16420fed22ce479f4843f0accd4c4bfba0885e",
+  "description": "Evidence map, not a claim that every scenario passed. Empty native_tests means coverage currently comes from the upstream harness.",
+  "scenarios": {
+    "adapter_handshake_and_capabilities": {
+      "profiles": [
+        "core"
+      ],
+      "shared_harness": [
+        {
+          "path": "conformance/harness/mixed_test.go",
+          "symbol": "verifyPostgresHandshakes"
+        }
+      ],
+      "native_tests": []
+    },
+    "barrier_wait_and_release": {
+      "profiles": [
+        "core"
+      ],
+      "shared_harness": [
+        {
+          "path": "conformance/harness/runtime_scenarios_test.go",
+          "symbol": "verifyBarrierWaitAndRelease"
+        }
+      ],
+      "native_tests": []
+    },
+    "bulk_delete_safety": {
+      "profiles": [
+        "core"
+      ],
+      "shared_harness": [
+        {
+          "path": "conformance/harness/storage_scenarios_test.go",
+          "symbol": "verifyBulkDeleteSafety"
+        }
+      ],
+      "native_tests": []
+    },
+    "candidate_insert_reference_work": {
+      "profiles": [
+        "core"
+      ],
+      "shared_harness": [
+        {
+          "path": "conformance/harness/mixed_test.go",
+          "symbol": "verifyInsertThenWork"
+        }
+      ],
+      "native_tests": []
+    },
+    "candidate_migrator_reference_runtime": {
+      "profiles": [
+        "core"
+      ],
+      "shared_harness": [
+        {
+          "path": "conformance/harness/mixed_test.go",
+          "symbol": "verifyMigratorRuntime"
+        }
+      ],
+      "native_tests": []
+    },
+    "candidate_process_kill_reference_rescue": {
+      "profiles": [
+        "core"
+      ],
+      "shared_harness": [
+        {
+          "path": "conformance/harness/lifecycle_scenarios_test.go",
+          "symbol": "verifyProcessKillCrossEngineRescue"
+        }
+      ],
+      "native_tests": []
+    },
+    "claim_time_cancellation": {
+      "profiles": [
+        "core"
+      ],
+      "shared_harness": [
+        {
+          "path": "conformance/harness/interop_scenarios_test.go",
+          "symbol": "verifyClaimTimeCancellation"
+        }
+      ],
+      "native_tests": []
+    },
+    "claimed_row_decode_isolation": {
+      "profiles": [
+        "core"
+      ],
+      "shared_harness": [
+        {
+          "path": "conformance/harness/resilience_test.go",
+          "symbol": "TestResilienceConformance"
+        }
+      ],
+      "native_tests": []
+    },
+    "clock_boundary_scheduling": {
+      "profiles": [
+        "core"
+      ],
+      "shared_harness": [
+        {
+          "path": "conformance/harness/lifecycle_scenarios_test.go",
+          "symbol": "verifyClockBoundaries"
+        }
+      ],
+      "native_tests": []
+    },
+    "completion_batching": {
+      "profiles": [
+        "core"
+      ],
+      "shared_harness": [
+        {
+          "path": "conformance/harness/runtime_scenarios_test.go",
+          "symbol": "verifyCompletionBatching"
+        }
+      ],
+      "native_tests": []
+    },
+    "completion_row_lock_wait": {
+      "profiles": [
+        "core"
+      ],
+      "shared_harness": [
+        {
+          "path": "conformance/harness/resilience_test.go",
+          "symbol": "TestResilienceConformance"
+        }
+      ],
+      "native_tests": []
+    },
+    "completion_transient_failure_retry": {
+      "profiles": [
+        "core"
+      ],
+      "shared_harness": [
+        {
+          "path": "conformance/harness/resilience_test.go",
+          "symbol": "TestResilienceConformance"
+        }
+      ],
+      "native_tests": []
+    },
+    "cooperative_remote_cancellation": {
+      "profiles": [
+        "core"
+      ],
+      "shared_harness": [
+        {
+          "path": "conformance/harness/coordination_scenarios_test.go",
+          "symbol": "verifyCooperativeRemoteCancellation"
+        }
+      ],
+      "native_tests": []
+    },
+    "cron_schedule_goldens": {
+      "profiles": [
+        "core"
+      ],
+      "shared_harness": [
+        {
+          "path": "conformance/harness/maintenance_test.go",
+          "symbol": "verifyCronScheduleGoldens"
+        }
+      ],
+      "native_tests": [
+        "river/src/test/java/com/riverqueue/ScheduleTest.java#goGoldens"
+      ]
+    },
+    "cross_language_cancel_retry_race": {
+      "profiles": [
+        "core"
+      ],
+      "shared_harness": [
+        {
+          "path": "conformance/harness/storage_scenarios_test.go",
+          "symbol": "verifyConcurrentCancelRetryRace"
+        }
+      ],
+      "native_tests": []
+    },
+    "cross_language_unique_conflict": {
+      "profiles": [
+        "core"
+      ],
+      "shared_harness": [
+        {
+          "path": "conformance/harness/storage_scenarios_test.go",
+          "symbol": "verifyConcurrentUniqueConflicts"
+        }
+      ],
+      "native_tests": []
+    },
+    "custom_schema_candidate_migrate_reference_work": {
+      "profiles": [
+        "core"
+      ],
+      "shared_harness": [
+        {
+          "path": "conformance/harness/storage_scenarios_test.go",
+          "symbol": "verifyCustomSchema"
+        }
+      ],
+      "native_tests": []
+    },
+    "custom_schema_reference_migrate_candidate_work": {
+      "profiles": [
+        "core"
+      ],
+      "shared_harness": [
+        {
+          "path": "conformance/harness/storage_scenarios_test.go",
+          "symbol": "verifyCustomSchema"
+        }
+      ],
+      "native_tests": []
+    },
+    "database_unavailable_reconnect": {
+      "profiles": [
+        "core"
+      ],
+      "shared_harness": [
+        {
+          "path": "conformance/harness/resilience_test.go",
+          "symbol": "TestResilienceConformance"
+        }
+      ],
+      "native_tests": []
+    },
+    "default_retry_policy_schedule": {
+      "profiles": [
+        "core"
+      ],
+      "shared_harness": [
+        {
+          "path": "conformance/harness/lifecycle_scenarios_test.go",
+          "symbol": "verifyDefaultRetrySchedule"
+        }
+      ],
+      "native_tests": []
+    },
+    "deterministic_retry_clock_rng": {
+      "profiles": [
+        "core"
+      ],
+      "shared_harness": [
+        {
+          "path": "conformance/harness/storage_scenarios_test.go",
+          "symbol": "verifyDeterministicControls"
+        }
+      ],
+      "native_tests": []
+    },
+    "differential_job_crud": {
+      "profiles": [
+        "core"
+      ],
+      "shared_harness": [
+        {
+          "path": "conformance/harness/storage_scenarios_test.go",
+          "symbol": "verifyDifferentialJobCRUD"
+        }
+      ],
+      "native_tests": []
+    },
+    "differential_job_list_filters_and_cursors": {
+      "profiles": [
+        "core"
+      ],
+      "shared_harness": [
+        {
+          "path": "conformance/harness/storage_scenarios_test.go",
+          "symbol": "verifyDifferentialListCursors"
+        }
+      ],
+      "native_tests": []
+    },
+    "differential_queue_crud": {
+      "profiles": [
+        "core"
+      ],
+      "shared_harness": [
+        {
+          "path": "conformance/harness/storage_scenarios_test.go",
+          "symbol": "verifyDifferentialQueueCRUD"
+        }
+      ],
+      "native_tests": []
+    },
+    "dynamic_queue_add_reconfigure_remove": {
+      "profiles": [
+        "core"
+      ],
+      "shared_harness": [
+        {
+          "path": "conformance/harness/runtime_scenarios_test.go",
+          "symbol": "verifyDynamicQueues"
+        }
+      ],
+      "native_tests": []
+    },
+    "error_handler_cancel_override": {
+      "profiles": [
+        "core"
+      ],
+      "shared_harness": [
+        {
+          "path": "conformance/harness/runtime_scenarios_test.go",
+          "symbol": "verifyErrorHandlerCancel"
+        }
+      ],
+      "native_tests": []
+    },
+    "extension_hook_middleware_order": {
+      "profiles": [
+        "core"
+      ],
+      "shared_harness": [
+        {
+          "path": "conformance/harness/runtime_scenarios_test.go",
+          "symbol": "verifyExtensionOrder"
+        }
+      ],
+      "native_tests": []
+    },
+    "external_terminal_completion_race": {
+      "profiles": [
+        "core"
+      ],
+      "shared_harness": [
+        {
+          "path": "conformance/harness/runtime_scenarios_test.go",
+          "symbol": "verifyExternalTerminalCompletionRace"
+        }
+      ],
+      "native_tests": []
+    },
+    "hard_shutdown_soft_stop_classification": {
+      "profiles": [
+        "core"
+      ],
+      "shared_harness": [
+        {
+          "path": "conformance/harness/resilience_test.go",
+          "symbol": "TestResilienceConformance"
+        }
+      ],
+      "native_tests": []
+    },
+    "historical_migration_down_up": {
+      "profiles": [
+        "core"
+      ],
+      "shared_harness": [
+        {
+          "path": "conformance/harness/storage_scenarios_test.go",
+          "symbol": "verifyHistoricalMigrations"
+        }
+      ],
+      "native_tests": []
+    },
+    "ignored_cancellation_hard_abort": {
+      "profiles": [
+        "core"
+      ],
+      "shared_harness": [
+        {
+          "path": "conformance/harness/coordination_scenarios_test.go",
+          "symbol": "verifyIgnoredCancellationHardAbort"
+        }
+      ],
+      "native_tests": []
+    },
+    "insert_only_insert_notification": {
+      "profiles": [
+        "insert-only"
+      ],
+      "shared_harness": [
+        {
+          "path": "conformance/harness/coordination_scenarios_test.go",
+          "symbol": "verifyInsertNotificationWakeup"
+        }
+      ],
+      "native_tests": []
+    },
+    "insert_only_insert_reference_work": {
+      "profiles": [
+        "insert-only"
+      ],
+      "shared_harness": [
+        {
+          "path": "conformance/harness/insert_only_test.go",
+          "symbol": "verifyInsertOnlyInsert"
+        }
+      ],
+      "native_tests": []
+    },
+    "insert_only_profile_handshake": {
+      "profiles": [
+        "insert-only"
+      ],
+      "shared_harness": [
+        {
+          "path": "conformance/harness/insert_only_test.go",
+          "symbol": "verifyInsertOnlyHandshake"
+        }
+      ],
+      "native_tests": []
+    },
+    "insert_only_transactional_insert": {
+      "profiles": [
+        "insert-only"
+      ],
+      "shared_harness": [
+        {
+          "path": "conformance/harness/insert_only_test.go",
+          "symbol": "verifyInsertOnlyTransactions"
+        }
+      ],
+      "native_tests": []
+    },
+    "insert_only_typed_batch": {
+      "profiles": [
+        "insert-only"
+      ],
+      "shared_harness": [
+        {
+          "path": "conformance/harness/insert_only_test.go",
+          "symbol": "verifyInsertOnlyBatch"
+        }
+      ],
+      "native_tests": []
+    },
+    "insert_only_unique_insert": {
+      "profiles": [
+        "insert-only"
+      ],
+      "shared_harness": [
+        {
+          "path": "conformance/harness/insert_only_test.go",
+          "symbol": "verifyInsertOnlyUnique"
+        }
+      ],
+      "native_tests": []
+    },
+    "job_cleaner_queue_filters": {
+      "profiles": [
+        "core"
+      ],
+      "shared_harness": [
+        {
+          "path": "conformance/harness/storage_scenarios_test.go",
+          "symbol": "verifyJobCleanerQueueFilters"
+        }
+      ],
+      "native_tests": []
+    },
+    "job_list_cursor_interchange": {
+      "profiles": [
+        "core"
+      ],
+      "shared_harness": [
+        {
+          "path": "conformance/harness/storage_scenarios_test.go",
+          "symbol": "verifyJobListCursorInterchange"
+        }
+      ],
+      "native_tests": []
+    },
+    "job_row_round_trip_all_fields": {
+      "profiles": [
+        "core"
+      ],
+      "shared_harness": [
+        {
+          "path": "conformance/harness/storage_scenarios_test.go",
+          "symbol": "verifyJobRowRoundTrip"
+        }
+      ],
+      "native_tests": []
+    },
+    "leader_election_disabled_both_directions": {
+      "profiles": [
+        "core"
+      ],
+      "shared_harness": [
+        {
+          "path": "conformance/harness/coordination_scenarios_test.go",
+          "symbol": "verifyLeaderElectionDisabled"
+        }
+      ],
+      "native_tests": []
+    },
+    "leadership_renewal_under_slow_maintenance": {
+      "profiles": [
+        "core"
+      ],
+      "shared_harness": [
+        {
+          "path": "conformance/harness/maintenance_test.go",
+          "symbol": "verifyRenewalUnderSlowMaintenance"
+        }
+      ],
+      "native_tests": []
+    },
+    "leadership_same_client_id_term_replacement": {
+      "profiles": [
+        "core"
+      ],
+      "shared_harness": [
+        {
+          "path": "conformance/harness/maintenance_test.go",
+          "symbol": "verifySameClientIDTermReplacement"
+        }
+      ],
+      "native_tests": []
+    },
+    "listener_backend_disconnect_reconnect": {
+      "profiles": [
+        "core"
+      ],
+      "shared_harness": [
+        {
+          "path": "conformance/harness/coordination_scenarios_test.go",
+          "symbol": "verifyListenerReconnect"
+        }
+      ],
+      "native_tests": []
+    },
+    "lost_notification_poll_recovery": {
+      "profiles": [
+        "core"
+      ],
+      "shared_harness": [
+        {
+          "path": "conformance/harness/coordination_scenarios_test.go",
+          "symbol": "verifyLostNotificationPollRecovery"
+        }
+      ],
+      "native_tests": []
+    },
+    "maintenance_job_cleaner_retention": {
+      "profiles": [
+        "core"
+      ],
+      "shared_harness": [
+        {
+          "path": "conformance/harness/maintenance_test.go",
+          "symbol": "verifyJobCleanerRetention"
+        }
+      ],
+      "native_tests": []
+    },
+    "maintenance_queue_cleaner_keeps_active_queues": {
+      "profiles": [
+        "core"
+      ],
+      "shared_harness": [
+        {
+          "path": "conformance/harness/maintenance_test.go",
+          "symbol": "verifyQueueCleaner"
+        }
+      ],
+      "native_tests": []
+    },
+    "maintenance_reindexer_skips_artifacts": {
+      "profiles": [
+        "core"
+      ],
+      "shared_harness": [
+        {
+          "path": "conformance/harness/maintenance_test.go",
+          "symbol": "verifyReindexer"
+        }
+      ],
+      "native_tests": []
+    },
+    "maintenance_rescuer_full_batch_of_unexpired_jobs": {
+      "profiles": [
+        "core"
+      ],
+      "shared_harness": [
+        {
+          "path": "conformance/harness/maintenance_test.go",
+          "symbol": "verifyRescuerFullBatch"
+        }
+      ],
+      "native_tests": []
+    },
+    "maintenance_rescuer_stale_selection": {
+      "profiles": [
+        "core"
+      ],
+      "shared_harness": [
+        {
+          "path": "conformance/harness/maintenance_test.go",
+          "symbol": "verifyRescuerStaleSelection"
+        }
+      ],
+      "native_tests": []
+    },
+    "migration_mixed_case_schema": {
+      "profiles": [
+        "core"
+      ],
+      "shared_harness": [
+        {
+          "path": "conformance/harness/maintenance_test.go",
+          "symbol": "TestMaintenanceConformance"
+        }
+      ],
+      "native_tests": []
+    },
+    "mixed_connection_pool_bound": {
+      "profiles": [
+        "core"
+      ],
+      "shared_harness": [
+        {
+          "path": "conformance/harness/performance_test.go",
+          "symbol": "TestMixedSoak"
+        }
+      ],
+      "native_tests": []
+    },
+    "mixed_leader_death_failover_both_directions": {
+      "profiles": [
+        "core"
+      ],
+      "shared_harness": [
+        {
+          "path": "conformance/harness/lifecycle_scenarios_test.go",
+          "symbol": "verifyLeaderDeathFailover"
+        }
+      ],
+      "native_tests": []
+    },
+    "mixed_leader_failover_both_directions": {
+      "profiles": [
+        "core"
+      ],
+      "shared_harness": [
+        {
+          "path": "conformance/harness/coordination_scenarios_test.go",
+          "symbol": "verifyGracefulLeaderFailover"
+        }
+      ],
+      "native_tests": []
+    },
+    "mixed_request_resign_terms": {
+      "profiles": [
+        "core"
+      ],
+      "shared_harness": [
+        {
+          "path": "conformance/harness/coordination_scenarios_test.go",
+          "symbol": "verifyLeadershipRequestLifecycle"
+        }
+      ],
+      "native_tests": []
+    },
+    "mixed_skip_locked_competition": {
+      "profiles": [
+        "core"
+      ],
+      "shared_harness": [
+        {
+          "path": "conformance/harness/coordination_scenarios_test.go",
+          "symbol": "verifySkipLockedCompetition"
+        }
+      ],
+      "native_tests": []
+    },
+    "mixed_soak": {
+      "profiles": [
+        "core"
+      ],
+      "shared_harness": [
+        {
+          "path": "conformance/harness/performance_test.go",
+          "symbol": "TestMixedSoak"
+        }
+      ],
+      "native_tests": []
+    },
+    "mixed_unknown_kind_error": {
+      "profiles": [
+        "core"
+      ],
+      "shared_harness": [
+        {
+          "path": "conformance/harness/coordination_scenarios_test.go",
+          "symbol": "verifyUnknownKind"
+        }
+      ],
+      "native_tests": []
+    },
+    "multi_engine_competition": {
+      "profiles": [
+        "core"
+      ],
+      "shared_harness": [
+        {
+          "path": "conformance/harness/multi_engine_test.go",
+          "symbol": "TestMultiEngineConformance"
+        }
+      ],
+      "native_tests": []
+    },
+    "multi_engine_directed_candidate_work_notification_cancellation": {
+      "profiles": [
+        "core"
+      ],
+      "shared_harness": [
+        {
+          "path": "conformance/harness/multi_engine_test.go",
+          "symbol": "verifyDirectedCandidateWork"
+        }
+      ],
+      "native_tests": []
+    },
+    "multi_engine_fault_recovery": {
+      "profiles": [
+        "core"
+      ],
+      "shared_harness": [
+        {
+          "path": "conformance/harness/multi_engine_test.go",
+          "symbol": "TestMultiEngineConformance"
+        }
+      ],
+      "native_tests": []
+    },
+    "multi_engine_job_list_cursor_interchange": {
+      "profiles": [
+        "core"
+      ],
+      "shared_harness": [
+        {
+          "path": "conformance/harness/storage_scenarios_test.go",
+          "symbol": "verifyJobListCursorInterchange"
+        }
+      ],
+      "native_tests": []
+    },
+    "multi_engine_leader_election_disabled": {
+      "profiles": [
+        "core"
+      ],
+      "shared_harness": [
+        {
+          "path": "conformance/harness/coordination_scenarios_test.go",
+          "symbol": "verifyLeaderElectionDisabled"
+        }
+      ],
+      "native_tests": []
+    },
+    "multi_engine_leader_failover": {
+      "profiles": [
+        "core"
+      ],
+      "shared_harness": [
+        {
+          "path": "conformance/harness/multi_engine_test.go",
+          "symbol": "TestMultiEngineConformance"
+        }
+      ],
+      "native_tests": []
+    },
+    "multi_engine_process_kill_rescue_failover": {
+      "profiles": [
+        "core"
+      ],
+      "shared_harness": [
+        {
+          "path": "conformance/harness/multi_engine_test.go",
+          "symbol": "verifyCrossEngineProcessKillRescue"
+        }
+      ],
+      "native_tests": []
+    },
+    "multi_engine_release_performance": {
+      "profiles": [
+        "core"
+      ],
+      "shared_harness": [
+        {
+          "path": "conformance/harness/multi_engine_test.go",
+          "symbol": "TestMultiEnginePerformanceGate"
+        }
+      ],
+      "native_tests": []
+    },
+    "multi_engine_resource_bound": {
+      "profiles": [
+        "core"
+      ],
+      "shared_harness": [
+        {
+          "path": "conformance/harness/multi_engine_test.go",
+          "symbol": "assertMultiEngineConnectionBounds"
+        }
+      ],
+      "native_tests": []
+    },
+    "multi_engine_resumable_cursor": {
+      "profiles": [
+        "core"
+      ],
+      "shared_harness": [
+        {
+          "path": "conformance/harness/resumable_test.go",
+          "symbol": "verifyResumableInteroperability"
+        }
+      ],
+      "native_tests": []
+    },
+    "multi_engine_soak": {
+      "profiles": [
+        "core"
+      ],
+      "shared_harness": [
+        {
+          "path": "conformance/harness/multi_engine_test.go",
+          "symbol": "TestMultiEngineSoak"
+        }
+      ],
+      "native_tests": []
+    },
+    "multi_engine_sqlite_candidate_pairs": {
+      "profiles": [
+        "sqlite-runtime"
+      ],
+      "shared_harness": [
+        {
+          "path": "conformance/harness/multi_engine_test.go",
+          "symbol": "verifySQLiteCandidatePair"
+        }
+      ],
+      "native_tests": []
+    },
+    "notification_only_wakeups": {
+      "profiles": [
+        "core"
+      ],
+      "shared_harness": [
+        {
+          "path": "conformance/harness/coordination_scenarios_test.go",
+          "symbol": "verifyInsertNotificationWakeup"
+        }
+      ],
+      "native_tests": []
+    },
+    "notification_payloads": {
+      "profiles": [
+        "core"
+      ],
+      "shared_harness": [
+        {
+          "path": "conformance/harness/interop_scenarios_test.go",
+          "symbol": "verifyNotificationPayloads"
+        }
+      ],
+      "native_tests": []
+    },
+    "panic_attempt_trace": {
+      "profiles": [
+        "core"
+      ],
+      "shared_harness": [
+        {
+          "path": "conformance/harness/runtime_scenarios_test.go",
+          "symbol": "verifyPanicAttemptTrace"
+        }
+      ],
+      "native_tests": []
+    },
+    "pause_resume_notification": {
+      "profiles": [
+        "core"
+      ],
+      "shared_harness": [
+        {
+          "path": "conformance/harness/coordination_scenarios_test.go",
+          "symbol": "verifyPauseResumeNotification"
+        }
+      ],
+      "native_tests": []
+    },
+    "periodic_due_job_available": {
+      "profiles": [
+        "core"
+      ],
+      "shared_harness": [
+        {
+          "path": "conformance/harness/maintenance_test.go",
+          "symbol": "verifyPeriodicDueJobAvailable"
+        }
+      ],
+      "native_tests": []
+    },
+    "periodic_run_on_start": {
+      "profiles": [
+        "core"
+      ],
+      "shared_harness": [
+        {
+          "path": "conformance/harness/runtime_scenarios_test.go",
+          "symbol": "verifyPeriodicRunOnStart"
+        }
+      ],
+      "native_tests": []
+    },
+    "periodic_unique_cross_engine": {
+      "profiles": [
+        "core"
+      ],
+      "shared_harness": [
+        {
+          "path": "conformance/harness/interop_scenarios_test.go",
+          "symbol": "verifyUniquePeriodicJob"
+        }
+      ],
+      "native_tests": []
+    },
+    "poll_only_remote_cancellation": {
+      "profiles": [
+        "core"
+      ],
+      "shared_harness": [
+        {
+          "path": "conformance/harness/coordination_scenarios_test.go",
+          "symbol": "verifyPollOnlyRemoteCancellation"
+        }
+      ],
+      "native_tests": []
+    },
+    "pool_pressure_completion": {
+      "profiles": [
+        "core"
+      ],
+      "shared_harness": [
+        {
+          "path": "conformance/harness/lifecycle_scenarios_test.go",
+          "symbol": "verifyPoolPressure"
+        }
+      ],
+      "native_tests": []
+    },
+    "process_kill_restart_and_rescue": {
+      "profiles": [
+        "core"
+      ],
+      "shared_harness": [
+        {
+          "path": "conformance/harness/coordination_scenarios_test.go",
+          "symbol": "verifyProcessKillRestartAndRescue"
+        }
+      ],
+      "native_tests": []
+    },
+    "queue_names_and_unknown_queue_control": {
+      "profiles": [
+        "core"
+      ],
+      "shared_harness": [
+        {
+          "path": "conformance/harness/maintenance_test.go",
+          "symbol": "TestMaintenanceConformance"
+        }
+      ],
+      "native_tests": []
+    },
+    "reference_insert_candidate_work": {
+      "profiles": [
+        "core"
+      ],
+      "shared_harness": [
+        {
+          "path": "conformance/harness/mixed_test.go",
+          "symbol": "verifyInsertThenWork"
+        }
+      ],
+      "native_tests": []
+    },
+    "reference_migrator_candidate_runtime": {
+      "profiles": [
+        "core"
+      ],
+      "shared_harness": [
+        {
+          "path": "conformance/harness/mixed_test.go",
+          "symbol": "verifyMigratorRuntime"
+        }
+      ],
+      "native_tests": []
+    },
+    "reference_process_kill_candidate_rescue": {
+      "profiles": [
+        "core"
+      ],
+      "shared_harness": [
+        {
+          "path": "conformance/harness/lifecycle_scenarios_test.go",
+          "symbol": "verifyProcessKillCrossEngineRescue"
+        }
+      ],
+      "native_tests": []
+    },
+    "refetched_attempt_cancellation": {
+      "profiles": [
+        "core"
+      ],
+      "shared_harness": [
+        {
+          "path": "conformance/harness/runtime_scenarios_test.go",
+          "symbol": "verifyRefetchedAttemptCancellation"
+        }
+      ],
+      "native_tests": []
+    },
+    "release_enqueue_performance": {
+      "profiles": [
+        "core"
+      ],
+      "shared_harness": [
+        {
+          "path": "conformance/harness/performance_test.go",
+          "symbol": "TestPerformanceGate"
+        }
+      ],
+      "native_tests": []
+    },
+    "release_mixed_performance": {
+      "profiles": [
+        "core"
+      ],
+      "shared_harness": [
+        {
+          "path": "conformance/harness/performance_test.go",
+          "symbol": "TestPerformanceGate"
+        }
+      ],
+      "native_tests": []
+    },
+    "release_worker_performance": {
+      "profiles": [
+        "core"
+      ],
+      "shared_harness": [
+        {
+          "path": "conformance/harness/performance_test.go",
+          "symbol": "TestPerformanceGate"
+        }
+      ],
+      "native_tests": []
+    },
+    "remote_cancel_notification": {
+      "profiles": [
+        "core"
+      ],
+      "shared_harness": [
+        {
+          "path": "conformance/harness/coordination_scenarios_test.go",
+          "symbol": "verifyRemoteCancelNotification"
+        }
+      ],
+      "native_tests": []
+    },
+    "remote_queue_subscription_events": {
+      "profiles": [
+        "core"
+      ],
+      "shared_harness": [
+        {
+          "path": "conformance/harness/coordination_scenarios_test.go",
+          "symbol": "verifyRemoteQueueSubscriptionEvents"
+        }
+      ],
+      "native_tests": []
+    },
+    "reserved_metadata_cross_engine": {
+      "profiles": [
+        "core"
+      ],
+      "shared_harness": [
+        {
+          "path": "conformance/harness/lifecycle_scenarios_test.go",
+          "symbol": "verifyReservedMetadata"
+        }
+      ],
+      "native_tests": []
+    },
+    "resumable_cross_engine_cursor": {
+      "profiles": [
+        "core"
+      ],
+      "shared_harness": [
+        {
+          "path": "conformance/harness/resumable_test.go",
+          "symbol": "verifyResumableInteroperability"
+        }
+      ],
+      "native_tests": []
+    },
+    "resumable_retry": {
+      "profiles": [
+        "core"
+      ],
+      "shared_harness": [
+        {
+          "path": "conformance/harness/runtime_scenarios_test.go",
+          "symbol": "verifyResumableRetry"
+        }
+      ],
+      "native_tests": []
+    },
+    "resumable_validation": {
+      "profiles": [
+        "core"
+      ],
+      "shared_harness": [
+        {
+          "path": "conformance/harness/resumable_test.go",
+          "symbol": "verifyResumableValidation"
+        }
+      ],
+      "native_tests": []
+    },
+    "rolling_deployment_same_protocol": {
+      "profiles": [
+        "core"
+      ],
+      "shared_harness": [
+        {
+          "path": "conformance/harness/lifecycle_scenarios_test.go",
+          "symbol": "verifyRollingDeployment"
+        }
+      ],
+      "native_tests": []
+    },
+    "shutdown_after_cancel_attempt": {
+      "profiles": [
+        "core"
+      ],
+      "shared_harness": [
+        {
+          "path": "conformance/harness/resilience_test.go",
+          "symbol": "TestResilienceConformance"
+        }
+      ],
+      "native_tests": []
+    },
+    "simulated_yugabyte_polling": {
+      "profiles": [
+        "core"
+      ],
+      "shared_harness": [
+        {
+          "path": "conformance/harness/yugabyte_test.go",
+          "symbol": "verifySimulatedYugabyte"
+        }
+      ],
+      "native_tests": []
+    },
+    "single_implementation_worker_outcomes": {
+      "profiles": [
+        "core"
+      ],
+      "shared_harness": [
+        {
+          "path": "conformance/harness/runtime_scenarios_test.go",
+          "symbol": "verifyWorkerOutcomes"
+        }
+      ],
+      "native_tests": []
+    },
+    "snooze_once_metadata_transition": {
+      "profiles": [
+        "core"
+      ],
+      "shared_harness": [
+        {
+          "path": "conformance/harness/runtime_scenarios_test.go",
+          "symbol": "verifySnoozeTransition"
+        }
+      ],
+      "native_tests": []
+    },
+    "sqlite_batch_atomicity": {
+      "profiles": [
+        "sqlite-storage"
+      ],
+      "shared_harness": [
+        {
+          "path": "conformance/harness/storage_scenarios_test.go",
+          "symbol": "verifyBatchInsertion"
+        }
+      ],
+      "native_tests": []
+    },
+    "sqlite_deterministic_retry_unique": {
+      "profiles": [
+        "sqlite-storage"
+      ],
+      "shared_harness": [
+        {
+          "path": "conformance/harness/storage_scenarios_test.go",
+          "symbol": "verifyDeterministicControls"
+        },
+        {
+          "path": "conformance/harness/unique_test.go",
+          "symbol": "verifyUniqueKeyGoldens"
+        }
+      ],
+      "native_tests": []
+    },
+    "sqlite_insert_get_unique_cross_language": {
+      "profiles": [
+        "sqlite-storage"
+      ],
+      "shared_harness": [
+        {
+          "path": "conformance/harness/sqlite_test.go",
+          "symbol": "verifySQLiteCrossLanguageInsertion"
+        }
+      ],
+      "native_tests": []
+    },
+    "sqlite_job_crud": {
+      "profiles": [
+        "sqlite-storage"
+      ],
+      "shared_harness": [
+        {
+          "path": "conformance/harness/storage_scenarios_test.go",
+          "symbol": "verifyDifferentialJobCRUD"
+        }
+      ],
+      "native_tests": []
+    },
+    "sqlite_job_rows": {
+      "profiles": [
+        "sqlite-storage"
+      ],
+      "shared_harness": [
+        {
+          "path": "conformance/harness/job_rows_test.go",
+          "symbol": "verifySQLiteJobRows"
+        }
+      ],
+      "native_tests": []
+    },
+    "sqlite_migration_cross_language": {
+      "profiles": [
+        "sqlite-storage"
+      ],
+      "shared_harness": [
+        {
+          "path": "conformance/harness/sqlite_test.go",
+          "symbol": "verifySQLiteMigrations"
+        }
+      ],
+      "native_tests": []
+    },
+    "sqlite_profile_handshake": {
+      "profiles": [
+        "sqlite-storage"
+      ],
+      "shared_harness": [
+        {
+          "path": "conformance/harness/sqlite_test.go",
+          "symbol": "verifyProfileHandshakes"
+        }
+      ],
+      "native_tests": []
+    },
+    "sqlite_runtime_attempted_by_ordering": {
+      "profiles": [
+        "sqlite-runtime"
+      ],
+      "shared_harness": [
+        {
+          "path": "conformance/harness/sqlite_test.go",
+          "symbol": "verifySQLiteAttemptedByHistory"
+        }
+      ],
+      "native_tests": []
+    },
+    "sqlite_runtime_claim_time_cancellation": {
+      "profiles": [
+        "sqlite-runtime"
+      ],
+      "shared_harness": [
+        {
+          "path": "conformance/harness/interop_scenarios_test.go",
+          "symbol": "verifyClaimTimeCancellation"
+        }
+      ],
+      "native_tests": []
+    },
+    "sqlite_runtime_competing_workers": {
+      "profiles": [
+        "sqlite-runtime"
+      ],
+      "shared_harness": [
+        {
+          "path": "conformance/harness/sqlite_test.go",
+          "symbol": "verifySQLiteCompetingWorkers"
+        }
+      ],
+      "native_tests": []
+    },
+    "sqlite_runtime_completion_under_writer_lock": {
+      "profiles": [
+        "sqlite-runtime"
+      ],
+      "shared_harness": [
+        {
+          "path": "conformance/harness/resilience_test.go",
+          "symbol": "TestResilienceSQLiteConformance"
+        }
+      ],
+      "native_tests": []
+    },
+    "sqlite_runtime_cross_language_work": {
+      "profiles": [
+        "sqlite-runtime"
+      ],
+      "shared_harness": [
+        {
+          "path": "conformance/harness/sqlite_test.go",
+          "symbol": "verifySQLiteCrossLanguageWork"
+        }
+      ],
+      "native_tests": []
+    },
+    "sqlite_runtime_extensions_resumable_subscriptions": {
+      "profiles": [
+        "sqlite-runtime"
+      ],
+      "shared_harness": [
+        {
+          "path": "conformance/harness/sqlite_test.go",
+          "symbol": "verifySQLiteAdvancedRuntime"
+        }
+      ],
+      "native_tests": []
+    },
+    "sqlite_runtime_external_terminal_completion_race": {
+      "profiles": [
+        "sqlite-runtime"
+      ],
+      "shared_harness": [
+        {
+          "path": "conformance/harness/runtime_scenarios_test.go",
+          "symbol": "verifyExternalTerminalCompletionRace"
+        }
+      ],
+      "native_tests": []
+    },
+    "sqlite_runtime_go_integer_ranges": {
+      "profiles": [
+        "sqlite-runtime"
+      ],
+      "shared_harness": [
+        {
+          "path": "conformance/harness/resilience_test.go",
+          "symbol": "TestResilienceSQLiteConformance"
+        }
+      ],
+      "native_tests": []
+    },
+    "sqlite_runtime_invalid_json_columns": {
+      "profiles": [
+        "sqlite-runtime"
+      ],
+      "shared_harness": [
+        {
+          "path": "conformance/harness/resilience_test.go",
+          "symbol": "TestResilienceSQLiteConformance"
+        }
+      ],
+      "native_tests": []
+    },
+    "sqlite_runtime_job_cleaner_queue_filters": {
+      "profiles": [
+        "sqlite-runtime"
+      ],
+      "shared_harness": [
+        {
+          "path": "conformance/harness/storage_scenarios_test.go",
+          "symbol": "verifyJobCleanerQueueFilters"
+        }
+      ],
+      "native_tests": []
+    },
+    "sqlite_runtime_job_list_cursor_interchange": {
+      "profiles": [
+        "sqlite-runtime"
+      ],
+      "shared_harness": [
+        {
+          "path": "conformance/harness/storage_scenarios_test.go",
+          "symbol": "verifyJobListCursorInterchange"
+        }
+      ],
+      "native_tests": []
+    },
+    "sqlite_runtime_job_rows": {
+      "profiles": [
+        "sqlite-runtime"
+      ],
+      "shared_harness": [
+        {
+          "path": "conformance/harness/job_rows_test.go",
+          "symbol": "verifySQLiteWorkedJobRows"
+        },
+        {
+          "path": "conformance/harness/job_rows_test.go",
+          "symbol": "verifySQLiteRuntimeJobRows"
+        }
+      ],
+      "native_tests": []
+    },
+    "sqlite_runtime_leader_election_disabled": {
+      "profiles": [
+        "sqlite-runtime"
+      ],
+      "shared_harness": [
+        {
+          "path": "conformance/harness/coordination_scenarios_test.go",
+          "symbol": "verifyLeaderElectionDisabled"
+        }
+      ],
+      "native_tests": []
+    },
+    "sqlite_runtime_leadership_failover": {
+      "profiles": [
+        "sqlite-runtime"
+      ],
+      "shared_harness": [
+        {
+          "path": "conformance/harness/sqlite_test.go",
+          "symbol": "verifySQLiteLeadershipFailover"
+        }
+      ],
+      "native_tests": []
+    },
+    "sqlite_runtime_lifecycle_shutdown": {
+      "profiles": [
+        "sqlite-runtime"
+      ],
+      "shared_harness": [
+        {
+          "path": "conformance/harness/sqlite_test.go",
+          "symbol": "verifySQLiteLifecycle"
+        }
+      ],
+      "native_tests": []
+    },
+    "sqlite_runtime_notification_payloads": {
+      "profiles": [
+        "sqlite-runtime"
+      ],
+      "shared_harness": [
+        {
+          "path": "conformance/harness/interop_scenarios_test.go",
+          "symbol": "verifyNotificationPayloads"
+        }
+      ],
+      "native_tests": []
+    },
+    "sqlite_runtime_notification_wakeups": {
+      "profiles": [
+        "sqlite-runtime"
+      ],
+      "shared_harness": [
+        {
+          "path": "conformance/harness/coordination_scenarios_test.go",
+          "symbol": "verifyPauseResumeNotification"
+        }
+      ],
+      "native_tests": []
+    },
+    "sqlite_runtime_periodic_scheduler": {
+      "profiles": [
+        "sqlite-runtime"
+      ],
+      "shared_harness": [
+        {
+          "path": "conformance/harness/sqlite_test.go",
+          "symbol": "verifySQLitePeriodicScheduler"
+        }
+      ],
+      "native_tests": []
+    },
+    "sqlite_runtime_periodic_unique": {
+      "profiles": [
+        "sqlite-runtime"
+      ],
+      "shared_harness": [
+        {
+          "path": "conformance/harness/interop_scenarios_test.go",
+          "symbol": "verifyUniquePeriodicJob"
+        }
+      ],
+      "native_tests": []
+    },
+    "sqlite_runtime_poll_only_recovery": {
+      "profiles": [
+        "sqlite-runtime"
+      ],
+      "shared_harness": [
+        {
+          "path": "conformance/harness/sqlite_test.go",
+          "symbol": "verifySQLitePollOnly"
+        }
+      ],
+      "native_tests": []
+    },
+    "sqlite_runtime_profile_handshake": {
+      "profiles": [
+        "sqlite-runtime"
+      ],
+      "shared_harness": [
+        {
+          "path": "conformance/harness/sqlite_test.go",
+          "symbol": "verifyProfileHandshakes"
+        }
+      ],
+      "native_tests": []
+    },
+    "sqlite_runtime_queue_crud_reconfigure_pause": {
+      "profiles": [
+        "sqlite-runtime"
+      ],
+      "shared_harness": [
+        {
+          "path": "conformance/harness/sqlite_test.go",
+          "symbol": "verifySQLiteQueues"
+        }
+      ],
+      "native_tests": []
+    },
+    "sqlite_runtime_remote_cancellation": {
+      "profiles": [
+        "sqlite-runtime"
+      ],
+      "shared_harness": [
+        {
+          "path": "conformance/harness/coordination_scenarios_test.go",
+          "symbol": "verifyRemoteCancelNotification"
+        },
+        {
+          "path": "conformance/harness/sqlite_test.go",
+          "symbol": "verifySQLiteCancelNotifications"
+        }
+      ],
+      "native_tests": []
+    },
+    "sqlite_runtime_remote_queue_subscription_events": {
+      "profiles": [
+        "sqlite-runtime"
+      ],
+      "shared_harness": [
+        {
+          "path": "conformance/harness/coordination_scenarios_test.go",
+          "symbol": "verifyRemoteQueueSubscriptionEvents"
+        }
+      ],
+      "native_tests": []
+    },
+    "sqlite_runtime_resumable_cross_engine_cursor": {
+      "profiles": [
+        "sqlite-runtime"
+      ],
+      "shared_harness": [
+        {
+          "path": "conformance/harness/resumable_test.go",
+          "symbol": "verifyResumableInteroperability"
+        }
+      ],
+      "native_tests": []
+    },
+    "sqlite_runtime_resumable_validation": {
+      "profiles": [
+        "sqlite-runtime"
+      ],
+      "shared_harness": [
+        {
+          "path": "conformance/harness/resumable_test.go",
+          "symbol": "verifyResumableValidation"
+        }
+      ],
+      "native_tests": []
+    },
+    "sqlite_runtime_transactional_notification": {
+      "profiles": [
+        "sqlite-runtime"
+      ],
+      "shared_harness": [
+        {
+          "path": "conformance/harness/sqlite_test.go",
+          "symbol": "verifySQLiteTransactionalNotification"
+        }
+      ],
+      "native_tests": []
+    },
+    "sqlite_runtime_unknown_kind_error": {
+      "profiles": [
+        "sqlite-runtime"
+      ],
+      "shared_harness": [
+        {
+          "path": "conformance/harness/coordination_scenarios_test.go",
+          "symbol": "verifyUnknownKind"
+        }
+      ],
+      "native_tests": []
+    },
+    "sqlite_timestamp_rounding_ordering": {
+      "profiles": [
+        "sqlite-storage"
+      ],
+      "shared_harness": [
+        {
+          "path": "conformance/harness/sqlite_test.go",
+          "symbol": "verifySQLiteTimestampEncoding"
+        }
+      ],
+      "native_tests": []
+    },
+    "sqlite_transactions": {
+      "profiles": [
+        "sqlite-storage"
+      ],
+      "shared_harness": [
+        {
+          "path": "conformance/harness/sqlite_test.go",
+          "symbol": "verifySQLiteTransactions"
+        }
+      ],
+      "native_tests": []
+    },
+    "sqlite_unique_column_bytes": {
+      "profiles": [
+        "sqlite-storage"
+      ],
+      "shared_harness": [
+        {
+          "path": "conformance/harness/interop_scenarios_test.go",
+          "symbol": "verifyUniqueColumnBytes"
+        }
+      ],
+      "native_tests": []
+    },
+    "sqlite_unsafe_int64_job_ids_rpc_list_cursors": {
+      "profiles": [
+        "sqlite-storage"
+      ],
+      "shared_harness": [
+        {
+          "path": "conformance/harness/storage_scenarios_test.go",
+          "symbol": "verifyUnsafeInt64JobIDs"
+        }
+      ],
+      "native_tests": []
+    },
+    "stuck_job_detection": {
+      "profiles": [
+        "core"
+      ],
+      "shared_harness": [
+        {
+          "path": "conformance/harness/lifecycle_scenarios_test.go",
+          "symbol": "verifyStuckJobDetection"
+        }
+      ],
+      "native_tests": []
+    },
+    "timeout_cancellation": {
+      "profiles": [
+        "core"
+      ],
+      "shared_harness": [
+        {
+          "path": "conformance/harness/runtime_scenarios_test.go",
+          "symbol": "verifyTimeoutCancellation"
+        }
+      ],
+      "native_tests": []
+    },
+    "transaction_abort_rollback_visibility": {
+      "profiles": [
+        "core"
+      ],
+      "shared_harness": [
+        {
+          "path": "conformance/harness/mixed_test.go",
+          "symbol": "verifyTransactionAbortRollback"
+        }
+      ],
+      "native_tests": []
+    },
+    "transaction_commit_visibility": {
+      "profiles": [
+        "core"
+      ],
+      "shared_harness": [
+        {
+          "path": "conformance/harness/mixed_test.go",
+          "symbol": "verifyTransactionCommitVisibility"
+        }
+      ],
+      "native_tests": [
+        "river/src/test/java/com/riverqueue/ClientTest.java#applicationTransactionOwnsCommitAndRollback"
+      ]
+    },
+    "transaction_rollback_visibility": {
+      "profiles": [
+        "core"
+      ],
+      "shared_harness": [
+        {
+          "path": "conformance/harness/mixed_test.go",
+          "symbol": "verifyTransactionRollbackVisibility"
+        }
+      ],
+      "native_tests": [
+        "river/src/test/java/com/riverqueue/ClientTest.java#applicationTransactionOwnsCommitAndRollback"
+      ]
+    },
+    "transactional_batch_insertion": {
+      "profiles": [
+        "core"
+      ],
+      "shared_harness": [
+        {
+          "path": "conformance/harness/storage_scenarios_test.go",
+          "symbol": "verifyTransactionalBatchInsertion"
+        }
+      ],
+      "native_tests": []
+    },
+    "transactional_completion": {
+      "profiles": [
+        "core"
+      ],
+      "shared_harness": [
+        {
+          "path": "conformance/harness/runtime_scenarios_test.go",
+          "symbol": "verifyTransactionalCompletion"
+        }
+      ],
+      "native_tests": []
+    },
+    "transactional_cross_language_cancel": {
+      "profiles": [
+        "core"
+      ],
+      "shared_harness": [
+        {
+          "path": "conformance/harness/mixed_test.go",
+          "symbol": "verifyTransactionalCrossLanguageCancel"
+        }
+      ],
+      "native_tests": []
+    },
+    "transactional_crud_commit_rollback": {
+      "profiles": [
+        "core"
+      ],
+      "shared_harness": [
+        {
+          "path": "conformance/harness/storage_scenarios_test.go",
+          "symbol": "verifyTransactionalJobCRUD"
+        }
+      ],
+      "native_tests": []
+    },
+    "transactional_insert_notification_commit_only": {
+      "profiles": [
+        "core"
+      ],
+      "shared_harness": [
+        {
+          "path": "conformance/harness/coordination_scenarios_test.go",
+          "symbol": "verifyTransactionalNotificationWakeups"
+        }
+      ],
+      "native_tests": []
+    },
+    "transactional_queue_operations": {
+      "profiles": [
+        "core"
+      ],
+      "shared_harness": [
+        {
+          "path": "conformance/harness/storage_scenarios_test.go",
+          "symbol": "verifyTransactionalQueueOperations"
+        }
+      ],
+      "native_tests": []
+    },
+    "typed_batch_insertion": {
+      "profiles": [
+        "core"
+      ],
+      "shared_harness": [
+        {
+          "path": "conformance/harness/storage_scenarios_test.go",
+          "symbol": "verifyBatchInsertion"
+        }
+      ],
+      "native_tests": []
+    },
+    "unique_column_bytes": {
+      "profiles": [
+        "core"
+      ],
+      "shared_harness": [
+        {
+          "path": "conformance/harness/interop_scenarios_test.go",
+          "symbol": "verifyUniqueColumnBytes"
+        }
+      ],
+      "native_tests": []
+    },
+    "unique_hash_goldens": {
+      "profiles": [
+        "core"
+      ],
+      "shared_harness": [
+        {
+          "path": "conformance/harness/unique_test.go",
+          "symbol": "verifyUniqueKeyGoldens"
+        }
+      ],
+      "native_tests": [
+        "river/src/test/java/com/riverqueue/UniqueTest.java#goGoldens"
+      ]
+    },
+    "unsafe_int64_job_ids_rpc_list_cursors": {
+      "profiles": [
+        "core"
+      ],
+      "shared_harness": [
+        {
+          "path": "conformance/harness/storage_scenarios_test.go",
+          "symbol": "verifyUnsafeInt64JobIDs"
+        }
+      ],
+      "native_tests": []
+    }
+  }
+}

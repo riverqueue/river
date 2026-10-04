@@ -1,0 +1,23 @@
+{
+  "application_name": "river-conformance-java",
+  "build_command": [
+    "python3",
+    "${RIVER_JAVA_ROOT}/conformance/bin/build.py"
+  ],
+  "command": [
+    "${RIVER_JAVA_ROOT}/conformance/bin/adapter"
+  ],
+  "implementation": "java",
+  "profiles": [
+    "insert-only-v1",
+    "portable-storage-v1",
+    "postgres-full-v1",
+    "sqlite-runtime-v1"
+  ],
+  "version": "0.48.0-alpha.1",
+  "start_options": [
+    "elect_interval_ms",
+    "rescuer_interval_ms",
+    "scheduler_interval_ms"
+  ]
+}
