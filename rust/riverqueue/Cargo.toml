@@ -53,6 +53,10 @@ name = "lifecycle"
 required-features = ["sqlite"]
 
 [[test]]
+name = "work_extensions"
+required-features = ["sqlite"]
+
+[[test]]
 name = "postgres"
 required-features = ["postgres"]
 
