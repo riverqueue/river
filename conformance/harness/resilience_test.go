@@ -1,0 +1,543 @@
+//go:build riverconformance
+
+package harness_test
+
+import (
+	"context"
+	"io"
+	"net"
+	"net/url"
+	"strconv"
+	"strings"
+	"sync"
+	"sync/atomic"
+	"testing"
+	"time"
+
+	"github.com/jackc/pgx/v5"
+	"github.com/stretchr/testify/require"
+)
+
+// TestResilienceConformance checks that each implementation keeps working
+// through database faults and reaches Go's job states on non-happy paths:
+// an unavailable database, transient completion errors, row locks, hard
+// shutdown, and rows another implementation may consider malformed. Faults
+// are injected by the harness itself (a TCP proxy and direct SQL) rather than
+// through adapter methods, so every implementation runs the same scenarios.
+func TestResilienceConformance(t *testing.T) { //nolint:paralleltest // Owns the shared PostgreSQL database.
+	databaseURL := requireEnv(t, "RIVER_CONFORMANCE_DATABASE_URL")
+	scenarios := newScenarioTracker(t, scenarioOwnerResilience)
+	ctx := context.Background()
+	repositoryRoot := repoRoot(t)
+	candidateSpec := conformanceCandidateSpec(t, repositoryRoot, false)
+
+	database, err := pgx.Connect(ctx, databaseURL)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, database.Close(context.Background())) })
+	observer, err := pgx.Connect(ctx, databaseURL)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, observer.Close(context.Background())) })
+
+	// The reference adapter always reaches the database directly. Every
+	// worker under test reaches it through its own fault proxy.
+	reference := startReferenceAdapter(t, repositoryRoot, databaseURL, "go")
+	reference.call(t, "migrate", map[string]any{}, nil)
+	goProxy := startFaultProxy(ctx, t, databaseURL)
+	candidateProxy := startFaultProxy(ctx, t, databaseURL)
+	workers := []resilienceWorker{
+		{
+			adapter: startReferenceAdapter(t, repositoryRoot, goProxy.url, "go-proxied"),
+			name:    "go",
+			proxy:   goProxy,
+		},
+		{
+			adapter: startCandidateAdapter(t, repositoryRoot, candidateProxy.url, candidateSpec.Implementation, candidateSpec, candidateSpec.Command),
+			name:    candidateSpec.Implementation,
+			proxy:   candidateProxy,
+		},
+	}
+
+	scenarios.attach(reference, workers[0].adapter, workers[1].adapter)
+
+	// Subtests share one database and run in order, so none are parallel.
+	t.Run("database_unavailable_reconnect", func(t *testing.T) { //nolint:paralleltest // Shares the conformance database.
+		defer scenarios.record(t)
+
+		for _, worker := range workers {
+			reference.call(t, "reset", map[string]any{}, nil)
+			worker.adapter.call(t, "start", map[string]any{"client_id": worker.name + "-outage"}, nil)
+			barrier := worker.name + "-outage"
+			worker.adapter.call(t, "barrier_create", map[string]any{"name": barrier}, nil)
+			var inFlight, during, observed normalizedJob
+			reference.call(t, "insert", map[string]any{"behavior": "barrier_wait", "message": barrier}, &inFlight)
+			reference.call(t, "wait", map[string]any{"id": inFlight.ID, "states": []string{"running"}}, &observed)
+
+			// The database becomes unreachable for the worker: established
+			// connections reset and new ones are refused. The in-flight job
+			// finishes while its completion cannot be written, and new work
+			// arrives while the worker cannot see it.
+			worker.proxy.takeDown()
+			worker.adapter.call(t, "barrier_release", map[string]any{"name": barrier}, nil)
+			reference.call(t, "insert", map[string]any{"message": "inserted during outage"}, &during)
+			worker.proxy.waitForRejections(t, 3)
+			worker.proxy.restore()
+
+			for _, id := range []int64{inFlight.ID, during.ID} {
+				job := waitForReferenceCompleted(t, reference, id, time.Minute)
+				require.Equal(t, 1, job.Attempt, "%s job %d was rescued or retried", worker.name, id)
+				require.Empty(t, job.Errors, "%s job %d", worker.name, id)
+			}
+			worker.adapter.call(t, "stop", map[string]any{}, nil)
+		}
+	})
+
+	t.Run("completion_transient_failure_retry", func(t *testing.T) { //nolint:paralleltest // Shares the conformance database.
+		defer scenarios.record(t)
+
+		for _, worker := range workers {
+			reference.call(t, "reset", map[string]any{}, nil)
+			// Fail the first running-to-completed transition with a
+			// serialization failure. The sequence advances outside the
+			// aborted statement, so exactly one attempt fails.
+			execSQL(ctx, t, database, `
+				CREATE SEQUENCE river_resilience_completion_fault;
+				CREATE FUNCTION river_resilience_fail_completion_once() RETURNS trigger
+				LANGUAGE plpgsql AS $$ BEGIN
+					IF OLD.state = 'running' AND NEW.state = 'completed'
+						AND nextval('river_resilience_completion_fault') = 1 THEN
+						RAISE EXCEPTION 'injected completion failure' USING ERRCODE = '40001';
+					END IF;
+					RETURN NEW;
+				END $$;
+				CREATE TRIGGER river_resilience_fail_completion_once BEFORE UPDATE ON river_job
+				FOR EACH ROW EXECUTE FUNCTION river_resilience_fail_completion_once()`)
+			t.Cleanup(func() {
+				execSQL(ctx, t, database, `
+					DROP TRIGGER IF EXISTS river_resilience_fail_completion_once ON river_job;
+					DROP FUNCTION IF EXISTS river_resilience_fail_completion_once();
+					DROP SEQUENCE IF EXISTS river_resilience_completion_fault`)
+			})
+
+			worker.adapter.call(t, "start", map[string]any{"client_id": worker.name + "-completion-retry"}, nil)
+			var inserted normalizedJob
+			reference.call(t, "insert", map[string]any{"message": "transient completion failure"}, &inserted)
+			job := waitForReferenceCompleted(t, reference, inserted.ID, 30*time.Second)
+			require.Equal(t, 1, job.Attempt, worker.name)
+			require.Empty(t, job.Errors, worker.name)
+			var injected int64
+			require.NoError(t, database.QueryRow(ctx,
+				"SELECT last_value FROM river_resilience_completion_fault").Scan(&injected))
+			require.GreaterOrEqual(t, injected, int64(2), "%s: the injected failure never fired", worker.name)
+			worker.adapter.call(t, "stop", map[string]any{}, nil)
+			execSQL(ctx, t, database, `
+				DROP TRIGGER river_resilience_fail_completion_once ON river_job;
+				DROP FUNCTION river_resilience_fail_completion_once();
+				DROP SEQUENCE river_resilience_completion_fault`)
+		}
+	})
+
+	t.Run("completion_row_lock_wait", func(t *testing.T) { //nolint:paralleltest // Shares the conformance database.
+		defer scenarios.record(t)
+
+		for _, worker := range workers {
+			reference.call(t, "reset", map[string]any{}, nil)
+			worker.adapter.call(t, "start", map[string]any{"client_id": worker.name + "-row-lock"}, nil)
+			barrier := worker.name + "-row-lock"
+			worker.adapter.call(t, "barrier_create", map[string]any{"name": barrier}, nil)
+			var inserted, observed normalizedJob
+			reference.call(t, "insert", map[string]any{"behavior": "barrier_wait", "message": barrier}, &inserted)
+			reference.call(t, "wait", map[string]any{"id": inserted.ID, "states": []string{"running"}}, &observed)
+
+			locker, err := database.Begin(ctx)
+			require.NoError(t, err)
+			_, err = locker.Exec(ctx, "SELECT 1 FROM river_job WHERE id = $1 FOR UPDATE", inserted.ID)
+			require.NoError(t, err)
+			worker.adapter.call(t, "barrier_release", map[string]any{"name": barrier}, nil)
+			pollUntil(t, 30*time.Second, worker.name+" completion waiting on the row lock", func() bool {
+				var waiting int
+				require.NoError(t, observer.QueryRow(ctx,
+					"SELECT count(*) FROM pg_locks WHERE NOT granted AND locktype = 'transactionid'").Scan(&waiting))
+				return waiting > 0
+			})
+			require.NoError(t, locker.Commit(ctx))
+
+			job := waitForReferenceCompleted(t, reference, inserted.ID, 30*time.Second)
+			require.Equal(t, 1, job.Attempt, worker.name)
+			worker.adapter.call(t, "stop", map[string]any{}, nil)
+		}
+	})
+
+	// The hard shutdown also stops a job whose cancellation never reached
+	// the worker; the next scenario checks that job.
+	cancelAttemptedAfterShutdown := make(map[string]normalizedJob)
+	t.Run("hard_shutdown_soft_stop_classification", func(t *testing.T) { //nolint:paralleltest // Shares the conformance database.
+		defer scenarios.record(t)
+
+		for _, worker := range workers {
+			reference.call(t, "reset", map[string]any{}, nil)
+			worker.adapter.call(t, "start", map[string]any{
+				"client_id": worker.name + "-hard-shutdown", "max_workers": 4,
+			}, nil)
+			jobs := make(map[string]normalizedJob)
+			for _, behavior := range []string{"cooperative_cancel", "cancel_attempted", "cancel_error", "cancel_panic"} {
+				insertBehavior := behavior
+				if behavior == "cancel_attempted" {
+					insertBehavior = "cooperative_cancel"
+				}
+				var inserted, observed normalizedJob
+				reference.call(t, "insert", map[string]any{"behavior": insertBehavior, "message": behavior}, &inserted)
+				reference.call(t, "wait", map[string]any{"id": inserted.ID, "states": []string{"running"}}, &observed)
+				jobs[behavior] = inserted
+			}
+			// A cancellation whose notification never reached the worker.
+			execSQL(ctx, t, database, `UPDATE river_job
+				SET metadata = jsonb_set(metadata, '{cancel_attempted_at}', to_jsonb('2026-01-02T03:04:05Z'::text))
+				WHERE id = `+strconv.FormatInt(jobs["cancel_attempted"].ID, 10))
+			worker.adapter.call(t, "stop", map[string]any{"cancel": true}, nil)
+
+			var job normalizedJob
+			reference.call(t, "get", map[string]any{"id": jobs["cooperative_cancel"].ID}, &job)
+			require.Equal(t, "available", job.State, worker.name)
+			require.Equal(t, 0, job.Attempt, worker.name)
+			require.NotNil(t, job.AttemptedAt, "%s: an interrupted job keeps attempted_at", worker.name)
+			require.Empty(t, job.Errors, worker.name)
+
+			reference.call(t, "get", map[string]any{"id": jobs["cancel_attempted"].ID}, &job)
+			cancelAttemptedAfterShutdown[worker.name] = job
+
+			for _, behavior := range []string{"cancel_error", "cancel_panic"} {
+				reference.call(t, "get", map[string]any{"id": jobs[behavior].ID}, &job)
+				require.Contains(t, []string{"available", "retryable"}, job.State, "%s %s", worker.name, behavior)
+				require.Equal(t, 1, job.Attempt, "%s %s: a genuine failure consumes its attempt", worker.name, behavior)
+				require.Len(t, job.Errors, 1, "%s %s", worker.name, behavior)
+			}
+		}
+	})
+
+	t.Run("shutdown_after_cancel_attempt", func(t *testing.T) { //nolint:paralleltest // Shares the conformance database.
+		defer scenarios.record(t)
+
+		require.Len(t, cancelAttemptedAfterShutdown, len(workers),
+			"hard_shutdown_soft_stop_classification must run first")
+		for name, job := range cancelAttemptedAfterShutdown {
+			require.Equal(t, "cancelled", job.State, name)
+			require.NotNil(t, job.FinalizedAt, name)
+		}
+	})
+
+	// A claimed row that an implementation can't decode must not strand the
+	// rows claimed with it. Like River Go, an implementation fails the
+	// undecodable row's attempt without working it: the error handler sees the
+	// partially decoded row, the attempt error starts with
+	// `job row couldn't be decoded: `, the job is retried with the client's
+	// retry policy or discarded at its maximum attempts, and the undecodable
+	// value is left as it was. Array metadata is valid for Go but can't be
+	// decoded by every implementation, so each implementation either works
+	// such a row or fails it this way.
+	t.Run("claimed_row_decode_isolation", func(t *testing.T) { //nolint:paralleltest // Shares the conformance database.
+		defer scenarios.record(t)
+
+		const retryDelay = time.Hour
+		setArrayMetadata := func(t *testing.T, id int64) {
+			t.Helper()
+			execSQL(ctx, t, database, `UPDATE river_job SET metadata = '[1]'::jsonb
+				WHERE id = `+strconv.FormatInt(id, 10))
+		}
+
+		for _, worker := range workers {
+			reference.call(t, "reset", map[string]any{}, nil)
+			var ordinary, sparseErrors, oddErrors, retried, discarded normalizedJob
+			reference.call(t, "insert", map[string]any{"message": "ordinary"}, &ordinary)
+			reference.call(t, "insert", map[string]any{"message": "sparse errors"}, &sparseErrors)
+			// Go decodes attempt errors with encoding/json, which tolerates
+			// missing and unknown fields.
+			execSQL(ctx, t, database, `UPDATE river_job
+				SET errors = ARRAY['{"error": "sparse", "extra": true}'::jsonb]
+				WHERE id = `+strconv.FormatInt(sparseErrors.ID, 10))
+			// Attempt errors in a shape River doesn't write decode leniently,
+			// with an `at` that isn't RFC 3339 left zero.
+			const oddErrorsSQL = `ARRAY['{"at": "2024-01-02 03:04:05+00", "attempt": "1", "error": {"message": "boom"}, "trace": ["frame"]}'::jsonb, '42'::jsonb]`
+			reference.call(t, "insert", map[string]any{"message": "odd errors"}, &oddErrors)
+			execSQL(ctx, t, database, `UPDATE river_job SET errors = `+oddErrorsSQL+`
+				WHERE id = `+strconv.FormatInt(oddErrors.ID, 10))
+			decodable := []int64{ordinary.ID, sparseErrors.ID, oddErrors.ID}
+			reference.call(t, "insert", map[string]any{"message": "array metadata retried"}, &retried)
+			reference.call(t, "insert", map[string]any{
+				"message": "array metadata discarded", "opts": map[string]any{"max_attempts": 1},
+			}, &discarded)
+			setArrayMetadata(t, retried.ID)
+			setArrayMetadata(t, discarded.ID)
+
+			worker.adapter.call(t, "start", map[string]any{
+				"client_id":      worker.name + "-decode",
+				"retry_delay_ms": retryDelay.Milliseconds(),
+			}, nil)
+			for _, id := range decodable {
+				var (
+					attempt int
+					state   string
+				)
+				pollUntil(t, 30*time.Second, worker.name+" completing a decodable row", func() bool {
+					require.NoError(t, database.QueryRow(ctx,
+						"SELECT state::text, attempt FROM river_job WHERE id = $1", id).Scan(&state, &attempt))
+					return state == "completed"
+				})
+				require.Equal(t, 1, attempt, "%s job %d", worker.name, id)
+			}
+			var worked normalizedJob
+			worker.adapter.call(t, "get", map[string]any{"id": oddErrors.ID}, &worked)
+			require.Equal(t, []normalizedAttemptError{
+				{At: "0001-01-01T00:00:00Z", Attempt: 1, Error: `{"message":"boom"}`, Trace: `["frame"]`},
+				{At: "0001-01-01T00:00:00Z", Error: "42"},
+			}, worked.Errors, worker.name)
+			var errorsText string
+			require.NoError(t, database.QueryRow(ctx,
+				"SELECT errors::text FROM river_job WHERE id = $1", oddErrors.ID).Scan(&errorsText))
+			var expectedText string
+			require.NoError(t, database.QueryRow(ctx, "SELECT ("+oddErrorsSQL+")::text").Scan(&expectedText))
+			require.Equal(t, expectedText, errorsText, "%s rewrote attempt errors it only read", worker.name)
+			failed := 0
+			for _, row := range []struct {
+				failedState string
+				id          int64
+			}{
+				{failedState: "retryable", id: retried.ID},
+				{failedState: "discarded", id: discarded.ID},
+			} {
+				if requireUndecodableRowOutcome(ctx, t, database, worker.name, row.id, row.failedState) {
+					failed++
+				}
+			}
+			stats := waitForRuntimeStats(t, worker.adapter, func(stats runtimeStats) bool {
+				return countRuntimeEvent(stats, "job_completed") == len(decodable)+2-failed &&
+					countRuntimeEvent(stats, "job_failed") == failed
+			})
+			require.Zero(t, stats.ErrorHandlerCalls, worker.name)
+			worker.adapter.call(t, "stop", map[string]any{}, nil)
+
+			// The error handler sees an undecodable row's failed attempt, and
+			// its decision applies to it.
+			var handled, afterHandled normalizedJob
+			reference.call(t, "insert", map[string]any{"message": "array metadata handled"}, &handled)
+			setArrayMetadata(t, handled.ID)
+			reference.call(t, "insert", map[string]any{"message": "ordinary after handler"}, &afterHandled)
+			worker.adapter.call(t, "start", map[string]any{
+				"client_id":            worker.name + "-decode-handler",
+				"error_handler_cancel": true,
+			}, nil)
+			waitForReferenceCompleted(t, reference, afterHandled.ID, 30*time.Second)
+			handlerCalls := 0
+			if requireUndecodableRowOutcome(ctx, t, database, worker.name, handled.ID, "cancelled") {
+				handlerCalls = 1
+			}
+			waitForRuntimeStats(t, worker.adapter, func(stats runtimeStats) bool {
+				return stats.ErrorHandlerCalls == handlerCalls
+			})
+			worker.adapter.call(t, "stop", map[string]any{}, nil)
+		}
+	})
+}
+
+// requireUndecodableRowOutcome waits for a worker to finish with a claimed row
+// whose metadata is a JSON array, then checks the outcome through SQL, since
+// not every implementation can read the row back. An implementation that can
+// decode the row completes it. One that can't fails the attempt the way River
+// Go fails an undecodable row, reaching failedState, and reports true. Either
+// way, the metadata is left as it was.
+func requireUndecodableRowOutcome(ctx context.Context, t *testing.T, database *pgx.Conn, workerName string, id int64, failedState string) bool {
+	t.Helper()
+
+	var (
+		attempt, errorCount    int
+		lastError, lastAttempt *string
+		metadata, state        string
+		retryLater, finalized  bool
+	)
+	pollUntil(t, 30*time.Second, workerName+" finishing a row it may not decode", func() bool {
+		require.NoError(t, database.QueryRow(ctx, `SELECT state::text, attempt,
+				coalesce(array_length(errors, 1), 0),
+				errors[array_length(errors, 1)] ->> 'error',
+				errors[array_length(errors, 1)] ->> 'attempt',
+				metadata::text, scheduled_at > now() + interval '30 minutes',
+				finalized_at IS NOT NULL
+			FROM river_job WHERE id = $1`, id).Scan(
+			&state, &attempt, &errorCount, &lastError, &lastAttempt,
+			&metadata, &retryLater, &finalized))
+		return state != "available" && state != "running"
+	})
+	require.Equal(t, 1, attempt, "%s job %d", workerName, id)
+	require.Equal(t, "[1]", metadata, "%s rewrote metadata it couldn't decode", workerName)
+	if state == "completed" {
+		require.Zero(t, errorCount, "%s job %d", workerName, id)
+		return false
+	}
+
+	require.Equal(t, failedState, state, "%s job %d", workerName, id)
+	require.Equal(t, 1, errorCount, "%s job %d", workerName, id)
+	require.NotNil(t, lastError, "%s job %d", workerName, id)
+	require.True(t, strings.HasPrefix(*lastError, "job row couldn't be decoded: "),
+		"%s job %d attempt error: %s", workerName, id, *lastError)
+	require.Equal(t, "1", *lastAttempt, "%s job %d", workerName, id)
+	switch failedState {
+	case "retryable":
+		require.True(t, retryLater, "%s job %d wasn't retried with the client retry policy", workerName, id)
+	case "cancelled", "discarded":
+		require.True(t, finalized, "%s job %d", workerName, id)
+	}
+	return true
+}
+
+type resilienceWorker struct {
+	adapter *adapter
+	name    string
+	proxy   *faultProxy
+}
+
+// faultProxy forwards TCP connections to PostgreSQL and can make the database
+// unavailable to one adapter: it resets established connections and refuses
+// new ones until restored. Unlike terminating backends, this keeps the
+// database down for that adapter while the harness and reference still work.
+type faultProxy struct {
+	down     atomic.Bool
+	mu       sync.Mutex
+	open     map[net.Conn]struct{}
+	rejected atomic.Int64
+	url      string
+}
+
+func startFaultProxy(ctx context.Context, t *testing.T, databaseURL string) *faultProxy {
+	t.Helper()
+
+	parsed, err := url.Parse(databaseURL)
+	require.NoError(t, err, "the resilience tier needs a URL-form database URL")
+	upstream := parsed.Host
+	if parsed.Port() == "" {
+		upstream = net.JoinHostPort(parsed.Hostname(), "5432")
+	}
+	listener, err := (&net.ListenConfig{}).Listen(ctx, "tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	proxied := *parsed
+	proxied.Host = listener.Addr().String()
+	proxy := &faultProxy{open: make(map[net.Conn]struct{}), url: proxied.String()}
+	t.Cleanup(func() {
+		_ = listener.Close()
+		proxy.closeAll()
+	})
+
+	go func() {
+		for {
+			client, err := listener.Accept()
+			if err != nil {
+				return
+			}
+			if proxy.down.Load() {
+				proxy.rejected.Add(1)
+				_ = client.Close()
+				continue
+			}
+			go proxy.forward(ctx, client, upstream)
+		}
+	}()
+	return proxy
+}
+
+func (proxy *faultProxy) forward(ctx context.Context, client net.Conn, upstream string) {
+	dialer := &net.Dialer{Timeout: 5 * time.Second}
+	server, err := dialer.DialContext(ctx, "tcp", upstream)
+	if err != nil {
+		_ = client.Close()
+		return
+	}
+	if !proxy.track(client, server) {
+		return
+	}
+	done := make(chan struct{}, 2)
+	pipe := func(destination, source net.Conn) {
+		_, _ = io.Copy(destination, source)
+		done <- struct{}{}
+	}
+	go pipe(server, client)
+	go pipe(client, server)
+	<-done
+	proxy.untrack(client, server)
+}
+
+func (proxy *faultProxy) track(connections ...net.Conn) bool {
+	proxy.mu.Lock()
+	defer proxy.mu.Unlock()
+	if proxy.down.Load() {
+		for _, connection := range connections {
+			_ = connection.Close()
+		}
+		return false
+	}
+	for _, connection := range connections {
+		proxy.open[connection] = struct{}{}
+	}
+	return true
+}
+
+func (proxy *faultProxy) untrack(connections ...net.Conn) {
+	proxy.mu.Lock()
+	defer proxy.mu.Unlock()
+	for _, connection := range connections {
+		_ = connection.Close()
+		delete(proxy.open, connection)
+	}
+}
+
+func (proxy *faultProxy) closeAll() {
+	proxy.mu.Lock()
+	defer proxy.mu.Unlock()
+	for connection := range proxy.open {
+		_ = connection.Close()
+		delete(proxy.open, connection)
+	}
+}
+
+func (proxy *faultProxy) takeDown() {
+	proxy.down.Store(true)
+	proxy.closeAll()
+}
+
+func (proxy *faultProxy) restore() {
+	proxy.down.Store(false)
+}
+
+// waitForRejections waits until the adapter has tried to reconnect `count`
+// times while the proxy is down, proving it noticed the outage.
+func (proxy *faultProxy) waitForRejections(t *testing.T, count int64) {
+	t.Helper()
+	pollUntil(t, time.Minute, "reconnection attempts (did the client stop?)", func() bool {
+		return proxy.rejected.Load() >= count
+	})
+}
+
+func execSQL(ctx context.Context, t *testing.T, database *pgx.Conn, sql string) {
+	t.Helper()
+	_, err := database.Exec(ctx, sql)
+	require.NoError(t, err)
+}
+
+// waitForReferenceCompleted polls a job through the reference adapter, which
+// is connected directly and so unaffected by a worker's faults.
+func waitForReferenceCompleted(t *testing.T, reference *adapter, id int64, timeout time.Duration) normalizedJob {
+	t.Helper()
+	var job normalizedJob
+	pollUntil(t, timeout, "job "+strconv.FormatInt(id, 10)+" completing", func() bool {
+		reference.call(t, "get", map[string]any{"id": id}, &job)
+		return job.State == "completed"
+	})
+	return job
+}
+
+// pollUntil evaluates condition on the test goroutine until it holds, failing
+// the test after timeout.
+func pollUntil(t *testing.T, timeout time.Duration, description string, condition func() bool) {
+	t.Helper()
+	deadline := time.Now().Add(timeout)
+	for !condition() {
+		require.True(t, time.Now().Before(deadline), "timed out waiting for %s", description)
+		time.Sleep(20 * time.Millisecond)
+	}
+}

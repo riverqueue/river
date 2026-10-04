@@ -3,6 +3,7 @@ package harness_test
 const (
 	scenarioOwnerMaintenance = "TestMaintenanceConformance"
 	scenarioOwnerMixed       = "TestMixedConformance"
+	scenarioOwnerResilience  = "TestResilienceConformance"
 )
 
 type scenarioBinding struct {
@@ -24,13 +25,17 @@ var scenarioRegistry = map[string]scenarioBinding{ //nolint:gochecknoglobals // 
 	"candidate_process_kill_reference_rescue":          {owner: scenarioOwnerMixed, tier: "chaos"},
 	"claim_order":                                      {owner: scenarioOwnerMixed, tier: "mixed"},
 	"claim_time_cancellation":                          {owner: scenarioOwnerMixed, tier: "runtime"},
+	"claimed_row_decode_isolation":                     {owner: scenarioOwnerResilience, tier: "mixed"},
 	"clock_boundary_scheduling":                        {owner: scenarioOwnerMixed, tier: "mixed"},
 	"completion_batching":                              {owner: scenarioOwnerMixed, tier: "performance"},
+	"completion_row_lock_wait":                         {owner: scenarioOwnerResilience, tier: "chaos"},
+	"completion_transient_failure_retry":               {owner: scenarioOwnerResilience, tier: "chaos"},
 	"cooperative_remote_cancellation":                  {owner: scenarioOwnerMixed, tier: "runtime"},
 	"cross_language_cancel_retry_race":                 {owner: scenarioOwnerMixed, tier: "mixed"},
 	"cross_language_unique_conflict":                   {owner: scenarioOwnerMixed, tier: "codec"},
 	"custom_schema_candidate_migrate_reference_work":   {owner: scenarioOwnerMixed, tier: "mixed"},
 	"custom_schema_reference_migrate_candidate_work":   {owner: scenarioOwnerMixed, tier: "mixed"},
+	"database_unavailable_reconnect":                   {owner: scenarioOwnerResilience, tier: "chaos"},
 	"differential_job_crud":                            {owner: scenarioOwnerMixed, tier: "storage"},
 	"differential_job_list_filters_and_cursors":        {owner: scenarioOwnerMixed, tier: "storage"},
 	"differential_queue_crud":                          {owner: scenarioOwnerMixed, tier: "storage"},
@@ -39,6 +44,7 @@ var scenarioRegistry = map[string]scenarioBinding{ //nolint:gochecknoglobals // 
 	"exhausted_job_retry":                              {owner: scenarioOwnerMixed, tier: "mixed"},
 	"extension_hook_middleware_order":                  {owner: scenarioOwnerMixed, tier: "runtime"},
 	"external_terminal_completion_race":                {owner: scenarioOwnerMixed, tier: "mixed"},
+	"hard_shutdown_soft_stop_classification":           {owner: scenarioOwnerResilience, tier: "runtime"},
 	"heterogeneous_fleet_known_kinds":                  {owner: scenarioOwnerMixed, tier: "mixed"},
 	"historical_migration_down_up":                     {owner: scenarioOwnerMixed, tier: "storage"},
 	"ignored_cancellation_hard_abort":                  {owner: scenarioOwnerMixed, tier: "chaos"},
@@ -85,6 +91,7 @@ var scenarioRegistry = map[string]scenarioBinding{ //nolint:gochecknoglobals // 
 	"resumable_validation":                             {owner: scenarioOwnerMixed, tier: "runtime"},
 	"rolling_deployment_same_protocol":                 {owner: scenarioOwnerMixed, tier: "mixed"},
 	"scheduler_unique_conflict_discard":                {owner: scenarioOwnerMixed, tier: "mixed"},
+	"shutdown_after_cancel_attempt":                    {owner: scenarioOwnerResilience, tier: "runtime"},
 	"simulated_yugabyte_polling":                       {owner: scenarioOwnerMixed, tier: "mixed"},
 	"single_implementation_worker_outcomes":            {owner: scenarioOwnerMixed, tier: "runtime"},
 	"snooze_once_metadata_transition":                  {owner: scenarioOwnerMixed, tier: "runtime"},
