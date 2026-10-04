@@ -170,6 +170,30 @@ func TestMixedConformance(t *testing.T) {
 
 		verifyExhaustedJobRetry(t, goAdapter, candidateAdapter)
 	})
+	t.Run("kind_alias_rename", func(t *testing.T) {
+		defer scenarios.record(t)
+
+		verifyKindAliasRename(t, goAdapter, candidateAdapter)
+	})
+	t.Run("heterogeneous_fleet_known_kinds", func(t *testing.T) {
+		defer scenarios.record(t)
+
+		verifyHeterogeneousFleet(t, goAdapter, candidateAdapter)
+	})
+	t.Run("rescuer_unknown_kind_discard", func(t *testing.T) {
+		defer scenarios.record(t)
+
+		verifyRescuerUnknownKind(t, goAdapter, candidateAdapter, func(t *testing.T, name string) *adapter {
+			t.Helper()
+
+			return startReferenceAdapter(t, repositoryRoot, databaseURL, name)
+		})
+	})
+	t.Run("mixed_unknown_kind_error", func(t *testing.T) {
+		defer scenarios.record(t)
+
+		verifyUnknownKind(t, goAdapter, candidateAdapter)
+	})
 	t.Run("transactional_crud_commit_rollback", func(t *testing.T) {
 		defer scenarios.record(t)
 
