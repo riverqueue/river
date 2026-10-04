@@ -1,6 +1,8 @@
 node_modules/
 coverage/
 dist/
+temp/
+*/temp/
 examples/prisma/src/generated/prisma/
 *.tsbuildinfo
 .DS_Store
