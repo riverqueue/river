@@ -155,6 +155,21 @@ func TestMixedConformance(t *testing.T) {
 
 		verifyUnsafeInt64JobIDs(t, goAdapter, candidateAdapter)
 	})
+	t.Run("claim_order", func(t *testing.T) {
+		defer scenarios.record(t)
+
+		verifyClaimOrder(t, goAdapter, candidateAdapter)
+	})
+	t.Run("scheduler_unique_conflict_discard", func(t *testing.T) {
+		defer scenarios.record(t)
+
+		verifySchedulerUniqueConflictDiscard(t, goAdapter, candidateAdapter)
+	})
+	t.Run("exhausted_job_retry", func(t *testing.T) {
+		defer scenarios.record(t)
+
+		verifyExhaustedJobRetry(t, goAdapter, candidateAdapter)
+	})
 	t.Run("transactional_crud_commit_rollback", func(t *testing.T) {
 		defer scenarios.record(t)
 
@@ -185,10 +200,87 @@ func TestMixedConformance(t *testing.T) {
 
 		verifyTransactionAbortRollback(t, goAdapter, candidateAdapter)
 	})
+	t.Run("barrier_wait_and_release", func(t *testing.T) {
+		defer scenarios.record(t)
+
+		pair.eachAdapter(func(current *adapter) { verifyBarrierWaitAndRelease(t, current) })
+	})
 	t.Run("single_implementation_worker_outcomes", func(t *testing.T) {
 		defer scenarios.record(t)
 
 		pair.eachAdapter(func(current *adapter) { verifyWorkerOutcomes(t, current) })
+	})
+	t.Run("panic_attempt_trace", func(t *testing.T) {
+		defer scenarios.record(t)
+
+		pair.eachDirection(func(worker, observer *adapter) { verifyPanicAttemptTrace(t, worker, observer) })
+	})
+	t.Run("transactional_completion", func(t *testing.T) {
+		defer scenarios.record(t)
+
+		pair.eachAdapter(func(current *adapter) { verifyTransactionalCompletion(t, current) })
+	})
+	t.Run("snooze_once_metadata_transition", func(t *testing.T) {
+		defer scenarios.record(t)
+
+		pair.eachDirection(func(worker, observer *adapter) { verifySnoozeTransition(t, worker, observer) })
+	})
+	t.Run("external_terminal_completion_race", func(t *testing.T) {
+		defer scenarios.record(t)
+
+		verifyExternalTerminalCompletionRace(t, goAdapter, candidateAdapter)
+		verifyExternalTerminalCompletionRace(t, candidateAdapter, goAdapter)
+	})
+	t.Run("extension_hook_middleware_order", func(t *testing.T) {
+		defer scenarios.record(t)
+
+		pair.eachAdapter(func(current *adapter) { verifyExtensionOrder(t, current) })
+	})
+	t.Run("resumable_retry", func(t *testing.T) {
+		defer scenarios.record(t)
+
+		pair.eachAdapter(func(current *adapter) { verifyResumableRetry(t, current) })
+	})
+	t.Run("dynamic_queue_add_reconfigure_remove", func(t *testing.T) {
+		defer scenarios.record(t)
+
+		pair.eachAdapter(func(current *adapter) { verifyDynamicQueues(t, current) })
+	})
+	t.Run("periodic_run_on_start", func(t *testing.T) {
+		defer scenarios.record(t)
+
+		pair.eachAdapter(func(current *adapter) { verifyPeriodicRunOnStart(t, current) })
+	})
+	t.Run("periodic_unique_cross_engine", func(t *testing.T) {
+		defer scenarios.record(t)
+
+		verifyUniquePeriodicJob(t, goAdapter, candidateAdapter)
+	})
+	t.Run("error_handler_cancel_override", func(t *testing.T) {
+		defer scenarios.record(t)
+
+		pair.eachAdapter(func(current *adapter) { verifyErrorHandlerCancel(t, current) })
+	})
+	t.Run("resumable_validation", func(t *testing.T) {
+		defer scenarios.record(t)
+
+		pair.eachAdapter(func(current *adapter) { verifyResumableValidation(t, current) })
+	})
+	t.Run("resumable_cross_engine_cursor", func(t *testing.T) {
+		defer scenarios.record(t)
+
+		verifyResumableInteroperability(t, goAdapter, candidateAdapter)
+	})
+	t.Run("refetched_attempt_cancellation", func(t *testing.T) {
+		defer scenarios.record(t)
+
+		verifyRefetchedAttemptCancellation(t, candidateAdapter, goAdapter)
+		verifyRefetchedAttemptCancellation(t, goAdapter, candidateAdapter)
+	})
+	t.Run("timeout_cancellation", func(t *testing.T) {
+		defer scenarios.record(t)
+
+		pair.eachDirection(func(worker, observer *adapter) { verifyTimeoutCancellation(t, worker, observer) })
 	})
 	t.Run("completion_batching", func(t *testing.T) {
 		defer scenarios.record(t)
@@ -204,6 +296,21 @@ func TestMixedConformance(t *testing.T) {
 		defer scenarios.record(t)
 
 		verifyProcessKillCrossEngineRescue(t, repositoryRoot, databaseURL, goAdapter, candidateAdapter)
+	})
+	t.Run("clock_boundary_scheduling", func(t *testing.T) {
+		defer scenarios.record(t)
+
+		pair.eachDirection(func(inserter, worker *adapter) { verifyClockBoundaries(t, inserter, worker) })
+	})
+	t.Run("stuck_job_detection", func(t *testing.T) {
+		defer scenarios.record(t)
+
+		pair.eachAdapter(func(kind *adapter) { verifyStuckJobDetection(t, repositoryRoot, databaseURL, kind) })
+	})
+	t.Run("pool_pressure_completion", func(t *testing.T) {
+		defer scenarios.record(t)
+
+		verifyPoolPressure(t, goAdapter, candidateAdapter)
 	})
 }
 

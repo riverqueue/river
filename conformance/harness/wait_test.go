@@ -15,6 +15,24 @@ func normalizedJobIDs(jobs []normalizedJob) []int64 {
 	return ids
 }
 
+func waitForListedJob(t *testing.T, adapter *adapter, params map[string]any) normalizedJob {
+	t.Helper()
+
+	deadline := time.Now().Add(10 * time.Second)
+	for time.Now().Before(deadline) {
+		var result struct {
+			Jobs []normalizedJob `json:"jobs"`
+		}
+		adapter.call(t, "list", params, &result)
+		if len(result.Jobs) > 0 {
+			return result.Jobs[0]
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatalf("%s adapter did not list a matching job", adapter.name)
+	return normalizedJob{}
+}
+
 // waitForListedJobCountWithin polls a job list until it contains exactly
 // count jobs or the timeout elapses.
 func waitForListedJobCountWithin(t *testing.T, adapter *adapter, params map[string]any, count int, timeout time.Duration) []normalizedJob {
@@ -33,6 +51,37 @@ func waitForListedJobCountWithin(t *testing.T, adapter *adapter, params map[stri
 	}
 	t.Fatalf("%s did not list %d matching jobs", adapter.name, count)
 	return nil
+}
+
+func waitForRuntimeStats(t *testing.T, adapter *adapter, predicate func(runtimeStats) bool) runtimeStats {
+	t.Helper()
+
+	deadline := time.Now().Add(5 * time.Second)
+	var stats runtimeStats
+	for time.Now().Before(deadline) {
+		adapter.call(t, "runtime_stats", map[string]any{}, &stats)
+		if predicate(stats) {
+			return stats
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatalf("%s adapter runtime observations did not converge: %+v", adapter.name, stats)
+	return runtimeStats{}
+}
+
+func requireOrderedSubsequence(t *testing.T, values, expected []string) {
+	t.Helper()
+
+	index := 0
+	for _, value := range values {
+		if value == expected[index] {
+			index++
+			if index == len(expected) {
+				return
+			}
+		}
+	}
+	t.Fatalf("expected ordered subsequence %v in %v", expected, values)
 }
 
 func mapKeys(values map[string]bool) []string {
