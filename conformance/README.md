@@ -45,7 +45,7 @@ suites pass. A capability that is not `complete` must record why in
 complete capabilities.
 
 The mixed harness is candidate-neutral. It always runs Go as the reference and
-skips unless a candidate descriptor is configured. Nothing in the harness names a
+uses the checked Rust descriptor by default. Nothing in the harness names a
 candidate language: thresholds, supported profiles, optional start tuning,
 and build steps come from the candidate's descriptor. `RIVER_CONFORMANCE_CANDIDATE_FILE`
 can point it at a descriptor supplied by another repository, while
@@ -106,7 +106,7 @@ candidate simultaneously against one PostgreSQL database. The ordinary
 candidate descriptor is joined by one or more peer descriptors from
 `RIVER_CONFORMANCE_PEER` (an inline descriptor object or array) or
 `RIVER_CONFORMANCE_PEER_FILE` (descriptor paths separated by the platform's
-path-list separator), which are required. At
+path-list separator); the checked Rust descriptor is the default peer. At
 least two distinct candidates are required so the tier cannot degrade into a
 duplicated pairwise test. The smoke tier fills one blocked worker slot in
 every engine, moves leadership through every runtime, terminates each

@@ -217,6 +217,7 @@ func TestCompatibilityArtifacts(t *testing.T) {
 		readJSON(t, "conformance/manifest.json", &manifest)
 		paths, err := filepath.Glob(filepath.Join(root, "conformance/adapter/candidates/*.json"))
 		require.NoError(t, err)
+		require.NotEmpty(t, paths)
 		for _, path := range paths {
 			contents, err := os.ReadFile(path)
 			require.NoError(t, err)
@@ -320,6 +321,7 @@ func TestCompatibilityArtifacts(t *testing.T) {
 		})
 		require.NoError(t, err)
 		for _, required := range []string{
+			"conformance/adapter/candidates/rust.json",
 			"conformance/adapter/contract.json",
 			"conformance/fixtures/maintenance_values.json",
 			"conformance/fixtures/protocol_values.json",

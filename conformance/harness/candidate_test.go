@@ -89,7 +89,7 @@ func referenceSpec() adapterSpec {
 
 // conformanceCandidateSpec loads the candidate descriptor from
 // RIVER_CONFORMANCE_CANDIDATE (inline JSON) or RIVER_CONFORMANCE_CANDIDATE_FILE,
-// skipping the test when neither is set, and builds it once.
+// defaulting to the checked Rust descriptor, and builds it once.
 func conformanceCandidateSpec(t *testing.T, root string, release bool) adapterSpec {
 	t.Helper()
 
@@ -101,7 +101,7 @@ func conformanceCandidateSpec(t *testing.T, root string, release bool) adapterSp
 // conformancePeerSpecs loads additional candidates for multi-engine tiers
 // from RIVER_CONFORMANCE_PEER (an inline descriptor object or array) or
 // RIVER_CONFORMANCE_PEER_FILE (one or more descriptor paths separated by the
-// platform's path list separator), skipping the test when neither is set.
+// platform's path list separator), defaulting to the checked Rust descriptor.
 func conformancePeerSpecs(t *testing.T, root string, release bool) []adapterSpec {
 	t.Helper()
 
@@ -134,7 +134,7 @@ func loadDescriptors(t *testing.T, root, inlineVariable, fileVariable string) []
 		}
 	default:
 		if paths == "" {
-			paths = requireEnv(t, fileVariable)
+			paths = "conformance/adapter/candidates/rust.json"
 		}
 		for _, descriptorPath := range filepath.SplitList(paths) {
 			if !filepath.IsAbs(descriptorPath) {

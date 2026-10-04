@@ -1,0 +1,17 @@
+{
+  "$schema": "../../schema/candidate.schema.json",
+  "application_name": "river-conformance-rust",
+  "build_command": ["cargo", "build", "--quiet", "--locked", "--manifest-path", "rust/Cargo.toml", "-p", "riverqueue-conformance"],
+  "command": ["${CARGO_TARGET_DIR:-rust/target}/debug/riverqueue-conformance"],
+  "implementation": "rust",
+  "performance": {
+    "enqueue": { "max_p95_ratio": 2, "min_throughput_ratio": 0.4 },
+    "mixed": { "max_p95_ratio": 1.25, "min_throughput_ratio": 0.8 },
+    "worker": { "max_p95_ratio": 1.25, "min_throughput_ratio": 0.8 }
+  },
+  "profiles": ["insert-only-v1", "portable-storage-v1", "postgres-full-v1", "sqlite-runtime-v1"],
+  "release_build_command": ["cargo", "build", "--release", "--quiet", "--locked", "--manifest-path", "rust/Cargo.toml", "-p", "riverqueue-conformance"],
+  "release_command": ["${CARGO_TARGET_DIR:-rust/target}/release/riverqueue-conformance"],
+  "start_options": ["elect_interval_ms", "rescuer_interval_ms", "scheduler_interval_ms"],
+  "version": "0.49.0-alpha.1"
+}

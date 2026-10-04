@@ -42,8 +42,9 @@ itself, write unique jobs with a `river:unique_nonce` metadata value instead
 of relying on `xmax`, send no notifications, and, when started without
 `poll_only`, poll for cancellations of its running jobs every two seconds.
 
-The Go implementation is the reference side. Another implementation, such as
-JavaScript, runs the suite as the candidate by placing an object
+The Go implementation is the reference side. By default the candidate is the
+Rust adapter described by [`candidates/rust.json`](candidates/rust.json). A
+JavaScript or future implementation can run the same suite by placing an object
 matching [`candidate.schema.json`](../schema/candidate.schema.json) in its own
 repository and setting `RIVER_CONFORMANCE_CANDIDATE_FILE` to its path:
 
@@ -66,8 +67,9 @@ inline JSON object. Set only one of the file and inline variables. Relative
 descriptor paths and every candidate command run from the River repository
 root, so a descriptor outside this checkout should use an absolute adapter path
 or a command whose arguments select that external project. Command arguments
-may reference environment variables as `${NAME}` or `${NAME:-default}`.
-Unknown descriptor fields are rejected.
+may reference environment variables as `${NAME}` or `${NAME:-default}`; the
+Rust descriptor uses this to follow `CARGO_TARGET_DIR`. Unknown descriptor
+fields are rejected.
 
 - `command` starts an adapter process. `build_command`, when present, runs
   once per test process before any adapter starts, so `command` can run the
