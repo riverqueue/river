@@ -61,6 +61,7 @@
     { "evidence": [{ "path": "conformance/harness/resumable_test.go", "symbol": "verifyResumableValidation" }], "name": "resumable_validation", "tier": "runtime" },
     { "evidence": [{ "path": "conformance/harness/lifecycle_scenarios_test.go", "symbol": "verifyRollingDeployment" }], "name": "rolling_deployment_same_protocol", "tier": "mixed" },
     { "evidence": [{ "path": "conformance/harness/scheduler_test.go", "symbol": "verifySchedulerUniqueConflictDiscard" }], "name": "scheduler_unique_conflict_discard", "tier": "mixed" },
+    { "evidence": [{ "path": "conformance/harness/yugabyte_test.go", "symbol": "verifySimulatedYugabyte" }], "name": "simulated_yugabyte_polling", "tier": "mixed" },
     { "evidence": [{ "path": "conformance/harness/runtime_scenarios_test.go", "symbol": "verifyWorkerOutcomes" }], "name": "single_implementation_worker_outcomes", "tier": "runtime" },
     { "evidence": [{ "path": "conformance/harness/runtime_scenarios_test.go", "symbol": "verifySnoozeTransition" }], "name": "snooze_once_metadata_transition", "tier": "runtime" },
     { "evidence": [{ "path": "conformance/harness/lifecycle_scenarios_test.go", "symbol": "verifyStuckJobDetection" }], "name": "stuck_job_detection", "tier": "runtime" },
