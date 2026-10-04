@@ -1,6 +1,7 @@
 [workspace]
 members = [
     "riverqueue",
+    "riverqueue-cli",
     "riverqueue-macros",
     "riverqueue-migrate",
     "riverqueue-test",
