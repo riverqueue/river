@@ -103,6 +103,14 @@ CONFORMANCE_SOAK_TIMEOUT ?= 6h20m
 test/conformance: ## Run Go and configured candidate conformance (requires database URL)
 	go test -tags riverconformance ./conformance/harness -run '^Test(Maintenance|Mixed|Resilience)Conformance$$' -count=1 -timeout $(CONFORMANCE_TIMEOUT)
 
+.PHONY: test/conformance/performance
+test/conformance/performance: ## Run Go and configured candidate performance gates
+	go test -tags riverconformance ./conformance/harness -run '^TestPerformanceGate$$' -count=1 -timeout $(CONFORMANCE_TIMEOUT)
+
+.PHONY: test/conformance/soak
+test/conformance/soak: ## Run mixed soak for RIVER_CONFORMANCE_SOAK_DURATION
+	go test -tags riverconformance ./conformance/harness -run '^TestMixedSoak$$' -count=1 -timeout $(CONFORMANCE_SOAK_TIMEOUT)
+
 .PHONY: test/race
 test/race:: ## Run tests with race detector (TEST_DATABASE=all, postgres, or sqlite)
 define test-race-target
