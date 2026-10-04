@@ -4,9 +4,12 @@ package harness_test
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"maps"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -130,6 +133,12 @@ func TestMaintenanceConformance(t *testing.T) { //nolint:paralleltest // Owns th
 	harness := &maintenanceHarness{pool: pool, t: t}
 	goAdapter.call(t, "migrate", map[string]any{}, nil)
 
+	t.Run("cron_schedule_goldens", func(t *testing.T) { //nolint:paralleltest // Shares adapters.
+		defer scenarios.record(t)
+
+		verifyCronScheduleGoldens(t, repositoryRoot, goAdapter, candidateAdapter)
+	})
+
 	t.Run("queue_names_and_unknown_queue_control", func(t *testing.T) { //nolint:paralleltest // Shares adapters.
 		defer scenarios.record(t)
 
@@ -239,6 +248,80 @@ func TestMaintenanceConformance(t *testing.T) { //nolint:paralleltest // Owns th
 			verifyPeriodicDueJobAvailable(t, harness, goAdapter, implementation)
 		}
 	})
+}
+
+func verifyCronScheduleGoldens(t *testing.T, repositoryRoot string, adapters ...*adapter) {
+	t.Helper()
+
+	var fixture struct {
+		CronCases []struct {
+			Expression string      `json:"expression"`
+			From       time.Time   `json:"from"`
+			Name       string      `json:"name"`
+			Next       []time.Time `json:"next"`
+		} `json:"cron_cases"`
+		CronInvalid        []string `json:"cron_invalid"`
+		CronNamedZoneCases []struct {
+			Expression string      `json:"expression"`
+			From       time.Time   `json:"from"`
+			Name       string      `json:"name"`
+			Next       []time.Time `json:"next"`
+		} `json:"cron_named_zone_cases"`
+	}
+	contents, err := os.ReadFile(filepath.Join(repositoryRoot, "conformance/fixtures/maintenance_values.json"))
+	require.NoError(t, err)
+	require.NoError(t, json.Unmarshal(contents, &fixture))
+	require.NotEmpty(t, fixture.CronCases)
+	require.NotEmpty(t, fixture.CronNamedZoneCases)
+
+	for _, testCase := range fixture.CronCases {
+		for _, adapter := range adapters {
+			var result struct {
+				Next []time.Time `json:"next"`
+			}
+			adapter.call(t, "cron_next", map[string]any{
+				"count":      5,
+				"expression": testCase.Expression,
+				"from":       testCase.From.Format(time.RFC3339Nano),
+			}, &result)
+			require.Len(t, result.Next, len(testCase.Next), "%s adapter case %s", adapter.name, testCase.Name)
+			for index, expected := range testCase.Next {
+				actual := result.Next[index]
+				require.True(t, expected.Equal(actual), "%s adapter case %s occurrence %d: %s != %s",
+					adapter.name, testCase.Name, index, actual, expected)
+				_, expectedOffset := expected.Zone()
+				_, actualOffset := actual.Zone()
+				require.Equal(t, expectedOffset, actualOffset, "%s adapter case %s offset", adapter.name, testCase.Name)
+			}
+		}
+	}
+	// Named `CRON_TZ=` zones, including across daylight saving transitions,
+	// must yield the same instants as Go. The fixture records them in UTC,
+	// and implementations may render them in the schedule's zone.
+	for _, testCase := range fixture.CronNamedZoneCases {
+		for _, adapter := range adapters {
+			var result struct {
+				Next []time.Time `json:"next"`
+			}
+			adapter.call(t, "cron_next", map[string]any{
+				"count":      len(testCase.Next),
+				"expression": testCase.Expression,
+				"from":       testCase.From.Format(time.RFC3339Nano),
+			}, &result)
+			require.Len(t, result.Next, len(testCase.Next), "%s adapter case %s", adapter.name, testCase.Name)
+			for index, expected := range testCase.Next {
+				require.True(t, expected.Equal(result.Next[index]), "%s adapter case %s occurrence %d: %s != %s",
+					adapter.name, testCase.Name, index, result.Next[index], expected)
+			}
+		}
+	}
+	for _, expression := range fixture.CronInvalid {
+		for _, adapter := range adapters {
+			adapter.requireCallError(t, "cron_next", map[string]any{
+				"count": 1, "expression": expression, "from": "2026-01-02T03:04:05Z",
+			}, "rejected")
+		}
+	}
 }
 
 func insertRawJob(harness *maintenanceHarness, schema, kind, state string, attemptedAgo, finalizedAgo *time.Duration) int64 {

@@ -3,8 +3,12 @@
 package harness_test
 
 import (
+	"encoding/json"
 	"fmt"
+	"os"
+	"path/filepath"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -274,6 +278,59 @@ func verifyClockBoundaries(t *testing.T, inserter, worker *adapter) {
 	worker.call(t, "stop", map[string]any{}, nil)
 }
 
+// verifyDefaultRetrySchedule runs failing jobs under an implementation's
+// production default retry policy. The first retry delay (about one second)
+// is inside the scheduler interval, so the job stays available and is
+// retried at its scheduled time; the second (about sixteen seconds) is not,
+// so the job waits as retryable. Both delays must fall within the bounds
+// generated from River's Go retry policy.
+func verifyDefaultRetrySchedule(t *testing.T, repositoryRoot string, worker, observer *adapter) {
+	t.Helper()
+
+	var fixture struct {
+		RetryCases []struct {
+			ErrorCount int   `json:"error_count"`
+			MaxDelayNS int64 `json:"max_delay_ns"`
+			MinDelayNS int64 `json:"min_delay_ns"`
+		} `json:"retry_cases"`
+	}
+	contents, err := os.ReadFile(filepath.Join(repositoryRoot, "conformance/fixtures/protocol_values.json"))
+	require.NoError(t, err)
+	require.NoError(t, json.Unmarshal(contents, &fixture))
+	bounds := func(errorCount int) (time.Duration, time.Duration) {
+		for _, retryCase := range fixture.RetryCases {
+			if retryCase.ErrorCount == errorCount {
+				return time.Duration(retryCase.MinDelayNS), time.Duration(retryCase.MaxDelayNS)
+			}
+		}
+		t.Fatalf("no retry bounds for error count %d", errorCount)
+		return 0, 0
+	}
+	// Timestamps come from the worker's clock and the database; allow for
+	// the time between recording the error and scheduling the retry.
+	const slack = 250 * time.Millisecond
+
+	worker.call(t, "reset", map[string]any{}, nil)
+	worker.call(t, "start", map[string]any{"client_id": worker.name + "-default-retry", "max_workers": 1}, nil)
+	var job normalizedJob
+	observer.call(t, "insert", map[string]any{
+		"behavior": "error", "message": "default retry policy", "opts": map[string]any{"max_attempts": 5},
+	}, &job)
+	job = waitForJobStateWithin(t, observer, job.ID, []string{"retryable"}, 15*time.Second)
+	require.Equal(t, 2, job.Attempt)
+	require.Len(t, job.Errors, 2)
+	firstMin, firstMax := bounds(1)
+	require.NotNil(t, job.AttemptedAt)
+	firstDelay := parseTime(t, *job.AttemptedAt).Sub(parseTime(t, job.Errors[0].At))
+	require.GreaterOrEqual(t, firstDelay, firstMin-slack, "second attempt started before the first retry delay")
+	require.Less(t, firstDelay, firstMax+5*time.Second, "second attempt started long after the first retry delay")
+	secondMin, secondMax := bounds(2)
+	secondDelay := parseTime(t, job.ScheduledAt).Sub(parseTime(t, job.Errors[1].At))
+	require.GreaterOrEqual(t, secondDelay, secondMin-slack)
+	require.LessOrEqual(t, secondDelay, secondMax+slack)
+	worker.call(t, "stop", map[string]any{}, nil)
+}
+
 // verifyStuckJobDetection runs a worker that ignores its timeout's
 // cancellation in a disposable process and requires the runtime to report
 // the job stuck once the timeout and stuck threshold pass. What happens to
@@ -356,4 +413,66 @@ func verifyPoolPressure(t *testing.T, goAdapter, candidateAdapter *adapter) {
 	for _, current := range adapters {
 		current.call(t, "stop", map[string]any{}, nil)
 	}
+}
+
+// verifyReservedMetadata has one implementation write each runtime-owned
+// reserved metadata key and the other read it back with its canonical name
+// and type. Every key an implementation writes must be in the reserved set
+// generated from Go, and user metadata must survive alongside it.
+func verifyReservedMetadata(t *testing.T, repositoryRoot string, worker, controller *adapter) {
+	t.Helper()
+
+	var fixture struct {
+		ReservedMetadataKeys []struct {
+			Key string `json:"key"`
+		} `json:"reserved_metadata_keys"`
+	}
+	contents, err := os.ReadFile(filepath.Join(repositoryRoot, "conformance/fixtures/protocol_values.json"))
+	require.NoError(t, err)
+	require.NoError(t, json.Unmarshal(contents, &fixture))
+	reserved := make([]string, 0, len(fixture.ReservedMetadataKeys))
+	for _, key := range fixture.ReservedMetadataKeys {
+		reserved = append(reserved, key.Key)
+	}
+	require.NotEmpty(t, reserved)
+
+	worker.call(t, "reset", map[string]any{}, nil)
+	worker.call(t, "start", map[string]any{"client_id": worker.name + "-reserved-metadata", "max_workers": 2}, nil)
+	// `river:log` stands in for metadata written by an extension of one
+	// implementation, such as Go's log middleware, which the other must
+	// carry through unchanged.
+	riverLog := []any{map[string]any{"attempt": float64(1), "log": "logged by an earlier attempt"}}
+	userMetadata := map[string]any{"river:log": riverLog, "user": "kept"}
+	var output, snoozed, cancelled normalizedJob
+	controller.call(t, "insert", map[string]any{
+		"behavior": "output", "message": "reserved output", "opts": map[string]any{"metadata": userMetadata},
+	}, &output)
+	controller.call(t, "insert", map[string]any{
+		"behavior": "snooze_once", "duration_ms": 5, "message": "reserved snooze", "opts": map[string]any{"metadata": userMetadata},
+	}, &snoozed)
+	controller.call(t, "insert", map[string]any{
+		"behavior": "cooperative_cancel", "message": "reserved cancel", "opts": map[string]any{"metadata": userMetadata},
+	}, &cancelled)
+	controller.call(t, "wait", map[string]any{"id": cancelled.ID, "states": []string{"running"}}, &cancelled)
+	controller.call(t, "cancel", map[string]any{"id": cancelled.ID}, &cancelled)
+	for _, job := range []*normalizedJob{&output, &snoozed, &cancelled} {
+		controller.call(t, "wait", map[string]any{"id": job.ID}, job)
+		require.Equal(t, "kept", job.Metadata["user"], "user metadata lost on job %d", job.ID)
+		require.Equal(t, riverLog, job.Metadata["river:log"], "river:log changed on job %d", job.ID)
+		for key := range job.Metadata {
+			if key != "user" {
+				require.Contains(t, reserved, key, "job %d carries metadata key %q outside the reserved set", job.ID, key)
+			}
+		}
+	}
+	require.Equal(t, "completed", output.State)
+	require.Equal(t, map[string]any{"message": "reserved output"}, output.Metadata["output"])
+	require.Equal(t, "completed", snoozed.State)
+	require.EqualValues(t, 1, snoozed.Metadata["snoozes"])
+	require.Equal(t, "cancelled", cancelled.State)
+	cancelAttemptedAt, ok := cancelled.Metadata["cancel_attempted_at"].(string)
+	require.True(t, ok, "cancel_attempted_at must be a timestamp string")
+	require.False(t, strings.HasSuffix(cancelAttemptedAt, " "))
+	parseTime(t, cancelAttemptedAt)
+	worker.call(t, "stop", map[string]any{}, nil)
 }

@@ -1,0 +1,96 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "$schema": { "type": "string" },
+    "attempt_error": {
+      "additionalProperties": false,
+      "properties": {
+        "at": { "format": "date-time", "type": "string" },
+        "attempt": { "minimum": 0, "type": "integer" },
+        "error": { "type": "string" },
+        "trace": { "type": "string" }
+      },
+      "required": ["at", "attempt", "error", "trace"],
+      "type": "object"
+    },
+    "job_states": {
+      "items": {
+        "additionalProperties": false,
+        "properties": {
+          "state": { "enum": ["available", "cancelled", "completed", "discarded", "pending", "retryable", "running", "scheduled"] },
+          "unique_bit": { "maximum": 128, "minimum": 1, "type": "integer" }
+        },
+        "required": ["state", "unique_bit"],
+        "type": "object"
+      },
+      "minItems": 8,
+      "type": "array"
+    },
+    "metadata_keys": { "additionalProperties": { "type": "string" }, "type": "object" },
+    "notifications": {
+      "description": "Payloads derived from the Go payload structs and action constants, in struct field order. Keys of payloads built in SQL are checked against the same structs.",
+      "items": {
+        "additionalProperties": false,
+        "properties": {
+          "fields": {
+            "items": {
+              "additionalProperties": false,
+              "properties": {
+                "name": { "minLength": 1, "type": "string" },
+                "omitempty": { "type": "boolean" }
+              },
+              "required": ["name", "omitempty"],
+              "type": "object"
+            },
+            "minItems": 1,
+            "type": "array"
+          },
+          "name": { "type": "string" },
+          "payload": { "type": "object" },
+          "source": { "minLength": 1, "type": "string" },
+          "topic": { "type": "string" }
+        },
+        "required": ["fields", "name", "payload", "source", "topic"],
+        "type": "object"
+      },
+      "type": "array"
+    },
+    "protocol_revision": { "minimum": 1, "type": "integer" },
+    "reserved_metadata_keys": {
+      "description": "Job metadata keys River reads or writes, extracted from Go source and SQL through the feature inventory.",
+      "items": {
+        "additionalProperties": false,
+        "properties": {
+          "applicability": { "enum": ["api_equivalent", "driver_specific", "internal", "not_applicable", "protocol_visible"] },
+          "key": { "minLength": 1, "type": "string" }
+        },
+        "required": ["applicability", "key"],
+        "type": "object"
+      },
+      "minItems": 1,
+      "type": "array"
+    },
+    "retry_cases": {
+      "description": "Bounds on the delay River's default retry policy schedules after error_count failures. Implementations with seedable jitter may use seed; any delay within the bounds conforms.",
+      "items": {
+        "additionalProperties": false,
+        "properties": {
+          "error_count": { "minimum": 1, "type": "integer" },
+          "job_id": { "minimum": 1, "type": "integer" },
+          "max_delay_ns": { "minimum": 0, "type": "integer" },
+          "min_delay_ns": { "minimum": 0, "type": "integer" },
+          "now": { "format": "date-time", "type": "string" },
+          "seed": { "minimum": 0, "type": "integer" }
+        },
+        "required": ["error_count", "job_id", "max_delay_ns", "min_delay_ns", "now", "seed"],
+        "type": "object"
+      },
+      "type": "array"
+    },
+    "topics": { "additionalProperties": { "type": "string" }, "type": "object" }
+  },
+  "required": ["$schema", "attempt_error", "job_states", "metadata_keys", "notifications", "protocol_revision", "reserved_metadata_keys", "retry_cases", "topics"],
+  "title": "River protocol value goldens",
+  "type": "object"
+}
