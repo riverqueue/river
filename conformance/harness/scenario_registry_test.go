@@ -3,7 +3,9 @@ package harness_test
 const (
 	scenarioOwnerMaintenance = "TestMaintenanceConformance"
 	scenarioOwnerMixed       = "TestMixedConformance"
+	scenarioOwnerPerformance = "TestPerformanceGate"
 	scenarioOwnerResilience  = "TestResilienceConformance"
+	scenarioOwnerSoak        = "TestMixedSoak"
 )
 
 type scenarioBinding struct {
@@ -63,10 +65,12 @@ var scenarioRegistry = map[string]scenarioBinding{ //nolint:gochecknoglobals // 
 	"maintenance_rescuer_full_batch_of_unexpired_jobs": {owner: scenarioOwnerMaintenance, tier: "runtime"},
 	"maintenance_rescuer_stale_selection":              {owner: scenarioOwnerMaintenance, tier: "runtime"},
 	"migration_mixed_case_schema":                      {owner: scenarioOwnerMaintenance, tier: "storage"},
+	"mixed_connection_pool_bound":                      {owner: scenarioOwnerSoak, tier: "performance"},
 	"mixed_leader_death_failover_both_directions":      {owner: scenarioOwnerMixed, tier: "chaos"},
 	"mixed_leader_failover_both_directions":            {owner: scenarioOwnerMixed, tier: "mixed"},
 	"mixed_request_resign_terms":                       {owner: scenarioOwnerMixed, tier: "mixed"},
 	"mixed_skip_locked_competition":                    {owner: scenarioOwnerMixed, tier: "mixed"},
+	"mixed_soak":                                       {owner: scenarioOwnerSoak, tier: "performance"},
 	"mixed_unknown_kind_error":                         {owner: scenarioOwnerMixed, tier: "mixed"},
 	"notification_only_wakeups":                        {owner: scenarioOwnerMixed, tier: "mixed"},
 	"notification_payloads":                            {owner: scenarioOwnerMixed, tier: "codec"},
@@ -83,6 +87,9 @@ var scenarioRegistry = map[string]scenarioBinding{ //nolint:gochecknoglobals // 
 	"reference_migrator_candidate_runtime":             {owner: scenarioOwnerMixed, tier: "storage"},
 	"reference_process_kill_candidate_rescue":          {owner: scenarioOwnerMixed, tier: "chaos"},
 	"refetched_attempt_cancellation":                   {owner: scenarioOwnerMixed, tier: "runtime"},
+	"release_enqueue_performance":                      {owner: scenarioOwnerPerformance, tier: "performance"},
+	"release_mixed_performance":                        {owner: scenarioOwnerPerformance, tier: "performance"},
+	"release_worker_performance":                       {owner: scenarioOwnerPerformance, tier: "performance"},
 	"remote_cancel_notification":                       {owner: scenarioOwnerMixed, tier: "mixed"},
 	"remote_queue_subscription_events":                 {owner: scenarioOwnerMixed, tier: "mixed"},
 	"rescuer_unknown_kind_discard":                     {owner: scenarioOwnerMixed, tier: "mixed"},

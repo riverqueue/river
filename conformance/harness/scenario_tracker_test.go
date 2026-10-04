@@ -116,3 +116,16 @@ func requireEnv(t *testing.T, name string) string {
 	}
 	return value
 }
+
+// requireOptIn skips a long-running tier unless its variable is "1". A
+// required run that selects the tier without enabling it fails instead.
+func requireOptIn(t *testing.T, name string) {
+	t.Helper()
+
+	if os.Getenv(name) != "1" {
+		if conformanceRequired() {
+			t.Fatalf("%s=1 is required when RIVER_CONFORMANCE_REQUIRED=1 selects this tier", name)
+		}
+		t.Skipf("%s=1 is required", name)
+	}
+}

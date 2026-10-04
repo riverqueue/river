@@ -30,6 +30,14 @@ const (
 // profiles, which keeps descriptors written before profiles existed valid.
 var defaultCandidateProfiles = []string{profilePortableStorage, profilePostgresFull, profileSQLiteRuntime} //nolint:gochecknoglobals // descriptor default
 
+// performanceBound returns the candidate's bound for a benchmark mode.
+func (spec adapterSpec) performanceBound(mode string) performanceBound {
+	if bound, ok := spec.Performance[mode]; ok {
+		return bound
+	}
+	return defaultPerformanceBounds[mode]
+}
+
 // servesProfile reports whether the candidate declares a conformance profile.
 func (spec adapterSpec) servesProfile(profile string) bool {
 	if spec.Profiles == nil {
