@@ -1,0 +1,34 @@
+import {
+  Client,
+  InsertManyParams,
+  JobArgsObject,
+  type JobArgs,
+} from "riverqueue";
+
+declare const client: Client;
+
+class SortArgs implements JobArgs {
+  kind = "sort";
+  insertOpts = { queue: "sorting" };
+
+  constructor(readonly strings: string[]) {}
+}
+
+async function insertLegacyJobs() {
+  const result = await client.insert(new SortArgs(["b", "a"]), {
+    scheduledAt: new Date(Date.now() + 60_000),
+    uniqueOpts: { byArgs: true, byPeriod: 60 },
+  });
+
+  const id: number = result.job.id;
+  if (result.uniqueSkippedAsDuplicated) console.log("duplicate", id);
+
+  await client.insertMany([
+    new InsertManyParams(new JobArgsObject("sort", { strings: ["c"] }), {
+      priority: 2,
+    }),
+    new SortArgs(["d"]),
+  ]);
+}
+
+void insertLegacyJobs;
