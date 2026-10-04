@@ -1,11 +1,12 @@
 package harness_test
 
 const (
-	scenarioOwnerMaintenance = "TestMaintenanceConformance"
-	scenarioOwnerMixed       = "TestMixedConformance"
-	scenarioOwnerPerformance = "TestPerformanceGate"
-	scenarioOwnerResilience  = "TestResilienceConformance"
-	scenarioOwnerSoak        = "TestMixedSoak"
+	scenarioOwnerMaintenance   = "TestMaintenanceConformance"
+	scenarioOwnerMixed         = "TestMixedConformance"
+	scenarioOwnerPerformance   = "TestPerformanceGate"
+	scenarioOwnerResilience    = "TestResilienceConformance"
+	scenarioOwnerSQLiteStorage = "TestMixedSQLiteConformance"
+	scenarioOwnerSoak          = "TestMixedSoak"
 )
 
 type scenarioBinding struct {
@@ -102,6 +103,16 @@ var scenarioRegistry = map[string]scenarioBinding{ //nolint:gochecknoglobals // 
 	"simulated_yugabyte_polling":                       {owner: scenarioOwnerMixed, tier: "mixed"},
 	"single_implementation_worker_outcomes":            {owner: scenarioOwnerMixed, tier: "runtime"},
 	"snooze_once_metadata_transition":                  {owner: scenarioOwnerMixed, tier: "runtime"},
+	"sqlite_batch_atomicity":                           {owner: scenarioOwnerSQLiteStorage, profile: "portable-storage-v1", tier: "storage"},
+	"sqlite_insert_get_unique_cross_language":          {owner: scenarioOwnerSQLiteStorage, profile: "portable-storage-v1", tier: "mixed"},
+	"sqlite_job_crud":                                  {owner: scenarioOwnerSQLiteStorage, profile: "portable-storage-v1", tier: "storage"},
+	"sqlite_job_rows":                                  {owner: scenarioOwnerSQLiteStorage, profile: "portable-storage-v1", tier: "storage"},
+	"sqlite_migration_cross_language":                  {owner: scenarioOwnerSQLiteStorage, profile: "portable-storage-v1", tier: "storage"},
+	"sqlite_profile_handshake":                         {owner: scenarioOwnerSQLiteStorage, profile: "portable-storage-v1", tier: "codec"},
+	"sqlite_timestamp_rounding_ordering":               {owner: scenarioOwnerSQLiteStorage, profile: "portable-storage-v1", tier: "codec"},
+	"sqlite_transactions":                              {owner: scenarioOwnerSQLiteStorage, profile: "portable-storage-v1", tier: "storage"},
+	"sqlite_unique_column_bytes":                       {owner: scenarioOwnerSQLiteStorage, profile: "portable-storage-v1", tier: "codec"},
+	"sqlite_unsafe_int64_job_ids_rpc_list_cursors":     {owner: scenarioOwnerSQLiteStorage, profile: "portable-storage-v1", tier: "codec"},
 	"stuck_job_detection":                              {owner: scenarioOwnerMixed, tier: "runtime"},
 	"timeout_cancellation":                             {owner: scenarioOwnerMixed, tier: "runtime"},
 	"transaction_abort_rollback_visibility":            {owner: scenarioOwnerMixed, tier: "storage"},

@@ -52,6 +52,14 @@ type adapterHandshake struct {
 	ProtocolRevision      int            `json:"protocol_revision"`
 }
 
+type adapterProfile struct {
+	Backend          string   `json:"backend"`
+	Capabilities     []string `json:"capabilities"`
+	Methods          []string `json:"methods"`
+	Name             string   `json:"name"`
+	ProtocolRevision int      `json:"protocol_revision"`
+}
+
 type rpcResponse struct {
 	Error  *rpcError       `json:"error"`
 	ID     int             `json:"id"`

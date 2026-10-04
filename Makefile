@@ -103,6 +103,10 @@ CONFORMANCE_SOAK_TIMEOUT ?= 6h20m
 test/conformance: ## Run Go and configured candidate conformance (requires database URL)
 	go test -tags riverconformance ./conformance/harness -run '^Test(Maintenance|Mixed|Resilience)Conformance$$' -count=1 -timeout $(CONFORMANCE_TIMEOUT)
 
+.PHONY: test/conformance/sqlite
+test/conformance/sqlite: ## Run candidate-neutral SQLite storage and runtime conformance
+	go test -tags riverconformance ./conformance/harness -run '^Test(MixedSQLite|MixedSQLiteRuntime|ResilienceSQLite)Conformance$$' -count=1 -timeout $(CONFORMANCE_TIMEOUT)
+
 .PHONY: test/conformance/performance
 test/conformance/performance: ## Run Go and configured candidate performance gates
 	go test -tags riverconformance ./conformance/harness -run '^TestPerformanceGate$$' -count=1 -timeout $(CONFORMANCE_TIMEOUT)

@@ -271,6 +271,7 @@ func TestCompatibilityArtifacts(t *testing.T) {
 			profile string
 		}{
 			{path: "conformance/scenarios/core.json"},
+			{path: "conformance/scenarios/sqlite-storage.json", profile: "portable-storage-v1"},
 		} {
 			verifyScenarioInventory(t, root, inventory.path, inventory.profile)
 		}
