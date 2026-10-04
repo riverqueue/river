@@ -1,0 +1,23 @@
+{
+  "name": "riverqueue-example-sqlite-worker",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=26"
+  },
+  "scripts": {
+    "build": "tsc",
+    "start": "node dist/index.js"
+  },
+  "dependencies": {
+    "@riverqueue/driver-sqlite": "workspace:*",
+    "@riverqueue/migrate": "workspace:*",
+    "riverqueue": "workspace:*",
+    "zod": "^4.6.5"
+  },
+  "devDependencies": {
+    "@types/node": "^26.1.1",
+    "typescript": "^6.0.3"
+  }
+}
