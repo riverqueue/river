@@ -16,6 +16,9 @@ on:
       - master
   pull_request:
 
+permissions:
+  contents: read
+
 jobs:
   benchmark:
     env:
