@@ -7,6 +7,7 @@ import {
 } from "@riverqueue/migrate";
 
 import { benchCommand } from "./bench.js";
+import { codemodCommand } from "./codemod-command.js";
 import { writeLine, type Command, type CommandContext } from "./command.js";
 import {
   migrateDownCommand,
@@ -74,6 +75,7 @@ const versionCommand: Command = {
 const COMMANDS: ReadonlyMap<string, Command> = new Map(
   [
     benchCommand,
+    codemodCommand,
     migrateDownCommand,
     migrateGetCommand,
     migrateListCommand,
