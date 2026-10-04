@@ -10,3 +10,10 @@ ignoredBuiltDependencies:
   - "@prisma/client"
   - "@prisma/engines"
   - prisma
+
+auditConfig:
+  ignoreGhsas:
+    # http-cache-semantics has no fixed release. It's reachable only through
+    # license-checker-rseidelsohn's npm registry client, which the offline
+    # `license:check` never uses.
+    - GHSA-ch52-4w7c-c8xp

@@ -1,19 +1,31 @@
 name: JavaScript
 
-# Runs for changes to the JavaScript workspace, the canonical migrations its
-# examples and integration tests run against, and this workflow.
+# Runs for changes to the JavaScript workspace and to everything its gates
+# read from the rest of River: the canonical migrations and SQL it mirrors and
+# runs against, and this workflow. Release tags always run it.
 on:
   push:
     branches: [master]
     paths: &paths
+      - ".github/actions/setup-js/**"
       - ".github/workflows/js.yaml"
+      - "Makefile"
       - "js/**"
       - "riverdriver/**/*.sql"
+    tags: ["v*"]
   pull_request:
     paths: *paths
 
-# Node versions to test against (last two LTS releases).
-# Update these when new LTS versions are released.
+concurrency:
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+  group: ${{ github.workflow }}-${{ github.ref }}
+
+permissions:
+  contents: read
+
+# The full runtime deliberately requires native Temporal from Node 26. Every
+# job installs the official build selected by js/.node-version (or the matrix)
+# and asserts `typeof Temporal` before doing anything else.
 
 defaults:
   run:
@@ -23,58 +35,66 @@ jobs:
   build:
     name: Build
     runs-on: ubuntu-latest
-
-    strategy:
-      matrix: &last_two_lts_node_versions
-        node-version: [22, 24]
+    timeout-minutes: 20
 
     steps:
       - uses: actions/checkout@v6
-
-      - uses: pnpm/action-setup@v6
         with:
-          package_json_file: js/package.json
+          persist-credentials: false
 
-      - uses: actions/setup-node@v6
-        with:
-          cache: pnpm
-          cache-dependency-path: js/pnpm-lock.yaml
-          node-version: ${{ matrix.node-version }}
-
-      - run: pnpm install --frozen-lockfile
+      - uses: ./.github/actions/setup-js
 
       - run: pnpm run build:all
+
+      - run: pnpm run typecheck:tests
+
+      - run: pnpm run typecheck:next
+
+      # Compares the generated mirror with River's canonical migration sources.
+      - run: pnpm run verify:migrations
+
+      - run: pnpm run api:check
+
+      - run: pnpm run docs:api
+
+      - run: pnpm run docs:snippets
+
+      - run: pnpm run migration:legacy
 
   lint:
     name: Lint
     runs-on: ubuntu-latest
+    timeout-minutes: 10
 
     steps:
       - uses: actions/checkout@v6
-
-      - uses: pnpm/action-setup@v6
         with:
-          package_json_file: js/package.json
+          persist-credentials: false
 
-      - uses: actions/setup-node@v6
-        with:
-          node-version: 24
-          cache: pnpm
-          cache-dependency-path: js/pnpm-lock.yaml
+      - uses: ./.github/actions/setup-js
 
-      - run: pnpm install --frozen-lockfile
+      # Type-aware lint reads `riverqueue` through its built declarations.
+      - run: pnpm run build
 
       - run: pnpm run lint
 
       - run: pnpm run fmt:check
 
-  examples:
-    name: Examples
-    runs-on: ubuntu-latest
+      - run: pnpm run license:check
 
+      - run: pnpm audit
+
+  packages:
+    name: Package archives
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    # The packed `node:test` suite runs its PostgreSQL tests against this
+    # database, and RIVER_REQUIRE_POSTGRES makes them fail instead of skip
+    # when DATABASE_URL is missing.
     services:
       postgres:
-        image: postgres:17
+        image: postgres:18
         env:
           POSTGRES_DB: river_test
           POSTGRES_PASSWORD: postgres
@@ -86,72 +106,98 @@ jobs:
         ports:
           - 5432:5432
 
-    strategy:
-      matrix: *last_two_lts_node_versions
+    env:
+      DATABASE_URL: postgres://postgres:postgres@localhost:5432/river_test?sslmode=disable
+      RIVER_REQUIRE_POSTGRES: "1"
+
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+
+      - uses: ./.github/actions/setup-js
+
+      - run: pnpm run build:all
+
+      # The packed examples that need a database use its default schema.
+      - run: node cli/dist/bin.js migrate-up --database-url "$DATABASE_URL"
+
+      - run: pnpm run package:check
+
+  examples:
+    name: Examples
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    services:
+      postgres:
+        image: postgres:18
+        env:
+          POSTGRES_DB: river_test
+          POSTGRES_PASSWORD: postgres
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+        ports:
+          - 5432:5432
 
     env:
       DATABASE_URL: postgres://postgres:postgres@localhost:5432/river_test?sslmode=disable
 
     steps:
       - uses: actions/checkout@v6
-
-      - uses: pnpm/action-setup@v6
         with:
-          package_json_file: js/package.json
+          persist-credentials: false
 
-      - uses: actions/setup-node@v6
-        with:
-          cache: pnpm
-          cache-dependency-path: js/pnpm-lock.yaml
-          node-version: ${{ matrix.node-version }}
-
-      - uses: actions/setup-go@v6
-        with:
-          go-version: "1.27"
-
-      # Migrate with this revision's River CLI and migrations.
-      - run: go run . migrate-up --database-url "$DATABASE_URL"
-        working-directory: cmd/river
-
-      - run: pnpm install --frozen-lockfile
+      - uses: ./.github/actions/setup-js
 
       - run: pnpm run build:all
 
-      - run: pnpm --filter='./examples/*' run build
+      - run: node cli/dist/bin.js migrate-up --database-url "$DATABASE_URL"
 
-      - run: pnpm --filter='./examples/*' run start
+      - run: pnpm run package:examples
 
   test:
-    name: Test
+    name: Test (Node ${{ matrix.node-version || 'from .node-version' }})
     runs-on: ubuntu-latest
+    timeout-minutes: 15
 
     strategy:
-      matrix: *last_two_lts_node_versions
+      fail-fast: false
+      matrix:
+        # The minimum supported release and the current Node 26 release.
+        node-version: ["26.0.0", ""]
 
     steps:
       - uses: actions/checkout@v6
-
-      - uses: pnpm/action-setup@v6
         with:
-          package_json_file: js/package.json
+          persist-credentials: false
 
-      - uses: actions/setup-node@v6
+      - uses: ./.github/actions/setup-js
         with:
-          cache: pnpm
-          cache-dependency-path: js/pnpm-lock.yaml
           node-version: ${{ matrix.node-version }}
 
-      - run: pnpm install --frozen-lockfile
+      # The unit tests import the other workspace packages through their
+      # build output, and worker threads run compiled handler modules.
+      - run: pnpm run build:all
 
       - run: pnpm run test
 
   test_integration:
-    name: Test (integration)
+    name: Test (integration, PostgreSQL ${{ matrix.postgres-version }})
     runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    strategy:
+      fail-fast: false
+      matrix:
+        postgres-version: [14, 15, 16, 17, 18]
 
     services:
       postgres:
-        image: postgres:17
+        image: postgres:${{ matrix.postgres-version }}
         env:
           POSTGRES_DB: river_test
           POSTGRES_PASSWORD: postgres
@@ -163,33 +209,18 @@ jobs:
         ports:
           - 5432:5432
 
-    strategy:
-      matrix: *last_two_lts_node_versions
-
     env:
       TEST_DATABASE_URL: postgres://postgres:postgres@localhost:5432/river_test?sslmode=disable
 
     steps:
       - uses: actions/checkout@v6
-
-      - uses: pnpm/action-setup@v6
         with:
-          package_json_file: js/package.json
+          persist-credentials: false
 
-      - uses: actions/setup-node@v6
-        with:
-          cache: pnpm
-          cache-dependency-path: js/pnpm-lock.yaml
-          node-version: ${{ matrix.node-version }}
+      - uses: ./.github/actions/setup-js
 
-      - uses: actions/setup-go@v6
-        with:
-          go-version: "1.27"
+      - run: pnpm run build:all
 
-      # Migrate with this revision's River CLI and migrations.
-      - run: go run . migrate-up --database-url "$TEST_DATABASE_URL"
-        working-directory: cmd/river
-
-      - run: pnpm install --frozen-lockfile
+      - run: node cli/dist/bin.js migrate-up --database-url "$TEST_DATABASE_URL"
 
       - run: pnpm run test:integration

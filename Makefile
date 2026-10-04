@@ -19,9 +19,14 @@ db/reset/test: ## Drop, create, and migrate test databases
 
 .PHONY: generate
 generate: ## Generate generated artifacts
+generate: generate/js-migrations
 generate: generate/migrations
 generate: generate/rust-migrations
 generate: generate/sqlc
+
+.PHONY: generate/js-migrations
+generate/js-migrations: ## Sync database migrations to JavaScript
+	pnpm -C js run generate:migrations
 
 .PHONY: generate/migrations
 generate/migrations: ## Sync changes of pgxv5 migrations to database/sql
@@ -91,6 +96,21 @@ lint/rust: ## Run Rust formatting and clippy checks, including single-backend bu
 	cd rust && cargo clippy -p riverqueue -p riverqueue-migrate -p riverqueue-cli -p riverqueue-test --no-default-features --features sqlite --all-targets --locked -- -D warnings
 	cd rust && $(RUST_POSTGRES_TESTS_ENV) cargo clippy -p riverqueue -p riverqueue-migrate --all-targets --all-features --locked -- -D warnings
 
+# JavaScript targets, like the Rust ones, are separate from `lint` and `test`
+# and need Node.js 26 and pnpm; they delegate to the workspace's own scripts.
+# Run `pnpm -C js install` first.
+.PHONY: build/js
+build/js: ## Build every JavaScript package
+	pnpm -C js run build:all
+
+.PHONY: lint/js
+lint/js: ## Run JavaScript lint, formatting, and type checks with both compilers
+lint/js: build/js
+	pnpm -C js run lint
+	pnpm -C js run fmt:check
+	pnpm -C js run typecheck:tests
+	pnpm -C js run typecheck:next
+
 .PHONY: test
 test:: ## Run tests (TEST_DATABASE=all, postgres, or sqlite)
 define test-target
@@ -116,6 +136,19 @@ RUST_POSTGRES_TESTS_ENV = RUSTFLAGS="$$RUSTFLAGS --cfg river_postgres_tests" \
 # PostgreSQL integration tests need RIVER_RUST_DATABASE_URL. Without it
 # test/rust still runs unit, doc, and SQLite integration tests, and fails in CI
 # so a missing URL cannot turn the PostgreSQL suite into a silent pass.
+.PHONY: test/js
+test/js: ## Run JavaScript unit tests
+test/js: build/js
+	pnpm -C js run test
+
+# Integration tests use TEST_DATABASE_URL (default
+# postgres://localhost:5432/river_test), migrated with
+# `node js/cli/dist/bin.js migrate-up`.
+.PHONY: test/js/integration
+test/js/integration: ## Run JavaScript integration tests against PostgreSQL
+test/js/integration: build/js
+	pnpm -C js run test:integration
+
 .PHONY: test/rust
 test/rust: ## Run Rust unit and SQLite tests, plus PostgreSQL tests when RIVER_RUST_DATABASE_URL is set
 	@if [ -n "$$RIVER_RUST_DATABASE_URL" ]; then \
@@ -136,6 +169,13 @@ test/rust/postgres: ## Run all Rust tests, including PostgreSQL integration test
 test/rust/sqlite: ## Run Rust unit, doc, and SQLite integration tests without a PostgreSQL database
 	cd rust && cargo test --workspace --features riverqueue/sqlite,riverqueue-migrate/sqlite --locked
 
+.PHONY: doc/js
+doc/js: ## Check JavaScript API reports, TypeDoc, and README snippets
+doc/js: build/js
+	pnpm -C js run api:check
+	pnpm -C js run docs:api
+	pnpm -C js run docs:snippets
+
 .PHONY: doc/rust
 doc/rust: ## Build Rust API documentation, compiled examples, and doctests for each backend feature set
 	cd rust && RUSTDOCFLAGS="-D warnings" cargo doc --workspace --all-features --no-deps --locked
@@ -147,6 +187,20 @@ doc/rust: ## Build Rust API documentation, compiled examples, and doctests for e
 .PHONY: doc/rust/docsrs
 doc/rust/docsrs: ## Build Rust API documentation as docs.rs does (nightly toolchain, `--cfg docsrs`)
 	cd rust && RUSTDOCFLAGS="--cfg docsrs -D warnings" CARGO_TARGET_DIR="$${CARGO_TARGET_DIR:-target}/docsrs" cargo +nightly doc -p riverqueue -p riverqueue-migrate -p riverqueue-test --all-features --no-deps --locked
+
+.PHONY: check/js/dependencies
+check/js/dependencies: ## Audit JavaScript advisories and production dependency licenses
+	pnpm -C js audit
+	pnpm -C js run license:check
+
+# Packs every published package and checks the archives in clean consumers,
+# including the 0.1 upgrade fixture. Its PostgreSQL tests run when
+# DATABASE_URL is set.
+.PHONY: check/js/package
+check/js/package: ## Build and verify publishable npm archives without publishing
+check/js/package: build/js
+	pnpm -C js run migration:legacy
+	pnpm -C js run package:check
 
 .PHONY: check/rust/dependencies
 check/rust/dependencies: ## Audit Rust advisories, licenses, bans, and sources
@@ -212,9 +266,14 @@ update-mod-version: ## Update River packages in all submodules to $VERSION
 
 .PHONY: verify
 verify: ## Verify generated artifacts
+verify: verify/js-migrations
 verify: verify/migrations
 verify: verify/rust-migrations
 verify: verify/sqlc
+
+.PHONY: verify/js-migrations
+verify/js-migrations: ## Verify JavaScript migrations match the canonical migrations
+	pnpm -C js run verify:migrations
 
 .PHONY: verify/migrations
 verify/migrations: ## Verify synced migrations
