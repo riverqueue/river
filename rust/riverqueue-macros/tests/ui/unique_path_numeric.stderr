@@ -1,0 +1,5 @@
+error: numeric unique JSON path segments require array semantics that are not yet supported
+ --> tests/ui/unique_path_numeric.rs:5:42
+  |
+5 | #[river(kind = "invoice", unique(by_args("lines.0")))]
+  |                                          ^^^^^^^^^

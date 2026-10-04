@@ -1,0 +1,5 @@
+error: by_period must be at least one second
+ --> tests/ui/unique_period_too_short.rs:5:46
+  |
+5 | #[river(kind = "invoice", unique(by_period = "500ms"))]
+  |                                              ^^^^^^^
