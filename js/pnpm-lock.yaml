@@ -62,6 +62,31 @@ importers:
         specifier: ^4.6.5
         version: 4.6.5
 
+  cli:
+    dependencies:
+      '@riverqueue/driver-pg':
+        specifier: workspace:0.50.0-alpha.1
+        version: link:../driver/pg
+      '@riverqueue/migrate':
+        specifier: workspace:0.50.0-alpha.1
+        version: link:../migrate
+      pg:
+        specifier: ^8.22.0
+        version: 8.22.0
+      riverqueue:
+        specifier: workspace:0.50.0-alpha.1
+        version: link:..
+    devDependencies:
+      '@types/node':
+        specifier: ^26.1.1
+        version: 26.1.1
+      '@types/pg':
+        specifier: ^8.20.0
+        version: 8.20.0
+      typescript:
+        specifier: ^6.0.3
+        version: 6.0.3
+
   driver/pg:
     dependencies:
       postgres-array:
