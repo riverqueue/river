@@ -1,6 +1,7 @@
 package harness_test
 
 const (
+	scenarioOwnerInsertOnly       = "TestInsertOnlyConformance"
 	scenarioOwnerMaintenance      = "TestMaintenanceConformance"
 	scenarioOwnerMixed            = "TestMixedConformance"
 	scenarioOwnerPerformance      = "TestPerformanceGate"
@@ -53,6 +54,11 @@ var scenarioRegistry = map[string]scenarioBinding{ //nolint:gochecknoglobals // 
 	"heterogeneous_fleet_known_kinds":                   {owner: scenarioOwnerMixed, tier: "mixed"},
 	"historical_migration_down_up":                      {owner: scenarioOwnerMixed, tier: "storage"},
 	"ignored_cancellation_hard_abort":                   {owner: scenarioOwnerMixed, tier: "chaos"},
+	"insert_only_insert_notification":                   {owner: scenarioOwnerInsertOnly, profile: "insert-only-v1", tier: "mixed"},
+	"insert_only_insert_reference_work":                 {owner: scenarioOwnerInsertOnly, profile: "insert-only-v1", tier: "mixed"},
+	"insert_only_profile_handshake":                     {owner: scenarioOwnerInsertOnly, profile: "insert-only-v1", tier: "codec"},
+	"insert_only_transactional_insert":                  {owner: scenarioOwnerInsertOnly, profile: "insert-only-v1", tier: "storage"},
+	"insert_only_typed_batch":                           {owner: scenarioOwnerInsertOnly, profile: "insert-only-v1", tier: "storage"},
 	"job_cleaner_queue_filters":                         {owner: scenarioOwnerMixed, tier: "storage"},
 	"job_list_cursor_interchange":                       {owner: scenarioOwnerMixed, tier: "storage"},
 	"job_row_round_trip_all_fields":                     {owner: scenarioOwnerMixed, tier: "codec"},

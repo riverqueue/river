@@ -271,6 +271,7 @@ func TestCompatibilityArtifacts(t *testing.T) {
 			profile string
 		}{
 			{path: "conformance/scenarios/core.json"},
+			{path: "conformance/scenarios/insert-only.json", profile: "insert-only-v1"},
 			{path: "conformance/scenarios/sqlite-runtime.json", profile: "sqlite-runtime-v1"},
 			{path: "conformance/scenarios/sqlite-storage.json", profile: "portable-storage-v1"},
 		} {
