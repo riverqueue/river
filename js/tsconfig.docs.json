@@ -1,0 +1,15 @@
+{
+  "extends": "./tsconfig.base.json",
+  "compilerOptions": {
+    "noEmit": true
+  },
+  "include": [
+    "src",
+    "cli/src",
+    "driver/*/src",
+    "migrate/src",
+    "test/src",
+    "worker-threads/src"
+  ],
+  "exclude": ["**/*.integration.test.ts", "**/*.test.ts"]
+}
