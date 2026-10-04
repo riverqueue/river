@@ -17,7 +17,10 @@ updates:
     schedule:
       interval: "weekly"
   - package-ecosystem: "github-actions"
-    directory: "/"
+    # The JavaScript workflows' composite actions live under .github/actions.
+    directories:
+      - "/"
+      - "/.github/actions/*"
     schedule:
       interval: "weekly"
   - package-ecosystem: "gomod"
@@ -30,6 +33,11 @@ updates:
           - "patch"
     schedule:
       interval: "weekly"
+  # Routine minor and patch updates to the JavaScript workspace arrive as one
+  # grouped pull request per dependency type; major updates stay separate so
+  # each can be reviewed on its own. Exact pins in package.json (Prisma, the
+  # TypeScript-next preview, pnpm overrides) stay exact because `increase`
+  # rewrites the pinned version rather than widening it.
   - package-ecosystem: "npm"
     directory: "/js"
     cooldown:
@@ -39,10 +47,16 @@ updates:
         dependency-type: "development"
         patterns:
           - "*"
+        update-types:
+          - "minor"
+          - "patch"
       production-dependencies:
         dependency-type: "production"
         patterns:
           - "*"
+        update-types:
+          - "minor"
+          - "patch"
     open-pull-requests-limit: 10
     schedule:
       interval: "monthly"
