@@ -119,6 +119,18 @@ test/conformance/performance: ## Run Go and configured candidate performance gat
 test/conformance/soak: ## Run mixed soak for RIVER_CONFORMANCE_SOAK_DURATION
 	go test -tags riverconformance ./conformance/harness -run '^TestMixedSoak$$' -count=1 -timeout $(CONFORMANCE_SOAK_TIMEOUT)
 
+.PHONY: test/conformance/multi-engine
+test/conformance/multi-engine: ## Run direct multi-engine competition, failover, fault, and SQLite pair checks
+	go test -tags riverconformance ./conformance/harness -run '^TestMultiEngine(Conformance|SQLiteConformance)$$' -count=1 -timeout $(CONFORMANCE_TIMEOUT)
+
+.PHONY: test/conformance/multi-engine/performance
+test/conformance/multi-engine/performance: ## Compare release-built reference and candidate adapters together
+	go test -tags riverconformance ./conformance/harness -run '^TestMultiEnginePerformanceGate$$' -count=1 -timeout $(CONFORMANCE_TIMEOUT)
+
+.PHONY: test/conformance/multi-engine/soak
+test/conformance/multi-engine/soak: ## Run direct multi-engine soak
+	go test -tags riverconformance ./conformance/harness -run '^TestMultiEngineSoak$$' -count=1 -timeout $(CONFORMANCE_SOAK_TIMEOUT)
+
 .PHONY: test/race
 test/race:: ## Run tests with race detector (TEST_DATABASE=all, postgres, or sqlite)
 define test-race-target

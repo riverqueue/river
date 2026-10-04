@@ -98,6 +98,20 @@ func conformanceCandidateSpec(t *testing.T, root string, release bool) adapterSp
 	return prepareCandidate(t, root, specs[0], release)
 }
 
+// conformancePeerSpecs loads additional candidates for multi-engine tiers
+// from RIVER_CONFORMANCE_PEER (an inline descriptor object or array) or
+// RIVER_CONFORMANCE_PEER_FILE (one or more descriptor paths separated by the
+// platform's path list separator), skipping the test when neither is set.
+func conformancePeerSpecs(t *testing.T, root string, release bool) []adapterSpec {
+	t.Helper()
+
+	specs := loadDescriptors(t, root, "RIVER_CONFORMANCE_PEER", "RIVER_CONFORMANCE_PEER_FILE")
+	for index := range specs {
+		specs[index] = prepareCandidate(t, root, specs[index], release)
+	}
+	return specs
+}
+
 func loadDescriptors(t *testing.T, root, inlineVariable, fileVariable string) []adapterSpec {
 	t.Helper()
 

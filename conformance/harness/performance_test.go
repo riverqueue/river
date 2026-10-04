@@ -119,6 +119,16 @@ func medianBenchmark(t *testing.T, current *adapter, mode string, jobs int) benc
 	return medianMetrics(runs)
 }
 
+// slowestMetrics combines the lowest throughput and highest p95 of a group.
+func slowestMetrics(metrics []benchmarkMetrics) benchmarkMetrics {
+	slowest := metrics[0]
+	for _, current := range metrics[1:] {
+		slowest.throughput = min(slowest.throughput, current.throughput)
+		slowest.p95 = max(slowest.p95, current.p95)
+	}
+	return slowest
+}
+
 // requireSoakBudget fails a soak immediately when running for duration and
 // then finishing would outlast `go test`'s -timeout, instead of letting the
 // run panic on the timeout hours later.

@@ -38,6 +38,18 @@ func (tracker *scenarioTracker) attach(adapters ...*adapter) {
 	tracker.adapters = append(tracker.adapters, adapters...)
 }
 
+// pass records scenarios verified inline by an owner whose whole body is one
+// scenario. Owners with several scenarios use a subtest per scenario and
+// record instead.
+func (tracker *scenarioTracker) pass(names ...string) {
+	tracker.t.Helper()
+
+	for _, name := range names {
+		tracker.requireOwned(name)
+		tracker.completed[name] = true
+	}
+}
+
 func (tracker *scenarioTracker) requireOwned(name string) {
 	tracker.t.Helper()
 
