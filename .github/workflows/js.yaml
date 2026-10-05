@@ -1,12 +1,12 @@
 name: JavaScript
 
-# Runs for changes to the JavaScript workspace and to everything its gates
-# read from the rest of River: the canonical migrations and SQL it mirrors and
-# runs against, and this workflow. Release tags always run it.
 on:
+  # Filter the whole workflow so unrelated changes don't create skipped
+  # matrix jobs. Keep both events' paths in sync. Release tags always run it.
   push:
-    branches: [master]
-    paths: &paths
+    branches:
+      - master
+    paths:
       - ".github/actions/setup-js/**"
       - ".github/workflows/js.yaml"
       - "Makefile"
@@ -14,7 +14,12 @@ on:
       - "riverdriver/**/*.sql"
     tags: ["v*"]
   pull_request:
-    paths: *paths
+    paths:
+      - ".github/actions/setup-js/**"
+      - ".github/workflows/js.yaml"
+      - "Makefile"
+      - "js/**"
+      - "riverdriver/**/*.sql"
 
 concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
