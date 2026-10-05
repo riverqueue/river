@@ -1,10 +1,26 @@
 name: Rust
 
 on:
+  # Filter the whole workflow so unrelated changes don't create skipped
+  # matrix jobs. Keep both events' paths in sync.
   push:
     branches:
       - master
+    paths:
+      - ".github/workflows/rust.yaml"
+      - "Makefile"
+      - "internal/cmd/syncrustmigrations/**"
+      - "riverdriver/riverpgxv5/migration/**"
+      - "riverdriver/riversqlite/migration/**"
+      - "rust/**"
   pull_request:
+    paths:
+      - ".github/workflows/rust.yaml"
+      - "Makefile"
+      - "internal/cmd/syncrustmigrations/**"
+      - "riverdriver/riverpgxv5/migration/**"
+      - "riverdriver/riversqlite/migration/**"
+      - "rust/**"
 
 permissions:
   contents: read
@@ -68,7 +84,7 @@ jobs:
       - name: Documentation as docs.rs builds it
         run: make doc/rust/docsrs
 
-  msrv:
+  rust_versions:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     strategy:
