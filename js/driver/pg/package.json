@@ -1,0 +1,48 @@
+{
+  "name": "@riverqueue/driver-pg",
+  "version": "0.1.0",
+  "description": "node-postgres (pg) driver for the riverqueue TypeScript client.",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsc",
+    "clean": "rm -rf dist",
+    "prepublishOnly": "pnpm run clean && pnpm run build"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/riverqueue/riverqueue-js.git",
+    "directory": "driver/pg"
+  },
+  "authors": ["Brandur Leach", "Blake Gentry"],
+  "license": "LGPL-3.0-or-later",
+  "dependencies": {
+    "riverqueue": "workspace:*"
+  },
+  "peerDependencies": {
+    "pg": ">=8.0.0"
+  },
+  "devDependencies": {
+    "@types/pg": "^8.11.0",
+    "pg": "^8.22.0",
+    "typescript": "^5.8.0"
+  },
+  "keywords": [
+    "river",
+    "job-queue",
+    "postgresql",
+    "pg",
+    "node-postgres",
+    "driver"
+  ]
+}

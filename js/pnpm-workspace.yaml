@@ -1,0 +1,8 @@
+packages:
+  - "driver/*"
+  - "examples/*"
+
+ignoredBuiltDependencies:
+  - "@prisma/client"
+  - "@prisma/engines"
+  - prisma

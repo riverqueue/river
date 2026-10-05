@@ -1,0 +1,171 @@
+name: CI
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+
+# Node versions to test against (last two LTS releases).
+# Update these when new LTS versions are released.
+
+jobs:
+  build:
+    name: Build
+    runs-on: ubuntu-latest
+
+    strategy:
+      matrix: &last_two_lts_node_versions
+        node-version: [22, 24]
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: pnpm/action-setup@v6
+
+      - uses: actions/setup-node@v6
+        with:
+          cache: pnpm
+          node-version: ${{ matrix.node-version }}
+
+      - run: pnpm install --frozen-lockfile
+
+      - run: pnpm run build:all
+
+  lint:
+    name: Lint
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: pnpm/action-setup@v6
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 24
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+
+      - run: pnpm run lint
+
+      - run: pnpm run fmt:check
+
+  examples:
+    name: Examples
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_DB: river_test
+          POSTGRES_PASSWORD: postgres
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+        ports:
+          - 5432:5432
+
+    strategy:
+      matrix: *last_two_lts_node_versions
+
+    env:
+      DATABASE_URL: postgres://postgres:postgres@localhost:5432/river_test?sslmode=disable
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: pnpm/action-setup@v6
+
+      - uses: actions/setup-node@v6
+        with:
+          cache: pnpm
+          node-version: ${{ matrix.node-version }}
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: stable
+          cache: false
+
+      - run: go install github.com/riverqueue/river/cmd/river@latest
+
+      - run: river migrate-up --database-url "$DATABASE_URL"
+
+      - run: pnpm install --frozen-lockfile
+
+      - run: pnpm run build:all
+
+      - run: pnpm --filter='./examples/*' run build
+
+      - run: pnpm --filter='./examples/*' run start
+
+  test:
+    name: Test
+    runs-on: ubuntu-latest
+
+    strategy:
+      matrix: *last_two_lts_node_versions
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: pnpm/action-setup@v6
+
+      - uses: actions/setup-node@v6
+        with:
+          cache: pnpm
+          node-version: ${{ matrix.node-version }}
+
+      - run: pnpm install --frozen-lockfile
+
+      - run: pnpm run test
+
+  test_integration:
+    name: Test (integration)
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_DB: river_test
+          POSTGRES_PASSWORD: postgres
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+        ports:
+          - 5432:5432
+
+    strategy:
+      matrix: *last_two_lts_node_versions
+
+    env:
+      TEST_DATABASE_URL: postgres://postgres:postgres@localhost:5432/river_test?sslmode=disable
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: pnpm/action-setup@v6
+
+      - uses: actions/setup-node@v6
+        with:
+          cache: pnpm
+          node-version: ${{ matrix.node-version }}
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: stable
+          cache: false
+
+      - run: go install github.com/riverqueue/river/cmd/river@latest
+
+      - run: river migrate-up --database-url "$TEST_DATABASE_URL"
+
+      - run: pnpm install --frozen-lockfile
+
+      - run: pnpm run test:integration
