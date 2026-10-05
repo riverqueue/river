@@ -35,7 +35,7 @@ jobs:
     timeout-minutes: 20
 
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0
       - uses: dtolnay/rust-toolchain@stable
@@ -93,7 +93,7 @@ jobs:
         rust-version: ["1.95", "1.96", "1.97"]
 
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@master
         id: rust
         with:
@@ -137,7 +137,7 @@ jobs:
           - 5432:5432
 
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
         id: rust
       - name: Cache Rust dependencies and build artifacts
