@@ -47,14 +47,17 @@ TEST_DATABASE ?= all
 
 # Only filter the shared driver suite. Other packages have SQLite-named tests
 # that use PostgreSQL or mocks and should stay in the regular test run.
-sqlite_test_pattern := '^(Test.*(LibSQL|SQLite|Turso)|Example_(libSQL|sqlite|turso))'
+sqlite_test_pattern := ^(Test.*(LibSQL|SQLite|Turso)|Example_(libSQL|sqlite|turso))
 test_submodules := $(submodules)
+legacy_driver_test_flags := -run '/WithTx$$'
 ifeq ($(TEST_DATABASE),postgres)
     test_submodules := $(filter-out %/riverdriver/riversqlite,$(submodules))
-    driver_test_flags := -skip $(sqlite_test_pattern)
+    driver_test_flags := -skip '$(sqlite_test_pattern)'
+    legacy_driver_test_flags += -skip '$(sqlite_test_pattern)'
 else ifeq ($(TEST_DATABASE),sqlite)
     test_submodules := $(filter %/riverdriver/riverdrivertest %/riverdriver/riversqlite,$(submodules))
-    driver_test_flags := -run $(sqlite_test_pattern)
+    driver_test_flags := -run '$(sqlite_test_pattern)'
+    legacy_driver_test_flags := -run '$(sqlite_test_pattern)/WithTx$$'
 else ifneq ($(TEST_DATABASE),all)
     $(error TEST_DATABASE must be all, postgres, or sqlite)
 endif
@@ -77,8 +80,10 @@ endef
 $(foreach mod,$(test_submodules),$(eval $(call test-target,$(mod))))
 
 # Exercise the temporary savepoint fallback as well as default transaction reuse.
-test:: ; cd ./riverdriver/riverdrivertest && RIVER_USE_LEGACY_SUBTRANSACTIONS=1 go test . -run '/WithTx$$' -timeout 2m
+test:: ; cd ./riverdriver/riverdrivertest && RIVER_USE_LEGACY_SUBTRANSACTIONS=1 go test . $(legacy_driver_test_flags) -timeout 2m
+ifneq ($(TEST_DATABASE),sqlite)
 test:: ; cd ./riverdriver/riverdrivertest && RIVER_USE_LEGACY_SUBTRANSACTIONS=1 go test . -run '^TestDriverRiverPgxV5$$/.*/WithTx$$' -timeout 2m
+endif
 
 .PHONY: test/race
 test/race:: ## Run tests with race detector (TEST_DATABASE=all, postgres, or sqlite)
@@ -87,8 +92,10 @@ define test-race-target
 endef
 $(foreach mod,$(test_submodules),$(eval $(call test-race-target,$(mod))))
 
-test/race:: ; cd ./riverdriver/riverdrivertest && RIVER_USE_LEGACY_SUBTRANSACTIONS=1 go test . -race -run '/WithTx$$' -timeout 2m
+test/race:: ; cd ./riverdriver/riverdrivertest && RIVER_USE_LEGACY_SUBTRANSACTIONS=1 go test . -race $(legacy_driver_test_flags) -timeout 2m
+ifneq ($(TEST_DATABASE),sqlite)
 test/race:: ; cd ./riverdriver/riverdrivertest && RIVER_USE_LEGACY_SUBTRANSACTIONS=1 go test . -race -run '^TestDriverRiverPgxV5$$/.*/WithTx$$' -timeout 2m
+endif
 
 .PHONY: bench
 bench:: ## Run benchmarks in each submodule (ITERATIONS=100)
