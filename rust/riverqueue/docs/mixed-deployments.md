@@ -8,11 +8,11 @@ existing Go deployment and back out again.
 
 ## Matching versions
 
-Each `riverqueue` minor release is matched to the River Go minor release with
-the same number: `riverqueue` 0.49 runs alongside River Go 0.49. Patch releases
-of either implementation can be mixed within a matched minor release. Upgrade
-both implementations together when moving to a new minor release, following
-the rolling procedure below.
+Each `riverqueue` preview is a prerelease of the next River Go minor release
+and works with the River Go release before it: `riverqueue` 0.50.0-alpha.1
+works with River Go 0.49. Patch releases of that River Go release can be mixed
+with it. Upgrade both implementations together when moving to a new pairing,
+following the rolling procedure below.
 
 Every River client in a deployment must understand the same schema. Run
 migrations once with either implementation, before starting clients of the
