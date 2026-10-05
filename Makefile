@@ -2,6 +2,10 @@
 
 SQLC ?= sqlc
 
+.PHONY: check/modzip
+check/modzip: ## Check that no Go module zip includes fixtures, testdata, or the Rust or JS ports
+	go run ./conformance/cmd/checkmodzip ./go.work
+
 .PHONY: db/reset
 db/reset: ## Drop, create, and migrate dev and test databases
 db/reset: db/reset/dev

@@ -13,6 +13,7 @@ require (
 	github.com/riverqueue/river/rivershared v0.49.0
 	github.com/riverqueue/river/rivertype v0.49.0
 	github.com/robfig/cron/v3 v3.0.1
+	golang.org/x/mod v0.41.0
 )
 
 require (
