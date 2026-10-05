@@ -1,0 +1,68 @@
+{
+  "name": "@riverqueue/driver-sqlite",
+  "version": "0.50.0-alpha.1",
+  "description": "First-party node:sqlite backend for River.",
+  "type": "module",
+  "sideEffects": false,
+  "engines": {
+    "node": ">=26"
+  },
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js",
+      "default": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist",
+    "src",
+    "!src/**/*.test.ts",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "build": "node ../../node_modules/typescript/bin/tsc && node ../../scripts/copy-license.mjs",
+    "clean": "rm -rf dist",
+    "prepack": "pnpm run clean && pnpm run build",
+    "test": "pnpm --dir ../../migrate run build && vitest run src",
+    "typecheck": "node ../../node_modules/typescript/bin/tsc -p tsconfig.test.json --noEmit"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/riverqueue/river.git",
+    "directory": "js/driver/sqlite"
+  },
+  "contributors": [
+    "Brandur Leach",
+    "Blake Gentry"
+  ],
+  "license": "LGPL-3.0-or-later",
+  "publishConfig": {
+    "access": "public",
+    "provenance": true
+  },
+  "peerDependencies": {
+    "@types/node": ">=26",
+    "riverqueue": "workspace:0.50.0-alpha.1"
+  },
+  "peerDependenciesMeta": {
+    "@types/node": {
+      "optional": true
+    }
+  },
+  "devDependencies": {
+    "@riverqueue/migrate": "workspace:0.50.0-alpha.1",
+    "@types/node": "^26.1.1",
+    "riverqueue": "workspace:0.50.0-alpha.1"
+  },
+  "keywords": [
+    "river",
+    "job-queue",
+    "sqlite",
+    "node:sqlite",
+    "driver"
+  ]
+}

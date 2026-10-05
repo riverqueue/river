@@ -1,0 +1,85 @@
+{
+  "name": "@riverqueue/cli",
+  "version": "0.50.0-alpha.1",
+  "description": "Command-line migrations, benchmarks, and upgrade codemods for River TypeScript.",
+  "type": "module",
+  "sideEffects": [
+    "./dist/bin.js"
+  ],
+  "engines": {
+    "node": ">=26"
+  },
+  "bin": {
+    "riverqueue": "./dist/bin.js"
+  },
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js",
+      "default": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist",
+    "src",
+    "!src/**/*.test.ts",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "build": "node ../node_modules/typescript/bin/tsc && chmod +x dist/bin.js && node ../scripts/copy-license.mjs",
+    "clean": "rm -rf dist",
+    "prepack": "pnpm run clean && pnpm run build",
+    "test": "vitest run src"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/riverqueue/river.git",
+    "directory": "js/cli"
+  },
+  "contributors": [
+    "Brandur Leach",
+    "Blake Gentry"
+  ],
+  "license": "LGPL-3.0-or-later",
+  "publishConfig": {
+    "access": "public",
+    "provenance": true
+  },
+  "dependencies": {
+    "@riverqueue/driver-pg": "workspace:0.50.0-alpha.1",
+    "@riverqueue/migrate": "workspace:0.50.0-alpha.1",
+    "pg": "^8.22.0",
+    "riverqueue": "workspace:0.50.0-alpha.1"
+  },
+  "peerDependencies": {
+    "@types/node": ">=26",
+    "@types/pg": ">=8",
+    "typescript": "^5.0.0 || ^6.0.0"
+  },
+  "peerDependenciesMeta": {
+    "@types/node": {
+      "optional": true
+    },
+    "@types/pg": {
+      "optional": true
+    },
+    "typescript": {
+      "optional": true
+    }
+  },
+  "devDependencies": {
+    "@types/node": "^26.1.1",
+    "@types/pg": "^8.20.0",
+    "typescript": "^6.0.3"
+  },
+  "keywords": [
+    "river",
+    "job-queue",
+    "cli",
+    "migrations",
+    "benchmark"
+  ]
+}
