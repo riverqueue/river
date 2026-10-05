@@ -106,9 +106,12 @@ candidate simultaneously against one PostgreSQL database. The ordinary
 candidate descriptor is joined by one or more peer descriptors from
 `RIVER_CONFORMANCE_PEER` (an inline descriptor object or array) or
 `RIVER_CONFORMANCE_PEER_FILE` (descriptor paths separated by the platform's
-path-list separator), which are required. At
-least two distinct candidates are required so the tier cannot degrade into a
-duplicated pairwise test. The smoke tier fills one blocked worker slot in
+path-list separator). The `make` targets use the JavaScript descriptor,
+[`js/conformance/candidate.json`](../js/conformance/candidate.json), as the peer
+when none is configured; build the JavaScript workspace first with
+`make build/js`. At least two distinct candidates are required so the tier
+cannot degrade into a duplicated pairwise test. The smoke tier fills one blocked
+worker slot in
 every engine, moves leadership through every runtime, terminates each
 engine's database connections, runs work, notification, and cancellation
 directly between every ordered pair of candidates, and kills each candidate
@@ -119,19 +122,24 @@ reference:
 
 ```sh
 RIVER_CONFORMANCE_DATABASE_URL=postgres://localhost/river_conformance \
-RIVER_CONFORMANCE_CANDIDATE_FILE=/path/to/javascript.json \
+RIVER_CONFORMANCE_CANDIDATE_FILE=/path/to/candidate.json \
   make test/conformance/multi-engine
 
 RIVER_CONFORMANCE_DATABASE_URL=postgres://localhost/river_conformance \
-RIVER_CONFORMANCE_CANDIDATE_FILE=/path/to/javascript.json \
+RIVER_CONFORMANCE_CANDIDATE_FILE=/path/to/candidate.json \
 RIVER_CONFORMANCE_MULTI_ENGINE_PERFORMANCE=1 \
   make test/conformance/multi-engine/performance
 
 RIVER_CONFORMANCE_DATABASE_URL=postgres://localhost/river_conformance \
-RIVER_CONFORMANCE_CANDIDATE_FILE=/path/to/javascript.json \
+RIVER_CONFORMANCE_CANDIDATE_FILE=/path/to/candidate.json \
 RIVER_CONFORMANCE_MULTI_ENGINE_SOAK_DURATION=10m \
   make test/conformance/multi-engine/soak
 ```
+
+`make test/conformance/js` runs the tiers the JavaScript workflow runs, with
+JavaScript as the candidate and Rust as its multi-engine peer: SQLite, and
+with `RIVER_CONFORMANCE_DATABASE_URL` set, PostgreSQL, insert-only, and
+multi-engine.
 
 Some scenarios simulate what cannot be forced quickly. Leader death and
 cross-engine rescue kill a real adapter process and then expire its lease
@@ -140,9 +148,9 @@ rolling deployment scenario replaces each engine's process in turn while both
 implementations keep inserting and working; "version skew" here means
 independently built and restarted implementations at the same protocol
 revision and migration line, not different protocol revisions, which the
-handshake rejects. Skew between released versions is exercised when an
-implementation maintained in another repository runs the suite against a
-pinned River revision. Stuck-job detection asserts only that the runtime reports the
+handshake rejects. Every implementation is built from the same River
+revision, so the suite doesn't exercise skew between released versions.
+Stuck-job detection asserts only that the runtime reports the
 job stuck; what happens to the stuck attempt afterwards is
 implementation-specific.
 
@@ -156,12 +164,14 @@ queue backlog; throughput still covers the complete concurrent pipeline.
 - `ci.yaml` runs the harness unit tests with the Go suite and verifies the
   generated fixtures and the feature inventory
   (`make verify/conformance verify/feature-inventory`).
+- `js.yaml` runs when the JavaScript workspace, this suite, River's
+  migrations or SQL, or the workflow changes. Besides the JavaScript gates, it
+  runs the SQLite tiers and, for PostgreSQL 14 through 18, the mixed,
+  insert-only, and multi-engine tiers with JavaScript as the candidate and
+  Rust as its peer; pushes to `master` add a ten-minute soak and advisory
+  performance runs. `js-soak.yaml` runs a six-hour multi-engine soak weekly.
 
-River CI runs only Go and the language-neutral artifacts. It never checks out
-another repository. An
-implementation maintained elsewhere, such as JavaScript, runs this harness
-from its own CI against a pinned River revision, with its own candidate
-descriptor, and adds the multi-engine tiers there, since they need at least
-two candidates.
+River CI never checks out another repository: every implementation and the
+harness come from the same commit.
 
 Every CI conformance job sets `RIVER_CONFORMANCE_REQUIRED=1`.

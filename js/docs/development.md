@@ -3,9 +3,10 @@
 ## Setup
 
 The JavaScript workspace lives in `js/` of the River repository, next to the
-Go and Rust implementations. Run the `pnpm` commands below from `js/`, or use
-River's top-level `make` targets (`make lint/js`, `make test/js`, and so on),
-which delegate to `pnpm -C js`.
+Go and Rust implementations and the shared conformance suite it is tested
+against. Run the `pnpm` commands below from `js/`, or use River's top-level
+`make` targets (`make lint/js`, `make test/js`, and so on), which delegate to
+`pnpm -C js`.
 
 Use an official Node.js 26 build, which includes native Temporal. The
 repository's `.node-version` selects Node 26 for version managers such as fnm,
@@ -33,6 +34,7 @@ pnpm run fmt:check         # Check formatting (for CI)
 pnpm run lint              # Run ESLint
 pnpm run lint:fix          # Run ESLint with auto-fix
 pnpm run test              # Run unit tests
+pnpm run test:conformance  # Run River's conformance suite against this workspace
 pnpm run test:coverage     # Run unit tests with line/branch coverage
 pnpm run test:integration  # Run integration tests (requires database)
 pnpm run verify:migrations # Verify generated migration files and hashes
@@ -146,8 +148,8 @@ explore new inputs, with `FAST_CHECK_SEED`:
 `pnpm run test:coverage` runs the unit suite with V8 coverage and writes a
 summary to the terminal and an HTML report to `coverage/`. Coverage is
 supplementary evidence only: it shows code no unit test executes, not that
-behavior matches River, which the JavaScript-native tests and River Go's
-recorded goldens establish. It has no threshold and is not a CI gate.
+behavior matches River, which the shared conformance scenarios and
+JavaScript-native tests establish. It has no threshold and is not a CI gate.
 
 ## Integration tests
 
@@ -163,6 +165,9 @@ generated migrations from this checkout:
 By default, tests connect to `postgres://localhost:5432/river_test`. Override with `TEST_DATABASE_URL`:
 
     TEST_DATABASE_URL="postgres://user:pass@host:5432/mydb" pnpm run test:integration
+
+The conformance adapter's PostgreSQL integration tests read River's adapter
+contract and manifest from the surrounding repository.
 
 The integration suite includes a bounded multi-client stress test: three
 clients share one database while jobs are inserted from every client, one
@@ -186,28 +191,140 @@ to benchmark against a disposable database:
     node cli/dist/bin.js bench \
       --database-url "postgres://localhost/river_bench" --yes --duration 30s
 
+## Cross-language conformance
+
+The canonical suite lives in River's `conformance/` directory and is shared by
+the Go, Rust, JavaScript, and future implementations. The workspace owns the
+JavaScript candidate descriptor, `conformance/candidate.json`, which tells
+River's harness how to start the adapter (`conformance/dist/bin.js`), which
+profiles it serves, which optional `start` tuning it honors, and its release
+performance bounds. Its `version` must equal the version the adapter reports,
+which is the conformance package's; the runner refuses to start otherwise.
+
+`pnpm run test:conformance` is a thin wrapper over River's `make` targets, so
+local runs match CI. It sets `RIVER_CONFORMANCE_CANDIDATE_FILE` to the
+descriptor and `RIVER_CONFORMANCE_PEER_FILE` to River's Rust descriptor, and
+puts the running Node.js first on `PATH`. Build this workspace first. SQLite
+needs no external service; a PostgreSQL URL adds the PostgreSQL tiers:
+
+```sh
+pnpm run build:all
+pnpm run test:conformance
+pnpm run test:conformance -- \
+  --database-url postgres://user@localhost:5432/river_conformance
+```
+
+| Tier                                                                    | `make` target                               | Runs when                      |
+| ----------------------------------------------------------------------- | ------------------------------------------- | ------------------------------ |
+| SQLite storage, runtime, and resilience                                 | `test/conformance/sqlite`                   | always                         |
+| Go and JavaScript on PostgreSQL: mixed, maintenance, and resilience     | `test/conformance`                          | `--database-url`               |
+| Insert-only profile through `@riverqueue/driver-prisma`                 | `test/conformance/insert-only`              | `--database-url`               |
+| Go, Rust, and JavaScript together, and Rust and JavaScript SQLite pairs | `test/conformance/multi-engine`             | `--multi-engine`               |
+| Go and JavaScript release performance                                   | `test/conformance/performance`              | `--performance`                |
+| Multi-engine release performance                                        | `test/conformance/multi-engine/performance` | `--multi-engine-performance`   |
+| Go and JavaScript soak                                                  | `test/conformance/soak`                     | `--soak-duration`              |
+| Multi-engine soak                                                       | `test/conformance/multi-engine/soak`        | `--multi-engine-soak-duration` |
+
+The database URL must name a TCP host and port, not a Unix socket directory:
+the resilience scenarios reach PostgreSQL through a fault proxy that rewrites
+the URL's address to make the database unavailable to one worker at a time.
+Use a disposable database; the harness truncates and migrates River's tables
+and creates and drops schemas.
+
+The release tiers use the same adapter and database workload:
+
+```sh
+pnpm run test:conformance:performance -- \
+  --database-url postgres://user@localhost:5432/river_conformance \
+  --performance-jobs 1000
+pnpm run test:conformance:soak -- \
+  --database-url postgres://user@localhost:5432/river_conformance
+pnpm run test:conformance:multi-engine -- \
+  --database-url postgres://user@localhost:5432/river_conformance
+pnpm run test:conformance:multi-engine:performance -- \
+  --database-url postgres://user@localhost:5432/river_conformance
+pnpm run test:conformance:multi-engine:soak -- \
+  --database-url postgres://user@localhost:5432/river_conformance
+```
+
+The soak scripts run for 10 minutes by default; pass `--soak-duration` or
+`--multi-engine-soak-duration` (a Go duration such as `2m` or `1h`) to change
+that. `--performance-jobs` sets the per-run workload of the performance gates,
+which otherwise use the harness default of 200 jobs. Every invocation first
+runs the SQLite tier and, with a database URL, the PostgreSQL and insert-only
+tiers. Set `RIVER_CONFORMANCE_REQUIRED=1`, as CI does, to turn every skipped
+tier or scenario into a failure.
+
+The multi-engine tiers run Go, Rust, and JavaScript simultaneously against one
+database for deterministic worker competition, leadership turnover through all
+three runtimes, connection-fault recovery, and bounded connection use, and run
+the SQLite checks between Rust and JavaScript directly. River's Rust descriptor
+is the peer, and its build command compiles River's Rust adapter with `cargo`,
+so these tiers need a Rust toolchain. River's own `make
+test/conformance/multi-engine` targets add this workspace's descriptor as the
+peer of the Rust candidate unless another peer is configured, so they run the
+same three implementations once `js/` is built.
+
+### Scenario coverage matrix
+
+Passing the shared scenarios proves compatibility with Go, but a regression
+should also fail a JavaScript-native test before it reaches the harness.
+`conformance/scenario-coverage.json` maps every scenario ID in River's
+PostgreSQL and SQLite catalogs to the Vitest tests that cover the same behavior
+(`path > describe > test`), to a documented `gap`, or to a `not_applicable`
+reason for scenarios that only mean something with several engines or as a
+harness-level measurement.
+`docs/conformance-coverage.md` is generated from it.
+
+```sh
+pnpm run coverage:scenarios        # check
+pnpm run coverage:scenarios:write  # regenerate
+```
+
+The check fails when a catalog scenario has no entry, an entry names a
+scenario River no longer has, a cited test does not exist, or the generated
+matrix is out of date. It lists tests with `vitest list`, so renaming a test
+means updating the mapping, and adding a scenario to River's catalogs means
+mapping it before regenerating.
+
 ## Continuous integration
 
 River's `.github/workflows/js.yaml` runs on pull requests and pushes to
-`master` that change `js/`, River's migrations or SQL, or the workflow itself,
-and on release tags. Each job installs the official Node.js build from
-`js/.node-version` and fails unless `typeof Temporal` is `object`. The jobs
-cover build, both type-check lanes, generated migrations (compared with
-River's sources), API reports, TypeDoc, README snippets, the 0.1 fixture, lint,
-formatting, licenses, `pnpm audit`, packed archives and examples, unit tests on
-Node 26.0.0 and the current Node 26 release, and integration tests on
+`master` that change `js/`, the shared conformance suite, River's migrations or
+SQL, or the workflow itself, and on release tags. Each job installs the
+official Node.js build from `js/.node-version` and fails unless
+`typeof Temporal` is `object`. The jobs cover build, both type-check lanes,
+generated migrations (compared with River's sources), API reports, TypeDoc,
+README snippets, the 0.1 fixture, lint, formatting, licenses, `pnpm audit`,
+packed archives and examples, unit tests on Node 26.0.0 and the current Node 26
+release, and integration tests (including the conformance adapter's) on
 PostgreSQL 14 through 18.
+
+Conformance jobs set `RIVER_CONFORMANCE_REQUIRED=1` and run the same `make`
+targets as `pnpm run test:conformance` with `conformance/candidate.json`. On
+PostgreSQL 14 through 18 they run the SQLite, PostgreSQL (mixed, maintenance,
+and resilience), insert-only, and multi-engine tiers, building River's Rust
+adapter as the peer with a cached `cargo` build. Pushes to `master` and
+release tags also run the Go and JavaScript and the multi-engine performance
+gates at 1,000 jobs per run and a 10-minute Go and JavaScript soak. The
+performance gates report without failing the workflow while the JavaScript
+bounds are recalibrated from GitHub runner measurements; they become blocking
+again once they are.
 
 Unit tests compare cron schedules and snooze counting with goldens recorded
 from River Go in `src/testdata`, the same values the Rust port checks in its
 own fixtures.
 
+`.github/workflows/js-soak.yaml` runs the six-hour multi-engine soak weekly.
+Start it manually with a shorter `soak-duration`, such as `1h`, for a release
+candidate.
+
 ## Preparing a release
 
 The root, drivers, migration library, worker-thread integration, test helpers,
-and CLI are intended to be publishable eventually. Examples are private. Until
-the initial release is explicitly approved, do not reserve names, publish
-packages, create tags, or create releases.
+and CLI are intended to be publishable eventually. Examples and conformance
+utilities are private. Until the initial release is explicitly approved, do
+not reserve names, publish packages, create tags, or create releases.
 
 1. Fetch changes to the repo. Export `VERSION` by incrementing the last tag:
 
@@ -222,8 +339,8 @@ packages, create tags, or create releases.
    `peerDependencies`, and `devDependencies`, then regenerate `pnpm-lock.yaml`.
    Libraries take `riverqueue` as an exact peer so a mismatched pair fails at
    install time instead of loading two copies; only the self-contained CLI
-   depends on it directly. Do not change the private example package
-   versions.
+   depends on it directly. Do not change the private example or conformance
+   package versions.
 
 3. Update `CHANGELOG.md` by moving the release notes from `Unreleased` into a
    heading for the new version.

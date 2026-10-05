@@ -148,6 +148,12 @@ endif
 CONFORMANCE_TIMEOUT ?= 30m
 CONFORMANCE_SOAK_TIMEOUT ?= 6h20m
 
+# Multi-engine tiers need at least two candidates. Unless a peer is
+# configured, the JavaScript adapter joins the candidate (Rust by default), so
+# Go, Rust, and JavaScript run together. Build it first with `make build/js`.
+JS_CONFORMANCE_CANDIDATE := js/conformance/candidate.json
+multi_engine_peer_env = $(if $(RIVER_CONFORMANCE_PEER)$(RIVER_CONFORMANCE_PEER_FILE),,RIVER_CONFORMANCE_PEER_FILE=$(JS_CONFORMANCE_CANDIDATE))
+
 .PHONY: test/conformance
 test/conformance: ## Run Go and configured candidate conformance (requires database URL)
 	go test -tags riverconformance ./conformance/harness -run '^Test(Maintenance|Mixed|Resilience)Conformance$$' -count=1 -timeout $(CONFORMANCE_TIMEOUT)
@@ -170,15 +176,15 @@ test/conformance/soak: ## Run mixed soak for RIVER_CONFORMANCE_SOAK_DURATION
 
 .PHONY: test/conformance/multi-engine
 test/conformance/multi-engine: ## Run direct multi-engine competition, failover, fault, and SQLite pair checks
-	go test -tags riverconformance ./conformance/harness -run '^TestMultiEngine(Conformance|SQLiteConformance)$$' -count=1 -timeout $(CONFORMANCE_TIMEOUT)
+	$(multi_engine_peer_env) go test -tags riverconformance ./conformance/harness -run '^TestMultiEngine(Conformance|SQLiteConformance)$$' -count=1 -timeout $(CONFORMANCE_TIMEOUT)
 
 .PHONY: test/conformance/multi-engine/performance
 test/conformance/multi-engine/performance: ## Compare release-built reference and candidate adapters together
-	go test -tags riverconformance ./conformance/harness -run '^TestMultiEnginePerformanceGate$$' -count=1 -timeout $(CONFORMANCE_TIMEOUT)
+	$(multi_engine_peer_env) go test -tags riverconformance ./conformance/harness -run '^TestMultiEnginePerformanceGate$$' -count=1 -timeout $(CONFORMANCE_TIMEOUT)
 
 .PHONY: test/conformance/multi-engine/soak
 test/conformance/multi-engine/soak: ## Run direct multi-engine soak
-	go test -tags riverconformance ./conformance/harness -run '^TestMultiEngineSoak$$' -count=1 -timeout $(CONFORMANCE_SOAK_TIMEOUT)
+	$(multi_engine_peer_env) go test -tags riverconformance ./conformance/harness -run '^TestMultiEngineSoak$$' -count=1 -timeout $(CONFORMANCE_SOAK_TIMEOUT)
 
 # `--cfg river_postgres_tests` builds the Rust PostgreSQL integration tests.
 # It goes to both rustc and rustdoc so any doctest gated on it runs too, and
@@ -224,6 +230,15 @@ test/rust/postgres: ## Run all Rust tests, including PostgreSQL integration test
 .PHONY: test/rust/sqlite
 test/rust/sqlite: ## Run Rust unit, doc, and SQLite integration tests without a PostgreSQL database
 	cd rust && cargo test --workspace --features riverqueue/sqlite,riverqueue-migrate/sqlite --locked
+
+# Runs every conformance tier the JavaScript workflow runs, with the
+# JavaScript adapter as the candidate and Rust as the multi-engine peer. The
+# PostgreSQL and multi-engine tiers run when RIVER_CONFORMANCE_DATABASE_URL is
+# set.
+.PHONY: test/conformance/js
+test/conformance/js: ## Run SQLite, PostgreSQL, insert-only, and multi-engine conformance with JavaScript as the candidate
+test/conformance/js: build/js
+	pnpm -C js run test:conformance $(if $(RIVER_CONFORMANCE_DATABASE_URL),-- --database-url "$(RIVER_CONFORMANCE_DATABASE_URL)" --multi-engine)
 
 .PHONY: doc/js
 doc/js: ## Check JavaScript API reports, TypeDoc, and README snippets
@@ -340,6 +355,10 @@ verify/feature-inventory: ## Fail on Go features missing from the cross-language
 .PHONY: verify/js-migrations
 verify/js-migrations: ## Verify JavaScript migrations match the canonical migrations
 	pnpm -C js run verify:migrations
+
+.PHONY: verify/js-scenario-coverage
+verify/js-scenario-coverage: ## Verify the JavaScript conformance scenario coverage matrix
+	pnpm -C js run coverage:scenarios
 
 .PHONY: verify/migrations
 verify/migrations: ## Verify synced migrations

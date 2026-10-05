@@ -42,10 +42,11 @@ itself, write unique jobs with a `river:unique_nonce` metadata value instead
 of relying on `xmax`, send no notifications, and, when started without
 `poll_only`, poll for cancellations of its running jobs every two seconds.
 
-The Go implementation is the reference side. Another implementation, such as
-JavaScript, runs the suite as the candidate by placing an object
-matching [`candidate.schema.json`](../schema/candidate.schema.json) in its own
-repository and setting `RIVER_CONFORMANCE_CANDIDATE_FILE` to its path:
+The Go implementation is the reference side. The JavaScript adapter's
+descriptor is [`js/conformance/candidate.json`](../../js/conformance/candidate.json),
+and another implementation can run the suite as the candidate by placing an
+object matching [`candidate.schema.json`](../schema/candidate.schema.json)
+beside its sources and setting `RIVER_CONFORMANCE_CANDIDATE_FILE` to its path:
 
 ```json
 {

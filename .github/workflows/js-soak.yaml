@@ -1,0 +1,64 @@
+name: JavaScript soak
+
+on:
+  schedule:
+    - cron: "41 4 * * 0"
+  workflow_dispatch:
+    inputs:
+      soak-duration:
+        default: 6h
+        description: >-
+          Soak length as a Go duration, such as 1h for a release candidate.
+          The job's timeout allows up to 6h.
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    working-directory: js
+
+env:
+  CARGO_INCREMENTAL: "0"
+
+jobs:
+  multi_engine_soak:
+    name: Multi-engine soak (${{ inputs.soak-duration || '6h' }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 390
+
+    services:
+      postgres:
+        image: postgres:18
+        env:
+          POSTGRES_DB: river_alignment
+          POSTGRES_PASSWORD: postgres
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+        ports:
+          - 5432:5432
+
+    env:
+      RIVER_CONFORMANCE_DATABASE_URL: postgres://postgres:postgres@localhost:5432/river_alignment?sslmode=disable
+      SOAK_DURATION: ${{ inputs.soak-duration || '6h' }}
+
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+
+      - uses: ./.github/actions/setup-js
+
+      - uses: ./.github/actions/setup-js-conformance
+
+      - run: pnpm run build:all
+
+      - run: >-
+          pnpm run test:conformance:multi-engine:soak --
+          --database-url "$RIVER_CONFORMANCE_DATABASE_URL"
+          --multi-engine-soak-duration "$SOAK_DURATION"

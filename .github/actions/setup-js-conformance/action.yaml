@@ -1,0 +1,44 @@
+name: Set up JavaScript conformance toolchains
+description: >-
+  Install Go for River's conformance harness and, unless `rust` is false,
+  Rust with a dependency cache and River's Rust adapter, the multi-engine peer
+  of the JavaScript candidate.
+
+inputs:
+  rust:
+    default: "true"
+    description: Whether to build River's Rust adapter for multi-engine tiers.
+
+runs:
+  using: composite
+  steps:
+    - uses: actions/setup-go@v6
+      with:
+        go-version: "1.27"
+
+    - uses: dtolnay/rust-toolchain@stable
+      if: inputs.rust == 'true'
+      id: rust
+
+    - name: Cache Rust dependencies and build artifacts
+      if: inputs.rust == 'true'
+      uses: actions/cache@v5
+      with:
+        path: |
+          ~/.cargo/registry/index
+          ~/.cargo/registry/cache
+          ~/.cargo/git/db
+          rust/target
+        key: rust-v1-${{ runner.os }}-${{ runner.arch }}-${{ github.job }}-${{ steps.rust.outputs.cachekey }}-${{ hashFiles('rust/**/Cargo.toml', 'rust/Cargo.lock') }}
+        restore-keys: rust-v1-${{ runner.os }}-${{ runner.arch }}-${{ github.job }}-${{ steps.rust.outputs.cachekey }}-
+
+    # River's Rust descriptor builds the adapter itself before the first
+    # multi-engine test; building here, with the same arguments, keeps that
+    # step fast and its compile output in its own log section.
+    - name: Build the Rust conformance adapter
+      if: inputs.rust == 'true'
+      shell: bash
+      run: >-
+        cargo build --quiet --locked
+        --manifest-path rust/Cargo.toml
+        -p riverqueue-conformance

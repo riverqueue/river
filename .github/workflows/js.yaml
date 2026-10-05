@@ -1,15 +1,18 @@
 name: JavaScript
 
 # Runs for changes to the JavaScript workspace and to everything its gates
-# read from the rest of River: the canonical migrations and SQL it mirrors and
-# runs against, and this workflow. Release tags always run it.
+# read from the rest of River: the shared conformance suite, the canonical
+# migrations and SQL it mirrors and runs against, and this workflow. Release
+# tags always run it.
 on:
   push:
     branches: [master]
     paths: &paths
       - ".github/actions/setup-js/**"
+      - ".github/actions/setup-js-conformance/**"
       - ".github/workflows/js.yaml"
       - "Makefile"
+      - "conformance/**"
       - "js/**"
       - "riverdriver/**/*.sql"
     tags: ["v*"]
@@ -25,11 +28,16 @@ permissions:
 
 # The full runtime deliberately requires native Temporal from Node 26. Every
 # job installs the official build selected by js/.node-version (or the matrix)
-# and asserts `typeof Temporal` before doing anything else.
+# and asserts `typeof Temporal` before doing anything else. Conformance jobs
+# run River's shared harness from this checkout with the JavaScript candidate
+# descriptor, js/conformance/candidate.json.
 
 defaults:
   run:
     working-directory: js
+
+env:
+  CARGO_INCREMENTAL: "0"
 
 jobs:
   build:
@@ -60,6 +68,8 @@ jobs:
       - run: pnpm run docs:snippets
 
       - run: pnpm run migration:legacy
+
+      - run: pnpm run coverage:scenarios
 
   lint:
     name: Lint
@@ -224,3 +234,143 @@ jobs:
       - run: node cli/dist/bin.js migrate-up --database-url "$TEST_DATABASE_URL"
 
       - run: pnpm run test:integration
+
+  conformance:
+    name: Cross-language conformance (PostgreSQL ${{ matrix.postgres-version }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+
+    strategy:
+      fail-fast: false
+      matrix:
+        postgres-version: [14, 15, 16, 17, 18]
+
+    services:
+      postgres:
+        image: postgres:${{ matrix.postgres-version }}
+        env:
+          POSTGRES_DB: river_conformance
+          POSTGRES_PASSWORD: postgres
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+        ports:
+          - 5432:5432
+
+    env:
+      # A TCP URL: the resilience scenarios reach PostgreSQL through a fault
+      # proxy that rewrites its host and port.
+      RIVER_CONFORMANCE_DATABASE_URL: postgres://postgres:postgres@localhost:5432/river_conformance?sslmode=disable
+      # Turn every skipped tier or scenario into a failure.
+      RIVER_CONFORMANCE_REQUIRED: "1"
+
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+
+      - uses: ./.github/actions/setup-js
+
+      - uses: ./.github/actions/setup-js-conformance
+
+      - run: pnpm run build:all
+
+      # SQLite storage and runtime; Go and JavaScript on PostgreSQL (mixed,
+      # maintenance, and resilience); the insert-only profile; then Go, Rust,
+      # and JavaScript together, including Rust and JavaScript SQLite pairs.
+      - run: >-
+          pnpm run test:conformance:multi-engine --
+          --database-url "$RIVER_CONFORMANCE_DATABASE_URL"
+
+  conformance_performance:
+    name: Conformance performance gate (calibrating, non-blocking)
+    # Release gates run for master and release tags, not every pull request.
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    # The JavaScript thresholds were set without a GitHub runner baseline.
+    # Report results without failing the workflow until they are recalibrated
+    # from runner data, then make this job blocking again.
+    continue-on-error: true
+
+    services:
+      postgres:
+        image: postgres:18
+        env:
+          POSTGRES_DB: river_conformance
+          POSTGRES_PASSWORD: postgres
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+        ports:
+          - 5432:5432
+
+    env:
+      RIVER_CONFORMANCE_DATABASE_URL: postgres://postgres:postgres@localhost:5432/river_conformance?sslmode=disable
+      RIVER_CONFORMANCE_REQUIRED: "1"
+
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+
+      - uses: ./.github/actions/setup-js
+
+      - uses: ./.github/actions/setup-js-conformance
+
+      - run: pnpm run build:all
+
+      # Compares Go and JavaScript enqueue, worker, and mixed throughput and
+      # p95 latency against the bounds in conformance/candidate.json, alone
+      # and with Rust competing, at five times the harness's default workload.
+      - run: >-
+          pnpm run test:conformance:performance --
+          --database-url "$RIVER_CONFORMANCE_DATABASE_URL"
+          --multi-engine-performance
+          --performance-jobs 1000
+
+  conformance_soak:
+    name: Conformance soak (10m)
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+
+    services:
+      postgres:
+        image: postgres:18
+        env:
+          POSTGRES_DB: river_conformance
+          POSTGRES_PASSWORD: postgres
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+        ports:
+          - 5432:5432
+
+    env:
+      RIVER_CONFORMANCE_DATABASE_URL: postgres://postgres:postgres@localhost:5432/river_conformance?sslmode=disable
+      RIVER_CONFORMANCE_REQUIRED: "1"
+
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+
+      - uses: ./.github/actions/setup-js
+
+      - uses: ./.github/actions/setup-js-conformance
+        with:
+          rust: "false"
+
+      - run: pnpm run build:all
+
+      - run: >-
+          pnpm run test:conformance:soak --
+          --database-url "$RIVER_CONFORMANCE_DATABASE_URL"
+          --soak-duration 10m
