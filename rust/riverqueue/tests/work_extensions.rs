@@ -148,7 +148,7 @@ impl Hook for TracingHook {
                         .downcast_ref::<PurposefulFailure>()
                         .is_some() =>
             {
-                Ok(WorkOutcome::Snooze(Duration::from_secs(60)))
+                Ok(WorkOutcome::Snooze(Duration::from_mins(1)))
             }
             result => result,
         }

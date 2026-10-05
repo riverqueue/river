@@ -933,7 +933,7 @@ mod tests {
         for valid in [
             kind_only.clone().with_by_args(true),
             kind_only.clone().with_by_queue(true),
-            kind_only.with_by_period(Duration::from_secs(60)),
+            kind_only.with_by_period(Duration::from_mins(1)),
         ] {
             assert!(valid.validate().is_ok(), "{valid:?}");
         }

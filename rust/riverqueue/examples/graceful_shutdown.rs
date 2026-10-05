@@ -25,7 +25,7 @@ async fn generate_report(
     // again without using up its attempt.
     tokio::select! {
         () = context.cancellation_token().cancelled() => Err(WorkCancelled.into()),
-        () = tokio::time::sleep(Duration::from_secs(60)) => {
+        () = tokio::time::sleep(Duration::from_mins(1)) => {
             println!("generated report {}", job.args.report_id);
             Ok(WorkOutcome::Complete)
         }

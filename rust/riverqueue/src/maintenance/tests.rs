@@ -781,7 +781,7 @@ async fn periodic_jobs_use_expected_run_time_and_uniqueness() {
     let periodic = client.periodic_jobs();
     periodic
         .add(PeriodicJob::conditional(
-            IntervalSchedule::new(Duration::from_secs(60)).unwrap(),
+            IntervalSchedule::new(Duration::from_mins(1)).unwrap(),
             || {
                 Some((
                     NoTimeoutArgs {},

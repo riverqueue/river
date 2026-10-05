@@ -1038,7 +1038,7 @@ async fn client_survives_database_outage_and_catches_up() {
                 "default",
                 QueueConfig::new(4)
                     .with_fetch_cooldown(Duration::from_millis(1))
-                    .with_fetch_poll_interval(Duration::from_secs(60)),
+                    .with_fetch_poll_interval(Duration::from_mins(1)),
             )
             .build()
             .unwrap();

@@ -337,7 +337,7 @@ async fn schema_names_are_quoted_like_go() {
     )
     .queue(
         "default",
-        QueueConfig::new(1).with_fetch_poll_interval(Duration::from_secs(60)),
+        QueueConfig::new(1).with_fetch_poll_interval(Duration::from_mins(1)),
     )
     .workers(noop_workers())
     .build()
