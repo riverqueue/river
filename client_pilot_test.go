@@ -74,9 +74,9 @@ func (p *pilotSpy) JobGetAvailable(ctx context.Context, exec riverdriver.Executo
 	return p.StandardPilot.JobGetAvailable(ctx, exec, state, params)
 }
 
-func (p *pilotSpy) JobInsertMany(ctx context.Context, exec riverdriver.Executor, params *riverdriver.JobInsertFastManyParams) ([]*riverdriver.JobInsertFastResult, error) {
+func (p *pilotSpy) JobInsertMany(ctx context.Context, execTx riverdriver.ExecutorTx, params *riverdriver.JobInsertFastManyParams) ([]*riverdriver.JobInsertFastResult, error) {
 	p.jobInsertManyCalls.Add(1)
-	return p.StandardPilot.JobInsertMany(ctx, exec, params)
+	return p.StandardPilot.JobInsertMany(ctx, execTx, params)
 }
 
 func (p *pilotSpy) JobRetry(ctx context.Context, exec riverdriver.Executor, params *riverdriver.JobRetryParams) (*rivertype.JobRow, error) {

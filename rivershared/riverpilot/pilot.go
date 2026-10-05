@@ -38,9 +38,11 @@ type Pilot interface {
 		params *riverdriver.JobGetAvailableParams,
 	) (*riverdriver.JobGetAvailableResult, error)
 
+	// JobInsertMany inserts jobs in the supplied transaction. The caller owns
+	// its commit or rollback; implementations must keep related writes in it.
 	JobInsertMany(
 		ctx context.Context,
-		exec riverdriver.Executor,
+		execTx riverdriver.ExecutorTx,
 		params *riverdriver.JobInsertFastManyParams,
 	) ([]*riverdriver.JobInsertFastResult, error)
 
