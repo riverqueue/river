@@ -52,8 +52,9 @@ before `pnpm run test`.
 
 `verify:migrations` compares every file of the generated migration mirror and
 its manifest with River's canonical Go migration sources in the surrounding
-repository. `generate:migrations` refreshes the mirror after a River migration
-changes.
+repository, and checks that the package version matches the JavaScript version
+in River's `conformance/manifest.json`. `generate:migrations` refreshes the
+mirror after a River migration changes.
 
 `package:check` creates real tarballs, validates them with publint and Are The
 Types Wrong, checks that every JavaScript and declaration map resolves to

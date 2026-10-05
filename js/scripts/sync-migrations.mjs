@@ -18,6 +18,8 @@ const sources = {
   sqlite: "riverdriver/riversqlite/migration/main",
 };
 
+await verifyProtocolVersion();
+
 const manifest = {
   backends: {},
   format: 1,
@@ -88,4 +90,22 @@ if (check) {
 } else {
   await mkdir(targetRoot, { recursive: true });
   await writeFile(manifestPath, encodedManifest);
+}
+
+// River's protocol manifest records the JavaScript version each River
+// revision is compatible with, and the conformance adapter reports the
+// package version in its handshake, so the two move together.
+async function verifyProtocolVersion() {
+  const protocolManifest = JSON.parse(
+    await readFile(resolve(riverRoot, "conformance/manifest.json"), "utf8")
+  );
+  const packageInfo = JSON.parse(
+    await readFile(resolve(repositoryRoot, "package.json"), "utf8")
+  );
+  const expected = protocolManifest.implementations?.javascript?.version;
+  if (expected !== packageInfo.version) {
+    throw new Error(
+      `package.json version ${JSON.stringify(packageInfo.version)} does not match River's conformance/manifest.json JavaScript version ${JSON.stringify(expected)}`
+    );
+  }
 }
