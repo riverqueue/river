@@ -1,13 +1,9 @@
 // Command syncrustmigrations mirrors River's canonical database migrations
-// into the publishable Rust migration crate and records their hashes for
-// cross-language conformance.
+// into the publishable Rust migration crate.
 package main
 
 import (
 	"bytes"
-	"crypto/sha256"
-	"encoding/hex"
-	"encoding/json"
 	"flag"
 	"fmt"
 	"os"
@@ -18,20 +14,7 @@ import (
 
 type database struct {
 	canonicalDir string
-	manifestPath string
 	mirrorDir    string
-	name         string
-}
-
-type manifest struct {
-	Database string         `json:"database"`
-	Files    []manifestFile `json:"files"`
-	Line     string         `json:"line"`
-}
-
-type manifestFile struct {
-	Path   string `json:"path"`
-	SHA256 string `json:"sha256"`
 }
 
 func main() {
@@ -41,15 +24,11 @@ func main() {
 	databases := []database{
 		{
 			canonicalDir: "riverdriver/riverpgxv5/migration/main",
-			manifestPath: "conformance/migrations.json",
 			mirrorDir:    "rust/riverqueue-migrate/migrations/main",
-			name:         "postgres",
 		},
 		{
 			canonicalDir: "riverdriver/riversqlite/migration/main",
-			manifestPath: "conformance/migrations-sqlite.json",
 			mirrorDir:    "rust/riverqueue-migrate/migrations/sqlite/main",
-			name:         "sqlite",
 		},
 	}
 	for _, database := range databases {
@@ -71,19 +50,12 @@ func syncDatabase(database database, check bool) {
 	}
 	slices.Sort(names)
 
-	generatedManifest := manifest{Database: database.name, Line: "main"}
 	for _, name := range names {
 		sourcePath := filepath.Join(database.canonicalDir, name)
 		contents, err := os.ReadFile(sourcePath)
 		if err != nil {
 			fatal(err)
 		}
-		hash := sha256.Sum256(contents)
-		generatedManifest.Files = append(generatedManifest.Files, manifestFile{
-			Path:   filepath.ToSlash(sourcePath),
-			SHA256: hex.EncodeToString(hash[:]),
-		})
-
 		mirrorPath := filepath.Join(database.mirrorDir, name)
 		if check {
 			checkFile(mirrorPath, contents)
@@ -92,17 +64,6 @@ func syncDatabase(database database, check bool) {
 		}
 	}
 	removeStaleMirrors(database.mirrorDir, names, check)
-
-	manifestContents, err := json.MarshalIndent(&generatedManifest, "", "  ")
-	if err != nil {
-		fatal(err)
-	}
-	manifestContents = append(manifestContents, '\n')
-	if check {
-		checkFile(database.manifestPath, manifestContents)
-	} else {
-		writeFile(database.manifestPath, manifestContents)
-	}
 }
 
 func removeStaleMirrors(directory string, expected []string, check bool) {

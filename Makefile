@@ -28,7 +28,7 @@ generate/migrations: ## Sync changes of pgxv5 migrations to database/sql
 	rsync -au --delete "riverdriver/riverpgxv5/migration/" "riverdriver/riverdatabasesql/migration/"
 
 .PHONY: generate/rust-migrations
-generate/rust-migrations: ## Sync database migrations and hashes to Rust
+generate/rust-migrations: ## Sync database migrations to Rust
 	go run ./internal/cmd/syncrustmigrations
 
 .PHONY: generate/sqlc
@@ -221,7 +221,7 @@ verify/migrations: ## Verify synced migrations
 	diff -qr riverdriver/riverpgxv5/migration riverdriver/riverdatabasesql/migration
 
 .PHONY: verify/rust-migrations
-verify/rust-migrations: ## Verify Rust migrations and protocol hashes
+verify/rust-migrations: ## Verify Rust migrations match the canonical migrations
 	go run ./internal/cmd/syncrustmigrations -check
 
 .PHONY: verify/sqlc

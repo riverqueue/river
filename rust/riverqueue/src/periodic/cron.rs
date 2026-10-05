@@ -742,8 +742,7 @@ mod tests {
     fn assert_matches_go(case: &CronCase) {
         let schedule = CronSchedule::parse(&case.expression)
             .unwrap_or_else(|error| panic!("{}: {error}", case.name));
-        // The generator records five occurrences, stopping early at Go's
-        // zero time.
+        // The fixture records five occurrences, stopping early at Go's zero time.
         let mut current = case.from;
         let mut observed = Vec::new();
         while observed.len() < 5 {

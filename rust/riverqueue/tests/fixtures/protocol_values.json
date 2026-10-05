@@ -1,5 +1,4 @@
 {
-  "$schema": "../schema/protocol-values.schema.json",
   "attempt_error": {
     "at": "2026-01-02T03:04:05.6789Z",
     "attempt": 3,
@@ -214,7 +213,6 @@
       "topic": "river_control"
     }
   ],
-  "protocol_revision": 1,
   "reserved_metadata_keys": [
     {
       "applicability": "protocol_visible",

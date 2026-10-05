@@ -1,5 +1,4 @@
 {
-  "$schema": "../schema/unique-keys.schema.json",
   "cases": [
     {
       "args": {},
@@ -894,7 +893,6 @@
       "selected_unique_paths": null
     }
   ],
-  "protocol_revision": 1,
   "typed_only_cases": [
     {
       "args": {

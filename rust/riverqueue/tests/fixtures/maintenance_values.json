@@ -1,5 +1,4 @@
 {
-  "$schema": "../schema/maintenance-values.schema.json",
   "cron_cases": [
     {
       "expression": "* * * * *",
@@ -561,7 +560,6 @@
       ]
     }
   ],
-  "protocol_revision": 1,
   "snooze_counters": [
     {
       "expected_snoozes": 1,

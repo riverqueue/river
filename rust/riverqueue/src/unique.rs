@@ -479,7 +479,6 @@ mod tests {
     #[derive(Deserialize)]
     struct Fixture {
         cases: Vec<FixtureCase>,
-        protocol_revision: u32,
         typed_only_cases: Vec<FixtureCase>,
     }
 
@@ -538,10 +537,7 @@ mod tests {
     }
 
     fn fixture() -> Fixture {
-        let fixture: Fixture =
-            serde_json::from_str(include_str!("../tests/fixtures/unique_keys.json")).unwrap();
-        assert_eq!(fixture.protocol_revision, 1);
-        fixture
+        serde_json::from_str(include_str!("../tests/fixtures/unique_keys.json")).unwrap()
     }
 
     fn golden(name: &str) -> FixtureCase {

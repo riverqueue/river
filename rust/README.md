@@ -3,8 +3,7 @@
 This workspace contains River's Rust implementation. It shares River's
 database schema and job protocol with River for Go on PostgreSQL and SQLite,
 with an API designed for Rust and Tokio. The crates are a pre-release
-preview. Shared cross-language fixtures live in
-[`../conformance`](../conformance).
+preview.
 
 ## Workspace crates
 
@@ -15,7 +14,6 @@ preview. Shared cross-language fixtures live in
 - `riverqueue-cli`: the `riverqueue` command-line program for migrations and
   benchmarks.
 - `riverqueue-test`: typed fixtures and worker-test helpers.
-- `riverqueue-conformance`: private verification package.
 
 The API uses a caller-owned SQLx pool, Tokio, typed workers, and
 `CancellationToken`. `Client` isn't generic over the database: it accepts a
@@ -58,9 +56,7 @@ make bench/rust DATABASE_URL=postgres://localhost/river_bench \
 The command supports continuous burn, fixed `--num-total-jobs` burn-down,
 custom schemas, tunable worker/pool/batch sizes, periodic jobs/sec output, and a
 final jobs/sec plus p95 end-to-end latency summary. Use `riverqueue bench
---help` for all options. The conformance performance gate remains the
-reproducible Go/Rust comparison across enqueue-only, worker-only, and mixed
-workloads.
+--help` for all options.
 
 PostgreSQL integration tests require a disposable database. They build only
 with `--cfg river_postgres_tests`, which the Makefile targets pass to rustc
@@ -70,6 +66,11 @@ and rustdoc, building into `target/postgres-tests`:
 RIVER_RUST_DATABASE_URL=postgres://localhost/river_rust_test \
   make test/rust/postgres
 ```
+
+CI runs unit, doc, and SQLite tests on each supported Rust version, and
+PostgreSQL tests against versions 14 through 18. Rust tests include local
+reference fixtures for unique keys, retry bounds, and cron schedules; they
+run with Cargo without requiring Go or a separate test harness.
 
 `make check/rust/package` builds the five publishable crate archives and
 verifies that each one builds from its packaged sources, resolving the
