@@ -1,4 +1,5 @@
 import { readFile } from "node:fs/promises";
+import { fileURLToPath } from "node:url";
 
 import { describe, expect, it } from "vitest";
 
@@ -18,13 +19,34 @@ interface SnoozeCounterCase {
   readonly name: string;
 }
 
-/** River Go's snooze counter goldens, recorded from its executor. */
-const GOLDENS = new URL("../testdata/snooze-counters.json", import.meta.url);
+/** River Go's snooze counter goldens, generated from its executor. */
+const GOLDENS = new URL(
+  "../../../conformance/testdata/snooze_counters.json",
+  import.meta.url
+);
+
+/**
+ * Reads a fixture that `make generate/fixtures` writes from River's Go
+ * implementation. A missing fixture fails the test rather than skipping it.
+ */
+async function readFixture(url: URL): Promise<string> {
+  try {
+    return await readFile(url, "utf8");
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+      throw new Error(
+        `missing conformance fixture ${fileURLToPath(url)}; run \`make generate/fixtures\` from the repository root`,
+        { cause: error }
+      );
+    }
+    throw error;
+  }
+}
 
 describe("completionCommand", () => {
   it("counts snoozes like River for Go's executor", async () => {
     // Parse with River's exact JSON so integers beyond 2^53 stay exact.
-    const golden = parseJson(await readFile(GOLDENS, "utf8")) as unknown as {
+    const golden = parseJson(await readFixture(GOLDENS)) as unknown as {
       readonly snooze_counters: readonly SnoozeCounterCase[];
     };
     const now = Temporal.Instant.from("2026-09-01T00:00:00Z");

@@ -197,9 +197,12 @@ formatting, licenses, packed archives and examples, unit tests on Node 26.0.0
 and the current Node 26 release, and integration tests on PostgreSQL 14
 through 18.
 
-Unit tests compare cron schedules and snooze counting with goldens recorded
-from River Go in `src/testdata`, the same values the Rust port checks in its
-own fixtures.
+Unit tests compare cron schedules and snooze counting with fixtures that
+River's Go implementation generates into `conformance/testdata`, the same
+files the Rust port reads. They aren't committed: `make test/js` generates
+them first, so Go is needed to run the unit tests, and `pnpm run test` needs
+a prior `make generate/fixtures` from the repository root. A missing fixture
+fails its test.
 
 ## Preparing a release
 

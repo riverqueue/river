@@ -150,7 +150,16 @@ RUST_POSTGRES_TESTS_ENV = RUSTFLAGS="$$RUSTFLAGS --cfg river_postgres_tests" \
 .PHONY: test/js
 test/js: ## Run JavaScript unit tests
 test/js: build/js
+test/js: generate/fixtures
 	pnpm -C js run test
+
+# Only the tests that compare JavaScript with fixtures generated from River's
+# Go implementation, for checking a Go change against the port. They import
+# sources directly and need no build.
+.PHONY: test/js/conformance
+test/js/conformance: ## Run JavaScript tests that check Go-generated conformance fixtures
+test/js/conformance: generate/fixtures
+	pnpm -C js exec vitest run src/cron.test.ts src/runtime/completion-command.test.ts
 
 # Integration tests use TEST_DATABASE_URL (default
 # postgres://localhost:5432/river_test), migrated with
