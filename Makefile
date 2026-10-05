@@ -19,10 +19,17 @@ db/reset/test: ## Drop, create, and migrate test databases
 
 .PHONY: generate
 generate: ## Generate generated artifacts
+generate: generate/fixtures
 generate: generate/js-migrations
 generate: generate/migrations
 generate: generate/rust-migrations
 generate: generate/sqlc
+
+# Fixtures are written to conformance/testdata, which is ignored by Git. Port
+# test targets that read them depend on this target.
+.PHONY: generate/fixtures
+generate/fixtures: ## Generate cross-language conformance fixtures from River's Go implementation
+	go run ./conformance/cmd/generatefixtures
 
 .PHONY: generate/js-migrations
 generate/js-migrations: ## Sync database migrations to JavaScript
