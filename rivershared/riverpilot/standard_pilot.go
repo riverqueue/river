@@ -37,10 +37,10 @@ func (p *StandardPilot) JobCancel(ctx context.Context, exec riverdriver.Executor
 
 func (p *StandardPilot) JobInsertMany(
 	ctx context.Context,
-	exec riverdriver.Executor,
+	execTx riverdriver.ExecutorTx,
 	params *riverdriver.JobInsertFastManyParams,
 ) ([]*riverdriver.JobInsertFastResult, error) {
-	return exec.JobInsertFastMany(ctx, params)
+	return execTx.JobInsertFastMany(ctx, params)
 }
 
 func (p *StandardPilot) JobRescueMany(ctx context.Context, exec riverdriver.Executor, params *riverdriver.JobRescueManyParams) (*struct{}, error) {
