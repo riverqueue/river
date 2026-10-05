@@ -10,6 +10,9 @@ license.workspace = true
 readme = "README.md"
 repository.workspace = true
 homepage.workspace = true
+# Only what builds and documents the crate ships; tests and their fixtures stay
+# in the repository.
+include = ["src/**", "LICENSE", "README.md"]
 
 [package.metadata.docs.rs]
 all-features = true

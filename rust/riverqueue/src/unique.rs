@@ -474,7 +474,10 @@ mod tests {
     use serde::{Deserialize, Serialize};
 
     use super::*;
-    use crate::{JobArgs, JobArgs as JobArgsDerive, JobState, encoding::encode_args};
+    use crate::{
+        JobArgs, JobArgs as JobArgsDerive, JobState, conformance::read_fixture,
+        encoding::encode_args,
+    };
 
     #[derive(Deserialize)]
     struct Fixture {
@@ -537,7 +540,7 @@ mod tests {
     }
 
     fn fixture() -> Fixture {
-        serde_json::from_str(include_str!("../tests/fixtures/unique_keys.json")).unwrap()
+        serde_json::from_str(&read_fixture("unique_keys.json")).unwrap()
     }
 
     fn golden(name: &str) -> FixtureCase {

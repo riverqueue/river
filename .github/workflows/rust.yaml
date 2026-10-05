@@ -9,6 +9,7 @@ on:
     paths:
       - ".github/workflows/rust.yaml"
       - "Makefile"
+      - "conformance/**"
       - "internal/cmd/syncrustmigrations/**"
       - "riverdriver/riverpgxv5/migration/**"
       - "riverdriver/riversqlite/migration/**"
@@ -17,6 +18,7 @@ on:
     paths:
       - ".github/workflows/rust.yaml"
       - "Makefile"
+      - "conformance/**"
       - "internal/cmd/syncrustmigrations/**"
       - "riverdriver/riverpgxv5/migration/**"
       - "riverdriver/riversqlite/migration/**"
@@ -108,6 +110,10 @@ jobs:
             rust/target
           key: rust-v1-${{ runner.os }}-${{ runner.arch }}-${{ github.job }}-${{ steps.rust.outputs.cachekey }}-${{ hashFiles('rust/**/Cargo.toml', 'rust/Cargo.lock') }}
           restore-keys: rust-v1-${{ runner.os }}-${{ runner.arch }}-${{ github.job }}-${{ steps.rust.outputs.cachekey }}-
+      # Tests read fixtures generated from River's Go implementation.
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.work
       - name: Check every target and feature
         run: cargo check --manifest-path rust/Cargo.toml --workspace --all-targets --all-features --locked
       - name: Unit, doc, and SQLite tests
@@ -150,6 +156,10 @@ jobs:
             rust/target
           key: rust-v1-${{ runner.os }}-${{ runner.arch }}-${{ github.job }}-${{ steps.rust.outputs.cachekey }}-${{ hashFiles('rust/**/Cargo.toml', 'rust/Cargo.lock') }}
           restore-keys: rust-v1-${{ runner.os }}-${{ runner.arch }}-${{ github.job }}-${{ steps.rust.outputs.cachekey }}-
+      # Tests read fixtures generated from River's Go implementation.
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.work
       - name: Create test database
         run: PGPASSWORD=postgres createdb -h localhost -U postgres river_rust_test
       - name: Rust unit, SQLite, and PostgreSQL tests

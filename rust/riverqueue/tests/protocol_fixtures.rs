@@ -1,4 +1,4 @@
-use std::time::Duration;
+use std::{io::ErrorKind, path::Path, time::Duration};
 
 use chrono::{DateTime, Utc};
 use riverqueue::{
@@ -46,10 +46,28 @@ struct StateFixture {
     unique_bit: u8,
 }
 
+/// Reads `name` from `conformance/testdata`, where `make generate/fixtures`
+/// writes fixtures produced by River's Go implementation. A missing fixture
+/// fails the test rather than skipping it.
+fn read_fixture(name: &str) -> String {
+    let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../conformance/testdata")
+        .join(name);
+    std::fs::read_to_string(&path).unwrap_or_else(|error| match error.kind() {
+        ErrorKind::NotFound => panic!(
+            "missing conformance fixture {}; run `make generate/fixtures` from the repository root",
+            path.display()
+        ),
+        _ => panic!(
+            "error reading conformance fixture {}: {error}",
+            path.display()
+        ),
+    })
+}
+
 #[test]
 fn go_protocol_values_match_rust() {
-    let fixture: Fixture =
-        serde_json::from_str(include_str!("fixtures/protocol_values.json")).unwrap();
+    let fixture: Fixture = serde_json::from_str(&read_fixture("protocol_values.json")).unwrap();
 
     assert_eq!(fixture.attempt_error.attempt, 3);
     assert!(fixture.attempt_error.error.contains("escaped"));

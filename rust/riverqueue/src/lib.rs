@@ -22,6 +22,8 @@ extern crate self as riverqueue;
 #[doc(hidden)]
 pub mod __private;
 mod client;
+#[cfg(test)]
+mod conformance;
 pub mod database;
 pub mod encoding;
 pub mod error;

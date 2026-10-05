@@ -748,7 +748,7 @@ fn go_json_int(value: Option<&serde_json::value::RawValue>) -> i64 {
 
 #[cfg(test)]
 mod go_json_int_tests {
-    use crate::JobMetadata;
+    use crate::{JobMetadata, conformance::read_fixture};
     use serde::Deserialize;
 
     use super::go_json_int;
@@ -767,9 +767,7 @@ mod go_json_int_tests {
 
     #[test]
     fn snooze_counter_matches_go_fixture() {
-        let fixture: Fixture =
-            serde_json::from_str(include_str!("../../tests/fixtures/maintenance_values.json"))
-                .unwrap();
+        let fixture: Fixture = serde_json::from_str(&read_fixture("snooze_counters.json")).unwrap();
         assert!(!fixture.snooze_counters.is_empty());
         for case in fixture.snooze_counters {
             assert_eq!(

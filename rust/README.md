@@ -68,9 +68,12 @@ RIVER_RUST_DATABASE_URL=postgres://localhost/river_rust_test \
 ```
 
 CI runs unit, doc, and SQLite tests on each supported Rust version, and
-PostgreSQL tests against versions 14 through 18. Rust tests include local
-reference fixtures for unique keys, retry bounds, and cron schedules; they
-run with Cargo without requiring Go or a separate test harness.
+PostgreSQL tests against versions 14 through 18. Rust tests check unique
+keys, retry bounds, cron schedules, and snooze counts against fixtures that
+River's Go implementation generates into `conformance/testdata`, which isn't
+committed. The `make test/rust` targets generate them first, so Go is needed
+to run the tests; when running `cargo test` directly, run `make
+generate/fixtures` beforehand. A missing fixture fails its test.
 
 `make check/rust/package` builds the five publishable crate archives and
 verifies that each one builds from its packaged sources, resolving the

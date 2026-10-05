@@ -715,6 +715,7 @@ mod tests {
     use serde::Deserialize;
 
     use super::{CronSchedule, CronTimeZone, PeriodicSchedule};
+    use crate::conformance::read_fixture;
 
     #[derive(Deserialize)]
     #[expect(
@@ -736,7 +737,7 @@ mod tests {
     }
 
     fn fixture() -> Fixture {
-        serde_json::from_str(include_str!("../../tests/fixtures/maintenance_values.json")).unwrap()
+        serde_json::from_str(&read_fixture("cron_schedules.json")).unwrap()
     }
 
     fn assert_matches_go(case: &CronCase) {
