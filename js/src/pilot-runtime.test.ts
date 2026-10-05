@@ -271,11 +271,9 @@ function deferred<T = undefined>(): Deferred<T> {
 }
 
 async function waitUntil(predicate: () => boolean): Promise<void> {
-  for (let turn = 0; turn < 10_000; turn++) {
-    if (predicate()) return;
-    await new Promise((resolve) => setImmediate(resolve));
-  }
-  throw new Error("condition was not reached");
+  // Queue polling and fetch cooldowns use real timers. A fixed number of
+  // event-loop turns can run out before those timers fire on a fast runner.
+  await expect.poll(predicate, { interval: 1, timeout: 2_000 }).toBe(true);
 }
 
 const silentLogger: Logger = {
