@@ -13,6 +13,19 @@ import (
 	"github.com/riverqueue/river/rivershared/util/testutil"
 )
 
+func TestAddWorkerSafelyAliasCollisionDoesNotRegisterKinds(t *testing.T) {
+	t.Parallel()
+
+	workers := NewWorkers()
+
+	require.NoError(t, AddWorkerSafely(workers, WorkFunc(func(context.Context, *Job[withKindAliasesArgs]) error { return nil })))
+	before := len(workers.workersMap)
+	require.Error(t, AddWorkerSafely(workers, WorkFunc(func(context.Context, *Job[lateAliasCollisionArgs]) error { return nil })))
+	require.Len(t, workers.workersMap, before)
+	require.NotContains(t, workers.workersMap, "candidate_primary")
+	require.NotContains(t, workers.workersMap, "candidate_early_alias")
+}
+
 func TestWork(t *testing.T) {
 	t.Parallel()
 
@@ -72,6 +85,13 @@ type configurableWorker struct {
 
 func (w *configurableWorker) Work(ctx context.Context, job *Job[configurableArgs]) error {
 	return nil
+}
+
+type lateAliasCollisionArgs struct{}
+
+func (lateAliasCollisionArgs) Kind() string { return "candidate_primary" }
+func (lateAliasCollisionArgs) KindAliases() []string {
+	return []string{"candidate_early_alias", "with_kind_alternate_alternate"}
 }
 
 type withKindAliasesArgs struct{}

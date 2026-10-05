@@ -174,20 +174,29 @@ func (w Workers) add(jobArgs JobArgs, workUnitFactory workunit.WorkUnitFactory) 
 		workUnitFactory: workUnitFactory,
 	}
 
-	kind := jobArgs.Kind()
-	if err := checkRegistered(kind); err != nil {
-		return err
-	}
-	w.workersMap[kind] = workerInfo
+	// Collect the primary kind and any aliases first so that all of them can
+	// be validated before anything is written to the map. This way, a failed
+	// registration leaves no partial state behind.
+	kinds := []string{jobArgs.Kind()}
 
 	// Jobs can register an alternate kind to make renaming easier.
 	if jobArgsWithKindAliases, ok := jobArgs.(JobArgsWithKindAliases); ok {
-		for _, kind := range jobArgsWithKindAliases.KindAliases() {
-			if err := checkRegistered(kind); err != nil {
-				return err
-			}
-			w.workersMap[kind] = workerInfo
+		kinds = append(kinds, jobArgsWithKindAliases.KindAliases()...)
+	}
+
+	seen := make(map[string]struct{}, len(kinds))
+	for _, kind := range kinds {
+		if err := checkRegistered(kind); err != nil {
+			return err
 		}
+		if _, ok := seen[kind]; ok {
+			return fmt.Errorf("worker for kind %q is already registered", kind)
+		}
+		seen[kind] = struct{}{}
+	}
+
+	for _, kind := range kinds {
+		w.workersMap[kind] = workerInfo
 	}
 
 	return nil
