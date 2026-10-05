@@ -9,6 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [0.49.0] - 2026-10-05
 
+⚠️ If using River Pro, make sure to upgrade it to at least River Pro v0.32.0 to get a compatible package.
+
 ### Changed
 
 - Internal transaction helpers now reuse existing transactions instead of creating unnecessary savepoints. Callers of transactional APIs must roll back their transaction on error; applications that need partial rollback can create an explicit savepoint around the River call. Set `RIVER_USE_LEGACY_SUBTRANSACTIONS=1` (or `true`) before starting the application to restore savepoints in these helpers, including those used by River Pro. This is a temporary compatibility fallback planned for removal in a future release. [PR #1420](https://github.com/riverqueue/river/pull/1420).
