@@ -1,0 +1,35 @@
+[package]
+name = "riverqueue-test"
+description = "Test helpers for River's Rust client"
+keywords = ["background", "jobs", "queue", "testing"]
+categories = ["asynchronous", "database", "development-tools::testing"]
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+readme = "README.md"
+repository.workspace = true
+homepage.workspace = true
+
+[package.metadata.docs.rs]
+all-features = true
+
+[features]
+default = ["postgres"]
+postgres = ["riverqueue/postgres"]
+sqlite = ["riverqueue/sqlite"]
+
+[dependencies]
+chrono.workspace = true
+riverqueue = { path = "../riverqueue", version = "=0.50.0-alpha.1", default-features = false }
+serde_json.workspace = true
+tokio-util.workspace = true
+
+[dev-dependencies]
+riverqueue-migrate = { path = "../riverqueue-migrate", version = "=0.50.0-alpha.1", default-features = false, features = ["sqlite"] }
+serde.workspace = true
+sqlx.workspace = true
+tokio.workspace = true
+
+[lints]
+workspace = true

@@ -1,0 +1,30 @@
+import { Client, defineJob } from "riverqueue";
+
+const sortJob = defineJob({ kind: "sort" });
+
+declare const client: Client;
+
+const sort = defineJob<{ strings: string[] }>()({
+  kind: "sort",
+  defaults: { queue: "sorting" },
+});
+
+async function insertLegacyJobs() {
+  const result = await client.insert(sort, { strings: ["b", "a"] }, {
+    scheduledAt: new Date(Date.now() + 60_000),
+    unique: { byArgs: true, byPeriod: { seconds: 60 } },
+  });
+
+  // TODO(riverqueue-0.1): `JobRow.id` is now a `bigint`; review number annotations, arithmetic, and JSON serialization
+  const id: number = result.job.id;
+  if (result.status === "duplicate") console.log("duplicate", id);
+
+  await client.insertMany([
+    { job: sortJob, args: { strings: ["c"] }, options: {
+      priority: 2,
+    } },
+    { job: sort, args: { strings: ["d"] } },
+  ]);
+}
+
+void insertLegacyJobs;

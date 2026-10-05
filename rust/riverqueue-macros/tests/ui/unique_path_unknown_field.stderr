@@ -1,0 +1,5 @@
+error: unique JSON path must start with a serialized field name
+ --> tests/ui/unique_path_unknown_field.rs:5:42
+  |
+5 | #[river(kind = "invoice", unique(by_args("customer.id")))]
+  |                                          ^^^^^^^^^^^^^

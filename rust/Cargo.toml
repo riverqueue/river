@@ -1,0 +1,56 @@
+[workspace]
+members = [
+    "riverqueue",
+    "riverqueue-cli",
+    "riverqueue-macros",
+    "riverqueue-migrate",
+    "riverqueue-test",
+]
+resolver = "3"
+
+[workspace.package]
+authors = ["Riverqueue contributors"]
+edition = "2024"
+homepage = "https://riverqueue.com"
+license = "MPL-2.0"
+repository = "https://github.com/riverqueue/river"
+rust-version = "1.95"
+version = "0.50.0-alpha.1"
+
+[workspace.dependencies]
+async-trait = "0.1.92"
+base64 = "0.22.1"
+chrono = { version = "0.4.45", features = ["serde"] }
+futures-util = { version = "0.3.34", default-features = false, features = ["std"] }
+proc-macro2 = "1.0.107"
+quote = "1.0.47"
+rand = "0.10.2"
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = { version = "1.0.151", features = ["raw_value"] }
+sha2 = "0.11.0"
+sqlx = { version = "0.9.0", default-features = false, features = ["runtime-tokio"] }
+syn = { version = "2.0", features = ["full"] }
+thiserror = "2.0.20"
+tokio = { version = "1.53.1", features = ["macros", "rt", "sync", "time"] }
+tokio-util = { version = "0.7.19", features = ["rt"] }
+tracing = "0.1.44"
+
+[workspace.lints.rust]
+missing_debug_implementations = "warn"
+unsafe_code = "forbid"
+# `--cfg river_postgres_tests` builds the PostgreSQL integration tests, which
+# need `RIVER_RUST_DATABASE_URL`; `make test/rust` sets it when the URL is set.
+unexpected_cfgs = { level = "warn", check-cfg = ["cfg(river_postgres_tests)"] }
+
+[workspace.lints.clippy]
+all = { level = "warn", priority = -1 }
+pedantic = { level = "warn", priority = -1 }
+doc_markdown = "allow"
+missing_errors_doc = "warn"
+module_name_repetitions = "allow"
+must_use_candidate = "allow"
+
+# Line tables keep file and line numbers in backtraces and panics at a
+# fraction of full debug info's size. The `test` profile inherits this.
+[profile.dev]
+debug = "line-tables-only"

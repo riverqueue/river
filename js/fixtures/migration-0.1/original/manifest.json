@@ -1,0 +1,19 @@
+{
+  "version": "0.1.0",
+  "npm": {
+    "file": "riverqueue-0.1.0.tgz",
+    "integrity": "sha512-axBxy75OVxypCCbnlzzDYMepUzCCxHcDu9Y9WPvZzCUH8C+S+BKHwykX89qs5HmKKlCf/Nxzyn2xl7P9Y23Btg==",
+    "sha1": "c58bf28453ee306388e9a1ee1ee2d7db5fefa5ac",
+    "sha256": "1632662dcb43840753eed022acd7d5f38856f35e52eed4e71dc66c777f7a9229"
+  },
+  "source": {
+    "commit": "7d1ad4d56ccd0eaaa06c5f0ebddbf24fdee82796",
+    "documents": {
+      "docs/README.md": "ec3664ce3a145c5eaa00f2faf57ea9ac87dc55b99019a17a8bcef2f0d422678b",
+      "docs/development.md": "8e38b4632da98d2cc973c29331bb826ff039d1d50181e4252c04310cdde1ce41",
+      "examples/node-postgres-README.md": "3c445e0ad927424d06e520402d5a6b94add4ac7ed9e88166e1360cd6c4ca02ae",
+      "examples/prisma-README.md": "3b3d5c38906d2e363ed4e6c5b3d2e65d86796e66d891faa74fcc72896554fd80"
+    },
+    "tag": "v0.1.0"
+  }
+}

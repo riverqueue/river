@@ -1,0 +1,57 @@
+{
+  "name": "@riverqueue/test",
+  "version": "0.50.0-alpha.1",
+  "description": "Typed test helpers for River jobs, workers, and clients.",
+  "type": "module",
+  "sideEffects": false,
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js",
+      "default": "./dist/index.js"
+    }
+  },
+  "engines": {
+    "node": ">=26"
+  },
+  "files": [
+    "dist",
+    "src",
+    "!src/**/*.test.ts",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "build": "node ../node_modules/typescript/bin/tsc && node ../scripts/copy-license.mjs",
+    "clean": "rm -rf dist",
+    "prepack": "pnpm run clean && pnpm run build",
+    "test": "vitest run src"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/riverqueue/river.git",
+    "directory": "js/test"
+  },
+  "contributors": [
+    "Brandur Leach",
+    "Blake Gentry"
+  ],
+  "license": "LGPL-3.0-or-later",
+  "publishConfig": {
+    "access": "public",
+    "provenance": true
+  },
+  "peerDependencies": {
+    "riverqueue": "workspace:0.50.0-alpha.1"
+  },
+  "devDependencies": {
+    "riverqueue": "workspace:0.50.0-alpha.1"
+  },
+  "keywords": [
+    "river",
+    "job-queue",
+    "testing"
+  ]
+}

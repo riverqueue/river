@@ -1,0 +1,34 @@
+{
+  "extends": "./tsconfig.base.json",
+  "compilerOptions": {
+    "noEmit": true,
+    "paths": {
+      "@riverqueue/driver-pg": [
+        "./driver/pg/src/index.ts"
+      ],
+      "@riverqueue/driver-prisma": [
+        "./driver/prisma/src/index.ts"
+      ],
+      "@riverqueue/driver-sqlite": [
+        "./driver/sqlite/src/index.ts"
+      ],
+      "@riverqueue/migrate": [
+        "./migrate/src/index.ts"
+      ],
+      "@riverqueue/test": [
+        "./test/src/index.ts"
+      ],
+      "@riverqueue/worker-threads": [
+        "./worker-threads/src/index.ts"
+      ]
+    }
+  },
+  "include": [
+    "src",
+    "cli/src",
+    "driver/*/src",
+    "migrate/src",
+    "test/src",
+    "worker-threads/src"
+  ]
+}

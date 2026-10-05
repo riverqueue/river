@@ -1,0 +1,25 @@
+{
+  "name": "riverqueue-example-worker-thread-cpu",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=26"
+  },
+  "scripts": {
+    "build": "tsc",
+    "start": "node dist/index.js",
+    "start:source": "node src/index.ts"
+  },
+  "dependencies": {
+    "@riverqueue/driver-sqlite": "workspace:*",
+    "@riverqueue/migrate": "workspace:*",
+    "@riverqueue/worker-threads": "workspace:*",
+    "riverqueue": "workspace:*",
+    "zod": "^4.6.5"
+  },
+  "devDependencies": {
+    "@types/node": "^26.1.1",
+    "typescript": "^6.0.3"
+  }
+}

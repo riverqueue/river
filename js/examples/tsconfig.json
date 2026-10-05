@@ -1,0 +1,21 @@
+{
+  "compilerOptions": {
+    "declaration": false,
+    "exactOptionalPropertyTypes": true,
+    "forceConsistentCasingInFileNames": true,
+    "inlineSources": true,
+    "lib": ["ES2024", "ESNext.Temporal"],
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
+    "noImplicitOverride": true,
+    "noUncheckedIndexedAccess": true,
+    "noUncheckedSideEffectImports": true,
+    "skipLibCheck": true,
+    "sourceMap": true,
+    "strict": true,
+    "target": "ES2024",
+    "types": ["node"],
+    "useUnknownInCatchVariables": true,
+    "verbatimModuleSyntax": true
+  }
+}
