@@ -1,0 +1,5 @@
+error: unknown job state `done`; expected one of available, cancelled, completed, discarded, pending, retryable, running, scheduled
+ --> tests/ui/unique_state_unknown.rs:5:83
+  |
+5 | #[river(kind = "invoice", unique(by_state(available, pending, running, scheduled, done)))]
+  |                                                                                   ^^^^

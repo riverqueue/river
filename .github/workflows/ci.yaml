@@ -418,6 +418,10 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v6
 
+      - uses: actions/setup-go@v6
+        with:
+          go-version: "1.27"
+
       - name: Setup sqlc
         uses: sqlc-dev/setup-sqlc@v5
         with:
@@ -427,6 +431,9 @@ jobs:
         run: |
           echo "Make sure migration directories are the same"
           make verify/migrations
+
+      - name: Verify Rust migrations match
+        run: make verify/rust-migrations
 
       - name: Verify sqlc generated code
         run: |
