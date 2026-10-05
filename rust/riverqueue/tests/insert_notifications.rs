@@ -189,7 +189,8 @@ mod postgres {
         let mut notifications = Notifications::listen(&schema).await;
         let client = client(&schema, Duration::from_millis(50));
 
-        client.insert(NotificationArgs {}).await.unwrap();
+        // Suppression is covered separately with a long cooldown; database
+        // round trips can exceed this short window on a busy runner.
         client.insert(NotificationArgs {}).await.unwrap();
         assert_eq!(notifications.next(&schema).await, ["default"]);
         tokio::time::sleep(Duration::from_millis(60)).await;
@@ -349,7 +350,8 @@ mod sqlite {
         let mut notifications = Notifications::default();
         let client = client(&pool, Duration::from_millis(50));
 
-        client.insert(NotificationArgs {}).await.unwrap();
+        // Suppression is covered separately with a long cooldown; database
+        // round trips can exceed this short window on a busy runner.
         client.insert(NotificationArgs {}).await.unwrap();
         assert_eq!(notifications.next(&pool).await, ["default"]);
         tokio::time::sleep(Duration::from_millis(60)).await;
