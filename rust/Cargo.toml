@@ -19,7 +19,7 @@ version = "0.50.0-alpha.1"
 
 [workspace.dependencies]
 async-trait = "0.1.92"
-base64 = "0.22.1"
+base64 = "0.23.1"
 chrono = { version = "0.4.45", features = ["serde"] }
 futures-util = { version = "0.3.34", default-features = false, features = ["std"] }
 proc-macro2 = "1.0.107"
