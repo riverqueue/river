@@ -177,4 +177,4 @@ await prisma.$transaction(async (tx) => {
 
 ## Development
 
-See [developing River TypeScript](https://github.com/riverqueue/riverqueue-js/blob/master/docs/development.md).
+See [developing River TypeScript](https://github.com/riverqueue/river/blob/master/js/docs/development.md).

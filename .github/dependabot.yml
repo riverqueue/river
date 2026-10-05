@@ -30,3 +30,20 @@ updates:
           - "patch"
     schedule:
       interval: "weekly"
+  - package-ecosystem: "npm"
+    directory: "/js"
+    cooldown:
+      default-days: 7
+    groups:
+      development-dependencies:
+        dependency-type: "development"
+        patterns:
+          - "*"
+      production-dependencies:
+        dependency-type: "production"
+        patterns:
+          - "*"
+    open-pull-requests-limit: 10
+    schedule:
+      interval: "monthly"
+    versioning-strategy: increase
