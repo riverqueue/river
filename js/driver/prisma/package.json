@@ -21,8 +21,8 @@
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/riverqueue/riverqueue-js.git",
-    "directory": "driver/prisma"
+    "url": "git+https://github.com/riverqueue/river.git",
+    "directory": "js/driver/prisma"
   },
   "authors": ["Brandur Leach", "Blake Gentry"],
   "license": "LGPL-3.0-or-later",

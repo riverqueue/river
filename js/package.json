@@ -29,7 +29,8 @@
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/riverqueue/riverqueue-js.git"
+    "url": "git+https://github.com/riverqueue/river.git",
+    "directory": "js"
   },
   "authors": [
     "Brandur Leach",
@@ -37,9 +38,9 @@
   ],
   "license": "LGPL-3.0-or-later",
   "bugs": {
-    "url": "https://github.com/riverqueue/riverqueue-js/issues"
+    "url": "https://github.com/riverqueue/river/issues"
   },
-  "homepage": "https://github.com/riverqueue/riverqueue-js#readme",
+  "homepage": "https://github.com/riverqueue/river/tree/master/js#readme",
   "devDependencies": {
     "@eslint/js": "^10.0.1",
     "@types/node": "^26.1.1",
