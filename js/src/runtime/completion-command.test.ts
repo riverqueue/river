@@ -49,6 +49,7 @@ describe("completionCommand", () => {
     const golden = parseJson(await readFixture(GOLDENS)) as unknown as {
       readonly snooze_counters: readonly SnoozeCounterCase[];
     };
+    expect(golden.snooze_counters.length).toBeGreaterThan(0);
     const now = Temporal.Instant.from("2026-09-01T00:00:00Z");
 
     const results = golden.snooze_counters.map(({ metadata, name }) => {
