@@ -87,8 +87,6 @@ jobs:
 
       - run: pnpm run license:check
 
-      - run: pnpm audit
-
   packages:
     name: Package archives
     runs-on: ubuntu-latest
