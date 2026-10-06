@@ -138,6 +138,13 @@ lint/java/tools: ## Lint Java's Go maintenance tools
 build/js: ## Build every JavaScript package
 	pnpm -C js run build:all
 
+# The harness builds the adapter itself too. Its workspace dependencies run
+# from their builds, which `...` selects, except the root riverqueue package.
+.PHONY: build/js/conformance
+build/js/conformance: ## Build River for JavaScript's conformance adapter
+	pnpm -C js run build
+	pnpm -C js --filter "@riverqueue/conformance..." run build
+
 .PHONY: lint/js
 lint/js: ## Run JavaScript lint, formatting, and type checks with both compilers
 lint/js: build/js
@@ -167,6 +174,11 @@ CANDIDATE ?= go
 .PHONY: test/conformance
 test/conformance: ## Run cross-language conformance scenarios against CANDIDATE (go, rust, or js)
 	cd conformance && RIVER_CONFORMANCE=$(CANDIDATE) go test ./harness -count=1 -timeout 10m
+
+.PHONY: test/conformance/js
+test/conformance/js: ## Run cross-language conformance scenarios against River for JavaScript
+test/conformance/js: build/js/conformance
+	$(MAKE) test/conformance CANDIDATE=js
 
 .PHONY: test/conformance/nightly
 test/conformance/nightly: ## Run conformance scenarios plus the nightly chaos and performance tier against CANDIDATE
