@@ -10,6 +10,7 @@ on:
       - ".github/actions/setup-js/**"
       - ".github/workflows/js.yaml"
       - "Makefile"
+      - "conformance/**"
       - "js/**"
       - "riverdriver/**/*.sql"
     tags: ["v*"]
@@ -18,6 +19,7 @@ on:
       - ".github/actions/setup-js/**"
       - ".github/workflows/js.yaml"
       - "Makefile"
+      - "conformance/**"
       - "js/**"
       - "riverdriver/**/*.sql"
 
@@ -181,6 +183,15 @@ jobs:
       - uses: ./.github/actions/setup-js
         with:
           node-version: ${{ matrix.node-version }}
+
+      # Some unit tests read fixtures generated from River's Go
+      # implementation.
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.work
+
+      - run: make generate/fixtures
+        working-directory: .
 
       # The unit tests import the other workspace packages through their
       # build output, and worker threads run compiled handler modules.

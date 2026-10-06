@@ -1,4 +1,5 @@
 import { readFile } from "node:fs/promises";
+import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 
 import {
@@ -37,8 +38,29 @@ interface CronGoldens {
   }[];
 }
 
-/** River Go's cron goldens, recorded with robfig/cron; see the file. */
-const GOLDENS = new URL("./testdata/cron-goldens.json", import.meta.url);
+/** River Go's cron goldens, generated with robfig/cron; see the file. */
+const GOLDENS = new URL(
+  "../../conformance/testdata/cron_schedules.json",
+  import.meta.url
+);
+
+/**
+ * Reads a fixture that `make generate/fixtures` writes from River's Go
+ * implementation. A missing fixture fails the test rather than skipping it.
+ */
+async function readFixture(url: URL): Promise<string> {
+  try {
+    return await readFile(url, "utf8");
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+      throw new Error(
+        `missing conformance fixture ${fileURLToPath(url)}; run \`make generate/fixtures\` from the repository root`,
+        { cause: error }
+      );
+    }
+    throw error;
+  }
+}
 
 /** Up to `count` successive occurrences after `from`, like robfig's tests. */
 function occurrences(
@@ -110,7 +132,7 @@ const midnight = fieldsSpec({ hour: 1n, minute: 1n });
 describe("cron", () => {
   describe("River Go goldens", () => {
     const load = async (): Promise<CronGoldens> =>
-      JSON.parse(await readFile(GOLDENS, "utf8")) as CronGoldens;
+      JSON.parse(await readFixture(GOLDENS)) as CronGoldens;
 
     it("returns robfig's successive occurrences in the reference offset", async () => {
       const goldens = await load();

@@ -80,6 +80,14 @@ func MetadataUpdatesFromWorkContext(ctx context.Context) (map[string]any, bool) 
 	return typedMetadataUpdates, true
 }
 
+// NextSnoozeCount returns the snooze count recorded on a job that's snoozed
+// again: its metadata's current `snoozes` value plus one. The current value is
+// read leniently, so a missing, non-numeric, or malformed count reads as zero
+// and a fractional one truncates toward zero.
+func NextSnoozeCount(metadata []byte) int64 {
+	return gjson.GetBytes(metadata, "snoozes").Int() + 1
+}
+
 type jobExecutorResult struct {
 	Err                error
 	JobArgsUnmarshaled bool
@@ -422,13 +430,12 @@ func (e *JobExecutor) reportResult(ctx context.Context, jobRow *rivertype.JobRow
 		)
 		nextAttemptScheduledAt := e.Time.Now().Add(snoozeErr.Duration)
 
-		snoozesValue := gjson.GetBytes(jobRow.Metadata, "snoozes").Int()
 		if res.MetadataUpdates == nil {
 			res.MetadataUpdates = make(map[string]any)
 		}
 		// Set snooze count in the metadata map before marshaling so we avoid
 		// rewriting a potentially large encoded metadata payload.
-		res.MetadataUpdates["snoozes"] = snoozesValue + 1
+		res.MetadataUpdates["snoozes"] = NextSnoozeCount(jobRow.Metadata)
 
 		metadataUpdatesBytes, err := marshalMetadataUpdates(res.MetadataUpdates)
 		if err != nil {

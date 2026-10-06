@@ -2,6 +2,10 @@
 
 SQLC ?= sqlc
 
+.PHONY: check/modzip
+check/modzip: ## Check that no Go module zip includes fixtures, testdata, or the Rust or JS ports
+	go run ./conformance/cmd/checkmodzip ./go.work
+
 .PHONY: db/reset
 db/reset: ## Drop, create, and migrate dev and test databases
 db/reset: db/reset/dev
@@ -19,10 +23,17 @@ db/reset/test: ## Drop, create, and migrate test databases
 
 .PHONY: generate
 generate: ## Generate generated artifacts
+generate: generate/fixtures
 generate: generate/js-migrations
 generate: generate/migrations
 generate: generate/rust-migrations
 generate: generate/sqlc
+
+# Fixtures are written to conformance/testdata, which is ignored by Git. Port
+# test targets that read them depend on this target.
+.PHONY: generate/fixtures
+generate/fixtures: ## Generate cross-language conformance fixtures from River's Go implementation
+	go run ./conformance/cmd/generatefixtures
 
 .PHONY: generate/js-migrations
 generate/js-migrations: ## Sync database migrations to JavaScript
@@ -139,7 +150,16 @@ RUST_POSTGRES_TESTS_ENV = RUSTFLAGS="$$RUSTFLAGS --cfg river_postgres_tests" \
 .PHONY: test/js
 test/js: ## Run JavaScript unit tests
 test/js: build/js
+test/js: generate/fixtures
 	pnpm -C js run test
+
+# Only the tests that compare JavaScript with fixtures generated from River's
+# Go implementation, for checking a Go change against the port. They import
+# sources directly and need no build.
+.PHONY: test/js/conformance
+test/js/conformance: ## Run JavaScript tests that check Go-generated conformance fixtures
+test/js/conformance: generate/fixtures
+	pnpm -C js exec vitest run src/cron.test.ts src/runtime/completion-command.test.ts
 
 # Integration tests use TEST_DATABASE_URL (default
 # postgres://localhost:5432/river_test), migrated with
@@ -151,6 +171,7 @@ test/js/integration: build/js
 
 .PHONY: test/rust
 test/rust: ## Run Rust unit and SQLite tests, plus PostgreSQL tests when RIVER_RUST_DATABASE_URL is set
+test/rust: generate/fixtures
 	@if [ -n "$$RIVER_RUST_DATABASE_URL" ]; then \
 		cd rust && $(RUST_POSTGRES_TESTS_ENV) cargo test --workspace --all-features --locked; \
 	elif [ -n "$$CI" ]; then \
@@ -160,13 +181,22 @@ test/rust: ## Run Rust unit and SQLite tests, plus PostgreSQL tests when RIVER_R
 		cd rust && cargo test --workspace --features riverqueue/sqlite,riverqueue-migrate/sqlite --locked; \
 	fi
 
+# Only the tests that compare Rust with fixtures generated from River's Go
+# implementation, for checking a Go change against the port.
+.PHONY: test/rust/conformance
+test/rust/conformance: ## Run Rust tests that check Go-generated conformance fixtures
+test/rust/conformance: generate/fixtures
+	cd rust && cargo test -p riverqueue --features chrono-tz --lib --test protocol_fixtures --locked
+
 .PHONY: test/rust/postgres
 test/rust/postgres: ## Run all Rust tests, including PostgreSQL integration tests (requires RIVER_RUST_DATABASE_URL)
+test/rust/postgres: generate/fixtures
 	@test -n "$$RIVER_RUST_DATABASE_URL" || { echo "RIVER_RUST_DATABASE_URL is required" >&2; exit 1; }
 	cd rust && $(RUST_POSTGRES_TESTS_ENV) cargo test --workspace --all-features --locked
 
 .PHONY: test/rust/sqlite
 test/rust/sqlite: ## Run Rust unit, doc, and SQLite integration tests without a PostgreSQL database
+test/rust/sqlite: generate/fixtures
 	cd rust && cargo test --workspace --features riverqueue/sqlite,riverqueue-migrate/sqlite --locked
 
 .PHONY: doc/js
@@ -214,6 +244,9 @@ check/rust/package: ## Build and verify publishable crate archives without publi
 	cd rust && package_build_dir=$$(mktemp -d) && \
 		trap 'rm -rf "$$package_build_dir"' EXIT && \
 		CARGO_BUILD_BUILD_DIR="$$package_build_dir" cargo package --workspace --allow-dirty --locked
+	cd rust && for crate in riverqueue riverqueue-cli riverqueue-macros riverqueue-migrate riverqueue-test; do \
+		! cargo package --list --allow-dirty --locked -p $$crate | grep -E '(^|/)(tests|fixtures|testdata)/|\.json$$' | grep -vxF .cargo_vcs_info.json || exit 1; \
+	done
 
 # The baseline is the latest published riverqueue-v* tag, and
 # cargo-semver-checks infers the allowed change from the version bump. It

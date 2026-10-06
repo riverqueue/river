@@ -1,0 +1,77 @@
+name: Conformance
+
+# The Rust and JavaScript workflows run only when their own files change, but
+# their fixture tests compare against values generated from River's Go code.
+# This job closes that gap: when Go code, SQL queries the generator reads, or
+# the generator itself changes, it regenerates the fixtures and runs only the
+# port tests that read them. Keep both events' paths in sync.
+on:
+  push:
+    branches:
+      - master
+    paths:
+      - ".github/workflows/conformance.yaml"
+      - "**.go"
+      - "**/go.mod"
+      - "**/go.sum"
+      - "conformance/**"
+      - "go.work"
+      - "riverdriver/**/*.sql"
+  pull_request:
+    paths:
+      - ".github/workflows/conformance.yaml"
+      - "**.go"
+      - "**/go.mod"
+      - "**/go.sum"
+      - "conformance/**"
+      - "go.work"
+      - "riverdriver/**/*.sql"
+
+concurrency:
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+  group: ${{ github.workflow }}-${{ github.ref }}
+
+permissions:
+  contents: read
+
+env:
+  # Keep the cross-run cache small; Cargo still reuses compiled dependencies.
+  CARGO_INCREMENTAL: "0"
+
+jobs:
+  port_fixtures:
+    name: Port fixture tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.work
+
+      - uses: dtolnay/rust-toolchain@stable
+        id: rust
+
+      - name: Cache Rust dependencies and build artifacts
+        uses: actions/cache@v5
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+            rust/target
+          key: rust-v1-${{ runner.os }}-${{ runner.arch }}-${{ github.job }}-${{ steps.rust.outputs.cachekey }}-${{ hashFiles('rust/**/Cargo.toml', 'rust/Cargo.lock') }}
+          restore-keys: rust-v1-${{ runner.os }}-${{ runner.arch }}-${{ github.job }}-${{ steps.rust.outputs.cachekey }}-
+
+      - uses: ./.github/actions/setup-js
+
+      # Each target generates the fixtures before running its tests.
+      - name: Rust fixture tests
+        run: make test/rust/conformance
+
+      - name: JavaScript fixture tests
+        run: make test/js/conformance

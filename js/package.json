@@ -25,7 +25,6 @@
     "dist",
     "src",
     "!src/**/*.test.ts",
-    "!src/testdata",
     "README.md",
     "LICENSE"
   ],

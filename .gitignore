@@ -1,4 +1,5 @@
 /.envrc
+/conformance/testdata/
 /go.work.sum
 /internal/cmd/riverbench/riverbench
 /river

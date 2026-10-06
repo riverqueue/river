@@ -454,3 +454,6 @@ jobs:
 
       - name: Check all go/toolchain directives match
         run: CHECK=true make update-mod-go
+
+      - name: Check module zips exclude fixtures and ports
+        run: make check/modzip

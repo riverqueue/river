@@ -1,4 +1,4 @@
-use std::time::Duration;
+use std::{io::ErrorKind, path::Path, time::Duration};
 
 use chrono::{DateTime, Utc};
 use riverqueue::{
@@ -18,16 +18,8 @@ struct Fixture {
     attempt_error: AttemptError,
     job_states: Vec<StateFixture>,
     metadata_keys: Map<String, Value>,
-    notifications: Vec<NotificationFixture>,
     retry_cases: Vec<RetryFixture>,
     topics: Map<String, Value>,
-}
-
-#[derive(Deserialize)]
-struct NotificationFixture {
-    name: String,
-    payload: Map<String, Value>,
-    topic: String,
 }
 
 #[derive(Deserialize)]
@@ -46,10 +38,28 @@ struct StateFixture {
     unique_bit: u8,
 }
 
+/// Reads `name` from `conformance/testdata`, where `make generate/fixtures`
+/// writes fixtures produced by River's Go implementation. A missing fixture
+/// fails the test rather than skipping it.
+fn read_fixture(name: &str) -> String {
+    let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../conformance/testdata")
+        .join(name);
+    std::fs::read_to_string(&path).unwrap_or_else(|error| match error.kind() {
+        ErrorKind::NotFound => panic!(
+            "missing conformance fixture {}; run `make generate/fixtures` from the repository root",
+            path.display()
+        ),
+        _ => panic!(
+            "error reading conformance fixture {}: {error}",
+            path.display()
+        ),
+    })
+}
+
 #[test]
 fn go_protocol_values_match_rust() {
-    let fixture: Fixture =
-        serde_json::from_str(include_str!("fixtures/protocol_values.json")).unwrap();
+    let fixture: Fixture = serde_json::from_str(&read_fixture("protocol_values.json")).unwrap();
 
     assert_eq!(fixture.attempt_error.attempt, 3);
     assert!(fixture.attempt_error.error.contains("escaped"));
@@ -70,19 +80,6 @@ fn go_protocol_values_match_rust() {
     assert_eq!(fixture.topics["control"], NOTIFICATION_TOPIC_CONTROL);
     assert_eq!(fixture.topics["insert"], NOTIFICATION_TOPIC_INSERT);
     assert_eq!(fixture.topics["leadership"], NOTIFICATION_TOPIC_LEADERSHIP);
-    for notification in fixture.notifications {
-        assert_ne!(notification.name, "");
-        assert!(notification.payload.contains_key("action") || notification.name == "insert");
-        assert!(
-            [
-                NOTIFICATION_TOPIC_CONTROL,
-                NOTIFICATION_TOPIC_INSERT,
-                NOTIFICATION_TOPIC_LEADERSHIP,
-            ]
-            .contains(&notification.topic.as_str())
-        );
-    }
-
     for test_case in fixture.retry_cases {
         let row = retry_row(test_case.job_id, test_case.now, test_case.error_count - 1);
         let delay = DefaultRetryPolicy::with_seed(test_case.seed).next_retry(

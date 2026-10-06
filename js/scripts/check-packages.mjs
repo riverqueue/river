@@ -26,6 +26,9 @@ import {
 const execFileAsync = promisify(execFile);
 const repositoryRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const examplesOnly = process.argv.includes("--examples-only");
+// The only JSON a package may ship: its manifest and runtime migration data.
+// Anything else, like Go-generated test goldens, is test data.
+const packagedJsonFiles = new Set(["migrations/manifest.json", "package.json"]);
 const rootPackageJson = JSON.parse(
   await readFile(join(repositoryRoot, "package.json"), "utf8")
 );
@@ -183,6 +186,17 @@ async function inspectArchive(packageSpec, archivePath) {
     files.filter((file) => /(?:^|[./])(?:integration\.)?test\./.test(file)),
     [],
     `${packageSpec.name} does not package test builds`
+  );
+  assert.deepEqual(
+    files.filter(
+      (file) =>
+        /(?:^|\/)(?:testdata|fixtures?|goldens?)\/|\.tsbuildinfo$/u.test(
+          file
+        ) ||
+        (file.endsWith(".json") && !packagedJsonFiles.has(file))
+    ),
+    [],
+    `${packageSpec.name} does not package test data`
   );
   const denied = deniedSubstrings(repositoryRoot);
   for (const file of files) {
