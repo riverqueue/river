@@ -193,9 +193,9 @@ and on release tags. Each job installs the official Node.js build from
 `js/.node-version` and fails unless `typeof Temporal` is `object`. The jobs
 cover build, both type-check lanes, generated migrations (compared with
 River's sources), API reports, TypeDoc, README snippets, the 0.1 fixture, lint,
-formatting, licenses, `pnpm audit`, packed archives and examples, unit tests on
-Node 26.0.0 and the current Node 26 release, and integration tests on
-PostgreSQL 14 through 18.
+formatting, licenses, packed archives and examples, unit tests on Node 26.0.0
+and the current Node 26 release, and integration tests on PostgreSQL 14
+through 18.
 
 Unit tests compare cron schedules and snooze counting with goldens recorded
 from River Go in `src/testdata`, the same values the Rust port checks in its
