@@ -197,12 +197,16 @@ formatting, licenses, packed archives and examples, unit tests on Node 26.0.0
 and the current Node 26 release, and integration tests on PostgreSQL 14
 through 18.
 
-Unit tests compare cron schedules and snooze counting with fixtures that
+Unit tests compare unique keys, protocol values, notification dispatch,
+retry timing, cron schedules, and snooze counting with fixtures that
 River's Go implementation generates into `conformance/testdata`, the same
 files the Rust port reads. They aren't committed: `make test/js` generates
 them first, so Go is needed to run the unit tests, and `pnpm run test` needs
 a prior `make generate/fixtures` from the repository root. A missing fixture
-fails its test.
+fails its test. `make test/js/conformance` runs just these checks, including
+both drivers' notification adapters without a PostgreSQL server. The two
+raw JSON unique-key cases involving duplicate keys or integer-key insertion
+order are Rust-only because JavaScript objects cannot preserve them.
 
 ## Preparing a release
 
