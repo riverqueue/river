@@ -16,7 +16,7 @@ runs:
       with:
         package_json_file: js/package.json
 
-    - uses: actions/setup-node@v6
+    - uses: actions/setup-node@v7
       with:
         cache: pnpm
         cache-dependency-path: js/pnpm-lock.yaml
