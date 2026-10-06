@@ -5,6 +5,8 @@
  * the TypeScript source, so every test also exercises the thread's fallback
  * from a missing `.js` module to its `.ts` source.
  */
+import { parentPort } from "node:worker_threads";
+
 import {
   complete as completeOutcome,
   snooze as snoozeOutcome,
@@ -20,19 +22,6 @@ export const allocateForever: TestHandler = ({ logger }) => {
   logger.info("started");
   const retained: number[][] = [];
   for (;;) retained.push(new Array<number>(100_000).fill(retained.length));
-};
-
-export const blockThenExit: TestHandler = () => {
-  // Keep the thread busy after returning so the next run message is queued
-  // behind this callback, then exit before the thread can acknowledge it.
-  setImmediate(() => {
-    const end = Date.now() + 100;
-    while (Date.now() < end) {
-      // Deliberately block this isolated thread.
-    }
-    process.exit(9);
-  });
-  return completeOutcome();
 };
 
 export const complete: TestHandler = ({ job }) =>
@@ -91,6 +80,14 @@ export const echoExact: TestHandler = ({
   recordOutput({ id });
   setMetadata("id", id);
   return completeOutcome({ output: { id } });
+};
+
+export const exitBeforeNextTask: TestHandler = () => {
+  // Replace the run listener so the next task kills this thread before it
+  // can acknowledge the task. A setImmediate callback races with that message.
+  parentPort?.removeAllListeners("message");
+  parentPort?.once("message", () => process.exit(9));
+  return completeOutcome();
 };
 
 export const exitWhenIdle: TestHandler = () => {
