@@ -1,4 +1,3 @@
-import { EventEmitter } from "node:events";
 import { mkdtempSync, rmSync } from "node:fs";
 import { readFile, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -149,38 +148,31 @@ describe("SqliteDriver insertion transactions", () => {
   });
 
   test("lets unrelated work that inherited its async context run before the write", async () => {
-    // A shared batcher created lazily inside insert middleware inherits the
-    // insertion's async context, so its later flushes run "inside" River's
-    // transaction while the middleware still awaits I/O before next().
-    const bus = new EventEmitter();
-    let batcher: NodeJS.Timeout | undefined;
-    onTestFinished(() => clearInterval(batcher));
+    // Callbacks created inside middleware inherit its transaction context.
+    // Run three background flushes while middleware waits before next(),
+    // awaiting each insertion instead of relying on a fixed time window.
     const { client, count } = await setup({
       insertMiddleware: [
         async (context, next) => {
-          if (
-            batcher === undefined &&
-            context.requests[0]?.args.wire === true
-          ) {
-            batcher = setInterval(() => bus.emit("flush"), 5);
-            await new Promise((resolve) => setTimeout(resolve, 50));
+          if (context.requests[0]?.args.wire === true) {
+            for (let index = 0; index < 3; index++) {
+              const flushed = Promise.withResolvers<unknown>();
+              setImmediate(() => {
+                void client
+                  .insert(scopedJob, {})
+                  .then(flushed.resolve, flushed.reject);
+              });
+              await flushed.promise;
+            }
           }
           return next();
         },
       ],
     });
-    const flushed: Promise<unknown>[] = [];
-    bus.on("flush", () => {
-      flushed.push(client.insert(scopedJob, {}));
-    });
 
     await client.insert(scopedJob, { wire: true });
-    clearInterval(batcher);
-    const results = await Promise.allSettled(flushed);
 
-    expect(results.length).toBeGreaterThan(2);
-    expect(results.filter(({ status }) => status === "rejected")).toEqual([]);
-    expect(count("river_job")).toBe(results.length + 1);
+    expect(count("river_job")).toBe(4);
   });
 
   test("lets middleware and beforeInsert hooks call River before the write", async () => {
