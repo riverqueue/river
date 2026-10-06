@@ -102,7 +102,7 @@ async fn claims_only_registered_kinds(backend: Backend) {
     }
     assert_eq!(completed, HashSet::from([known, alias]));
 
-    tokio::time::timeout(TIMEOUT, run.shutdown())
+    tokio::time::timeout(TIMEOUT, run.stop())
         .await
         .expect("the client should stop")
         .unwrap();

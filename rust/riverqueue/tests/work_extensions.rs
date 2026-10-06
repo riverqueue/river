@@ -249,7 +249,7 @@ async fn work_until(client: &Client, kind: EventKind, job_id: i64) -> JobRow {
     })
     .await
     .expect("job event");
-    run.shutdown().await.unwrap();
+    run.stop().await.unwrap();
     row
 }
 

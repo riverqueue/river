@@ -53,7 +53,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
             stopper.stop();
         }
         if tokio::signal::ctrl_c().await.is_ok() {
-            stopper.stop_now();
+            stopper.stop_and_cancel();
         }
     });
 

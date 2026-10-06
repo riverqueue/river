@@ -523,7 +523,7 @@ async fn client_cancels_a_running_job() {
     assert!(cancelled.finalized_at.is_some());
     assert!(cancelled.metadata.contains_key("cancel_attempted_at"));
 
-    run_handle.shutdown().await.unwrap();
+    run_handle.stop().await.unwrap();
     database.cleanup().await;
 }
 
@@ -559,7 +559,7 @@ async fn client_completes_a_job_with_output_and_event() {
         }
     }
 
-    run_handle.shutdown().await.unwrap();
+    run_handle.stop().await.unwrap();
     database.cleanup().await;
 }
 
@@ -578,7 +578,7 @@ async fn client_discards_a_failing_job_after_max_attempts() {
     assert_eq!(failed.errors.len(), 1);
     assert_eq!(failed.errors[0].error, "intentional failure");
 
-    run_handle.shutdown().await.unwrap();
+    run_handle.stop().await.unwrap();
     database.cleanup().await;
 }
 
@@ -603,7 +603,7 @@ async fn client_discards_a_job_of_an_unregistered_kind() {
         "job kind is not registered in the client's Workers bundle: rust_unregistered_kind"
     );
 
-    run_handle.shutdown().await.unwrap();
+    run_handle.stop().await.unwrap();
     database.cleanup().await;
 }
 
@@ -614,10 +614,10 @@ async fn client_restarts_after_shutdown() {
 
     let mut run_handle = client.start().unwrap();
     run_handle.wait_ready().await.unwrap();
-    run_handle.shutdown().await.unwrap();
+    run_handle.stop().await.unwrap();
     let mut restarted_handle = client.start().unwrap();
     restarted_handle.wait_ready().await.unwrap();
-    restarted_handle.shutdown().await.unwrap();
+    restarted_handle.stop().await.unwrap();
 
     database.cleanup().await;
 }
@@ -648,7 +648,7 @@ async fn client_resumes_resumable_steps_on_retry() {
     assert_eq!(resumable_first_runs.load(Ordering::SeqCst), 1);
     assert_eq!(resumable_second_runs.load(Ordering::SeqCst), 2);
 
-    run_handle.shutdown().await.unwrap();
+    run_handle.stop().await.unwrap();
     database.cleanup().await;
 }
 
@@ -1155,7 +1155,7 @@ async fn job_admin_lists_updates_retries_and_deletes() {
         .unwrap();
     wait_for_state(&client, inserted.job.row.id, JobState::Completed).await;
     let failed = wait_for_state(&client, failed.job.row.id, JobState::Discarded).await;
-    run_handle.shutdown().await.unwrap();
+    run_handle.stop().await.unwrap();
 
     let listed = client
         .jobs()
@@ -1215,7 +1215,7 @@ async fn local_queue_added_at_runtime_works_jobs() {
         .unwrap();
     wait_for_state(&client, dynamic.job.row.id, JobState::Completed).await;
     client.local_queues().remove("dynamic").await.unwrap();
-    run_handle.shutdown().await.unwrap();
+    run_handle.stop().await.unwrap();
 
     // The removed queue's row stays behind alongside the configured one.
     let queues = client
@@ -1328,7 +1328,7 @@ async fn maintenance_cleans_old_jobs_and_queues_and_reindexes() {
         );
         tokio::time::sleep(Duration::from_millis(20)).await;
     }
-    cleanup_handle.shutdown().await.unwrap();
+    cleanup_handle.stop().await.unwrap();
 
     database.cleanup().await;
 }
@@ -1408,7 +1408,7 @@ async fn maintenance_client_runs_pilot_periodic_scheduled_and_transactional_jobs
     );
     assert_eq!(pilot.maintenance_starts.load(Ordering::SeqCst), 1);
     assert_eq!(pilot.runtime_starts.load(Ordering::SeqCst), 1);
-    maintenance_handle.shutdown().await.unwrap();
+    maintenance_handle.stop().await.unwrap();
     assert_eq!(pilot.maintenance_stops.load(Ordering::SeqCst), 1);
     assert_eq!(pilot.runtime_stops.load(Ordering::SeqCst), 1);
 
@@ -1444,7 +1444,7 @@ async fn maintenance_leader_rescues_stuck_jobs_and_resigns_on_shutdown() {
         .await
         .unwrap();
     assert_eq!(leader_id, "rust-maintenance-client");
-    maintenance_handle.shutdown().await.unwrap();
+    maintenance_handle.stop().await.unwrap();
     let leader_count: i64 = sqlx::query_scalar("SELECT count(*) FROM river_leader")
         .fetch_one(&pool)
         .await
@@ -1532,7 +1532,7 @@ async fn queue_admin_gets_pauses_resumes_and_updates() {
     // Starting the client records its configured queue.
     let mut run_handle = client.start().unwrap();
     run_handle.wait_ready().await.unwrap();
-    run_handle.shutdown().await.unwrap();
+    run_handle.stop().await.unwrap();
 
     let queue = client.queues().get("default").await.unwrap();
     assert_eq!(queue.name, "default");
@@ -1681,7 +1681,7 @@ async fn rescuer_honors_worker_timeout_and_retry_overrides() {
         assert!(!row.metadata.contains_key("river:rescue_count"));
     }
 
-    handle.shutdown().await.unwrap();
+    handle.stop().await.unwrap();
     database.cleanup().await;
 }
 
@@ -1818,7 +1818,7 @@ async fn resumable_cursor_and_transactional_checkpoints() {
         assert!(!rolled_back.metadata.contains_key("river:resumable_cursor"));
     }
 
-    handle.shutdown().await.unwrap();
+    handle.stop().await.unwrap();
     database.cleanup().await;
 }
 
@@ -1827,7 +1827,7 @@ async fn resumable_cursor_and_transactional_checkpoints() {
 /// error is recorded, and the job is retried or, at its maximum attempts,
 /// discarded.
 #[tokio::test]
-async fn shutdown_now_fails_a_job_ignoring_cancellation() {
+async fn stop_and_cancel_fails_a_job_ignoring_cancellation() {
     let database = support::PostgresSchema::current("rs_interrupt").await;
 
     let mut workers = WorkerRegistry::new();
@@ -1867,7 +1867,7 @@ async fn shutdown_now_fails_a_job_ignoring_cancellation() {
     let mut handle = client.start().unwrap();
     wait_for_state(&client, retried, JobState::Running).await;
     wait_for_state(&client, discarded, JobState::Running).await;
-    handle.shutdown_now().await.unwrap();
+    handle.stop_and_cancel().await.unwrap();
 
     for (id, states) in [
         (retried, &[JobState::Available, JobState::Retryable][..]),

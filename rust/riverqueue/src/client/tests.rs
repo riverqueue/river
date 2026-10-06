@@ -589,7 +589,7 @@ async fn readiness_survives_a_notification_listener_panic() {
         client.inner.notifier_start_panics.load(Ordering::Acquire),
         0
     );
-    run.shutdown().await.unwrap();
+    run.stop().await.unwrap();
     pool.close().await;
     for suffix in ["", "-shm", "-wal"] {
         let mut file = path.as_os_str().to_owned();

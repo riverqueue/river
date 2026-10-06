@@ -288,7 +288,7 @@ async fn sqlite_snooze_preserves_large_metadata_numbers() {
     })
     .await
     .unwrap();
-    run.shutdown().await.unwrap();
+    run.stop().await.unwrap();
     assert_eq!(row.metadata.get_raw("beyond_float").unwrap().get(), "1e400");
     assert_eq!(
         row.metadata.get_raw("long_decimal").unwrap().get(),

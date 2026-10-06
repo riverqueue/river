@@ -329,7 +329,7 @@ async fn assert_shutdown_retries_with_growing_deadlines(builder: riverqueue::Cli
         .unwrap();
     let mut run = client.start().unwrap();
     run.wait_ready().await.unwrap();
-    tokio::time::timeout(WAIT, run.shutdown())
+    tokio::time::timeout(WAIT, run.stop())
         .await
         .expect("client stops")
         .unwrap();
@@ -374,7 +374,7 @@ async fn assert_stuck_keep_alives_time_out(builder: riverqueue::ClientBuilder) {
         (Duration::from_secs(9)..Duration::from_secs(15)).contains(&waited),
         "{waited:?}"
     );
-    run.shutdown().await.unwrap();
+    run.stop().await.unwrap();
 }
 
 /// A panic in `job_finished` or `configuration_changed` stops the client
@@ -502,7 +502,7 @@ async fn assert_removal_waits_for_the_drain(builder: riverqueue::ClientBuilder) 
             pilot.starts.load(Ordering::SeqCst) > starts
         })
         .await;
-    run.shutdown().await.unwrap();
+    run.stop().await.unwrap();
 }
 
 /// A running producer applies an updated configuration without restarting:
@@ -556,7 +556,7 @@ async fn assert_updates_apply_while_running(builder: riverqueue::ClientBuilder) 
         .await
         .expect("jobs complete");
     }
-    run.shutdown().await.unwrap();
+    run.stop().await.unwrap();
     assert_eq!(pilot.starts.load(Ordering::SeqCst), 1, "no restart");
 }
 
@@ -635,7 +635,7 @@ async fn assert_queue_settings_reach_the_session(builder: impl Fn() -> riverqueu
             })
         })
         .await;
-    run.shutdown().await.unwrap();
+    run.stop().await.unwrap();
     let Some(Call::Started(started)) = pilot.calls.snapshot().first().cloned() else {
         panic!("session never started");
     };

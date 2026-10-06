@@ -67,7 +67,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
     while completed.recv().await?.as_job().map(|event| event.job.id) != Some(inserted.id()) {}
     println!("job {} completed", inserted.id());
 
-    run.shutdown().await?;
+    run.stop().await?;
     pool.close().await;
     std::fs::remove_dir_all(&directory).ok();
     Ok(())

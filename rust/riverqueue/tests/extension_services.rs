@@ -312,7 +312,7 @@ async fn assert_maintenance_services_restart_within_their_term(builder: riverque
                 >= 3
         })
         .await;
-    run.shutdown().await.unwrap();
+    run.stop().await.unwrap();
 
     let terms = pilot
         .calls

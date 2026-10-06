@@ -102,8 +102,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 ```
 
 Apply migrations before any client starts, and start clients inside a Tokio
-runtime. `Client::start` returns a `RunHandle`: await `wait`, `shutdown` (a
-soft stop that lets running jobs finish), or `shutdown_now` (which cancels
+runtime. `Client::start` returns a `RunHandle`: await `wait`, `stop` (a
+soft stop that lets running jobs finish), or `stop_and_cancel` (which cancels
 them). `RunHandle::stopper` returns a cloneable `Stopper` for stopping the
 client from another task, such as a signal handler. The handle controls the
 running client: dropping every `Client` clone doesn't stop it, dropping the
@@ -224,8 +224,8 @@ async fn build_report(
 }
 ```
 
-During a client's hard stop (`RunHandle::shutdown_now` or
-`Stopper::stop_now`), a job whose worker returns `WorkCancelled`, anywhere in
+During a client's hard stop (`RunHandle::stop_and_cancel` or
+`Stopper::stop_and_cancel`), a job whose worker returns `WorkCancelled`, anywhere in
 its error's source chain, becomes available again without using up its
 attempt. Any other error is recorded and consumes the attempt, and `Ok`
 completes the job. After the configured stuck threshold, River can abort a

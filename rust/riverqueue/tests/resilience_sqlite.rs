@@ -331,7 +331,7 @@ async fn claimed_rows_decode_individually_and_accept_go_integer_ranges() {
         let event = event.as_job().unwrap().clone();
         events_by_id.insert(event.job.id, event);
     }
-    run.shutdown().await.unwrap();
+    run.stop().await.unwrap();
 
     for id in decodable_ids {
         assert_eq!(events_by_id[&id].kind, JobEventKind::Completed);
@@ -473,7 +473,7 @@ async fn rescuer_recovers_undecodable_stuck_jobs() {
         })
         .await;
     }
-    run.shutdown().await.unwrap();
+    run.stop().await.unwrap();
 
     let tags: String = sqlx::query_scalar("SELECT json(tags) FROM river_job WHERE id = ?")
         .bind(stuck[0])
@@ -635,7 +635,7 @@ async fn invalid_json_columns_fail_attempts_without_stalling_the_queue() {
         })
         .await;
     }
-    run.shutdown().await.unwrap();
+    run.stop().await.unwrap();
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -667,7 +667,7 @@ async fn completion_retries_while_a_foreign_writer_holds_the_lock() {
         || async { job_state(&database.pool, job.job.row.id).await == "completed" },
     )
     .await;
-    run.shutdown().await.unwrap();
+    run.stop().await.unwrap();
     foreign.close().await;
 }
 
@@ -700,7 +700,7 @@ async fn completion_cancels_on_a_null_cancel_attempted_at_key() {
         job_state(&database.pool, job.job.row.id).await == "cancelled"
     })
     .await;
-    run.shutdown().await.unwrap();
+    run.stop().await.unwrap();
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -744,7 +744,7 @@ async fn hard_shutdown_interrupts_only_cooperative_cancellations() {
     .execute(&database.pool)
     .await
     .unwrap();
-    tokio::time::timeout(Duration::from_secs(10), run.shutdown_now())
+    tokio::time::timeout(Duration::from_secs(10), run.stop_and_cancel())
         .await
         .unwrap()
         .unwrap();
@@ -854,7 +854,7 @@ async fn notification_poll_failures_do_not_stop_the_client() {
         job_state(&foreign, job.job.row.id).await == "completed"
     })
     .await;
-    run.shutdown().await.unwrap();
+    run.stop().await.unwrap();
     foreign.close().await;
 }
 

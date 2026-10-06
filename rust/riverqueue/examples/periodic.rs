@@ -79,6 +79,6 @@ async fn main() -> Result<(), Box<dyn Error>> {
             break;
         }
     }
-    run.shutdown().await?;
+    run.stop().await?;
     Ok(())
 }

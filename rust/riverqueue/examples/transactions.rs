@@ -91,6 +91,6 @@ async fn main() -> Result<(), Box<dyn Error>> {
         .await?;
     assert!(confirmed);
 
-    run.shutdown().await?;
+    run.stop().await?;
     Ok(())
 }

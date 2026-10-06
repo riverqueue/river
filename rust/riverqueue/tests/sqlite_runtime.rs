@@ -469,7 +469,7 @@ async fn sqlite_pilot_completion_continue_and_mark_are_atomic() {
         assert!(pilot.fetch_calls.load(Ordering::SeqCst) >= 1);
         assert_eq!(pilot.completion_calls.load(Ordering::SeqCst), 1);
 
-        run.shutdown().await.unwrap();
+        run.stop().await.unwrap();
     }
 }
 
@@ -520,7 +520,7 @@ async fn sqlite_pilot_completion_error_rolls_back_side_effects() {
         JobState::Running
     );
 
-    run.shutdown_now().await.unwrap();
+    run.stop_and_cancel().await.unwrap();
 }
 
 #[tokio::test]
@@ -562,7 +562,7 @@ async fn sqlite_pilot_fetch_error_rolls_back_selection_side_effects() {
         JobState::Available
     );
 
-    let _ = run.shutdown_now().await;
+    let _ = run.stop_and_cancel().await;
 }
 
 #[tokio::test]
@@ -599,7 +599,7 @@ async fn sqlite_pilot_fetch_transient_error_retries_without_stopping_the_queue()
     })
     .await
     .unwrap();
-    run.shutdown().await.unwrap();
+    run.stop().await.unwrap();
 
     let fetch_calls = pilot.fetch_calls.load(Ordering::SeqCst);
     let effects: i64 =
@@ -649,7 +649,7 @@ async fn sqlite_queue_start_retries_transient_write_contention() {
     .await
     .unwrap();
 
-    run.shutdown().await.unwrap();
+    run.stop().await.unwrap();
     pool.close().await;
     remove_sqlite_files(&database_path);
 }
@@ -727,7 +727,7 @@ async fn sqlite_transient_renewal_contention_preserves_leadership_services() {
     .await
     .expect("leader resigns on request");
 
-    run.shutdown_now().await.unwrap();
+    run.stop_and_cancel().await.unwrap();
     assert!(service.stops.load(Ordering::SeqCst) >= 1);
     pool.close().await;
     remove_sqlite_files(&database_path);
@@ -1037,7 +1037,7 @@ async fn sqlite_pilot_rescue_selection_and_update_share_a_transaction() {
     assert_eq!(effects, 1);
     assert!(pilot.rescue_calls.load(Ordering::SeqCst) >= 1);
 
-    run.shutdown().await.unwrap();
+    run.stop().await.unwrap();
 }
 
 #[tokio::test]
@@ -1093,7 +1093,7 @@ async fn sqlite_pilot_rescue_error_rolls_back_selection_side_effects() {
         JobState::Running
     );
 
-    run.shutdown_now().await.unwrap();
+    run.stop_and_cancel().await.unwrap();
 }
 
 #[tokio::test]
@@ -1155,7 +1155,7 @@ async fn sqlite_queue_events_are_emitted_once_per_transition() {
             .is_err()
     );
 
-    run.shutdown().await.unwrap();
+    run.stop().await.unwrap();
 }
 
 #[tokio::test]
@@ -1213,7 +1213,7 @@ async fn sqlite_runs_jobs_and_persists_output() {
         Some(r#"{"doubled":42}"#)
     );
 
-    run.shutdown().await.unwrap();
+    run.stop().await.unwrap();
 }
 
 #[tokio::test]
@@ -1268,7 +1268,7 @@ async fn sqlite_worker_cancelling_its_own_token_fails_the_attempt_normally() {
     assert_eq!(row.errors.len(), 1);
     assert_eq!(row.errors[0].error, "worker gave up");
 
-    run.shutdown().await.unwrap();
+    run.stop().await.unwrap();
 }
 
 #[tokio::test]
@@ -1320,7 +1320,7 @@ async fn sqlite_attempt_errors_record_when_the_attempt_started() {
         "error at {at}, worker started at {worker_started}"
     );
 
-    run.shutdown().await.unwrap();
+    run.stop().await.unwrap();
 }
 
 #[tokio::test]
@@ -1467,7 +1467,7 @@ async fn sqlite_long_fetch_cooldown_still_fetches_first() {
         .expect("the first fetch doesn't wait for a cooldown")
         .unwrap()
         .forget();
-    run.shutdown().await.unwrap();
+    run.stop().await.unwrap();
 }
 
 #[tokio::test]
@@ -1527,7 +1527,7 @@ async fn sqlite_outbox_cancels_work_from_another_client() {
         JobState::Cancelled
     );
 
-    run.shutdown().await.unwrap();
+    run.stop().await.unwrap();
 }
 
 #[tokio::test]
@@ -1589,7 +1589,7 @@ async fn sqlite_completion_event_follows_external_cancelled_state() {
     assert_eq!(event.job.id, inserted.job.row.id);
     assert_eq!(event.job.state, JobState::Cancelled);
 
-    run.shutdown().await.unwrap();
+    run.stop().await.unwrap();
 }
 
 #[tokio::test]
@@ -1630,7 +1630,7 @@ async fn sqlite_fetches_and_discards_unregistered_kinds() {
     .await
     .unwrap();
 
-    run.shutdown().await.unwrap();
+    run.stop().await.unwrap();
 }
 
 /// An extension that claims every available job itself and records the jobs
@@ -1796,7 +1796,7 @@ async fn extension_claimed_rows_fail_undecodable_attempts_like_river_claims() {
     })
     .await
     .expect("decodable claimed job did not complete");
-    run.shutdown().await.unwrap();
+    run.stop().await.unwrap();
     // Both attempts, including the undecodable row's, finished once.
     let mut finished = pilot.finished.lock().unwrap().clone();
     finished.sort_unstable();
@@ -1847,7 +1847,7 @@ async fn set_state_extension_sees_jobs_deleted_while_worked() {
     })
     .await
     .expect("set-state extension never saw the deleted job");
-    run.shutdown().await.unwrap();
+    run.stop().await.unwrap();
 
     // The job's row is gone, so only its ID reaches the extension.
     assert!(!pilot.set_state_rows.lock().unwrap().contains(&deleted.id()));

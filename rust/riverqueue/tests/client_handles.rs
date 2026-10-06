@@ -93,7 +93,7 @@ macro_rules! scenarios {
                 .unwrap();
             let mut run = client.start().unwrap();
             wait_for_completion(&client, id).await;
-            run.shutdown().await.unwrap();
+            run.stop().await.unwrap();
 
             let attempted_by = client.jobs().get(id).await.unwrap().attempted_by;
             let mut expected = previous[1..].to_vec();
@@ -134,7 +134,7 @@ macro_rules! scenarios {
                 .unwrap();
             client.jobs().cancel(id).await.unwrap();
             wait_for_completion(&client, id).await;
-            run.shutdown().await.unwrap();
+            run.stop().await.unwrap();
             fixture.cleanup().await;
         }
 
@@ -408,7 +408,7 @@ macro_rules! scenarios {
                 .unwrap();
             let mut run = client.start().unwrap();
             wait_for_completion(&client, ids[4]).await;
-            run.shutdown().await.unwrap();
+            run.stop().await.unwrap();
 
             assert_eq!(
                 *worked.lock().unwrap(),
@@ -465,7 +465,7 @@ macro_rules! scenarios {
             let finalized_at = job.finalized_at.unwrap();
             assert!((chrono::Utc::now() - finalized_at).num_seconds().abs() < 2);
 
-            run.shutdown().await.unwrap();
+            run.stop().await.unwrap();
             fixture.cleanup().await;
         }
 
@@ -861,7 +861,7 @@ macro_rules! scenarios {
             );
             assert!(!client.local_queues().configs().contains_key("dynamic"));
 
-            run.shutdown().await.unwrap();
+            run.stop().await.unwrap();
             fixture.cleanup().await;
         }
     };

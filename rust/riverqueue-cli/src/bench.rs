@@ -440,7 +440,7 @@ async fn run_benchmark(options: BenchOptions) -> Result<(), Box<dyn StdError + S
     if let Some(producer) = producer {
         producer.await.map_err(|error| join_error(&error))??;
     }
-    run.shutdown().await?;
+    run.stop().await?;
     event_cancel.cancel();
     event_task.await.map_err(|error| join_error(&error))??;
     run_result?;

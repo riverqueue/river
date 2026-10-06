@@ -105,7 +105,7 @@ async fn polls_for_remote_cancellation(backend: Backend) {
         let job = &event.as_job().expect("a job event").job;
         assert_eq!(job.id, id);
         assert_eq!(job.state, JobState::Cancelled, "{job:?}");
-        tokio::time::timeout(TIMEOUT, run.shutdown())
+        tokio::time::timeout(TIMEOUT, run.stop())
             .await
             .expect("the client should stop")
             .unwrap();
