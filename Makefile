@@ -168,6 +168,10 @@ CANDIDATE ?= go
 test/conformance: ## Run cross-language conformance scenarios against CANDIDATE (go, rust, or js)
 	cd conformance && RIVER_CONFORMANCE=$(CANDIDATE) go test ./harness -count=1 -timeout 10m
 
+.PHONY: test/conformance/nightly
+test/conformance/nightly: ## Run conformance scenarios plus the nightly chaos and performance tier against CANDIDATE
+	cd conformance && RIVER_CONFORMANCE=$(CANDIDATE) RIVER_CONFORMANCE_NIGHTLY=1 go test ./harness -count=1 -timeout 30m
+
 # `--cfg river_postgres_tests` builds the Rust Postgres integration tests.
 # It goes to both rustc and rustdoc so any doctest gated on it runs too, and
 # into its own target directory so switching it on and off doesn't rebuild
