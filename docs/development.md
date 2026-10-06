@@ -1,5 +1,8 @@
 # River development
 
+The [Ruby](../ruby/), [Rust](../rust/), and [JavaScript](../js/) ports have
+separate development instructions and `make test/<language>` targets.
+
 ## Run tests
 
 Raise the test database:

@@ -1,0 +1,25 @@
+module River
+  class InsertOpts
+    attr_accessor max_attempts: Integer?
+    attr_accessor metadata: Hash[String | Symbol, untyped]?
+    attr_accessor priority: Integer?
+    attr_accessor queue: (String | Symbol)?
+    attr_accessor scheduled_at: Time?
+    attr_accessor state: jobStateInitialInput?
+    attr_accessor tags: Array[String]?
+    attr_accessor unique_opts: UniqueOpts?
+
+    def initialize: (?max_attempts: Integer?, ?metadata: Hash[String | Symbol, untyped]?, ?priority: Integer?, ?queue: (String | Symbol)?, ?scheduled_at: Time?, ?state: jobStateInitialInput?, ?tags: Array[String]?, ?unique_opts: UniqueOpts?) -> void
+  end
+
+  class UniqueOpts
+    def empty?: () -> bool
+    attr_accessor by_args: bool? | Array[String | Symbol | Array[String | Symbol]]?
+    attr_accessor by_period: (Integer | Rational)?
+    attr_accessor by_queue: bool?
+    attr_accessor by_state: Array[jobStateInput]?
+    attr_accessor exclude_kind: bool?
+
+    def initialize: (?by_args: bool? | Array[String | Symbol | Array[String | Symbol]]?, ?by_period: (Integer | Rational)?, ?by_queue: bool?, ?by_state: Array[jobStateInput]?, ?exclude_kind: bool?) -> void
+  end
+end

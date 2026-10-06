@@ -1,0 +1,110 @@
+PATH
+  remote: ../..
+  specs:
+    riverqueue (0.12.0)
+      logger (> 0, < 1000)
+      optparse (> 0, < 1000)
+      securerandom (> 0, < 1000)
+      timeout (> 0, < 1000)
+
+PATH
+  remote: .
+  specs:
+    riverqueue-sequel (0.12.0)
+      riverqueue (= 0.12.0)
+      sequel (> 0, < 1000)
+
+GEM
+  remote: https://rubygems.org/
+  specs:
+    ast (2.4.3)
+    bigdecimal (4.1.0)
+    diff-lcs (1.6.2)
+    docile (1.4.1)
+    json (2.19.9)
+    language_server-protocol (3.17.0.5)
+    lint_roller (1.1.0)
+    logger (1.7.0)
+    optparse (0.8.1)
+    parallel (1.27.0)
+    parser (3.3.11.1)
+      ast (~> 2.4.1)
+      racc
+    pg (1.6.3-arm64-darwin)
+    pg (1.6.3-x86_64-linux)
+    prism (1.9.0)
+    racc (1.8.1)
+    rainbow (3.1.1)
+    regexp_parser (2.11.3)
+    rspec-core (3.13.6)
+      rspec-support (~> 3.13.0)
+    rspec-expectations (3.13.5)
+      diff-lcs (>= 1.2.0, < 2.0)
+      rspec-support (~> 3.13.0)
+    rspec-support (3.13.7)
+    rubocop (1.84.2)
+      json (~> 2.3)
+      language_server-protocol (~> 3.17.0.2)
+      lint_roller (~> 1.1.0)
+      parallel (~> 1.10)
+      parser (>= 3.3.0.2)
+      rainbow (>= 2.2.2, < 4.0)
+      regexp_parser (>= 2.9.3, < 3.0)
+      rubocop-ast (>= 1.49.0, < 2.0)
+      ruby-progressbar (~> 1.7)
+      unicode-display_width (>= 2.4.0, < 4.0)
+    rubocop-ast (1.49.1)
+      parser (>= 3.3.7.2)
+      prism (~> 1.7)
+    rubocop-performance (1.26.1)
+      lint_roller (~> 1.1)
+      rubocop (>= 1.75.0, < 2.0)
+      rubocop-ast (>= 1.47.1, < 2.0)
+    ruby-progressbar (1.13.0)
+    securerandom (0.4.1)
+    sequel (5.102.0)
+      bigdecimal
+    simplecov (0.22.0)
+      docile (~> 1.1)
+      simplecov-html (~> 0.11)
+      simplecov_json_formatter (~> 0.1)
+    simplecov-html (0.13.2)
+    simplecov_json_formatter (0.1.4)
+    sqlite3 (2.9.5-arm64-darwin)
+    sqlite3 (2.9.5-x86_64-linux-gnu)
+    standard (1.54.0)
+      language_server-protocol (~> 3.17.0.2)
+      lint_roller (~> 1.0)
+      rubocop (~> 1.84.0)
+      standard-custom (~> 1.0.0)
+      standard-performance (~> 1.8)
+    standard-custom (1.0.2)
+      lint_roller (~> 1.0)
+      rubocop (~> 1.50)
+    standard-performance (1.9.0)
+      lint_roller (~> 1.1)
+      rubocop-performance (~> 1.26.0)
+    timeout (0.6.1)
+    unicode-display_width (3.2.0)
+      unicode-emoji (~> 4.1)
+    unicode-emoji (4.2.0)
+
+PLATFORMS
+  arm64-darwin-22
+  arm64-darwin-23
+  arm64-darwin-24
+  arm64-darwin-25
+  x86_64-linux
+
+DEPENDENCIES
+  pg
+  riverqueue!
+  riverqueue-sequel!
+  rspec-core
+  rspec-expectations
+  simplecov
+  sqlite3
+  standard
+
+BUNDLED WITH
+  4.0.9

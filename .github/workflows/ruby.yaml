@@ -1,0 +1,209 @@
+name: Ruby
+
+# Filter the workflow so unrelated changes create no skipped matrix jobs.
+# Keep both events' paths in sync.
+on:
+  push:
+    branches: [master]
+    paths:
+      - ".github/workflows/ruby.yaml"
+      - "Makefile"
+      - "conformance/**"
+      - "riverdriver/**/*.sql"
+      - "ruby/**"
+    tags: ["riverqueue-ruby-v*"]
+  pull_request:
+    paths:
+      - ".github/workflows/ruby.yaml"
+      - "Makefile"
+      - "conformance/**"
+      - "riverdriver/**/*.sql"
+      - "ruby/**"
+
+concurrency:
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+  group: ${{ github.workflow }}-${{ github.ref }}
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    working-directory: ruby
+
+jobs:
+  checks:
+    # Check coverage from the two backends without adding another CI job.
+    needs: [test, test_sqlite]
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: ruby/setup-ruby@v1
+        with:
+          working-directory: ruby
+          bundler-cache: true
+      - run: bundle exec standardrb
+      - run: make frozen-string-literals type-check verify build
+      - uses: actions/download-artifact@v8
+        with:
+          pattern: ruby-coverage-*
+          path: ruby/coverage/ci
+      - run: bundle exec ruby scripts/check_coverage.rb
+
+  test:
+    name: test (${{ matrix.ruby }}, ${{ matrix.postgres }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # Latest Ruby against all supported PostgreSQL versions.
+          - ruby: "4.0"
+            postgres: 18
+            primary: true
+          - ruby: "4.0"
+            postgres: 17
+          - ruby: "4.0"
+            postgres: 16
+          - ruby: "4.0"
+            postgres: 15
+          - ruby: "4.0"
+            postgres: 14
+
+          # Older Ruby versions against the latest PostgreSQL only.
+          - ruby: "3.4"
+            postgres: 18
+          - ruby: "3.3"
+            postgres: 18
+          - ruby: "3.2"
+            postgres: 18
+    env:
+      RIVER_REQUIRE_DATABASES: "1"
+      TEST_DATABASE: postgres
+      TEST_DATABASE_URL: postgres://postgres:postgres@127.0.0.1:5432/river_test?sslmode=disable
+    services:
+      postgres:
+        image: postgres:${{ matrix.postgres }}
+        env:
+          POSTGRES_DB: river_test
+          POSTGRES_PASSWORD: postgres
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 2s
+          --health-timeout 5s
+          --health-retries 5
+        ports: ["5432:5432"]
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: ${{ matrix.ruby }}
+          working-directory: ruby
+          bundler-cache: true
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.work
+      - run: make generate/fixtures
+      - run: make spec/core
+      - run: bundle install
+        working-directory: ruby/driver/riverqueue-activerecord
+      - run: make spec/activerecord
+      - run: bundle install
+        working-directory: ruby/driver/riverqueue-sequel
+      - run: make spec/sequel
+      - uses: actions/upload-artifact@v7
+        if: matrix.primary
+        with:
+          name: ruby-coverage-postgres
+          path: ruby/**/coverage/.resultset.json
+          include-hidden-files: true
+          if-no-files-found: error
+          retention-days: 1
+
+  test_sqlite:
+    name: test_sqlite (4.0)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      RIVER_REQUIRE_DATABASES: "1"
+      TEST_DATABASE: sqlite
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: "4.0"
+          working-directory: ruby
+          bundler-cache: true
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.work
+      - run: make generate/fixtures
+      - run: make spec/core
+      - run: bundle install
+        working-directory: ruby/driver/riverqueue-activerecord
+      - run: make spec/activerecord
+      - run: bundle install
+        working-directory: ruby/driver/riverqueue-sequel
+      - run: make spec/sequel
+      - uses: actions/upload-artifact@v7
+        with:
+          name: ruby-coverage-sqlite
+          path: ruby/**/coverage/.resultset.json
+          include-hidden-files: true
+          if-no-files-found: error
+          retention-days: 1
+
+  rails:
+    name: rails (4.0)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      BUNDLE_FROZEN: "false"
+      RIVER_REQUIRE_DATABASES: "1"
+      TEST_DATABASE_URL: postgres://postgres:postgres@127.0.0.1:5432/river_test?sslmode=disable
+    services:
+      postgres:
+        image: postgres:18
+        env:
+          POSTGRES_DB: river_test
+          POSTGRES_PASSWORD: postgres
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 2s
+          --health-timeout 5s
+          --health-retries 5
+        ports: ["5432:5432"]
+    defaults:
+      run:
+        working-directory: ruby/rails/riverqueue-rails
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: "4.0"
+          working-directory: ruby/rails/riverqueue-rails
+      # Reuse the runner, PostgreSQL service, and installed gems across versions.
+      - name: Test Rails 7.2
+        env:
+          RAILS_VERSION: "~> 7.2.0"
+        run: bundle install && bundle exec rspec
+      - name: Test Rails 8.0
+        if: success() || failure()
+        env:
+          RAILS_VERSION: "~> 8.0.0"
+        run: bundle install && bundle exec rspec
+      - name: Test Rails 8.1
+        if: success() || failure()
+        env:
+          RAILS_VERSION: "~> 8.1.0"
+        run: bundle install && bundle exec rspec

@@ -1,0 +1,19 @@
+# frozen_string_literal: true
+
+source "https://rubygems.org"
+
+gemspec
+
+group :development, :test do
+  gem "riverqueue", path: "../.."
+  gem "standard"
+end
+
+group :test do
+  gem "debug"
+  gem "pg"
+  gem "rspec-core"
+  gem "rspec-expectations"
+  gem "simplecov", require: false
+  gem "sqlite3"
+end

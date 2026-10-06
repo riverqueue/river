@@ -1,0 +1,29 @@
+module River
+  module JobPersistedLogging
+    class Plugin
+      @logger_factory: (^(Buffer) -> untyped)?
+      @max_size_bytes: Integer
+      @max_total_bytes: Integer
+
+      def initialize: (?max_size_bytes: Integer, ?max_total_bytes: Integer) ?{ (Buffer) -> untyped } -> void
+      def work: [T] (Job, ^() -> T) -> T
+
+      private
+
+      def persist_log: (Job, Buffer) -> void
+
+      class Buffer
+        @closed: bool
+        @data: String
+        @limit: Integer
+        @mutex: Mutex
+        @truncated: bool
+
+        def initialize: (Integer) -> void
+        def close: () -> nil
+        def finish: () -> [String, bool]
+        def write: (_ToS) -> Integer
+      end
+    end
+  end
+end
