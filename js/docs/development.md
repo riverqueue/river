@@ -203,12 +203,15 @@ own fixtures.
 
 ## Preparing a release
 
-The root, drivers, migration library, worker-thread integration, test helpers,
-and CLI are intended to be publishable eventually. Examples are private. Until
-the initial release is explicitly approved, do not reserve names, publish
-packages, create tags, or create releases.
+The eight publishable packages are the root `riverqueue` package, the three
+drivers under `driver/*`, and `migrate`, `worker-threads`, `test`, and `cli`.
+They share one release version. Examples are private and stay at `0.0.0`.
+The core and PostgreSQL/Prisma drivers were already released as 0.1.0; this
+checklist prepares a release of the expanded workspace.
 
-1. Fetch changes to the repo. Export `VERSION` by incrementing the last tag:
+1. Fetch changes to the repo and choose the target npm version, including a
+   prerelease suffix when applicable. Do not infer it from the latest
+   repository tag: this repository also contains Go and Rust releases.
 
    ```shell
    git checkout master && git pull --rebase
@@ -222,24 +225,32 @@ packages, create tags, or create releases.
    Libraries take `riverqueue` as an exact peer so a mismatched pair fails at
    install time instead of loading two copies; only the self-contained CLI
    depends on it directly. Do not change the private example package
-   versions.
+   versions or their `workspace:*` references, or the pinned historical
+   `fixtures/migration-0.1` files. After editing the manifests, update the
+   lockfile:
+
+   ```shell
+   pnpm install --lockfile-only
+   ```
 
 3. Update `CHANGELOG.md` by moving the release notes from `Unreleased` into a
    heading for the new version.
 
-4. Verify generated migrations, declarations, package contents, and consumer
-   installs. Dry runs must not contact the publish endpoint.
+4. Open a PR with the version, lockfile, and changelog changes, and let the
+   [JavaScript CI workflow](#continuous-integration) validate them. It runs
+   the build, tests, lint, package checks, and Node/PostgreSQL matrices.
+   Local reruns are optional and useful for debugging CI failures.
 
-   ```shell
-   pnpm run verify:migrations
-   pnpm run build:all
-   pnpm run api:check
-   pnpm run docs:snippets
-   pnpm run migration:legacy
-   pnpm run package:check
-   pnpm run license:check
-   pnpm audit
-   ```
+5. After merge, release from a `master` commit with passing JavaScript CI
+   that includes the release's version and lockfile changes.
+   Publication remains a separate, explicitly authorized operation after merge.
 
-5. Prepare a PR with the version and changelog changes. Publication remains a
-   separate, explicitly authorized operation after merge.
+There is currently no npm publication workflow in this repository:
+`.github/workflows/js.yaml` runs checks on `v*` tags but does not publish
+packages. All eight packages set `publishConfig.provenance: true`, so
+publication needs a supported CI environment configured for
+[npm provenance](https://docs.npmjs.com/generating-provenance-statements/)
+(including `id-token: write` on GitHub Actions). A publication workflow and
+release-tag convention still need to be established. For a prerelease, use an
+explicit [npm distribution tag](https://pnpm.io/10.x/cli/publish#--tag-tag),
+such as `next`; `pnpm publish` defaults to `latest`.
