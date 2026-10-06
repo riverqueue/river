@@ -159,6 +159,15 @@ ifneq ($(TEST_DATABASE),sqlite)
 test:: ; cd ./riverdriver/riverdrivertest && RIVER_USE_LEGACY_SUBTRANSACTIONS=1 go test . -run '^TestDriverRiverPgxV5$$/.*/WithTx$$' -timeout 2m
 endif
 
+# Cross-language conformance scenarios between River Go and CANDIDATE (go,
+# rust, or js) on Postgres (TEST_DATABASE_URL) and SQLite. With the
+# default, Go runs against itself, which exercises the harness.
+CANDIDATE ?= go
+
+.PHONY: test/conformance
+test/conformance: ## Run cross-language conformance scenarios against CANDIDATE (go, rust, or js)
+	cd conformance && RIVER_CONFORMANCE=$(CANDIDATE) go test ./harness -count=1 -timeout 10m
+
 # `--cfg river_postgres_tests` builds the Rust Postgres integration tests.
 # It goes to both rustc and rustdoc so any doctest gated on it runs too, and
 # into its own target directory so switching it on and off doesn't rebuild
