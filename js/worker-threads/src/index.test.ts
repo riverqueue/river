@@ -781,10 +781,13 @@ describe("WorkerThreads", () => {
       }
     );
 
-    it("retries a task once when its reused thread dies before starting it", async () => {
+    it("retries a task once when its reused thread dies before starting it", async ({
+      onTestFinished,
+    }) => {
       const executor = new WorkerThreads({ maxThreads: 1 });
+      onTestFinished(() => executor.close());
       const exiting = executor.handler(testJob, {
-        exportName: "blockThenExit",
+        exportName: "exitBeforeNextTask",
         module: handlers,
       });
       const complete = executor.handler(testJob, {
@@ -805,7 +808,6 @@ describe("WorkerThreads", () => {
         crashedThreads: 1,
         totalThreads: 1,
       });
-      await executor.close();
     });
 
     it("fails an attempt that exceeds its thread's heap limit", async () => {
