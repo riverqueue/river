@@ -600,7 +600,7 @@ impl Run {
     }
 
     async fn stop(mut self) {
-        tokio::time::timeout(WAIT, self.handle.shutdown())
+        tokio::time::timeout(WAIT, self.handle.stop())
             .await
             .expect("client stops")
             .unwrap();
@@ -1006,7 +1006,7 @@ async fn assert_stops_interrupt_and_cancellations_fail(
             assert!(row.errors[0].error.contains("ended without an outcome"));
             run.stop().await;
         } else {
-            tokio::time::timeout(WAIT, run.handle.shutdown_now())
+            tokio::time::timeout(WAIT, run.handle.stop_and_cancel())
                 .await
                 .expect("client stops")
                 .unwrap();
@@ -1098,7 +1098,7 @@ async fn assert_soft_stops_keep_claims_open(
             run.assert_checks().await;
             run.settled(run.coordinator).await;
         } else {
-            run.handle.stopper().stop_now();
+            run.handle.stopper().stop_and_cancel();
             run.assert_checks().await;
         }
         let peer = run.client.jobs().get(run.env.peers[0]).await.unwrap();
@@ -1175,7 +1175,7 @@ async fn assert_coordinator_lifetime_bounds_operations(
     run.env.signals.wait("claiming").await;
     // A hard stop cancels the coordinator without a write, which SQLite
     // couldn't take while the claim holds its write lock.
-    run.handle.stopper().stop_now();
+    run.handle.stopper().stop_and_cancel();
     run.assert_checks().await;
     let peer = run.client.jobs().get(run.env.peers[0]).await.unwrap();
     assert_eq!(peer.state, JobState::Available);
@@ -1343,7 +1343,7 @@ async fn assert_abandoned_attempts_release_peers(
     )
     .await;
     run.env.signals.wait("coordinator blocks").await;
-    tokio::time::timeout(WAIT, run.handle.shutdown_now())
+    tokio::time::timeout(WAIT, run.handle.stop_and_cancel())
         .await
         .expect("client stops")
         .unwrap();

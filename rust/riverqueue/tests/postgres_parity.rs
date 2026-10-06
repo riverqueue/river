@@ -348,7 +348,7 @@ async fn schema_names_are_quoted_like_go() {
     let inserted = client.insert(NoopArgs {}).await.unwrap();
     wait_for_job_state(&client, inserted.job.row.id, JobState::Completed).await;
 
-    handle.shutdown().await.unwrap();
+    handle.stop().await.unwrap();
     database.cleanup().await;
 }
 
@@ -521,7 +521,7 @@ async fn leader_renews_while_maintenance_is_blocked() {
     assert!(blocked_deletes().await > 0);
 
     // Shutdown cancels the blocked statement server-side instead of waiting.
-    tokio::time::timeout(Duration::from_secs(10), handle.shutdown())
+    tokio::time::timeout(Duration::from_secs(10), handle.stop())
         .await
         .expect("shutdown should cancel blocked maintenance")
         .unwrap();

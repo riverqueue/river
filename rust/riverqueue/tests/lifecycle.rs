@@ -203,7 +203,7 @@ async fn dropping_a_shutdown_future_keeps_the_soft_stop() {
     // the gated job keeps it pending, as `tokio::time::timeout` would.
     tokio::select! {
         biased;
-        result = run.shutdown() => panic!("shutdown finished while a job was held: {result:?}"),
+        result = run.stop() => panic!("shutdown finished while a job was held: {result:?}"),
         () = std::future::ready(()) => {}
     }
     gate.release();
@@ -220,7 +220,7 @@ async fn dropping_a_shutdown_future_keeps_the_soft_stop() {
         JobState::Available
     );
     // The handle is still usable after the dropped future.
-    run.shutdown_now().await.unwrap();
+    run.stop_and_cancel().await.unwrap();
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -297,19 +297,19 @@ async fn lifecycle_methods_are_idempotent() {
     let stopper = run.stopper();
     stopper.stop();
     stopper.stop();
-    run.shutdown().await.unwrap();
-    run.shutdown().await.unwrap();
-    run.shutdown_now().await.unwrap();
+    run.stop().await.unwrap();
+    run.stop().await.unwrap();
+    run.stop_and_cancel().await.unwrap();
     run.wait().await.unwrap();
     run.wait_ready().await.unwrap();
-    stopper.stop_now();
+    stopper.stop_and_cancel();
     stopper.stop();
 
     // A stopper affects only its own run, not a restart of the client.
     let job = insert_gated(&client).await;
     let mut restarted = client.start().unwrap();
     gate.wait_started().await;
-    stopper.stop_now();
+    stopper.stop_and_cancel();
     gate.release();
     let completed = async {
         while client.jobs().get(job).await.unwrap().state != JobState::Completed {
@@ -320,7 +320,7 @@ async fn lifecycle_methods_are_idempotent() {
         .await
         .expect("the restarted client did not complete its job");
     assert_eq!(gate.ending(job), Some(Ending::Released));
-    restarted.shutdown().await.unwrap();
+    restarted.stop().await.unwrap();
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -373,7 +373,7 @@ async fn stop_from_another_task_while_waiting() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn stop_now_from_another_task_interrupts_running_jobs() {
+async fn stop_and_cancel_from_another_task_interrupts_running_jobs() {
     let database = TestDatabase::new().await;
     let gate = Gate::new();
     let client = database.client(&gate, 2);
@@ -397,7 +397,7 @@ async fn stop_now_from_another_task_interrupts_running_jobs() {
         .execute(&pool)
         .await
         .unwrap();
-        stopper.stop_now();
+        stopper.stop_and_cancel();
     });
     wait_stopped(&mut run).await;
     stop_task.await.unwrap();
@@ -451,7 +451,7 @@ async fn stop_during_an_outage_does_not_wait_for_a_connection() {
     // Give polls and fetches time to start waiting; a stop must end them
     // wherever they are.
     tokio::time::sleep(Duration::from_millis(300)).await;
-    tokio::time::timeout(Duration::from_secs(5), run.shutdown())
+    tokio::time::timeout(Duration::from_secs(5), run.stop())
         .await
         .expect("the stop waited for a pool connection")
         .unwrap();
@@ -471,5 +471,5 @@ async fn wait_ready_waits_for_queue_registration() {
         .await
         .unwrap();
     assert_eq!(queues, 1);
-    run.shutdown().await.unwrap();
+    run.stop().await.unwrap();
 }

@@ -346,7 +346,7 @@ async fn completion_burst_does_not_lag_large_subscription() {
             .is_err(),
         "unexpected extra completion event"
     );
-    run_handle.shutdown().await.unwrap();
+    run_handle.stop().await.unwrap();
 
     let completed_count: i64 = sqlx::query_scalar(AssertSqlSafe(format!(
         "SELECT count(*) FROM {} WHERE state = 'completed'",
@@ -447,7 +447,7 @@ async fn external_terminal_state_wins_worker_completion_race() {
         );
     }
 
-    run_handle.shutdown().await.unwrap();
+    run_handle.stop().await.unwrap();
     database.cleanup().await;
 }
 
@@ -495,7 +495,7 @@ async fn remote_cancellation_overrides_worker_snooze() {
     );
     assert_eq!(row.attempt, 1);
 
-    run_handle.shutdown().await.unwrap();
+    run_handle.stop().await.unwrap();
     database.cleanup().await;
 }
 
@@ -551,7 +551,7 @@ async fn shutdown_waits_for_active_work_and_soft_stop_escalates() {
     graceful_handle.stopper().stop();
     let finish = Arc::clone(&graceful_finish);
     let graceful_shutdown = tokio::spawn(async move {
-        graceful_handle.shutdown().await.unwrap();
+        graceful_handle.stop().await.unwrap();
         finish.available_permits()
     });
     graceful_finish.add_permits(1);
@@ -619,7 +619,7 @@ async fn shutdown_waits_for_active_work_and_soft_stop_escalates() {
     escalation_handle.wait_ready().await.unwrap();
     escalation_started.acquire().await.unwrap().forget();
     let shutdown_started = tokio::time::Instant::now();
-    tokio::time::timeout(Duration::from_secs(2), escalation_handle.shutdown())
+    tokio::time::timeout(Duration::from_secs(2), escalation_handle.stop())
         .await
         .unwrap()
         .unwrap();
@@ -746,7 +746,7 @@ async fn poll_only_and_subscription_configuration() {
     ));
     assert_eq!(lagged.recv().await.unwrap().kind(), EventKind::QueuePaused);
 
-    run_handle.shutdown().await.unwrap();
+    run_handle.stop().await.unwrap();
     assert_eq!(
         client.jobs().get(inserted.job.row.id).await.unwrap().state,
         JobState::Completed
@@ -778,7 +778,7 @@ fn start_without_runtime_returns_error_and_is_restartable() {
             .start()
             .expect("failed start must not poison the client");
         run.wait_ready().await.unwrap();
-        run.shutdown_now().await.unwrap();
+        run.stop_and_cancel().await.unwrap();
         database.cleanup().await;
     });
     drop(client);

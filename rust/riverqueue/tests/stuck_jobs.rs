@@ -134,7 +134,7 @@ async fn stuck_log_line_reports_the_worker_timeout() {
     })
     .await
     .expect("stuck job logged");
-    run.shutdown().await.unwrap();
+    run.stop().await.unwrap();
 
     assert_eq!(*lines.timeouts.lock().unwrap(), ["Some(5ms)"]);
     sqlite_cleanup(pool, path).await;

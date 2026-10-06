@@ -46,6 +46,6 @@ async fn main() -> Result<(), Box<dyn Error>> {
         .await?;
     while completed.recv().await?.as_job().map(|event| event.job.id) != Some(inserted.id()) {}
 
-    run.shutdown().await?;
+    run.stop().await?;
     Ok(())
 }

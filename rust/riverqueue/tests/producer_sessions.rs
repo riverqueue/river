@@ -298,7 +298,7 @@ async fn assert_every_attempt_finishes_once(builder: riverqueue::ClientBuilder) 
             ids.iter().all(|id| finished.contains(id))
         })
         .await;
-    run.shutdown().await.unwrap();
+    run.stop().await.unwrap();
 
     let finished = counts(&pilot.finished.snapshot());
     assert_eq!(finished.len(), ids.len(), "{finished:?}");
@@ -349,7 +349,7 @@ async fn assert_abandoned_attempts_finish(builder: riverqueue::ClientBuilder) {
         .await
         .expect("worker starts");
 
-    tokio::time::timeout(WAIT, run.shutdown_now())
+    tokio::time::timeout(WAIT, run.stop_and_cancel())
         .await
         .expect("client stops")
         .unwrap();
@@ -399,7 +399,7 @@ async fn assert_panicked_attempts_finish(builder: riverqueue::ClientBuilder) {
             finished.contains(&id)
         })
         .await;
-    run.shutdown().await.unwrap();
+    run.stop().await.unwrap();
     assert_eq!(pilot.finished.snapshot(), [id]);
 }
 
@@ -535,7 +535,7 @@ async fn assert_queue_changes_reach_the_session(
         .await
         .unwrap_or_else(|_| panic!("metadata {metadata} not reported in time"));
     }
-    run.shutdown().await.unwrap();
+    run.stop().await.unwrap();
 }
 
 /// A job whose worker reports whether its attempt started cancelled.
@@ -623,7 +623,7 @@ async fn assert_cancellation_during_claim_reaches_the_attempt(builder: riverqueu
     })
     .await
     .expect("job finishes");
-    run.shutdown().await.unwrap();
+    run.stop().await.unwrap();
 
     assert_eq!(
         client.jobs().get(id).await.unwrap().state,
@@ -677,7 +677,7 @@ async fn assert_sessions_see_metadata_text<F, Fut>(
         configurations.last().unwrap().queue.metadata,
         "only the text changed"
     );
-    run.shutdown().await.unwrap();
+    run.stop().await.unwrap();
 }
 
 #[cfg(all(feature = "postgres", river_postgres_tests))]

@@ -1008,7 +1008,7 @@ async fn periodic_start_hooks_and_run_on_start_follow_each_leadership_gain() {
     wait_for(1).await;
     client.request_resign().await.unwrap();
     wait_for(2).await;
-    handle.shutdown().await.unwrap();
+    handle.stop().await.unwrap();
     assert_eq!(starts.load(Ordering::SeqCst), 2);
     assert_eq!(periodic_count().await, 2);
     database.cleanup().await;
@@ -1089,7 +1089,7 @@ async fn maintenance_start_retries_then_resigns(poll_only: bool) {
     .expect("maintenance start should be retried in a new term");
     let second_term = elected_at().await.unwrap();
     assert_ne!(second_term, first_term);
-    handle.shutdown().await.unwrap();
+    handle.stop().await.unwrap();
     assert_eq!(attempts.load(Ordering::SeqCst), 4);
     database.cleanup().await;
 }

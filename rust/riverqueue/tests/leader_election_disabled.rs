@@ -217,7 +217,7 @@ async fn works_jobs_without_electing(backend: Backend, poll_only: bool) {
         assert_eq!(next_completed(&mut events).await.id, inserted.job.row.id);
         assert_eq!(backend.leader_id().await, None);
 
-        tokio::time::timeout(Duration::from_secs(5), run.shutdown())
+        tokio::time::timeout(Duration::from_secs(5), run.stop())
             .await
             .expect("the client should stop")
             .unwrap();
@@ -258,7 +258,7 @@ async fn stays_ineligible_after_leader_stops(backend: Backend) {
         Some("eligible_leader")
     );
 
-    tokio::time::timeout(Duration::from_secs(5), leader_run.shutdown())
+    tokio::time::timeout(Duration::from_secs(5), leader_run.stop())
         .await
         .expect("the leader should stop")
         .unwrap();
@@ -273,7 +273,7 @@ async fn stays_ineligible_after_leader_stops(backend: Backend) {
     assert_eq!(pilot.maintenance_starts.load(Ordering::SeqCst), 0);
     assert_eq!(pilot.runtime_starts.load(Ordering::SeqCst), 1);
 
-    run.shutdown().await.unwrap();
+    run.stop().await.unwrap();
     backend.cleanup().await;
 }
 

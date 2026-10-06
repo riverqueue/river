@@ -206,9 +206,14 @@ check/js/package: build/js
 check/rust/dependencies: ## Audit Rust advisories, licenses, bans, and sources
 	cd rust && cargo deny check
 
+# Cargo caches temporary registry dependencies by path and version. A fresh
+# build directory prevents stale sources and binaries after same-version edits.
+# Verified archives still go to the normal target/package directory.
 .PHONY: check/rust/package
 check/rust/package: ## Build and verify publishable crate archives without publishing
-	cd rust && cargo package --workspace --allow-dirty --locked
+	cd rust && package_build_dir=$$(mktemp -d) && \
+		trap 'rm -rf "$$package_build_dir"' EXIT && \
+		CARGO_BUILD_BUILD_DIR="$$package_build_dir" cargo package --workspace --allow-dirty --locked
 
 # The baseline is the latest published riverqueue-v* tag, and
 # cargo-semver-checks infers the allowed change from the version bump. It

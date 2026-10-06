@@ -538,7 +538,7 @@ async fn claimed_rows_decode_individually_and_leniently() {
         let event = event.as_job().unwrap().clone();
         events_by_id.insert(event.job.id, event);
     }
-    run.shutdown().await.unwrap();
+    run.stop().await.unwrap();
 
     for id in decodable_ids {
         assert_eq!(events_by_id[&id].kind, JobEventKind::Completed);
@@ -662,7 +662,7 @@ async fn completion_retries_a_transient_database_error() {
         || async { schema.job_state(job.job.row.id).await == "completed" },
     )
     .await;
-    run.shutdown().await.unwrap();
+    run.stop().await.unwrap();
 
     let injected: i64 = sqlx::query_scalar(AssertSqlSafe(format!(
         "SELECT last_value FROM {}.completion_fault",
@@ -719,7 +719,7 @@ async fn completion_waits_for_a_row_lock() {
         || async { schema.job_state(job.job.row.id).await == "completed" },
     )
     .await;
-    run.shutdown().await.unwrap();
+    run.stop().await.unwrap();
 
     schema.drop().await;
 }
@@ -749,7 +749,7 @@ async fn completion_leaves_rows_moved_out_of_running_and_keeps_working() {
         || async { schema.job_state(later.job.row.id).await == "completed" },
     )
     .await;
-    run.shutdown().await.unwrap();
+    run.stop().await.unwrap();
 
     assert_eq!(schema.job_state(pending.job.row.id).await, "pending");
 
@@ -778,7 +778,7 @@ async fn completion_does_not_rewrite_a_newer_attempt_number() {
         schema.job_state(job.job.row.id).await == "completed"
     })
     .await;
-    run.shutdown().await.unwrap();
+    run.stop().await.unwrap();
 
     assert_eq!(schema.job_attempt(job.job.row.id).await, 5);
 
@@ -820,7 +820,7 @@ async fn hard_shutdown_interrupts_only_cooperative_cancellations() {
             cancel_attempted.job.row.id
         ))
         .await;
-    tokio::time::timeout(Duration::from_secs(10), run.shutdown_now())
+    tokio::time::timeout(Duration::from_secs(10), run.stop_and_cancel())
         .await
         .unwrap()
         .unwrap();
@@ -908,7 +908,7 @@ async fn stuck_job_keeps_its_worker_slot_until_it_ends() {
         schema.job_state(later.job.row.id).await == "completed"
     })
     .await;
-    run.shutdown().await.unwrap();
+    run.stop().await.unwrap();
 
     let blocking_finished = timeline.blocking_finished.lock().unwrap().unwrap();
     let later_started = timeline.later_started.lock().unwrap().unwrap();
@@ -948,7 +948,7 @@ async fn shutdown_leaves_a_job_still_stuck_after_abort_running() {
     let mut run = client.start().unwrap();
     gate.wait_started().await;
     let started = std::time::Instant::now();
-    tokio::time::timeout(Duration::from_secs(1), run.shutdown_now())
+    tokio::time::timeout(Duration::from_secs(1), run.stop_and_cancel())
         .await
         .expect("shutdown waited for a task that cannot be aborted")
         .unwrap();
@@ -970,7 +970,7 @@ async fn out_of_range_snooze_is_clamped_and_cancel_time_matches_go() {
         schema.job_state(snoozed.job.row.id).await == "scheduled"
     })
     .await;
-    run.shutdown().await.unwrap();
+    run.stop().await.unwrap();
     let snoozed = client.jobs().get(snoozed.job.row.id).await.unwrap();
     assert_eq!(snoozed.attempt, 0);
     assert!(snoozed.scheduled_at > chrono::Utc::now() + chrono::Duration::days(365 * 200));
@@ -1014,7 +1014,7 @@ async fn snooze_preserves_metadata_numbers_beyond_float_range() {
         schema.job_state(snoozed.job.row.id).await == "scheduled"
     })
     .await;
-    run.shutdown().await.unwrap();
+    run.stop().await.unwrap();
     let snoozed = client.jobs().get(snoozed.job.row.id).await.unwrap();
     // PostgreSQL expands `1e400` in jsonb; the snooze must keep it intact.
     assert!(snoozed.metadata.get_raw("unrelated").unwrap().get().len() > 400);
@@ -1077,7 +1077,7 @@ async fn client_survives_database_outage_and_catches_up() {
         })
         .await;
     }
-    tokio::time::timeout(Duration::from_secs(10), run.shutdown())
+    tokio::time::timeout(Duration::from_secs(10), run.stop())
         .await
         .unwrap()
         .unwrap();
@@ -1122,7 +1122,7 @@ async fn client_started_during_an_outage_becomes_ready_after_recovery() {
         schema.job_state(job.job.row.id).await == "completed"
     })
     .await;
-    run.shutdown().await.unwrap();
+    run.stop().await.unwrap();
 
     drop(proxy);
     schema.drop().await;
@@ -1153,7 +1153,7 @@ async fn listener_does_not_occupy_a_pool_connection() {
         || async { schema.job_state(job.job.row.id).await == "completed" },
     )
     .await;
-    run.shutdown().await.unwrap();
+    run.stop().await.unwrap();
     pool.close().await;
 
     schema.drop().await;
@@ -1199,7 +1199,7 @@ async fn queue_update_keeps_the_producer_within_max_workers() {
         })
         .await;
     }
-    run.shutdown().await.unwrap();
+    run.stop().await.unwrap();
     assert_eq!(
         gate.max_active.load(Ordering::SeqCst),
         1,
@@ -1310,7 +1310,7 @@ async fn extension_set_state_hook_runs_in_the_completion_transaction() {
             .unwrap();
         completed.push(event.as_job().unwrap().job.id);
     }
-    run.shutdown().await.unwrap();
+    run.stop().await.unwrap();
 
     completed.sort_unstable();
     let mut expected = vec![kept.job.row.id, deleted.job.row.id];

@@ -116,7 +116,7 @@ with `SQLITE_BUSY` when a Rust process commits in between.
 ## Rolling back
 
 Rolling back doesn't touch the schema. Stop Rust clients gracefully with
-`RunHandle::shutdown` and let the Go clients continue. Jobs that Rust inserted
+`RunHandle::stop` and let the Go clients continue. Jobs that Rust inserted
 are ordinary River rows that Go workers can run, and any job a stopped Rust
 client left running is recovered by the rescuer. Only migrate down as a
 separately planned operation once no deployed client needs the newer schema.

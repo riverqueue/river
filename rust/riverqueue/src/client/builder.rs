@@ -568,11 +568,11 @@ impl ClientBuilder {
     /// The timeout must be positive.
     ///
     /// The client starts this timer when fetching stops, however the stop was
-    /// requested: [`RunHandle::shutdown`](crate::RunHandle::shutdown),
+    /// requested: [`RunHandle::stop`](crate::RunHandle::stop),
     /// [`Stopper::stop`](crate::Stopper::stop), or the signal passed to
     /// [`Client::start_with_graceful_shutdown`]. Jobs still running when it
     /// expires are cancelled as if by
-    /// [`Stopper::stop_now`](crate::Stopper::stop_now).
+    /// [`Stopper::stop_and_cancel`](crate::Stopper::stop_and_cancel).
     #[must_use]
     pub fn soft_stop_timeout(mut self, timeout: Duration) -> Self {
         self.soft_stop_timeout = Some(timeout);

@@ -247,7 +247,7 @@ async fn polls_without_listen_notify() {
         assert_eq!(job.id, cancellable.job.row.id, "{server:?}");
         assert_eq!(job.state, JobState::Cancelled, "{server:?}");
 
-        tokio::time::timeout(TIMEOUT, run.shutdown())
+        tokio::time::timeout(TIMEOUT, run.stop())
             .await
             .expect("the client should stop")
             .unwrap();

@@ -109,6 +109,6 @@ async fn main() -> Result<(), Box<dyn Error>> {
     while completed.recv().await?.as_job().map(|event| event.job.id) != Some(inserted.id()) {}
     println!("send_receipt is waiting in the default queue for the Go service");
 
-    run.shutdown().await?;
+    run.stop().await?;
     Ok(())
 }
