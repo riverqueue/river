@@ -107,6 +107,31 @@ importers:
         specifier: ^6.0.3
         version: 6.0.3
 
+  conformance:
+    dependencies:
+      '@riverqueue/driver-pg':
+        specifier: workspace:0.2.0
+        version: link:../driver/pg
+      '@riverqueue/driver-sqlite':
+        specifier: workspace:0.2.0
+        version: link:../driver/sqlite
+      '@riverqueue/migrate':
+        specifier: workspace:0.2.0
+        version: link:../migrate
+      pg:
+        specifier: ^8.22.0
+        version: 8.22.0
+      riverqueue:
+        specifier: workspace:0.2.0
+        version: link:..
+    devDependencies:
+      '@types/node':
+        specifier: ^26.1.1
+        version: 26.1.1
+      '@types/pg':
+        specifier: ^8.20.0
+        version: 8.20.0
+
   driver/pg:
     dependencies:
       postgres-array:
@@ -2326,9 +2351,6 @@ packages:
     peerDependencies:
       pg: '>=8.0'
 
-  pg-protocol@1.13.0:
-    resolution: {integrity: sha512-zzdvXfS6v89r6v7OcFCHfHlyG/wvry1ALxZo4LqgUoy7W9xhBDMaqOuMiF3qEV45VqsN6rdlcehHrfDtlCPc8w==}
-
   pg-protocol@1.15.0:
     resolution: {integrity: sha512-cq9sECI5s0+uPUXjbz8ioyPJni6RzsRib0US67i5IoTZKw8fNeYlVE7u8F4dG7vEJJtc5wdD1K189lCCUwqWTQ==}
 
@@ -3715,7 +3737,7 @@ snapshots:
   '@types/pg@8.20.0':
     dependencies:
       '@types/node': 26.1.1
-      pg-protocol: 1.13.0
+      pg-protocol: 1.15.0
       pg-types: 2.2.0
 
   '@types/react@19.2.18':
@@ -4952,8 +4974,6 @@ snapshots:
   pg-pool@3.14.0(pg@8.22.0):
     dependencies:
       pg: 8.22.0
-
-  pg-protocol@1.13.0: {}
 
   pg-protocol@1.15.0: {}
 

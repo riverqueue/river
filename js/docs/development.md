@@ -209,9 +209,17 @@ both drivers' notification adapters without a Postgres server. The two
 raw JSON unique-key cases involving duplicate keys or integer-key insertion
 order are Rust-only because JavaScript objects cannot preserve them.
 
+The private `@riverqueue/conformance` package in `conformance/` is River for
+JavaScript's adapter for the cross-language conformance harness in the
+repository's `conformance/harness`, which runs it against River for Go on
+Postgres and SQLite. `make test/conformance/js` builds it and runs the
+harness's pull request tier against `TEST_DATABASE_URL`; behavior one
+implementation shows alone is tested here instead, in the packages' own
+tests.
+
 ## Preparing a release
 
-Run this section's commands from the repository root. The eight publishable packages are `js/package.json` (`riverqueue`), the three drivers under `js/driver/*`, and `js/{migrate,worker-threads,test,cli}`. They share one version, independently of Go and Rust. Examples are private and stay at `0.0.0`. `VERSION` has no leading `v`; JavaScript Git tags use `js/vX.Y.Z`.
+Run this section's commands from the repository root. The eight publishable packages are `js/package.json` (`riverqueue`), the three drivers under `js/driver/*`, and `js/{migrate,worker-threads,test,cli}`. They share one version, independently of Go and Rust. Examples are private and stay at `0.0.0`. `VERSION` has no leading `v`; JavaScript Git tags use `js/vX.Y.Z`. The private conformance adapter in `js/conformance` is never published but shares the release version through its exact `workspace:` dependencies, so update it along with the publishable packages.
 
 1. Fetch changes and tags, choose the next JavaScript version (including a prerelease suffix when applicable), and create a release branch:
 
