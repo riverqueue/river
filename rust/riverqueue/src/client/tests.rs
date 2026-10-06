@@ -1,4 +1,3 @@
-#[cfg(feature = "sqlite")]
 use serde::Deserialize;
 use serde_json::Map;
 
@@ -11,7 +10,6 @@ use super::completer::{
 };
 use super::completer::{persisted_completion_event_kind, with_completion_retries};
 use super::executor::scheduled_after;
-#[cfg(feature = "sqlite")]
 use super::notifier::dispatch_notification;
 use super::*;
 use crate::{AttemptError, JobEventKind, JobRow, JobState, WorkError, WorkResult};
@@ -120,6 +118,119 @@ fn completion_cleanup_preserves_newer_attempt() {
             .get(&job_id)
             .is_none()
     );
+}
+
+#[tokio::test]
+async fn go_notification_fixtures_dispatch_correctly() {
+    #[derive(Deserialize)]
+    struct Fixture {
+        notifications: Vec<NotificationFixture>,
+    }
+
+    #[derive(Deserialize)]
+    struct NotificationFixture {
+        name: String,
+        payload: Box<serde_json::value::RawValue>,
+        topic: String,
+    }
+
+    let fixture: Fixture =
+        serde_json::from_str(&crate::conformance::read_fixture("protocol_values.json")).unwrap();
+    let names = [
+        "cancel",
+        "insert",
+        "metadata_changed",
+        "pause",
+        "request_resign",
+        "resigned",
+        "resume",
+    ];
+    assert_eq!(fixture.notifications.len(), names.len());
+
+    // Dispatch is synchronous and needs no database connection. Exercise it
+    // in both PostgreSQL-only and SQLite-only builds.
+    #[cfg(feature = "postgres")]
+    let pool = sqlx::PgPool::connect_lazy("postgres://localhost/unused").unwrap();
+    #[cfg(not(feature = "postgres"))]
+    let pool = sqlx::SqlitePool::connect_lazy("sqlite::memory:").unwrap();
+
+    for name in names {
+        let notification = fixture
+            .notifications
+            .iter()
+            .find(|notification| notification.name == name)
+            .unwrap_or_else(|| panic!("missing Go notification fixture {name}"));
+
+        // The Go examples target job 42 in queue "priority", with resignations
+        // from "client-1". A leader ignores its own resignation notification.
+        for client_id in ["client-1", "observer"] {
+            let client = Client::builder(pool.clone()).id(client_id).build().unwrap();
+            let inner = &client.inner;
+            let mut leadership = inner.leadership_wakeups.subscribe();
+            let mut producer = inner.queue_notifications.subscribe();
+            let cancellation = CancellationToken::new();
+            let unrelated = CancellationToken::new();
+            for (job_id, token) in [(42, &cancellation), (43, &unrelated)] {
+                register_running_attempt(
+                    &inner.running,
+                    &inner.pending_cancellations,
+                    job_id,
+                    token,
+                );
+            }
+
+            dispatch_notification(
+                inner,
+                &inner.queue_notifications,
+                &notification.topic,
+                notification.payload.get(),
+            );
+
+            match name {
+                "cancel" => {}
+                "insert" => assert!(
+                    matches!(producer.try_recv(), Ok(RuntimeNotification::Insert(queue)) if queue == "priority"),
+                    "{name}: expected an insert wakeup"
+                ),
+                "metadata_changed" | "pause" | "resume" => assert!(
+                    matches!(producer.try_recv(), Ok(RuntimeNotification::QueueControl(queue)) if queue == "priority"),
+                    "{name}: expected a queue control wakeup"
+                ),
+                "request_resign" => assert_eq!(
+                    leadership.try_recv().unwrap(),
+                    LeadershipWakeup::RequestResign,
+                    "{name}"
+                ),
+                "resigned" if client_id == "client-1" => {}
+                "resigned" => assert_eq!(
+                    leadership.try_recv().unwrap(),
+                    LeadershipWakeup::Changed,
+                    "{name}"
+                ),
+                _ => unreachable!(),
+            }
+            assert_eq!(cancellation.is_cancelled(), name == "cancel", "{name}");
+            assert!(
+                !unrelated.is_cancelled(),
+                "{name}: cancelled an unrelated job"
+            );
+            assert!(
+                matches!(
+                    producer.try_recv(),
+                    Err(broadcast::error::TryRecvError::Empty)
+                ),
+                "{name}: unexpected producer notification"
+            );
+            assert!(
+                matches!(
+                    leadership.try_recv(),
+                    Err(broadcast::error::TryRecvError::Empty)
+                ),
+                "{name}: unexpected leadership notification"
+            );
+        }
+    }
+    pool.close().await;
 }
 
 #[test]

@@ -18,16 +18,8 @@ struct Fixture {
     attempt_error: AttemptError,
     job_states: Vec<StateFixture>,
     metadata_keys: Map<String, Value>,
-    notifications: Vec<NotificationFixture>,
     retry_cases: Vec<RetryFixture>,
     topics: Map<String, Value>,
-}
-
-#[derive(Deserialize)]
-struct NotificationFixture {
-    name: String,
-    payload: Map<String, Value>,
-    topic: String,
 }
 
 #[derive(Deserialize)]
@@ -88,19 +80,6 @@ fn go_protocol_values_match_rust() {
     assert_eq!(fixture.topics["control"], NOTIFICATION_TOPIC_CONTROL);
     assert_eq!(fixture.topics["insert"], NOTIFICATION_TOPIC_INSERT);
     assert_eq!(fixture.topics["leadership"], NOTIFICATION_TOPIC_LEADERSHIP);
-    for notification in fixture.notifications {
-        assert_ne!(notification.name, "");
-        assert!(notification.payload.contains_key("action") || notification.name == "insert");
-        assert!(
-            [
-                NOTIFICATION_TOPIC_CONTROL,
-                NOTIFICATION_TOPIC_INSERT,
-                NOTIFICATION_TOPIC_LEADERSHIP,
-            ]
-            .contains(&notification.topic.as_str())
-        );
-    }
-
     for test_case in fixture.retry_cases {
         let row = retry_row(test_case.job_id, test_case.now, test_case.error_count - 1);
         let delay = DefaultRetryPolicy::with_seed(test_case.seed).next_retry(
