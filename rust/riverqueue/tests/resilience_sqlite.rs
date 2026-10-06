@@ -845,14 +845,17 @@ async fn notification_poll_failures_do_not_stop_the_client() {
     // Hold the lock across several 100 ms outbox polls.
     tokio::time::sleep(Duration::from_millis(500)).await;
     writer.rollback().await.unwrap();
-    foreign.close().await;
 
-    let job = client.insert(ResilienceArgs {}).await.unwrap();
+    // Keep the short timeout on the worker, but let insertion and assertions
+    // wait through normal write contention after the deliberate lock is released.
+    let inserter = Client::builder(foreign.clone()).build().unwrap();
+    let job = inserter.insert(ResilienceArgs {}).await.unwrap();
     wait_until(Duration::from_secs(15), "work after the lock", || async {
-        job_state(&database.pool, job.job.row.id).await == "completed"
+        job_state(&foreign, job.job.row.id).await == "completed"
     })
     .await;
     run.shutdown().await.unwrap();
+    foreign.close().await;
 }
 
 #[tokio::test(flavor = "multi_thread")]
