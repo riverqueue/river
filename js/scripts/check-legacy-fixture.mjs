@@ -65,6 +65,7 @@ const { stdout: packageJsonText } = await execFileAsync("tar", [
 const packageJson = JSON.parse(packageJsonText);
 assert.equal(packageJson.name, "riverqueue");
 assert.equal(packageJson.version, manifest.version);
+// The pinned 0.1.0 archive predates the switch to MPL-2.0.
 assert.equal(packageJson.license, "LGPL-3.0-or-later");
 
 const temporaryDirectory = await mkdtemp(join(tmpdir(), "riverqueue-0.1-"));

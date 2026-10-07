@@ -126,5 +126,5 @@ API reference documentation is generated with `pnpm run docs:api`.
 
 ## License
 
-River for JavaScript and TypeScript is licensed under the GNU Lesser General
-Public License v3.0 or later. See [LICENSE](./LICENSE).
+River for JavaScript and TypeScript is licensed under the Mozilla Public
+License 2.0. See [LICENSE](./LICENSE).
