@@ -570,7 +570,7 @@ impl ClientBuilder {
     /// The client starts this timer when fetching stops, however the stop was
     /// requested: [`RunHandle::stop`](crate::RunHandle::stop),
     /// [`Stopper::stop`](crate::Stopper::stop), or the signal passed to
-    /// [`Client::start_with_graceful_shutdown`]. Jobs still running when it
+    /// [`Client::start_with_graceful_stop`]. Jobs still running when it
     /// expires are cancelled as if by
     /// [`Stopper::stop_and_cancel`](crate::Stopper::stop_and_cancel).
     #[must_use]

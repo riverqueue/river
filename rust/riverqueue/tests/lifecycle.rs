@@ -1,4 +1,4 @@
-//! Client lifecycle: stopping from other tasks, graceful shutdown signals,
+//! Client lifecycle: stopping from other tasks, graceful stop signals,
 //! cancel safety, and idempotency.
 //!
 //! Lifecycle behavior doesn't depend on the backend, so these tests use
@@ -246,13 +246,13 @@ async fn dropping_the_handle_requests_a_hard_stop() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn graceful_shutdown_signal_accepts_a_cancellation_token() {
+async fn graceful_stop_signal_accepts_a_cancellation_token() {
     let database = TestDatabase::new().await;
     let client = database.client(&Gate::new(), 1);
     let token = CancellationToken::new();
 
     let mut run = client
-        .start_with_graceful_shutdown(token.clone().cancelled_owned())
+        .start_with_graceful_stop(token.clone().cancelled_owned())
         .unwrap();
     run.wait_ready().await.unwrap();
     token.cancel();
@@ -260,7 +260,7 @@ async fn graceful_shutdown_signal_accepts_a_cancellation_token() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn graceful_shutdown_signal_stops_softly() {
+async fn graceful_stop_signal_stops_softly() {
     let database = TestDatabase::new().await;
     let gate = Gate::new();
     let client = database.client(&gate, 1);
@@ -268,7 +268,7 @@ async fn graceful_shutdown_signal_stops_softly() {
     let (signal_sender, signal) = oneshot::channel::<()>();
 
     let mut run = client
-        .start_with_graceful_shutdown(async move {
+        .start_with_graceful_stop(async move {
             let _ = signal.await;
         })
         .unwrap();
