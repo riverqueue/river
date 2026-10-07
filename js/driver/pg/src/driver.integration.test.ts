@@ -888,6 +888,132 @@ describe("PgDriver integration", () => {
     await notifications.return(undefined);
   });
 
+  it("sends River Go's notification topics and payload fields", async () => {
+    const golden = JSON.parse(
+      await readFile(
+        new URL(
+          "../../../../conformance/testdata/protocol_values.json",
+          import.meta.url
+        ),
+        "utf8"
+      )
+    ) as {
+      readonly notifications: readonly {
+        readonly fields: readonly { name: string; omitempty: boolean }[];
+        readonly name: string;
+        readonly payload: Record<string, unknown>;
+        readonly topic: string;
+      }[];
+    };
+    expect(golden.notifications.length).toBeGreaterThan(0);
+    const queue = `${filePrefix}_golden_notify`;
+    await driver.queueUpsert({ name: queue });
+    const abort = new AbortController();
+    const listening = Promise.withResolvers<undefined>();
+    const notifications = driver.listen(
+      ["river_control", "river_insert", "river_leadership"],
+      abort.signal,
+      () => {
+        listening.resolve(undefined);
+      }
+    );
+    const first = notifications.next();
+    await listening.promise;
+    let pending: ReturnType<typeof notifications.next> | undefined = first;
+
+    try {
+      for (const notification of golden.notifications) {
+        // Go's goldens name a fixed queue, job, and leader; this database
+        // is shared, so the test uses its own and expects them instead.
+        const expected: Record<string, unknown> = { ...notification.payload };
+        if ("queue" in expected) expected.queue = queue;
+        switch (notification.name) {
+          case "cancel": {
+            const { job } = await driver.jobInsert(
+              insertParams(`${filePrefix}_golden_notify`, { queue })
+            );
+            expected.job_id = Number(job.id);
+            await driver.jobCancel(job.id);
+            break;
+          }
+          case "insert":
+            await driver.notifyInsert([queue]);
+            break;
+          case "metadata_changed":
+            await driver.queueUpdate(queue, {
+              metadata: notification.payload.metadata as JsonObject,
+            });
+            break;
+          case "pause":
+            await driver.queuePause(queue);
+            break;
+          case "request_resign":
+            await driver.runtimeRequestLeadershipResignation();
+            break;
+          case "resigned": {
+            const leaderId = `${filePrefix}_golden_leader`;
+            expected.leader_id = leaderId;
+            const leader = await driver.maintenanceLeaderAcquire(
+              leaderId,
+              Temporal.Now.instant(),
+              60_000,
+              null
+            );
+            expect(leader).not.toBeNull();
+            expect(await driver.maintenanceLeaderResign(leader!)).toBe(true);
+            break;
+          }
+          case "resume":
+            await driver.queueResume(queue);
+            break;
+          default:
+            throw new Error(
+              `unhandled notification golden ${notification.name}`
+            );
+        }
+
+        // Skip notifications other activity on the shared database sends.
+        let received: { payload: Record<string, unknown>; topic: string };
+        for (;;) {
+          const next = await (pending ?? notifications.next());
+          pending = undefined;
+          expect(next.done).toBe(false);
+          const payload = JSON.parse(next.value!.payload) as Record<
+            string,
+            unknown
+          >;
+          if (
+            next.value!.topic === notification.topic &&
+            payload.action === expected.action &&
+            payload.queue === expected.queue &&
+            payload.leader_id === expected.leader_id
+          ) {
+            received = { payload, topic: next.value!.topic };
+            break;
+          }
+        }
+        expect(received.payload, notification.name).toEqual(expected);
+        const fields = new Map(
+          notification.fields.map(({ name, omitempty }) => [name, omitempty])
+        );
+        for (const key of Object.keys(received.payload)) {
+          expect(fields.has(key), `${notification.name}.${key}`).toBe(true);
+        }
+        for (const [name, omitempty] of fields) {
+          if (!omitempty) {
+            expect(
+              Object.hasOwn(received.payload, name),
+              `${notification.name}.${name}`
+            ).toBe(true);
+          }
+        }
+      }
+    } finally {
+      abort.abort();
+      await notifications.return(undefined);
+    }
+  });
+
   it("claims by queue capacity and rejects stale attempt completions", async () => {
     const first = await driver.jobInsert(
       insertParams(`${filePrefix}_claim_first`)
