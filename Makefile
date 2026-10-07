@@ -236,7 +236,8 @@ test/js: generate/fixtures
 .PHONY: test/js/conformance
 test/js/conformance: ## Run JavaScript tests that check Go-generated conformance fixtures
 test/js/conformance: generate/fixtures
-	pnpm -C js exec vitest run src/conformance.test.ts src/cron.test.ts src/runtime/completion-command.test.ts src/runtime/notification-pump.conformance.test.ts
+	pnpm -C js exec vitest run src/conformance.test.ts src/cron.test.ts src/runtime/completion-command.test.ts \
+		src/runtime/notification-payloads.test.ts src/runtime/notification-pump.conformance.test.ts
 
 # Integration tests use TEST_DATABASE_URL (default
 # postgres://localhost:5432/river_test), migrated with
@@ -244,6 +245,7 @@ test/js/conformance: generate/fixtures
 .PHONY: test/js/integration
 test/js/integration: ## Run JavaScript integration tests against Postgres
 test/js/integration: build/js
+test/js/integration: generate/fixtures
 	pnpm -C js run test:integration
 
 .PHONY: test/rust
