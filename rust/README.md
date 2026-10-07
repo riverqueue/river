@@ -1,9 +1,6 @@
-# River for Rust (preview)
+# River for Rust
 
-This workspace contains River's Rust implementation. It shares River's
-database schema and job protocol with River for Go on PostgreSQL and SQLite,
-with an API designed for Rust and Tokio. The crates are a pre-release
-preview.
+This workspace contains River's Rust implementation. It shares River's database schema and job protocol with River for Go on PostgreSQL and SQLite, with an API designed for Rust and Tokio. The Rust crates are versioned independently of River for Go.
 
 ## Workspace crates
 
@@ -24,11 +21,7 @@ PostgreSQL or SQLite pool, and there's no driver trait to implement.
 The [`riverqueue` crate README](riverqueue/README.md) walks through defining
 a job, registering a worker, inserting, and starting a client.
 
-To run Rust clients alongside River Go against one database, including
-version matching, queue and kind layout, unique jobs, and rolling deployment
-and rollback, see the
-[mixed deployment guide](riverqueue/docs/mixed-deployments.md), also published
-as `riverqueue::guide::mixed_deployments`.
+To run Rust clients alongside River Go against one database, including schema and protocol compatibility, queue and kind layout, unique jobs, and rolling deployment and rollback, see the [mixed deployment guide](riverqueue/docs/mixed-deployments.md), also published as `riverqueue::guide::mixed_deployments`.
 
 Runnable examples in `riverqueue/examples` cover workers and graceful
 shutdown, cancellation, transactional completion, unique and periodic jobs,
@@ -78,5 +71,7 @@ generate/fixtures` beforehand. A missing fixture fails its test.
 `make check/rust/package` builds the five publishable crate archives and
 verifies that each one builds from its packaged sources, resolving the
 exact-version workspace dependencies from the other archives. It does not
-publish anything. Release tags use `riverqueue-vX.Y.Z`, independently of Go
+publish anything. Release tags use `rust/vX.Y.Z`, independently of Go
 module tags.
+
+See [Rust development](docs/development.md#releasing-a-new-version) for the release procedure.

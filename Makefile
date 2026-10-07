@@ -66,7 +66,7 @@ submodules := $(shell go list -f '{{.Dir}}' -m)
 
 ITERATIONS ?= 100
 RUST_BENCH_ARGS ?=
-RUST_SEMVER_BASELINE_REV ?= $(shell git tag --list 'riverqueue-v*' --sort=-v:refname | head -n 1)
+RUST_SEMVER_BASELINE_REV ?= $(shell git tag --list 'rust/v*' --sort=-v:refname | head -n 1)
 
 TEST_DATABASE ?= all
 
@@ -248,7 +248,7 @@ check/rust/package: ## Build and verify publishable crate archives without publi
 		! cargo package --list --allow-dirty --locked -p $$crate | grep -E '(^|/)(tests|fixtures|testdata)/|\.json$$' | grep -vxF .cargo_vcs_info.json || exit 1; \
 	done
 
-# The baseline is the latest published riverqueue-v* tag, and
+# The baseline is the latest published rust/v* tag, and
 # cargo-semver-checks infers the allowed change from the version bump. It
 # skips every lint while the workspace version is a pre-release, so
 # comparing unreleased revisions with each other checks nothing. Until a
@@ -257,7 +257,7 @@ check/rust/package: ## Build and verify publishable crate archives without publi
 .PHONY: check/rust/semver
 check/rust/semver: ## Check Rust APIs against RUST_SEMVER_BASELINE_REV (default: latest Rust tag)
 	@if test -z "$(RUST_SEMVER_BASELINE_REV)"; then \
-		echo "No published Rust release tag (riverqueue-v*); no public API baseline to compare"; \
+		echo "No published Rust release tag (rust/v*); no public API baseline to compare"; \
 	elif ! git cat-file -e "$(RUST_SEMVER_BASELINE_REV):rust/Cargo.toml" 2>/dev/null; then \
 		echo "Baseline $(RUST_SEMVER_BASELINE_REV) predates the Rust crates; no public API to compare"; \
 	else \

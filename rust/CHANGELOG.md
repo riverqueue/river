@@ -10,23 +10,8 @@ Changes to River for Go are recorded in the [repository changelog](../CHANGELOG.
 
 ## [Unreleased]
 
+## [0.1.0-alpha.1] - 2026-10-06
+
 ### Added
 
-- First preview release of River for Rust. `riverqueue` provides a typed,
-  Tokio-based client for PostgreSQL (through SQLx) and SQLite that shares
-  River's database schema and job protocol with River for Go, so Rust and Go
-  clients can insert and work jobs in the same database. It includes typed
-  workers, transactional inserts and completion, unique, scheduled, periodic,
-  and resumable jobs, queue management, job cancellation, events, hooks,
-  middleware, leader election, and maintenance services.
-- Requests run with `.tx(...)` use the caller's transaction directly, without
-  a savepoint or nested transaction, like River for Go's `*Tx` methods. A
-  request that returns an error may leave partial writes in that transaction,
-  so roll it back, or open your own savepoint around the request to continue.
-- `riverqueue-macros` provides `#[derive(JobArgs)]`, including unique options.
-- `riverqueue-migrate` applies and validates River's migration lines on
-  PostgreSQL and SQLite, sharing migration history with River for Go.
-- `riverqueue-cli` installs the `riverqueue` command for migrations and
-  benchmarks.
-- `riverqueue-test` provides fixtures, insertion assertions, and helpers for
-  running workers in tests.
+- First preview release of River for Rust. `riverqueue` provides a typed, Tokio-based client for PostgreSQL (through SQLx) and SQLite that shares River's database schema and job protocol with River for Go, so Rust and Go clients can insert and work jobs in the same database. It includes typed workers, transactional inserts and completion, unique, scheduled, periodic, and resumable jobs, queue management, job cancellation, events, hooks, middleware, leader election, and maintenance services. Companion crates provide `#[derive(JobArgs)]` with unique options (`riverqueue-macros`), migration application and validation using Go's migration history (`riverqueue-migrate`), the `riverqueue` command for migrations and benchmarks (`riverqueue-cli`), and fixtures, insertion assertions, and worker test helpers (`riverqueue-test`). Requests run with `.tx(...)` use the caller's transaction directly, without a savepoint or nested transaction, like River for Go's `*Tx` methods. Errors may leave partial writes, so roll back the transaction or create an explicit savepoint around the request. [PR #1442](https://github.com/riverqueue/river/pull/1442).

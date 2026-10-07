@@ -6,13 +6,9 @@ and take part in leader election and maintenance alongside Go clients. This
 guide covers what must match between them and how to roll Rust into an
 existing Go deployment and back out again.
 
-## Matching versions
+## Version compatibility
 
-Each `riverqueue` preview is a prerelease of the next River Go minor release
-and works with the River Go release before it: `riverqueue` 0.50.0-alpha.1
-works with River Go 0.49. Patch releases of that River Go release can be mixed
-with it. Upgrade both implementations together when moving to a new pairing,
-following the rolling procedure below.
+The Rust crates are versioned independently of River for Go. A mixed deployment requires compatible database schemas and job protocols.
 
 Every River client in a deployment must understand the same schema. Run
 migrations once with either implementation, before starting clients of the
@@ -78,10 +74,7 @@ both languages must serialize the same way:
   by Rust's unique-field API.
 - Rust encodes floating point numbers and escapes strings the way Go's
   `encoding/json` does, so `1.0` hashes the same as Go's `1`.
-- `ByPeriod` periods are measured in UTC from the job's scheduled time, as in
-  River Go 0.48 and later. River Go before 0.48 derives periods from the
-  insertion time in the process's local time zone, which is one more reason
-  to run matched versions.
+- `ByPeriod` periods are measured in UTC from the job's scheduled time, as in River Go 0.48 and later. River Go before 0.48 derives periods from the insertion time in the process's local time zone, so it can produce different unique keys.
 
 ## Periodic jobs
 
@@ -106,7 +99,7 @@ with `SQLITE_BUSY` when a Rust process commits in between.
 
 ## Rolling deployment
 
-1. Upgrade River Go to the matched release and run migrations.
+1. Confirm that the Go and Rust clients support the same schema and job protocol, then run migrations.
 2. Deploy a small number of Rust clients alongside the Go clients.
 3. Watch queue depth, retries, rescued jobs, leadership changes, and database
    connection counts while increasing Rust's share.
