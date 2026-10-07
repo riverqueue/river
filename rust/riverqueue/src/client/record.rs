@@ -109,16 +109,6 @@ impl FieldErrors {
     }
 }
 
-/// Converts a persisted integer to `i16`, saturating at the type bounds.
-///
-/// River Go stores `attempt`, `max_attempts`, and `priority` as native
-/// integers on SQLite. Values beyond `i16` are only reachable through
-/// `max_attempts` in practice; saturating keeps such a job workable with
-/// identical retry decisions until its 32,767th attempt.
-pub(crate) fn saturating_i16(value: i64) -> i16 {
-    i16::try_from(value).unwrap_or(if value < 0 { i16::MIN } else { i16::MAX })
-}
-
 /// A Postgres job row. Columns the database constrains decode strictly, while
 /// those that can hold values River can't represent are kept as their decode
 /// results.
@@ -228,7 +218,7 @@ impl JobRecord {
                 .transpose(),
         );
         errors.finish(JobRow {
-            attempt: self.attempt,
+            attempt: self.attempt.into(),
             attempted_at: self.attempted_at,
             attempted_by: attempted_by.unwrap_or_default(),
             created_at: self.created_at,
@@ -237,7 +227,7 @@ impl JobRecord {
             finalized_at: self.finalized_at,
             id: self.id,
             kind: self.kind,
-            max_attempts: self.max_attempts,
+            max_attempts: self.max_attempts.into(),
             metadata,
             priority: self.priority,
             queue: self.queue,
@@ -272,16 +262,4 @@ pub(crate) fn job_projection(alias: &str) -> String {
          {alias}.priority, {alias}.queue, {alias}.scheduled_at, {alias}.state::text AS state, \
          {alias}.tags::text[] AS tags, {alias}.unique_key, {alias}.unique_states::text AS unique_states"
     )
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn integers_saturate_to_i16() {
-        assert_eq!(saturating_i16(25), 25);
-        assert_eq!(saturating_i16(40_000), i16::MAX);
-        assert_eq!(saturating_i16(-40_000), i16::MIN);
-    }
 }

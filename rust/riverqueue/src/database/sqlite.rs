@@ -27,7 +27,7 @@ use sqlx::sqlite::SqliteRow;
 
 use crate::{
     AttemptError, JobMetadata, JobRow, JobState, METADATA_KEY_UNIQUE_NONCE, Queue,
-    client::{DecodedJob, FieldErrors, UndecodableJob, go_time_json, saturating_i16, tolerant_row},
+    client::{DecodedJob, FieldErrors, UndecodableJob, go_time_json, tolerant_row},
     query::{JobListKeyset, JobListSqlPart},
 };
 
@@ -139,7 +139,7 @@ impl From<BackendError> for sqlx::Error {
 pub(crate) struct InsertJob<'a> {
     pub attempted_at: Option<DateTime<Utc>>,
     pub attempted_by: &'a [String],
-    pub attempt: i16,
+    pub attempt: i32,
     /// When unset, SQLite's `datetime('now', 'subsec')`, like Go's driver.
     pub created_at: Option<DateTime<Utc>>,
     pub encoded_args: &'a serde_json::value::RawValue,
@@ -147,7 +147,7 @@ pub(crate) struct InsertJob<'a> {
     pub finalized_at: Option<DateTime<Utc>>,
     pub id: Option<i64>,
     pub kind: &'a str,
-    pub max_attempts: i16,
+    pub max_attempts: i32,
     pub metadata: &'a JobMetadata,
     pub priority: i16,
     pub queue: &'a str,
@@ -196,7 +196,7 @@ pub(crate) struct ListJobs<'a> {
 
 #[derive(Clone, Debug)]
 pub(crate) struct CompleteJob<'a> {
-    pub attempt: Option<i16>,
+    pub attempt: Option<i32>,
     pub error: Option<&'a AttemptError>,
     pub finalized_at: Option<DateTime<Utc>>,
     pub id: i64,
@@ -249,7 +249,8 @@ pub(crate) struct NotificationInput<'a> {
 }
 
 // River Go stores `attempt`, `max_attempts`, and `priority` as native
-// integers, so they decode as `i64` and saturate into `JobRow`'s fields.
+// integers, so they decode as `i64`. A value `JobRow`'s field can't hold
+// makes the row undecodable, like other columns River can't represent.
 // JSON columns are read as bytes, since a value changed out of band might not
 // even be UTF-8.
 #[derive(Clone, Debug, FromRow)]
@@ -338,9 +339,12 @@ impl JobRecord {
             "unique_states",
             self.unique_states.map(decode_unique_states).transpose(),
         );
+        let attempt = errors.field("attempt", i32::try_from(self.attempt));
+        let max_attempts = errors.field("max_attempts", i32::try_from(self.max_attempts));
+        let priority = errors.field("priority", i16::try_from(self.priority));
         errors.finish(JobRow {
             id: self.id,
-            attempt: saturating_i16(self.attempt),
+            attempt,
             attempted_at: self.attempted_at,
             attempted_by,
             created_at: self.created_at,
@@ -348,9 +352,9 @@ impl JobRecord {
             errors: attempt_errors,
             finalized_at: self.finalized_at,
             kind: self.kind,
-            max_attempts: saturating_i16(self.max_attempts),
+            max_attempts,
             metadata,
-            priority: saturating_i16(self.priority),
+            priority,
             queue: self.queue,
             scheduled_at: self.scheduled_at,
             state,
@@ -2529,7 +2533,7 @@ mod tests {
         insert(
             connection,
             &InsertJob {
-                attempt: i16::from(running),
+                attempt: i32::from(running),
                 attempted_at: running.then_some(now - TimeDelta::hours(2)),
                 attempted_by: &[],
                 created_at: Some(now),

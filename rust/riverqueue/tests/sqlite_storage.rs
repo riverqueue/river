@@ -90,6 +90,28 @@ async fn control_and_resign_notifications_carry_their_fields() {
     pool.close().await;
 }
 
+/// River Go stores `max_attempts` as a native integer on SQLite, so a value
+/// beyond Postgres's 16-bit column inserts and lists unchanged.
+#[tokio::test]
+async fn max_attempts_beyond_sixteen_bits_insert_and_list_unchanged() {
+    let (client, pool) = setup().await;
+
+    let inserted = client
+        .insert(EmptyBatchArgs { value: 1 })
+        .opts(InsertOpts::default().with_max_attempts(40_000))
+        .await
+        .unwrap();
+    assert_eq!(inserted.job.row.max_attempts, 40_000);
+    let listed = client
+        .jobs()
+        .list(JobListParams::default().ids([inserted.job.row.id]))
+        .await
+        .unwrap();
+    assert_eq!(listed.jobs[0].max_attempts, 40_000);
+
+    pool.close().await;
+}
+
 #[tokio::test]
 async fn empty_batches_are_rejected_before_database_work() {
     let (client, pool) = setup().await;

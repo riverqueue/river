@@ -876,7 +876,9 @@ impl Client {
                     .bind(Json(&encoded_args))
                     .bind(created_at)
                     .bind(&kind)
-                    .bind(opts.max_attempts)
+                    // Like River Go's Postgres drivers, a value wider than
+                    // the `smallint` column is clamped rather than failing.
+                    .bind(opts.max_attempts.min(i32::from(i16::MAX)))
                     .bind(Json(&*metadata))
                     .bind(opts.priority)
                     .bind(&opts.queue)
