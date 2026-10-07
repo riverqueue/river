@@ -24,12 +24,12 @@ sqlite = ["riverqueue/sqlite"]
 
 [dependencies]
 chrono.workspace = true
-riverqueue = { path = "../riverqueue", version = "=0.1.0-alpha.1", default-features = false }
+riverqueue = { path = "../riverqueue", version = "=0.1.0", default-features = false }
 serde_json.workspace = true
 tokio-util.workspace = true
 
 [dev-dependencies]
-riverqueue-migrate = { path = "../riverqueue-migrate", version = "=0.1.0-alpha.1", default-features = false, features = ["sqlite"] }
+riverqueue-migrate = { path = "../riverqueue-migrate", version = "=0.1.0", default-features = false, features = ["sqlite"] }
 serde.workspace = true
 sqlx.workspace = true
 tokio.workspace = true

@@ -59,7 +59,7 @@ jobs:
           tool: cargo-deny@0.20.2
       - uses: taiki-e/install-action@v2
         with:
-          tool: cargo-semver-checks@0.49.0
+          tool: cargo-semver-checks@0.51.0
 
       - name: Lint, including PostgreSQL-only and SQLite-only builds
         run: make lint/rust

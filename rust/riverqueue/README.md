@@ -11,7 +11,7 @@ The [mixed deployment guide](https://docs.rs/riverqueue/latest/riverqueue/guide/
 
 ```toml
 [dependencies]
-riverqueue = "0.1.0-alpha.1"
+riverqueue = "0.1.0"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "signal"] }
@@ -28,7 +28,7 @@ Rust version is 1.95.
 | `chrono-tz` | no | IANA zone names such as `America/New_York` in cron `CRON_TZ=` and `TZ=` prefixes |
 
 For SQLite alone, use
-`riverqueue = { version = "0.1.0-alpha.1", default-features = false, features = ["sqlite"] }`.
+`riverqueue = { version = "0.1.0", default-features = false, features = ["sqlite"] }`.
 
 River's API uses types from SQLx (pools and transactions), Chrono
 (timestamps), `serde_json` (metadata, outputs, and other JSON values), and
