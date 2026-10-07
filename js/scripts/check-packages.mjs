@@ -162,8 +162,9 @@ async function inspectArchive(packageSpec, archivePath) {
   assert.equal(
     await readFile(join(packageRoot, "LICENSE"), "utf8"),
     await readFile(join(repositoryRoot, "LICENSE"), "utf8"),
-    `${packageSpec.name} packages the canonical LGPL text`
+    `${packageSpec.name} packages the canonical MPL-2.0 text`
   );
+  assert.equal(packageJson.license, "MPL-2.0");
   assert.equal(packageJson.engines?.node, ">=26");
   assert.equal(packageJson.publishConfig?.access, "public");
   assert.equal(packageJson.publishConfig?.provenance, true);

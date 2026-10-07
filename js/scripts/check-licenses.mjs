@@ -22,8 +22,8 @@ const allowed = [
   "BSD-2-Clause",
   "BSD-3-Clause",
   "ISC",
-  "LGPL-3.0-or-later",
   "MIT",
+  "MPL-2.0",
   "PostgreSQL",
 ].join(";");
 const checker = resolve(

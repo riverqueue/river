@@ -63,7 +63,7 @@
     "Brandur Leach",
     "Blake Gentry"
   ],
-  "license": "LGPL-3.0-or-later",
+  "license": "MPL-2.0",
   "bugs": {
     "url": "https://github.com/riverqueue/river/issues"
   },
