@@ -657,6 +657,18 @@ async fn sqlite_queue_start_retries_transient_write_contention() {
 #[tokio::test]
 async fn sqlite_transient_renewal_contention_preserves_leadership_services() {
     let (pool, database_path) = setup_file_pool(Duration::from_millis(5)).await;
+    // Only the running client needs a short busy timeout to exercise failed
+    // renewals. Test control writes must tolerate its ordinary background writes.
+    let control_pool = SqlitePoolOptions::new()
+        .max_connections(2)
+        .connect_with(
+            pool.connect_options()
+                .as_ref()
+                .clone()
+                .busy_timeout(Duration::from_secs(5)),
+        )
+        .await
+        .unwrap();
     let service = Arc::new(LeadershipServiceState::default());
     let mut pilot = SqlitePilot::new();
     pilot.maintenance_service = Some(Arc::clone(&service));
@@ -686,8 +698,10 @@ async fn sqlite_transient_renewal_contention_preserves_leadership_services() {
     }
     let starts_before_contention = service.starts.load(Ordering::SeqCst);
     let stops_before_contention = service.stops.load(Ordering::SeqCst);
-    let lease_before_contention = leader_expires_at(&pool).await;
-    let mut writer = pool.begin_with("BEGIN IMMEDIATE").await.unwrap();
+    let mut writer = control_pool.begin_with("BEGIN IMMEDIATE").await.unwrap();
+    // Read after acquiring the writer lock so a renewal can't advance the
+    // baseline before the intended contention begins.
+    let lease_before_contention = leader_expires_at(&control_pool).await;
     sqlx::query("UPDATE river_queue SET updated_at = updated_at WHERE name = 'default'")
         .execute(&mut *writer)
         .await
@@ -700,7 +714,7 @@ async fn sqlite_transient_renewal_contention_preserves_leadership_services() {
     // been through the whole contention; the counters show whether they
     // stopped at any point.
     let renewal_deadline = tokio::time::Instant::now() + Duration::from_secs(5);
-    while leader_expires_at(&pool).await == lease_before_contention {
+    while leader_expires_at(&control_pool).await == lease_before_contention {
         assert!(
             tokio::time::Instant::now() < renewal_deadline,
             "leadership was never renewed after the contention"
@@ -718,7 +732,9 @@ async fn sqlite_transient_renewal_contention_preserves_leadership_services() {
 
     // A renewal that failed during the contention backs off for about a
     // second before the leader reads its next wakeup.
-    client.request_resign().await.unwrap();
+    let mut transaction = control_pool.begin_with("BEGIN IMMEDIATE").await.unwrap();
+    client.request_resign().tx(&mut transaction).await.unwrap();
+    transaction.commit().await.unwrap();
     tokio::time::timeout(Duration::from_secs(5), async {
         while service.stops.load(Ordering::SeqCst) == stops_before_contention {
             tokio::time::sleep(Duration::from_millis(5)).await;
@@ -729,6 +745,7 @@ async fn sqlite_transient_renewal_contention_preserves_leadership_services() {
 
     run.stop_and_cancel().await.unwrap();
     assert!(service.stops.load(Ordering::SeqCst) >= 1);
+    control_pool.close().await;
     pool.close().await;
     remove_sqlite_files(&database_path);
 }
