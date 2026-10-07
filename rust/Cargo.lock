@@ -969,6 +969,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "riverqueue-conformance"
+version = "0.3.0"
+dependencies = [
+ "async-trait",
+ "chrono",
+ "riverqueue",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tokio-util",
+]
+
+[[package]]
 name = "riverqueue-macros"
 version = "0.3.0"
 dependencies = [

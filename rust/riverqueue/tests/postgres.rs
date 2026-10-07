@@ -1411,6 +1411,7 @@ async fn maintenance_client_runs_pilot_periodic_scheduled_and_transactional_jobs
             .unwrap(),
         Some(true)
     );
+    assert_eq!(transactional.errors, []);
     assert_eq!(
         transactional
             .metadata
