@@ -17,7 +17,7 @@ use std::{
 use riverqueue::{
     Client, ErrorHandler, ErrorHandlerDecision, EventKind, Hook, InsertOpts, Job, JobArgs, JobRow,
     JobState, Metric, QueueConfig, WorkContext, WorkError, WorkMiddleware, WorkNext, WorkOutcome,
-    WorkerRegistry,
+    Workers,
 };
 use riverqueue_migrate::SqliteMigrator;
 use serde::{Deserialize, Serialize};
@@ -178,11 +178,11 @@ impl ErrorHandler for PanickingErrorHandler {
     }
 }
 
-fn workers(trace: &Trace) -> WorkerRegistry {
+fn workers(trace: &Trace) -> Workers {
     let trace = trace.clone();
-    let mut workers = WorkerRegistry::new();
+    let mut workers = Workers::new();
     workers
-        .register_fn(move |_context: WorkContext, job: Job<ExtensionArgs>| {
+        .add_fn(move |_context: WorkContext, job: Job<ExtensionArgs>| {
             let trace = trace.clone();
             async move {
                 trace.push("worker");

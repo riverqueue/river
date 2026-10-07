@@ -17,7 +17,7 @@ use chrono::{DateTime, Utc};
 use riverqueue::{
     AttemptError, BoxError, Client, ErrorHandler, ErrorHandlerDecision, EventKind, InsertOpts, Job,
     JobArgs, JobEventKind, JobRow, JobState, MaintenanceConfig, QueueConfig, RetryPolicy,
-    UniqueOpts, WorkCancelled, WorkContext, WorkOutcome, WorkResult, WorkerRegistry,
+    UniqueOpts, WorkCancelled, WorkContext, WorkOutcome, WorkResult, Workers,
 };
 use riverqueue_migrate::SqliteMigrator;
 use serde::{Deserialize, Serialize};
@@ -134,20 +134,20 @@ impl Drop for TestDatabase {
     }
 }
 
-fn completing_workers() -> WorkerRegistry {
+fn completing_workers() -> Workers {
     gated_workers(&Gate::default())
 }
 
-fn gated_workers(gate: &Gate) -> WorkerRegistry {
-    let mut workers = WorkerRegistry::new();
+fn gated_workers(gate: &Gate) -> Workers {
+    let mut workers = Workers::new();
     workers
-        .register_fn(|_context: WorkContext, _job: Job<ResilienceArgs>| async {
+        .add_fn(|_context: WorkContext, _job: Job<ResilienceArgs>| async {
             Ok::<_, Infallible>(WorkOutcome::Complete)
         })
         .unwrap();
     let shutdown_gate = gate.clone();
     workers
-        .register_fn(move |context: WorkContext, job: Job<ShutdownArgs>| {
+        .add_fn(move |context: WorkContext, job: Job<ShutdownArgs>| {
             let gate = shutdown_gate.clone();
             async move {
                 gate.started.add_permits(1);
@@ -162,7 +162,7 @@ fn gated_workers(gate: &Gate) -> WorkerRegistry {
         .unwrap();
     let gate = gate.clone();
     workers
-        .register_fn(move |_context: WorkContext, job: Job<GatedArgs>| {
+        .add_fn(move |_context: WorkContext, job: Job<GatedArgs>| {
             let gate = gate.clone();
             async move {
                 gate.started.add_permits(1);

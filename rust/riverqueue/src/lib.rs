@@ -104,7 +104,7 @@ pub use sqlx;
 /// The `tokio-util` version of [`WorkContext::cancellation_token`]'s
 /// [`CancellationToken`](tokio_util::sync::CancellationToken).
 pub use tokio_util;
-pub use worker::{WorkContext, WorkOutcome, Worker, WorkerRegistry, WorkerTimeout};
+pub use worker::{WorkContext, WorkOutcome, Worker, WorkerTimeout, Workers};
 
 /// Default maximum number of attempts for a job.
 pub const MAX_ATTEMPTS_DEFAULT: i16 = 25;

@@ -31,7 +31,7 @@ use riverqueue::__private::{
 };
 use riverqueue::{
     Client, Job, JobArgs, JobRow, JobState, MaintenanceConfig, QueueConfig, WorkContext,
-    WorkOutcome, WorkerRegistry,
+    WorkOutcome, Workers,
 };
 use serde::{Deserialize, Serialize};
 use tokio::sync::{Notify, Semaphore};
@@ -205,10 +205,10 @@ fn client(
     pilot: &ServicePilot,
     release: &Arc<Semaphore>,
 ) -> Client {
-    let mut workers = WorkerRegistry::new();
+    let mut workers = Workers::new();
     let release = Arc::clone(release);
     workers
-        .register_fn(move |_context: WorkContext, _job: Job<GatedArgs>| {
+        .add_fn(move |_context: WorkContext, _job: Job<GatedArgs>| {
             let release = Arc::clone(&release);
             async move {
                 release.acquire().await.unwrap().forget();

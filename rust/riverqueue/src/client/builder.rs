@@ -18,7 +18,7 @@ use crate::database::Database;
 use crate::periodic::{PeriodicJob, PeriodicJobs};
 use crate::{
     Client, Error, ErrorHandler, FETCH_COOLDOWN_MIN, FETCH_POLL_INTERVAL_DEFAULT, Hook,
-    InsertMiddleware, Plugin, QUEUE_NUM_WORKERS_MAX, RetryPolicy, WorkMiddleware, WorkerRegistry,
+    InsertMiddleware, Plugin, QUEUE_NUM_WORKERS_MAX, RetryPolicy, WorkMiddleware, Workers,
 };
 
 /// Default age at which running jobs are rescued (Go
@@ -362,7 +362,7 @@ pub struct ClientBuilder {
     pub(super) retry_policy: Arc<dyn RetryPolicy>,
     pub(super) soft_stop_timeout: Option<Duration>,
     pub(super) work_middleware: Vec<Arc<dyn crate::extension::DynWorkMiddleware>>,
-    pub(crate) workers: WorkerRegistry,
+    pub(crate) workers: Workers,
 }
 
 impl std::fmt::Debug for ClientBuilder {
@@ -642,9 +642,9 @@ impl ClientBuilder {
         self
     }
 
-    /// Installs a typed worker registry.
+    /// Sets the client's workers.
     #[must_use]
-    pub fn workers(mut self, workers: WorkerRegistry) -> Self {
+    pub fn workers(mut self, workers: Workers) -> Self {
         self.workers = workers;
         self
     }

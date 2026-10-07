@@ -23,7 +23,7 @@ use riverqueue::__private::{
 };
 use riverqueue::{
     Client, Error, ExtensionPhase, InsertOpts, Job, JobArgs, JobRow, JobState, QueueConfig,
-    QueueUpdateParams, WorkContext, WorkOutcome, WorkerRegistry,
+    QueueUpdateParams, WorkContext, WorkOutcome, Workers,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -49,10 +49,10 @@ fn fast_queue(max_workers: usize) -> QueueConfig {
         .with_fetch_poll_interval(Duration::from_millis(10))
 }
 
-fn workers() -> WorkerRegistry {
-    let mut workers = WorkerRegistry::new();
+fn workers() -> Workers {
+    let mut workers = Workers::new();
     workers
-        .register_fn(|_context: WorkContext, job: Job<SessionArgs>| async move {
+        .add_fn(|_context: WorkContext, job: Job<SessionArgs>| async move {
             if job.args.fail {
                 return Err(std::io::Error::other("failed on purpose"));
             }
@@ -321,10 +321,10 @@ async fn assert_abandoned_attempts_finish(builder: riverqueue::ClientBuilder) {
     let (release, blocked) = std::sync::mpsc::channel::<()>();
     let blocked = Arc::new(Mutex::new(blocked));
     let started = Arc::new(Notify::new());
-    let mut workers = WorkerRegistry::new();
+    let mut workers = Workers::new();
     let worker_started = Arc::clone(&started);
     workers
-        .register_fn(move |_context: WorkContext, _job: Job<BlockingArgs>| {
+        .add_fn(move |_context: WorkContext, _job: Job<BlockingArgs>| {
             let blocked = Arc::clone(&blocked);
             let started = Arc::clone(&worker_started);
             async move {
@@ -589,9 +589,9 @@ impl PilotProducer for GatedPilot {
 /// is handled before the claim is released.
 async fn assert_cancellation_during_claim_reaches_the_attempt(builder: riverqueue::ClientBuilder) {
     let pilot = GatedPilot::default();
-    let mut workers = WorkerRegistry::new();
+    let mut workers = Workers::new();
     workers
-        .register_fn(
+        .add_fn(
             |context: WorkContext, _job: Job<CancelProbeArgs>| async move {
                 if context.cancellation_token().is_cancelled() {
                     return Err(std::io::Error::other("started cancelled"));

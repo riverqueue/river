@@ -18,7 +18,7 @@ use std::{convert::Infallible, sync::Arc, time::Duration};
 
 use riverqueue::{
     Client, EventKind, InsertOpts, Job, JobArgs, JobState, QueueConfig, QueueSelector, UniqueOpts,
-    WorkContext, WorkOutcome, WorkerRegistry, database::PostgresDatabase,
+    WorkContext, WorkOutcome, Workers, database::PostgresDatabase,
 };
 use serde::{Deserialize, Serialize};
 use sqlx::{
@@ -193,9 +193,9 @@ async fn polls_without_listen_notify() {
         let simulated = Simulated::new(server).await;
         let started = Arc::new(Semaphore::new(0));
         let worker_started = Arc::clone(&started);
-        let mut workers = WorkerRegistry::new();
+        let mut workers = Workers::new();
         workers
-            .register_fn(move |context: WorkContext, job: Job<YugabyteArgs>| {
+            .add_fn(move |context: WorkContext, job: Job<YugabyteArgs>| {
                 let started = Arc::clone(&worker_started);
                 async move {
                     if job.args.value == 0 {

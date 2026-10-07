@@ -15,7 +15,7 @@ use std::{
 
 use riverqueue::{
     Client, Job, JobArgs, JobState, QueueConfig, RunHandle, WorkCancelled, WorkContext,
-    WorkOutcome, WorkerRegistry,
+    WorkOutcome, Workers,
 };
 use riverqueue_migrate::SqliteMigrator;
 use serde::{Deserialize, Serialize};
@@ -75,11 +75,11 @@ impl Gate {
             .forget();
     }
 
-    fn workers(&self) -> WorkerRegistry {
+    fn workers(&self) -> Workers {
         let gate = self.clone();
-        let mut workers = WorkerRegistry::new();
+        let mut workers = Workers::new();
         workers
-            .register_fn(move |context: WorkContext, job: Job<GatedArgs>| {
+            .add_fn(move |context: WorkContext, job: Job<GatedArgs>| {
                 let gate = gate.clone();
                 async move {
                     gate.started.add_permits(1);

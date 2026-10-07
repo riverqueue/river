@@ -12,7 +12,7 @@ use std::error::Error;
 use riverqueue::sqlx::PgPool;
 use riverqueue::{
     Client, Event, EventKind, InsertOpts, Job, JobArgs, JobEventKind, QueueConfig, WorkContext,
-    WorkOutcome, WorkerRegistry, migrate::PostgresMigrator,
+    WorkOutcome, Workers, migrate::PostgresMigrator,
 };
 use serde::{Deserialize, Serialize};
 
@@ -38,8 +38,8 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let pool = PgPool::connect(&std::env::var("DATABASE_URL")?).await?;
     PostgresMigrator::new(pool.clone()).migrate_up().await?;
 
-    let mut workers = WorkerRegistry::new();
-    workers.register_fn(charge_card)?;
+    let mut workers = Workers::new();
+    workers.add_fn(charge_card)?;
     let client = Client::builder(pool)
         .workers(workers)
         .queue("default", QueueConfig::new(4))

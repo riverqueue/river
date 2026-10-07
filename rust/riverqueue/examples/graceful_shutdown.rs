@@ -5,8 +5,7 @@ use std::{error::Error, time::Duration};
 
 use riverqueue::sqlx::PgPool;
 use riverqueue::{
-    BoxError, Client, Job, JobArgs, QueueConfig, WorkCancelled, WorkContext, WorkOutcome,
-    WorkerRegistry,
+    BoxError, Client, Job, JobArgs, QueueConfig, WorkCancelled, WorkContext, WorkOutcome, Workers,
 };
 use serde::{Deserialize, Serialize};
 
@@ -35,8 +34,8 @@ async fn generate_report(
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn Error>> {
     let pool = PgPool::connect(&std::env::var("DATABASE_URL")?).await?;
-    let mut workers = WorkerRegistry::new();
-    workers.register_fn(generate_report)?;
+    let mut workers = Workers::new();
+    workers.add_fn(generate_report)?;
     let client = Client::builder(pool)
         .workers(workers)
         .queue("default", QueueConfig::new(10))

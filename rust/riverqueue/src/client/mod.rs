@@ -72,7 +72,7 @@ use crate::maintenance::LeadershipWakeup;
 use crate::{
     DefaultRetryPolicy, Error, Event, EventKind, EventReceiver, FETCH_COOLDOWN_DEFAULT,
     JOB_STUCK_THRESHOLD_DEFAULT, JOB_TIMEOUT_DEFAULT, MAX_ATTEMPTS_DEFAULT, RetryPolicy,
-    SubscribeConfig, WorkerRegistry,
+    SubscribeConfig, Workers,
     database::{ClientDatabase, Database, DatabasePool, DatabaseTransactionExecutor, IntoDatabase},
     periodic::PeriodicJobs,
 };
@@ -154,7 +154,7 @@ pub(crate) struct ClientInner {
     soft_stop_timeout: Option<Duration>,
     started: AtomicBool,
     work_middleware: Vec<Arc<dyn crate::extension::DynWorkMiddleware>>,
-    pub(crate) workers: WorkerRegistry,
+    pub(crate) workers: Workers,
 }
 
 #[cfg(feature = "sqlite")]
@@ -322,7 +322,7 @@ impl Client {
             retry_policy: Arc::new(DefaultRetryPolicy::default()),
             soft_stop_timeout: None,
             work_middleware: Vec::new(),
-            workers: WorkerRegistry::new(),
+            workers: Workers::new(),
         }
     }
 

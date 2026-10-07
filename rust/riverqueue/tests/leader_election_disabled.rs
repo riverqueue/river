@@ -24,7 +24,7 @@ use riverqueue::{
     },
     Client, ClientBuilder, EventKind, EventReceiver, Job, JobArgs, JobRow, JobState,
     MaintenanceConfig, NeverSchedule, PeriodicJob, PeriodicJobOpts, QueueConfig, WorkContext,
-    WorkOutcome, WorkerRegistry,
+    WorkOutcome, Workers,
 };
 use serde::{Deserialize, Serialize};
 use tokio_util::sync::CancellationToken;
@@ -40,10 +40,10 @@ const ELECT_INTERVAL: Duration = Duration::from_millis(50);
 #[river(kind = "rust_leader_election_disabled_noop")]
 struct NoopArgs {}
 
-fn noop_workers() -> WorkerRegistry {
-    let mut workers = WorkerRegistry::new();
+fn noop_workers() -> Workers {
+    let mut workers = Workers::new();
     workers
-        .register_fn(|_context: WorkContext, _job: Job<NoopArgs>| async {
+        .add_fn(|_context: WorkContext, _job: Job<NoopArgs>| async {
             Ok::<_, Infallible>(WorkOutcome::Complete)
         })
         .unwrap();

@@ -12,8 +12,7 @@ use std::{
 };
 
 use riverqueue::{
-    Client, Job, JobArgs, QueueConfig, WorkContext, WorkOutcome, Worker, WorkerRegistry,
-    WorkerTimeout,
+    Client, Job, JobArgs, QueueConfig, WorkContext, WorkOutcome, Worker, WorkerTimeout, Workers,
 };
 use serde::{Deserialize, Serialize};
 use tokio::sync::Notify;
@@ -97,9 +96,9 @@ async fn stuck_log_line_reports_the_worker_timeout() {
         tracing::subscriber::set_default(tracing_subscriber::registry().with(lines.clone()));
     let (pool, path) = sqlite_file_pool(4).await;
     let started = Arc::new(Notify::new());
-    let mut workers = WorkerRegistry::new();
+    let mut workers = Workers::new();
     workers
-        .register(StuckWorker {
+        .add(StuckWorker {
             started: Arc::clone(&started),
         })
         .unwrap();

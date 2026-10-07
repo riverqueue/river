@@ -820,23 +820,27 @@ where
     }
 }
 
-/// Type-erased collection of workers keyed by job kind.
+/// Collection of available job workers, keyed by job kind.
+///
+/// Add a [`Worker`] with [`Self::add`], or an async function or closure with
+/// [`Self::add_fn`], then pass the collection to
+/// [`ClientBuilder::workers`](crate::ClientBuilder::workers).
 #[derive(Clone, Default)]
-pub struct WorkerRegistry {
+pub struct Workers {
     workers: HashMap<&'static str, Arc<dyn ErasedWorker>>,
 }
 
-impl std::fmt::Debug for WorkerRegistry {
+impl std::fmt::Debug for Workers {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         formatter
-            .debug_struct("WorkerRegistry")
+            .debug_struct("Workers")
             .field("kinds", &self.kinds())
             .finish_non_exhaustive()
     }
 }
 
-impl WorkerRegistry {
-    /// Creates an empty worker registry.
+impl Workers {
+    /// Creates an empty collection of workers.
     #[must_use]
     pub fn new() -> Self {
         Self::default()
@@ -872,14 +876,14 @@ impl WorkerRegistry {
         self.worker_for(row)?.timeout(row)
     }
 
-    /// Registers one worker, rejecting duplicate kinds.
+    /// Adds one worker, rejecting duplicate kinds.
     ///
     /// # Errors
     ///
     /// Returns [`Error::InvalidJob`] when the kind or one of its aliases is
     /// empty or 128 bytes or longer, or when a worker is already registered
     /// for it.
-    pub fn register<A, W>(&mut self, worker: W) -> Result<&mut Self, Error>
+    pub fn add<A, W>(&mut self, worker: W) -> Result<&mut Self, Error>
     where
         A: JobArgs,
         W: Worker<A>,
@@ -925,7 +929,7 @@ impl WorkerRegistry {
         Ok(self)
     }
 
-    /// Registers an asynchronous function or closure as a worker.
+    /// Adds an asynchronous function or closure as a worker.
     ///
     /// The function may return any error convertible into [`BoxError`], such
     /// as `anyhow::Result<WorkOutcome>`; see [`Worker::Error`]. Use [`Worker`]
@@ -936,14 +940,14 @@ impl WorkerRegistry {
     ///
     /// Returns an error when the job kind or one of its aliases is invalid or
     /// already registered.
-    pub fn register_fn<A, E, F, Fut>(&mut self, function: F) -> Result<&mut Self, Error>
+    pub fn add_fn<A, E, F, Fut>(&mut self, function: F) -> Result<&mut Self, Error>
     where
         A: JobArgs,
         E: Into<BoxError>,
         F: Fn(WorkContext, Job<A>) -> Fut + Send + Sync + 'static,
         Fut: Future<Output = Result<WorkOutcome, E>> + Send,
     {
-        self.register::<A, _>(FunctionWorker { function })
+        self.add::<A, _>(FunctionWorker { function })
     }
 
     /// Returns an error for a row whose kind has no registered worker, which
@@ -1212,12 +1216,12 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn register_fn_accepts_capturing_closure() {
+    async fn add_fn_accepts_capturing_closure() {
         let calls = Arc::new(AtomicUsize::new(0));
         let calls_for_worker = Arc::clone(&calls);
-        let mut workers = WorkerRegistry::new();
+        let mut workers = Workers::new();
         workers
-            .register_fn(move |_context: WorkContext, _job: Job<FunctionJobArgs>| {
+            .add_fn(move |_context: WorkContext, _job: Job<FunctionJobArgs>| {
                 let calls = Arc::clone(&calls_for_worker);
                 async move {
                     calls.fetch_add(1, Ordering::Relaxed);
@@ -1242,9 +1246,9 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn register_fn_handles_aliases_and_typed_errors() {
-        let mut workers = WorkerRegistry::new();
-        workers.register_fn(function_worker).unwrap();
+    async fn add_fn_handles_aliases_and_typed_errors() {
+        let mut workers = Workers::new();
+        workers.add_fn(function_worker).unwrap();
 
         assert_eq!(
             workers.kinds(),
@@ -1310,8 +1314,8 @@ mod tests {
 
     #[tokio::test]
     async fn work_decodes_args_once_and_reports_timeout_first() {
-        let mut workers = WorkerRegistry::new();
-        workers.register(CountedWorker).unwrap();
+        let mut workers = Workers::new();
+        workers.add(CountedWorker).unwrap();
         let mut row = job_row(CountedArgs::KIND, false);
         row.encoded_args = serde_json::value::to_raw_value(&json!({"timeout_ms": 1234})).unwrap();
 
@@ -1336,8 +1340,8 @@ mod tests {
 
     #[tokio::test]
     async fn work_with_undecodable_args_fails_without_reporting_timeout() {
-        let mut workers = WorkerRegistry::new();
-        workers.register_fn(function_worker).unwrap();
+        let mut workers = Workers::new();
+        workers.add_fn(function_worker).unwrap();
         let mut row = job_row(FunctionJobArgs::KIND, false);
         row.encoded_args = serde_json::value::to_raw_value(&json!({"fail": "no"})).unwrap();
 
@@ -1355,7 +1359,7 @@ mod tests {
         assert!(timeout_receiver.await.is_err());
     }
 
-    async fn run_once(workers: &WorkerRegistry, row: &JobRow) -> Result<WorkOutcome, WorkError> {
+    async fn run_once(workers: &Workers, row: &JobRow) -> Result<WorkOutcome, WorkError> {
         let (timeout_sender, _timeout_receiver) = oneshot::channel();
         workers
             .work(
@@ -1380,9 +1384,9 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn register_fn_accepts_anyhow_results() {
-        let mut workers = WorkerRegistry::new();
-        workers.register_fn(anyhow_function_worker).unwrap();
+    async fn add_fn_accepts_anyhow_results() {
+        let mut workers = Workers::new();
+        workers.add_fn(anyhow_function_worker).unwrap();
 
         assert_eq!(
             run_once(&workers, &job_row(FunctionJobArgs::KIND, false))
@@ -1420,8 +1424,8 @@ mod tests {
 
     #[tokio::test]
     async fn boxed_worker_errors_remain_downcastable() {
-        let mut workers = WorkerRegistry::new();
-        workers.register(BoxedErrorWorker).unwrap();
+        let mut workers = Workers::new();
+        workers.add(BoxedErrorWorker).unwrap();
 
         let error = run_once(&workers, &job_row(FunctionJobArgs::KIND, false))
             .await
@@ -1492,11 +1496,11 @@ mod tests {
     }
 
     #[test]
-    fn register_fn_rejects_duplicate_kinds() {
-        let mut workers = WorkerRegistry::new();
-        workers.register_fn(function_worker).unwrap();
+    fn add_fn_rejects_duplicate_kinds() {
+        let mut workers = Workers::new();
+        workers.add_fn(function_worker).unwrap();
 
-        let Err(error) = workers.register_fn(function_worker) else {
+        let Err(error) = workers.add_fn(function_worker) else {
             panic!("duplicate registration should fail");
         };
 
@@ -1505,9 +1509,9 @@ mod tests {
 
     #[test]
     fn registry_debug_lists_kinds_without_worker_internals() {
-        let mut registry = WorkerRegistry::new();
+        let mut registry = Workers::new();
         registry
-            .register_fn(
+            .add_fn(
                 |_context: WorkContext, _job: Job<FunctionJobArgs>| async move {
                     Ok::<_, std::io::Error>(WorkOutcome::Complete)
                 },

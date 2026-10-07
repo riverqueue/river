@@ -26,7 +26,7 @@ use riverqueue::__private::{
 };
 use riverqueue::{
     Client, Error, ExtensionPhase, InsertOpts, Job, JobArgs, JobRow, JobState, QueueConfig,
-    WorkContext, WorkOutcome, WorkerRegistry,
+    WorkContext, WorkOutcome, Workers,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value, json};
@@ -58,11 +58,11 @@ impl Gate {
         self.release.add_permits(jobs);
     }
 
-    fn workers(&self) -> WorkerRegistry {
+    fn workers(&self) -> Workers {
         let gate = self.clone();
-        let mut workers = WorkerRegistry::new();
+        let mut workers = Workers::new();
         workers
-            .register_fn(move |_context: WorkContext, job: Job<GatedArgs>| {
+            .add_fn(move |_context: WorkContext, job: Job<GatedArgs>| {
                 let gate = gate.clone();
                 async move {
                     gate.started.push(job.id());
