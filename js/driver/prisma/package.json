@@ -1,6 +1,6 @@
 {
   "name": "@riverqueue/driver-prisma",
-  "version": "0.50.0-alpha.1",
+  "version": "0.2.0",
   "description": "Prisma driver for the riverqueue TypeScript client.",
   "type": "module",
   "sideEffects": false,
@@ -44,13 +44,13 @@
   },
   "peerDependencies": {
     "@prisma/client": ">=5.0.0",
-    "riverqueue": "workspace:0.50.0-alpha.1"
+    "riverqueue": "workspace:0.2.0"
   },
   "devDependencies": {
     "@prisma/adapter-pg": "7.9.1",
     "@prisma/client": "7.9.1",
     "prisma": "7.9.1",
-    "riverqueue": "workspace:0.50.0-alpha.1",
+    "riverqueue": "workspace:0.2.0",
     "typescript": "^6.0.3"
   },
   "keywords": [

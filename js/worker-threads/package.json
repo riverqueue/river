@@ -1,6 +1,6 @@
 {
   "name": "@riverqueue/worker-threads",
-  "version": "0.50.0-alpha.1",
+  "version": "0.2.0",
   "description": "Optional bounded worker-thread executor for River TypeScript.",
   "type": "module",
   "sideEffects": [
@@ -48,7 +48,7 @@
   },
   "peerDependencies": {
     "@types/node": ">=26",
-    "riverqueue": "workspace:0.50.0-alpha.1"
+    "riverqueue": "workspace:0.2.0"
   },
   "peerDependenciesMeta": {
     "@types/node": {
@@ -56,10 +56,10 @@
     }
   },
   "devDependencies": {
-    "@riverqueue/driver-sqlite": "workspace:0.50.0-alpha.1",
-    "@riverqueue/migrate": "workspace:0.50.0-alpha.1",
+    "@riverqueue/driver-sqlite": "workspace:0.2.0",
+    "@riverqueue/migrate": "workspace:0.2.0",
     "@types/node": "^26.1.1",
-    "riverqueue": "workspace:0.50.0-alpha.1"
+    "riverqueue": "workspace:0.2.0"
   },
   "keywords": [
     "river",

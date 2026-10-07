@@ -85,16 +85,16 @@ importers:
   cli:
     dependencies:
       '@riverqueue/driver-pg':
-        specifier: workspace:0.50.0-alpha.1
+        specifier: workspace:0.2.0
         version: link:../driver/pg
       '@riverqueue/migrate':
-        specifier: workspace:0.50.0-alpha.1
+        specifier: workspace:0.2.0
         version: link:../migrate
       pg:
         specifier: ^8.22.0
         version: 8.22.0
       riverqueue:
-        specifier: workspace:0.50.0-alpha.1
+        specifier: workspace:0.2.0
         version: link:..
     devDependencies:
       '@types/node':
@@ -120,7 +120,7 @@ importers:
         specifier: ^8.22.0
         version: 8.22.0
       riverqueue:
-        specifier: workspace:0.50.0-alpha.1
+        specifier: workspace:0.2.0
         version: link:../..
       typescript:
         specifier: ^6.0.3
@@ -138,7 +138,7 @@ importers:
         specifier: 7.9.1
         version: 7.9.1(@types/node@26.1.1)(@types/react@19.2.18)(magicast@0.5.5)(react-dom@19.2.8(react@19.2.8))(react@19.2.8)(typescript@6.0.3)
       riverqueue:
-        specifier: workspace:0.50.0-alpha.1
+        specifier: workspace:0.2.0
         version: link:../..
       typescript:
         specifier: ^6.0.3
@@ -147,13 +147,13 @@ importers:
   driver/sqlite:
     devDependencies:
       '@riverqueue/migrate':
-        specifier: workspace:0.50.0-alpha.1
+        specifier: workspace:0.2.0
         version: link:../../migrate
       '@types/node':
         specifier: ^26.1.1
         version: 26.1.1
       riverqueue:
-        specifier: workspace:0.50.0-alpha.1
+        specifier: workspace:0.2.0
         version: link:../..
 
   examples/graceful-shutdown:
@@ -356,7 +356,7 @@ importers:
   migrate:
     devDependencies:
       '@riverqueue/driver-pg':
-        specifier: workspace:0.50.0-alpha.1
+        specifier: workspace:0.2.0
         version: link:../driver/pg
       '@types/node':
         specifier: ^26.1.1
@@ -365,28 +365,28 @@ importers:
         specifier: ^8.22.0
         version: 8.22.0
       riverqueue:
-        specifier: workspace:0.50.0-alpha.1
+        specifier: workspace:0.2.0
         version: link:..
 
   test:
     devDependencies:
       riverqueue:
-        specifier: workspace:0.50.0-alpha.1
+        specifier: workspace:0.2.0
         version: link:..
 
   worker-threads:
     devDependencies:
       '@riverqueue/driver-sqlite':
-        specifier: workspace:0.50.0-alpha.1
+        specifier: workspace:0.2.0
         version: link:../driver/sqlite
       '@riverqueue/migrate':
-        specifier: workspace:0.50.0-alpha.1
+        specifier: workspace:0.2.0
         version: link:../migrate
       '@types/node':
         specifier: ^26.1.1
         version: 26.1.1
       riverqueue:
-        specifier: workspace:0.50.0-alpha.1
+        specifier: workspace:0.2.0
         version: link:..
 
 packages:

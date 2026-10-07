@@ -8,7 +8,7 @@ River's top-level `make` targets (`make lint/js`, `make test/js`, and so on),
 which delegate to `pnpm -C js`.
 
 Use an official Node.js 26 build, which includes native Temporal. The
-repository's `.node-version` selects Node 26 for version managers such as fnm,
+workspace's `.node-version` selects Node 26 for version managers such as fnm,
 nvm (`nvm use $(cat .node-version)`), and `actions/setup-node`. Some Node.js
 builds compiled from source, including some distribution and Homebrew
 packages, lack Temporal, and most unit tests then fail with
@@ -189,7 +189,7 @@ to benchmark against a disposable database:
 
 River's `.github/workflows/js.yaml` runs on pull requests and pushes to
 `master` that change `js/`, River's migrations or SQL, or the workflow itself,
-and on release tags. Each job installs the official Node.js build from
+and on `js/v*` release tags. Each job installs the official Node.js build from
 `js/.node-version` and fails unless `typeof Temporal` is `object`. The jobs
 cover build, both type-check lanes, generated migrations (compared with
 River's sources), API reports, TypeDoc, README snippets, the 0.1 fixture, lint,
@@ -210,54 +210,52 @@ order are Rust-only because JavaScript objects cannot preserve them.
 
 ## Preparing a release
 
-The eight publishable packages are the root `riverqueue` package, the three
-drivers under `driver/*`, and `migrate`, `worker-threads`, `test`, and `cli`.
-They share one release version. Examples are private and stay at `0.0.0`.
-The core and PostgreSQL/Prisma drivers were already released as 0.1.0; this
-checklist prepares a release of the expanded workspace.
+Run this section's commands from the repository root. The eight publishable packages are `js/package.json` (`riverqueue`), the three drivers under `js/driver/*`, and `js/{migrate,worker-threads,test,cli}`. They share one version, independently of Go and Rust. Examples are private and stay at `0.0.0`. `VERSION` has no leading `v`; JavaScript Git tags use `js/vX.Y.Z`.
 
-1. Fetch changes to the repo and choose the target npm version, including a
-   prerelease suffix when applicable. Do not infer it from the latest
-   repository tag: this repository also contains Go and Rust releases.
+1. Fetch changes and tags, choose the next JavaScript version (including a prerelease suffix when applicable), and create a release branch:
 
    ```shell
    git checkout master && git pull --rebase
+   git fetch --tags
    export VERSION=0.x.y
-   git checkout -b $USER-$VERSION
+   git checkout -b "$USER-js-$VERSION"
    ```
 
-2. Update every publishable `package.json` to the same version, including the
-   exact `workspace:` versions of first-party `dependencies`,
-   `peerDependencies`, and `devDependencies`, then regenerate `pnpm-lock.yaml`.
-   Libraries take `riverqueue` as an exact peer so a mismatched pair fails at
-   install time instead of loading two copies; only the self-contained CLI
-   depends on it directly. Do not change the private example package
-   versions or their `workspace:*` references, or the pinned historical
-   `fixtures/migration-0.1` files. After editing the manifests, update the
-   lockfile:
+2. Set every publishable `package.json` version to `$VERSION` and update its exact `workspace:` references in `dependencies`, `peerDependencies`, and `devDependencies`. Libraries take `riverqueue` as an exact peer; the CLI depends on it directly. Keep private example versions and their `workspace:*` references, and the historical `js/fixtures/migration-0.1` files. Refresh the lockfile:
 
    ```shell
-   pnpm install --lockfile-only
+   pnpm -C js install --lockfile-only
    ```
 
-3. Update `CHANGELOG.md` by moving the release notes from `Unreleased` into a
-   heading for the new version.
+3. Move `js/CHANGELOG.md` entries from `Unreleased` into a `[$VERSION] - YYYY-MM-DD` section, and update any versioned README examples.
 
-4. Open a PR with the version, lockfile, and changelog changes, and let the
-   [JavaScript CI workflow](#continuous-integration) validate them. It runs
-   the build, tests, lint, package checks, and Node/PostgreSQL matrices.
-   Local reruns are optional and useful for debugging CI failures.
+4. Open a PR with the manifests, `js/pnpm-lock.yaml`, changelog, and README changes. Keep [JavaScript CI](#continuous-integration) enabled and merge after checks pass. To verify the package archives locally:
 
-5. After merge, release from a `master` commit with passing JavaScript CI
-   that includes the release's version and lockfile changes.
-   Publication remains a separate, explicitly authorized operation after merge.
+   ```shell
+   make check/js/package
+   ```
 
-There is currently no npm publication workflow in this repository:
-`.github/workflows/js.yaml` runs checks on `v*` tags but does not publish
-packages. All eight packages set `publishConfig.provenance: true`, so
-publication needs a supported CI environment configured for
-[npm provenance](https://docs.npmjs.com/generating-provenance-statements/)
-(including `id-token: write` on GitHub Actions). A publication workflow and
-release-tag convention still need to be established. For a prerelease, use an
-explicit [npm distribution tag](https://pnpm.io/10.x/cli/publish#--tag-tag),
-such as `next`; `pnpm publish` defaults to `latest`.
+5. After merge, pull the release commit into a clean checkout, confirm its version, and push only its JavaScript tag:
+
+   ```shell
+   git checkout master && git pull --rebase
+   test "$(node -p 'require("./js/package.json").version')" = "$VERSION"
+   git tag "js/v$VERSION" -m "release js/v$VERSION"
+   git push origin "js/v$VERSION"
+   ```
+
+6. Publish locally from the clean `master` checkout tagged above after its JavaScript checks pass. Use official Node.js 26 and the pinned pnpm version, and log in with an npm account that can publish all eight packages. A publication workflow is optional. Disable [provenance](https://docs.npmjs.com/generating-provenance-statements/) for local publication with `--provenance=false`, overriding the packages' `publishConfig.provenance: true`:
+
+   ```shell
+   test "$(git rev-parse HEAD)" = "$(git rev-parse "js/v$VERSION^{commit}")"
+   npm login
+   pnpm -C js install --frozen-lockfile
+   pnpm -C js run build:all
+   for package in js js/migrate js/driver/pg js/driver/prisma js/driver/sqlite js/worker-threads js/test js/cli; do
+     pnpm -C "$package" publish --access public --tag latest --provenance=false || break
+   done
+   ```
+
+   Complete npm's authentication prompts as needed. Publish packages individually because pnpm 10.22.0's recursive publication does not forward `--provenance=false` to npm. The loop publishes dependencies first and stops on failure; after a partial publication, remove the already-published packages from the loop before rerunning it. For a prerelease, use `--tag next` instead of `--tag latest`.
+
+7. Once all eight packages are published, create a [GitHub release](https://github.com/riverqueue/river/releases/new) for `js/v$VERSION` and copy the version's `js/CHANGELOG.md` notes into its body. Mark alpha, beta, and RC versions as prereleases.

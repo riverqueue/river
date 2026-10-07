@@ -5,8 +5,6 @@ This implementation runs on Node.js and shares River's database protocol with
 River for Go and Rust, so services in all three languages can insert and work
 the same jobs in the same database.
 
-It is currently an alpha and is not published from this branch.
-
 ## Requirements
 
 - **Node.js 26 with native `Temporal`.** River uses `Temporal.Instant` for

@@ -1,6 +1,6 @@
 {
   "name": "@riverqueue/migrate",
-  "version": "0.50.0-alpha.1",
+  "version": "0.2.0",
   "description": "Canonical River database migrations for JavaScript and TypeScript.",
   "type": "module",
   "sideEffects": false,
@@ -46,7 +46,7 @@
   },
   "peerDependencies": {
     "@types/node": ">=26",
-    "riverqueue": "workspace:0.50.0-alpha.1"
+    "riverqueue": "workspace:0.2.0"
   },
   "peerDependenciesMeta": {
     "@types/node": {
@@ -54,10 +54,10 @@
     }
   },
   "devDependencies": {
-    "@riverqueue/driver-pg": "workspace:0.50.0-alpha.1",
+    "@riverqueue/driver-pg": "workspace:0.2.0",
     "@types/node": "^26.1.1",
     "pg": "^8.22.0",
-    "riverqueue": "workspace:0.50.0-alpha.1"
+    "riverqueue": "workspace:0.2.0"
   },
   "keywords": [
     "river",

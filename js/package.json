@@ -1,6 +1,6 @@
 {
   "name": "riverqueue",
-  "version": "0.50.0-alpha.1",
+  "version": "0.2.0",
   "description": "TypeScript implementation of River, a fast and reliable background job system.",
   "type": "module",
   "sideEffects": false,
