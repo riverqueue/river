@@ -16,9 +16,9 @@ use crate::client::{ClientInner, PeerLedger, peers};
 use crate::error::{Chain, panic_message};
 use crate::extension::{WorkEndpoint, WorkNext};
 use crate::{
-    AttemptError, BoxError, Client, Error, ErrorHandlerDecision, JobEventKind, JobMetadata, JobRow,
-    JobState, PanicError, WorkCancelled, WorkContext, WorkError, WorkOutcome, WorkResult,
-    WorkerTimeout,
+    AttemptError, BoxError, Client, Error, ErrorHandlerDecision, JobCancelError, JobEventKind,
+    JobMetadata, JobRow, JobState, PanicError, WorkCancelled, WorkContext, WorkError, WorkOutcome,
+    WorkResult, WorkerTimeout,
 };
 
 /// Runs one claimed job's attempt and persists its result.
@@ -426,9 +426,15 @@ pub(super) fn worker_join_result(
 ) -> WorkerResult {
     match result {
         Ok(Ok(outcome)) => Ok(outcome),
+        // Like Go's `JobCancel`, a cancellation the worker returns cancels
+        // the job and records its reason.
         Ok(Err(worker_error)) => Err(WorkerFailure {
             error: Chain(&worker_error).to_string(),
-            kind: WorkerFailureKind::Error,
+            kind: if JobCancelError::is_in_chain(worker_error.get_ref()) {
+                WorkerFailureKind::Cancelled
+            } else {
+                WorkerFailureKind::Error
+            },
             source: Some(worker_error),
             trace: String::new(),
         }),

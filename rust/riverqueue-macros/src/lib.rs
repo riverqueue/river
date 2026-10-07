@@ -318,11 +318,11 @@ fn expand_job_args(input: &DeriveInput) -> syn::Result<proc_macro2::TokenStream>
         ));
     }
     if let Some(max_attempts) = &attributes.max_attempts
-        && !(1..=i16::MAX as u64).contains(&max_attempts.base10_parse::<u64>()?)
+        && !(1..=i32::MAX as u64).contains(&max_attempts.base10_parse::<u64>()?)
     {
         return Err(syn::Error::new_spanned(
             max_attempts,
-            "max_attempts must be between 1 and 32767",
+            "max_attempts must be between 1 and 2147483647",
         ));
     }
     if let Some(priority) = &attributes.priority

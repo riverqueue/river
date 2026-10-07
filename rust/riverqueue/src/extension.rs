@@ -113,22 +113,66 @@ impl WorkCancelled {
     /// because `io::Error` does not expose its payload as a source.
     #[must_use]
     pub fn is_in_chain(error: &(dyn std::error::Error + 'static)) -> bool {
-        let mut current = Some(error);
-        while let Some(error) = current {
-            if error.is::<Self>() {
-                return true;
-            }
-            if let Some(payload) = error
-                .downcast_ref::<std::io::Error>()
-                .and_then(std::io::Error::get_ref)
-                && Self::is_in_chain(payload)
-            {
-                return true;
-            }
-            current = error.source();
-        }
-        false
+        in_chain::<Self>(error)
     }
+}
+
+/// Error a worker returns to cancel its job, like River Go's `JobCancel`.
+///
+/// The job is cancelled immediately, whatever attempts it has left, and the
+/// attempt's recorded error is `JobCancelError: ` followed by the reason, as
+/// River Go records it. The error handler isn't called. Unlike
+/// [`WorkOutcome::Cancel`], which records a fixed message, it keeps why the
+/// worker cancelled the job. It's recognized anywhere in the worker error's
+/// source chain.
+///
+/// ```
+/// use riverqueue::{JobCancelError, WorkOutcome};
+///
+/// fn charge(card_expired: bool) -> Result<WorkOutcome, JobCancelError> {
+///     if card_expired {
+///         return Err(JobCancelError::new("card expired"));
+///     }
+///     Ok(WorkOutcome::Complete)
+/// }
+/// ```
+#[derive(Debug, thiserror::Error)]
+#[error("JobCancelError")]
+pub struct JobCancelError(#[source] BoxError);
+
+impl JobCancelError {
+    /// Cancels the job, recording `reason` as its attempt's error.
+    pub fn new(reason: impl Into<BoxError>) -> Self {
+        Self(reason.into())
+    }
+
+    /// Whether `error` or any error in its source chain is a
+    /// [`JobCancelError`].
+    #[must_use]
+    pub fn is_in_chain(error: &(dyn std::error::Error + 'static)) -> bool {
+        in_chain::<Self>(error)
+    }
+}
+
+/// Whether `error`'s source chain holds a `T`, looking inside errors wrapped
+/// by `std::io::Error::other` too, since `io::Error` doesn't expose its
+/// payload as a source.
+fn in_chain<T: std::error::Error + 'static>(error: &(dyn std::error::Error + 'static)) -> bool {
+    let mut current = Some(error);
+    while let Some(error) = current {
+        if error.is::<T>() {
+            return true;
+        }
+        if let Some(payload) = error
+            .downcast_ref::<std::io::Error>()
+            .and_then(std::io::Error::get_ref)
+            && in_chain::<T>(payload)
+        {
+            return true;
+        }
+        current = error.source();
+    }
+    false
 }
 
 /// Name of an internal runtime metric emitted to hooks.

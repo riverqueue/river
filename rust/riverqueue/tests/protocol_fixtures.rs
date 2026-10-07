@@ -104,7 +104,7 @@ fn retry_row(id: i64, now: DateTime<Utc>, previous_errors: usize) -> JobRow {
         riverqueue::encoding::encode_args(&serde_json::json!({})).unwrap(),
         now,
     );
-    row.attempt = i16::try_from(previous_errors + 1).unwrap();
+    row.attempt = i32::try_from(previous_errors + 1).unwrap();
     row.attempted_at = Some(now);
     row.attempted_by = vec!["fixture".to_owned()];
     row.errors = vec![AttemptError::new(now, 1, "previous failure"); previous_errors];
