@@ -119,7 +119,9 @@ export function normalizeInsertOptions(
   const copy: NormalizedInsertOptions = {};
 
   if (options.maxAttempts !== undefined) {
-    requireInteger("maxAttempts", options.maxAttempts, 1, 32_767);
+    // Like River for Go, no 16-bit ceiling: SQLite stores the full value,
+    // and Postgres drivers clamp it to their `smallint` column.
+    requireInteger("maxAttempts", options.maxAttempts, 1);
     copy.maxAttempts = options.maxAttempts;
   }
   if (options.metadata !== undefined) {

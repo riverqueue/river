@@ -249,7 +249,7 @@ describe("Go protocol fixtures", () => {
         resumable.setCursor({ offset: 3 });
         throw new Error("retry");
       })
-    ).rejects.toThrow("failed");
+    ).rejects.toThrow("retry");
     expect(resumable.finish(true).metadata).toEqual({
       [keys.resumable_cursor]: { process: { offset: 3 } },
       [keys.resumable_step]: "process",
