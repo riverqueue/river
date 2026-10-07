@@ -198,16 +198,18 @@ formatting, licenses, packed archives and examples, unit tests on Node 26.0.0
 and the current Node 26 release, and integration tests on Postgres 14
 through 18.
 
-Unit tests compare unique keys, protocol values, notification dispatch,
-retry timing, cron schedules, and snooze counting with fixtures that
-River's Go implementation generates into `conformance/testdata`, the same
-files the Rust port reads. They aren't committed: `make test/js` generates
-them first, so Go is needed to run the unit tests, and `pnpm run test` needs
-a prior `make generate/fixtures` from the repository root. A missing fixture
-fails its test. `make test/js/conformance` runs just these checks, including
-both drivers' notification adapters without a Postgres server. The two
-raw JSON unique-key cases involving duplicate keys or integer-key insertion
-order are Rust-only because JavaScript objects cannot preserve them.
+Unit and integration tests compare unique keys, protocol values,
+notification dispatch and payloads, retry timing, cron schedules, and snooze
+counting with fixtures that River's Go implementation generates into
+`conformance/testdata`, the same files the Rust port reads. They aren't
+committed: `make test/js` and `make test/js/integration` generate them
+first, so Go is needed to run the tests, and `pnpm run test` or
+`pnpm run test:integration` needs a prior `make generate/fixtures` from the
+repository root. A missing fixture fails its test. `make test/js/conformance`
+runs just the unit checks, including both drivers' notification adapters
+without a Postgres server. The two raw JSON unique-key cases involving
+duplicate keys or integer-key insertion order are Rust-only because
+JavaScript objects cannot preserve them.
 
 The private `@riverqueue/conformance` package in `conformance/` is River for
 JavaScript's adapter for the cross-language conformance harness in the
