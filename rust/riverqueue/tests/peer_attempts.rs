@@ -195,8 +195,6 @@ enum Take {
     ClaimUntilCancelled(&'static str),
     /// Claims the rows, then waits for the scenario's gate before returning.
     ClaimAfterGate,
-    /// Claims the rows, then raises a signal as it returns.
-    ClaimAndSignal(&'static str),
 }
 
 /// Forces the claim callback's signature.
@@ -302,7 +300,6 @@ async fn scripted_claim(
             signals.raise("claim holds its rows");
             gate.notified().await;
         }
-        Take::ClaimAndSignal(signal) => signals.raise(signal),
         _ => {}
     }
     Ok(rows)
@@ -1264,15 +1261,24 @@ async fn assert_failed_commits_release_reservations(builder: riverqueue::ClientB
 
 /// An attempt abandoned after its worker outlived an abort leaves its peers
 /// to the rescuer but stops owning them, so a later attempt of the same
-/// client can claim them. With `racing_claim`, a claim still committing when
-/// the attempt is abandoned is refused once it commits and gives its rows
-/// back too; that needs a commit slow enough to abandon the attempt during
-/// it.
-async fn assert_abandoned_attempts_release_peers(
+/// client can claim them.
+async fn assert_abandoned_attempts_release_peers(builder: riverqueue::ClientBuilder, db: Db) {
+    let (mut run, unblock) = start_abandoned_attempt(builder, db, false).await;
+    tokio::time::timeout(WAIT, run.handle.stop_and_cancel())
+        .await
+        .expect("client stops")
+        .unwrap();
+    assert_abandoned_peers_reclaimed(run, unblock).await;
+}
+
+/// Starts an attempt that blocks its worker's thread after claiming a peer.
+/// With `racing_claim`, another claim runs in a separate task; its commit
+/// must be held open by the caller until after the attempt is abandoned.
+async fn start_abandoned_attempt(
     builder: riverqueue::ClientBuilder,
     db: Db,
     racing_claim: bool,
-) {
+) -> (Run, std::sync::mpsc::Sender<()>) {
     let (unblock, blocked) = std::sync::mpsc::channel::<()>();
     let blocked = Arc::new(Mutex::new(Some(blocked)));
     let runs = Arc::new(std::sync::atomic::AtomicUsize::new(0));
@@ -1288,22 +1294,23 @@ async fn assert_abandoned_attempts_release_peers(
                     let claim_env = env.clone();
                     let claim_context = context.clone();
                     tokio::spawn(async move {
+                        claim_env.signals.raise("claim started");
                         let claimed = claim_env
-                            .claim(
-                                &claim_context,
-                                Take::ClaimAndSignal("claim commits"),
-                                &claim_env.peers[1..],
-                            )
+                            .claim(&claim_context, Take::Claim, &claim_env.peers[1..])
                             .await;
-                        claim_env.signals.raise(
-                            if claimed.is_err_and(|error| peer_error(&error, "running attempt")) {
-                                "late claim refused"
-                            } else {
-                                "late claim accepted"
-                            },
+                        let mut checks = Checks::new();
+                        check(
+                            &mut checks,
+                            &format!("claim refused after abandonment: {claimed:?}"),
+                            claimed
+                                .as_ref()
+                                .is_err_and(|error| peer_error(error, "running attempt")),
                         );
+                        let _ = claim_env.checks.send(checks);
                     });
-                    env.signals.wait("claim commits").await;
+                    // Let the spawned task leave this worker's local queue
+                    // before blocking the worker thread below.
+                    env.signals.wait("claim started").await;
                 }
                 env.signals.raise("coordinator blocks");
                 // Blocks the worker's thread, so neither cancellation nor an
@@ -1335,7 +1342,7 @@ async fn assert_abandoned_attempts_release_peers(
         })
     });
     let peers = if racing_claim { 2 } else { 1 };
-    let mut run = Run::start(
+    let run = Run::start(
         builder.job_stuck_threshold(Duration::from_millis(50)),
         db,
         peers,
@@ -1343,13 +1350,11 @@ async fn assert_abandoned_attempts_release_peers(
     )
     .await;
     run.env.signals.wait("coordinator blocks").await;
-    tokio::time::timeout(WAIT, run.handle.stop_and_cancel())
-        .await
-        .expect("client stops")
-        .unwrap();
-    if racing_claim {
-        run.env.signals.wait("late claim refused").await;
-    }
+    (run, unblock)
+}
+
+/// Releases the abandoned worker and checks a new attempt can own its peers.
+async fn assert_abandoned_peers_reclaimed(mut run: Run, unblock: std::sync::mpsc::Sender<()>) {
     unblock.send(()).unwrap();
 
     run.client.insert(CoordinatorArgs {}).await.unwrap();
@@ -1385,32 +1390,76 @@ mod postgres {
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
     async fn abandoned_attempts_release_peers() {
         let schema = PostgresSchema::new("peer_abandoned").await;
-        assert_abandoned_attempts_release_peers(builder(&schema), db(&schema), false).await;
+        assert_abandoned_attempts_release_peers(builder(&schema), db(&schema)).await;
         schema.cleanup().await;
     }
 
-    /// Only PostgreSQL can hold a commit open long enough to abandon the
-    /// attempt while its claim commits.
+    /// Holds the second peer's commit until River has abandoned its coordinator.
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
     async fn claims_committing_while_abandoned_release_peers() {
         let schema = PostgresSchema::new("peer_abandon_race").await;
-        let db = db(&schema);
-        slow_peer_commits(&db).await;
-        assert_abandoned_attempts_release_peers(builder(&schema), db, true).await;
+        let commit_gate = block_peer_commit(&schema, 2).await;
+        let (mut run, unblock) = start_abandoned_attempt(builder(&schema), db(&schema), true).await;
+        wait_for_peer_commit(&schema).await;
+        tokio::time::timeout(WAIT, run.handle.stop_and_cancel())
+            .await
+            .expect("client stops while the peer claim commits")
+            .unwrap();
+        commit_gate.commit().await.unwrap();
+        run.assert_checks().await;
+        assert_abandoned_peers_reclaimed(run, unblock).await;
         schema.cleanup().await;
     }
 
-    /// Makes each commit that changes a peer job take a second.
-    async fn slow_peer_commits(db: &Db) {
-        db.raw(
-            "CREATE FUNCTION {function}() RETURNS trigger LANGUAGE plpgsql AS $$ \
-             BEGIN IF NEW.kind = 'peer_job' AND NEW.state = 'running' THEN \
-             PERFORM pg_sleep(1); END IF; RETURN NULL; END $$; \
-             CREATE CONSTRAINT TRIGGER slow_peer_commit AFTER UPDATE ON {table} \
-             DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION {function}();",
-            "",
-        )
-        .await;
+    /// Holds a peer's commit on a schema-specific lock until the gate commits.
+    async fn block_peer_commit(
+        schema: &PostgresSchema,
+        value: i64,
+    ) -> sqlx::Transaction<'static, sqlx::Postgres> {
+        let mut gate = schema.pool.begin().await.unwrap();
+        sqlx::query("SELECT pg_advisory_xact_lock($1::regclass::oid::int, 1)")
+            .bind(schema.table("river_job"))
+            .execute(&mut *gate)
+            .await
+            .unwrap();
+        db(schema)
+            .raw(
+                &format!(
+                    "CREATE FUNCTION {{function}}() RETURNS trigger LANGUAGE plpgsql AS $$ \
+                 BEGIN IF NEW.kind = 'peer_job' AND NEW.state = 'running' \
+                 AND (NEW.args->>'value')::bigint = {value} THEN \
+                 PERFORM pg_advisory_xact_lock(TG_RELID::int, 1); \
+                 END IF; RETURN NULL; END $$; \
+                 CREATE CONSTRAINT TRIGGER block_peer_commit AFTER UPDATE ON {{table}} \
+                 DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION {{function}}();"
+                ),
+                "",
+            )
+            .await;
+        gate
+    }
+
+    /// Waits for the deferred trigger, after the claim's cancellation check.
+    async fn wait_for_peer_commit(schema: &PostgresSchema) {
+        tokio::time::timeout(WAIT, async {
+            loop {
+                let blocked: bool = sqlx::query_scalar(
+                    "SELECT EXISTS (SELECT 1 FROM pg_locks \
+                     WHERE locktype = 'advisory' AND NOT granted \
+                     AND classid = $1::regclass::oid AND objid = 1 AND objsubid = 2)",
+                )
+                .bind(schema.table("river_job"))
+                .fetch_one(&schema.pool)
+                .await
+                .unwrap();
+                if blocked {
+                    return;
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("peer claim reaches its commit");
     }
 
     #[tokio::test(flavor = "multi_thread")]
@@ -1427,29 +1476,24 @@ mod postgres {
         schema.cleanup().await;
     }
 
-    /// Only PostgreSQL can hold a commit open long enough to drop the claim
-    /// while it commits.
+    /// Holds the commit until the coordinator has dropped the claim's future.
     #[tokio::test(flavor = "multi_thread")]
     async fn claims_dropped_while_committing_release_reservations() {
         let schema = PostgresSchema::new("peer_commit_drop").await;
-        let db = db(&schema);
-        slow_peer_commits(&db).await;
+        let commit_gate = block_peer_commit(&schema, 1).await;
         let script: Script = Arc::new(|context, _row, env| {
             Box::pin(async move {
                 let mut checks = Checks::new();
-                let dropped = tokio::time::timeout(
-                    Duration::from_millis(300),
-                    env.claim(&context, Take::Claim, &env.peers),
-                )
-                .await;
-                check(
-                    &mut checks,
-                    "claim dropped while committing",
-                    dropped.is_err(),
-                );
+                let dropped = tokio::select! {
+                    biased;
+                    _ = env.claim(&context, Take::Claim, &env.peers) => false,
+                    () = env.gate.notified() => true,
+                };
+                check(&mut checks, "claim dropped while committing", dropped);
+                env.signals.raise("claim dropped");
                 // Waits for the commit the dropped claim started.
                 env.db
-                    .raw("DROP TRIGGER slow_peer_commit ON {table}", "")
+                    .raw("DROP TRIGGER block_peer_commit ON {table}", "")
                     .await;
                 let state = context
                     .client()
@@ -1483,7 +1527,11 @@ mod postgres {
                 WorkOutcome::Complete
             })
         });
-        let mut run = Run::start(builder(&schema), db, 1, script).await;
+        let mut run = Run::start(builder(&schema), db(&schema), 1, script).await;
+        wait_for_peer_commit(&schema).await;
+        run.env.gate.notify_one();
+        run.env.signals.wait("claim dropped").await;
+        commit_gate.commit().await.unwrap();
         run.assert_checks().await;
         run.stop().await;
         schema.cleanup().await;
@@ -1550,7 +1598,6 @@ mod sqlite {
         assert_abandoned_attempts_release_peers(
             Client::builder(pool.clone()),
             Db::Sqlite(pool.clone()),
-            false,
         )
         .await;
         sqlite_cleanup(pool, path).await;
