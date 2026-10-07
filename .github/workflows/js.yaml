@@ -13,7 +13,7 @@ on:
       - "conformance/**"
       - "js/**"
       - "riverdriver/**/*.sql"
-    tags: ["v*"]
+    tags: ["js/v*"]
   pull_request:
     paths:
       - ".github/actions/setup-js/**"
