@@ -1,0 +1,21 @@
+[package]
+name = "riverqueue-conformance"
+description = "River's Rust adapter for the cross-language conformance harness"
+# The harness builds and runs it from the workspace; it's never published.
+publish = false
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+async-trait.workspace = true
+chrono.workspace = true
+riverqueue = { path = "../riverqueue", features = ["postgres", "sqlite"] }
+serde.workspace = true
+serde_json.workspace = true
+tokio = { workspace = true, features = ["io-std", "io-util", "rt-multi-thread"] }
+tokio-util.workspace = true
+
+[lints]
+workspace = true

@@ -15,9 +15,9 @@ use std::{
 };
 
 use riverqueue::{
-    Client, ErrorHandler, ErrorHandlerDecision, EventKind, Hook, InsertOpts, Job, JobArgs, JobRow,
-    JobState, Metric, QueueConfig, WorkContext, WorkError, WorkMiddleware, WorkNext, WorkOutcome,
-    Workers,
+    Client, ErrorHandler, ErrorHandlerDecision, EventKind, Hook, InsertContext, InsertMiddleware,
+    InsertNext, InsertOpts, InsertedJob, Job, JobArgs, JobRow, JobState, Metric, QueueConfig,
+    WorkContext, WorkError, WorkMiddleware, WorkNext, WorkOutcome, Workers,
 };
 use riverqueue_migrate::SqliteMigrator;
 use serde::{Deserialize, Serialize};
@@ -112,6 +112,21 @@ impl WorkMiddleware for TracingMiddleware {
     }
 }
 
+struct TracingInsertMiddleware(Trace);
+
+impl InsertMiddleware for TracingInsertMiddleware {
+    async fn insert_many(
+        &self,
+        jobs: Vec<InsertContext>,
+        next: InsertNext<'_>,
+    ) -> Result<Vec<InsertedJob>, riverqueue::Error> {
+        self.0.push("insert middleware before");
+        let result = next.run(jobs).await;
+        self.0.push("insert middleware after");
+        result
+    }
+}
+
 /// Records work hooks and replaces a failure with a snooze, like a Go
 /// `HookWorkEnd` that returns a different error.
 struct TracingHook {
@@ -124,6 +139,11 @@ struct TracingHook {
     reason = "the hook only records state synchronously"
 )]
 impl Hook for TracingHook {
+    async fn insert_begin(&self, _insert: &mut InsertContext) -> Result<(), riverqueue::BoxError> {
+        self.trace.push("hook insert begin");
+        Ok(())
+    }
+
     async fn work_begin(
         &self,
         _context: &WorkContext,
@@ -178,6 +198,27 @@ impl ErrorHandler for PanickingErrorHandler {
     }
 }
 
+/// Cancels every failed job and counts its calls, like a Go `ErrorHandler`
+/// returning `SetCancelled`.
+#[derive(Clone, Default)]
+struct CancellingErrorHandler(Arc<AtomicUsize>);
+
+#[allow(
+    clippy::unused_async_trait_impl,
+    reason = "the handler only records state synchronously"
+)]
+impl ErrorHandler for CancellingErrorHandler {
+    async fn handle_error(
+        &self,
+        _context: &WorkContext,
+        _job: &JobRow,
+        _result: &riverqueue::WorkResult,
+    ) -> Result<ErrorHandlerDecision, riverqueue::BoxError> {
+        self.0.fetch_add(1, Ordering::SeqCst);
+        Ok(ErrorHandlerDecision::Cancel)
+    }
+}
+
 fn workers(trace: &Trace) -> Workers {
     let trace = trace.clone();
     let mut workers = Workers::new();
@@ -212,6 +253,7 @@ fn client(database: &TestDatabase, trace: &Trace, snooze_failures: bool) -> Clie
                 .with_fetch_poll_interval(Duration::from_millis(10)),
         )
         .workers(workers(trace))
+        .insert_middleware(TracingInsertMiddleware(trace.clone()))
         .work_middleware(TracingMiddleware(trace.clone(), "outer"))
         .work_middleware(TracingMiddleware(trace.clone(), "inner"))
         .hook(TracingHook {
@@ -263,9 +305,14 @@ async fn hooks_run_inside_middleware_around_the_worker_like_go() {
     let completed = work_until(&client, EventKind::JobCompleted, job.id()).await;
 
     assert_eq!(completed.state, JobState::Completed);
+    // Insert middleware wraps the insert hook, and insertion finishes
+    // before any work extension runs.
     assert_eq!(
         trace.entries(),
         [
+            "insert middleware before",
+            "hook insert begin",
+            "insert middleware after",
             "middleware outer before",
             "middleware inner before",
             "hook begin",
@@ -328,6 +375,44 @@ async fn panicking_error_handlers_still_persist_the_result() {
         client.jobs().get(job.id()).await.unwrap().state,
         JobState::Discarded
     );
+    database.close().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn error_handlers_cancel_failing_jobs_with_attempts_left() {
+    let database = TestDatabase::new().await;
+    let trace = Trace::default();
+    let handler = CancellingErrorHandler::default();
+    let client = Client::builder(database.pool.clone())
+        .queue(
+            "default",
+            QueueConfig::new(1)
+                .with_fetch_cooldown(Duration::from_millis(1))
+                .with_fetch_poll_interval(Duration::from_millis(10)),
+        )
+        .workers(workers(&trace))
+        .error_handler(handler.clone())
+        .build()
+        .unwrap();
+    let job = client
+        .insert(ExtensionArgs { fail: true })
+        .opts(InsertOpts::default().with_max_attempts(3))
+        .await
+        .unwrap();
+    // Waiting for the cancelled event asserts that it's emitted.
+    work_until(&client, EventKind::JobCancelled, job.id()).await;
+
+    // Like Go's `SetCancelled`, the handler's decision cancels the job after
+    // its first attempt despite the attempts left, keeping the error.
+    let cancelled = client.jobs().get(job.id()).await.unwrap();
+    assert_eq!(cancelled.state, JobState::Cancelled);
+    assert_eq!(cancelled.attempt, 1);
+    assert_eq!(cancelled.max_attempts, 3);
+    assert!(cancelled.finalized_at.is_some());
+    assert_eq!(cancelled.errors.len(), 1);
+    assert_eq!(cancelled.errors[0].attempt, 1);
+    assert_eq!(cancelled.errors[0].error, "worker failed on purpose");
+    assert_eq!(handler.0.load(Ordering::SeqCst), 1);
     database.close().await;
 }
 

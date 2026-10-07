@@ -32,6 +32,13 @@ committed. The `make test/rust` targets generate them first, so Go is needed
 to run the tests; when running `cargo test` directly, run `make
 generate/fixtures` beforehand. A missing fixture fails its test.
 
+The unpublished `riverqueue-conformance` crate is River Rust's adapter for
+the cross-language conformance harness in `conformance/harness`, which runs
+it against River Go on Postgres and SQLite. `make test/conformance/rust`
+builds it and runs the harness's pull request tier against
+`TEST_DATABASE_URL`; behavior one implementation shows alone is tested in
+the crates' own tests instead.
+
 `make check/rust/package` builds the five publishable crate archives and
 verifies that each one builds from its packaged sources, resolving the
 exact-version workspace dependencies from the other archives. It does not
