@@ -83,7 +83,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .queue("default", QueueConfig::new(10))
         .build()?;
     // Work jobs until Ctrl-C, then stop fetching and let running jobs finish.
-    let mut run = client.start_with_graceful_shutdown(async {
+    let mut run = client.start_with_graceful_stop(async {
         let _ = tokio::signal::ctrl_c().await;
     })?;
 

@@ -73,7 +73,7 @@ impl Client {
     ///
     /// ```no_run
     /// # async fn example(client: riverqueue::Client) -> Result<(), riverqueue::Error> {
-    /// let mut run = client.start_with_graceful_shutdown(async {
+    /// let mut run = client.start_with_graceful_stop(async {
     ///     let _ = tokio::signal::ctrl_c().await;
     /// })?;
     /// // Returns after Ctrl-C once in-flight jobs have finished.
@@ -84,7 +84,7 @@ impl Client {
     /// # Errors
     ///
     /// Returns the same errors as [`Client::start`].
-    pub fn start_with_graceful_shutdown<F>(&self, signal: F) -> Result<RunHandle, Error>
+    pub fn start_with_graceful_stop<F>(&self, signal: F) -> Result<RunHandle, Error>
     where
         F: std::future::Future<Output = ()> + Send + 'static,
     {
@@ -565,7 +565,7 @@ impl Stopper {
 /// handle as they were, apart from any stop the method already requested. To
 /// stop the client from another task, obtain a [`Stopper`] with
 /// [`RunHandle::stopper`] or start the client with
-/// [`Client::start_with_graceful_shutdown`].
+/// [`Client::start_with_graceful_stop`].
 ///
 /// The client's result is reported to the first call that observes it
 /// stopping; later calls return `Ok(())`.
@@ -627,7 +627,7 @@ impl RunHandle {
     ///
     /// This relinquishes waiting for the client: it runs until a [`Stopper`]
     /// obtained earlier from [`RunHandle::stopper`] or the signal passed to
-    /// [`Client::start_with_graceful_shutdown`] stops it, an essential service
+    /// [`Client::start_with_graceful_stop`] stops it, an essential service
     /// fails, or the process exits. Nothing observes its result, and jobs
     /// running when the process exits are left `running` for the rescuer.
     /// Most applications should keep the handle and await
