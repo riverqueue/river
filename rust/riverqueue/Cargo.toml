@@ -31,8 +31,8 @@ base64.workspace = true
 chrono.workspace = true
 chrono-tz = { version = "0.10.4", optional = true }
 futures-util.workspace = true
-riverqueue-migrate = { path = "../riverqueue-migrate", version = "=0.2.0", default-features = false }
-riverqueue-macros = { path = "../riverqueue-macros", version = "=0.2.0" }
+riverqueue-migrate = { path = "../riverqueue-migrate", version = "=0.3.0", default-features = false }
+riverqueue-macros = { path = "../riverqueue-macros", version = "=0.3.0" }
 rand = { workspace = true }
 serde.workspace = true
 serde_json.workspace = true
@@ -45,7 +45,7 @@ tracing.workspace = true
 
 [dev-dependencies]
 anyhow = "1.0.104"
-riverqueue-migrate = { path = "../riverqueue-migrate", version = "=0.2.0", features = ["postgres", "sqlite"] }
+riverqueue-migrate = { path = "../riverqueue-migrate", version = "=0.3.0", features = ["postgres", "sqlite"] }
 serde.workspace = true
 tracing-subscriber = { version = "0.3.20", default-features = false, features = ["registry", "std"] }
 # Fault-injection tests proxy database connections.

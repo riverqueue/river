@@ -26,8 +26,8 @@ path = "src/main.rs"
 doc = false
 
 [dependencies]
-riverqueue = { path = "../riverqueue", version = "=0.2.0", default-features = false }
-riverqueue-migrate = { path = "../riverqueue-migrate", version = "=0.2.0", default-features = false }
+riverqueue = { path = "../riverqueue", version = "=0.3.0", default-features = false }
+riverqueue-migrate = { path = "../riverqueue-migrate", version = "=0.3.0", default-features = false }
 serde.workspace = true
 sqlx = { workspace = true, features = ["tls-rustls"] }
 tokio = { workspace = true, features = ["macros", "rt-multi-thread", "signal"] }
