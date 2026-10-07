@@ -184,6 +184,22 @@ test/conformance/js: build/js/conformance
 test/conformance/nightly: ## Run conformance scenarios plus the nightly chaos and performance tier against CANDIDATE
 	cd conformance && RIVER_CONFORMANCE=$(CANDIDATE) RIVER_CONFORMANCE_NIGHTLY=1 go test ./harness -count=1 -timeout 30m
 
+# The harness builds the Rust adapter itself, but building it first reports
+# a compile error once rather than as every scenario's failure.
+.PHONY: build/rust/conformance
+build/rust/conformance:
+	cd rust && cargo build --locked -p riverqueue-conformance
+
+.PHONY: test/conformance/rust
+test/conformance/rust: ## Run conformance scenarios against River Rust
+test/conformance/rust: build/rust/conformance
+	$(MAKE) test/conformance CANDIDATE=rust
+
+.PHONY: test/conformance/rust/nightly
+test/conformance/rust/nightly: ## Run conformance scenarios plus the nightly tier against River Rust
+test/conformance/rust/nightly: build/rust/conformance
+	$(MAKE) test/conformance/nightly CANDIDATE=rust
+
 # `--cfg river_postgres_tests` builds the Rust Postgres integration tests.
 # It goes to both rustc and rustdoc so any doctest gated on it runs too, and
 # into its own target directory so switching it on and off doesn't rebuild
@@ -265,7 +281,7 @@ test/rust: generate/fixtures
 .PHONY: test/rust/conformance
 test/rust/conformance: ## Run Rust tests that check Go-generated conformance fixtures
 test/rust/conformance: generate/fixtures
-	cd rust && cargo test -p riverqueue --features chrono-tz --lib --test protocol_fixtures --locked
+	cd rust && cargo test -p riverqueue --features chrono-tz,sqlite --lib --test protocol_fixtures --test notification_fixtures --locked
 
 .PHONY: test/rust/postgres
 test/rust/postgres: ## Run all Rust tests, including Postgres integration tests (requires RIVER_RUST_DATABASE_URL)
@@ -323,11 +339,13 @@ check/rust/dependencies: ## Audit Rust advisories, licenses, bans, and sources
 # Cargo caches temporary registry dependencies by path and version. A fresh
 # build directory prevents stale sources and binaries after same-version edits.
 # Verified archives still go to the normal target/package directory.
+# `cargo package --workspace`, unlike `cargo publish`, includes crates marked
+# `publish = false`, so the conformance adapter is excluded by name.
 .PHONY: check/rust/package
 check/rust/package: ## Build and verify publishable crate archives without publishing
 	cd rust && package_build_dir=$$(mktemp -d) && \
 		trap 'rm -rf "$$package_build_dir"' EXIT && \
-		CARGO_BUILD_BUILD_DIR="$$package_build_dir" cargo package --workspace --allow-dirty --locked
+		CARGO_BUILD_BUILD_DIR="$$package_build_dir" cargo package --workspace --exclude riverqueue-conformance --allow-dirty --locked
 	cd rust && for crate in riverqueue riverqueue-cli riverqueue-macros riverqueue-migrate riverqueue-test; do \
 		! cargo package --list --allow-dirty --locked -p $$crate | grep -E '(^|/)(tests|fixtures|testdata)/|\.json$$' | grep -vxF .cargo_vcs_info.json || exit 1; \
 	done
