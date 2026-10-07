@@ -5,16 +5,13 @@ a fast and reliable background job system backed by PostgreSQL or SQLite. It
 shares River's database schema and job protocol with River for Go, so Rust
 and Go services can insert and work jobs in the same database.
 
-This crate is a pre-release preview. Each release matches the River for Go
-release with the same minor version; the
-[mixed deployment guide](https://docs.rs/riverqueue/latest/riverqueue/guide/mixed_deployments/index.html)
-covers running both against one database.
+The [mixed deployment guide](https://docs.rs/riverqueue/latest/riverqueue/guide/mixed_deployments/index.html) covers running both against one database.
 
 ## Installation
 
 ```toml
 [dependencies]
-riverqueue = "0.50.0-alpha.1"
+riverqueue = "0.1.0-alpha.1"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "signal"] }
@@ -31,7 +28,7 @@ Rust version is 1.95.
 | `chrono-tz` | no | IANA zone names such as `America/New_York` in cron `CRON_TZ=` and `TZ=` prefixes |
 
 For SQLite alone, use
-`riverqueue = { version = "0.50.0-alpha.1", default-features = false, features = ["sqlite"] }`.
+`riverqueue = { version = "0.1.0-alpha.1", default-features = false, features = ["sqlite"] }`.
 
 River's API uses types from SQLx (pools and transactions), Chrono
 (timestamps), `serde_json` (metadata, outputs, and other JSON values), and
