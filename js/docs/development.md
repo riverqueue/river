@@ -248,14 +248,14 @@ Run this section's commands from the repository root. The eight publishable pack
 
    ```shell
    test "$(git rev-parse HEAD)" = "$(git rev-parse "js/v$VERSION^{commit}")"
-   npm login
+   pnpm login
    pnpm -C js install --frozen-lockfile
    pnpm -C js run build:all
    for package in js js/migrate js/driver/pg js/driver/prisma js/driver/sqlite js/worker-threads js/test js/cli; do
-     pnpm -C "$package" publish --access public --tag latest --provenance=false || break
+     (cd "$package" && pnpm publish --access public --no-git-checks --tag latest --provenance=false) || break
    done
    ```
 
-   Complete npm's authentication prompts as needed. Publish packages individually because pnpm 10.22.0's recursive publication does not forward `--provenance=false` to npm. The loop publishes dependencies first and stops on failure; after a partial publication, remove the already-published packages from the loop before rerunning it. For a prerelease, use `--tag next` instead of `--tag latest`.
+   Complete npm's authentication prompts as needed. Publish packages individually because pnpm 10.22.0's recursive publication does not forward `--provenance=false` to npm. Run publication inside each package directory: `pnpm -C "$package" publish` in this version forwards extra arguments to npm and fails with `EUSAGE`. The loop publishes dependencies first and stops on failure; after a partial publication, remove the already-published packages from the loop before rerunning it. For a prerelease, use `--tag next` instead of `--tag latest`.
 
 7. Once all eight packages are published, create a [GitHub release](https://github.com/riverqueue/river/releases/new) for `js/v$VERSION` and copy the version's `js/CHANGELOG.md` notes into its body. Mark alpha, beta, and RC versions as prereleases.
