@@ -16,7 +16,7 @@ use riverqueue::__private::{ClientBuilderExt, ExtensionClient, PreparedInsertPar
 use riverqueue::__private::{MaintenanceService, MaintenanceServiceContext};
 use riverqueue::{
     BoxError, Client, EventKind, Hook, InsertBatch, InsertOpts, Job, JobArgs, JobRow, JobState,
-    MaintenanceConfig, QueueConfig, UniqueOpts, WorkContext, WorkOutcome, WorkerRegistry,
+    MaintenanceConfig, QueueConfig, UniqueOpts, WorkContext, WorkOutcome, Workers,
     database::DatabaseKind,
 };
 use riverqueue_migrate::SqliteMigrator;
@@ -399,10 +399,10 @@ fn remove_sqlite_files(database_path: &std::path::Path) {
     }
 }
 
-fn runtime_workers(worked: Arc<Semaphore>) -> WorkerRegistry {
-    let mut workers = WorkerRegistry::new();
+fn runtime_workers(worked: Arc<Semaphore>) -> Workers {
+    let mut workers = Workers::new();
     workers
-        .register_fn(move |_context: WorkContext, _job: Job<RuntimeArgs>| {
+        .add_fn(move |_context: WorkContext, _job: Job<RuntimeArgs>| {
             let worked = Arc::clone(&worked);
             async move {
                 worked.add_permits(1);
@@ -823,9 +823,9 @@ async fn sqlite_reinsert_preserves_wire_fields_and_runs_the_canonical_pipeline()
         .unwrap();
     let mut pilot = SqlitePilot::new();
     pilot.insert = Some(SelectionBehavior::Success);
-    let mut workers = WorkerRegistry::new();
+    let mut workers = Workers::new();
     workers
-        .register_fn(|_context: WorkContext, _job: Job<CancelArgs>| async move {
+        .add_fn(|_context: WorkContext, _job: Job<CancelArgs>| async move {
             Ok::<_, Infallible>(WorkOutcome::Complete)
         })
         .unwrap();
@@ -1163,9 +1163,9 @@ async fn sqlite_runs_jobs_and_persists_output() {
     let pool = setup().await;
     let worked = Arc::new(Semaphore::new(0));
     let worked_for_worker = Arc::clone(&worked);
-    let mut workers = WorkerRegistry::new();
+    let mut workers = Workers::new();
     workers
-        .register_fn(move |context: WorkContext, job: Job<RuntimeArgs>| {
+        .add_fn(move |context: WorkContext, job: Job<RuntimeArgs>| {
             let worked = Arc::clone(&worked_for_worker);
             async move {
                 context
@@ -1223,9 +1223,9 @@ async fn sqlite_worker_cancelling_its_own_token_fails_the_attempt_normally() {
     struct GaveUp;
 
     let pool = setup().await;
-    let mut workers = WorkerRegistry::new();
+    let mut workers = Workers::new();
     workers
-        .register_fn(|context: WorkContext, _job: Job<CancelArgs>| async move {
+        .add_fn(|context: WorkContext, _job: Job<CancelArgs>| async move {
             // Like a worker that cancels its subtasks through a drop guard
             // on its own token before returning.
             drop(context.cancellation_token().clone().drop_guard());
@@ -1280,9 +1280,9 @@ async fn sqlite_attempt_errors_record_when_the_attempt_started() {
     let pool = setup().await;
     let worker_started = Arc::new(Mutex::new(None));
     let worker_started_for_worker = Arc::clone(&worker_started);
-    let mut workers = WorkerRegistry::new();
+    let mut workers = Workers::new();
     workers
-        .register_fn(move |_context: WorkContext, _job: Job<CancelArgs>| {
+        .add_fn(move |_context: WorkContext, _job: Job<CancelArgs>| {
             let worker_started = Arc::clone(&worker_started_for_worker);
             async move {
                 *worker_started.lock().unwrap() = Some(chrono::Utc::now());
@@ -1475,9 +1475,9 @@ async fn sqlite_outbox_cancels_work_from_another_client() {
     let pool = setup().await;
     let started = Arc::new(Semaphore::new(0));
     let started_for_worker = Arc::clone(&started);
-    let mut workers = WorkerRegistry::new();
+    let mut workers = Workers::new();
     workers
-        .register_fn(move |context: WorkContext, _job: Job<CancelArgs>| {
+        .add_fn(move |context: WorkContext, _job: Job<CancelArgs>| {
             let started = Arc::clone(&started_for_worker);
             async move {
                 started.add_permits(1);
@@ -1535,9 +1535,9 @@ async fn sqlite_completion_event_follows_external_cancelled_state() {
     let pool = setup().await;
     let finish = Arc::new(Semaphore::new(0));
     let started = Arc::new(Semaphore::new(0));
-    let mut workers = WorkerRegistry::new();
+    let mut workers = Workers::new();
     workers
-        .register_fn({
+        .add_fn({
             let finish = Arc::clone(&finish);
             let started = Arc::clone(&started);
             move |_context: WorkContext, _job: Job<CancelIgnoredArgs>| {
@@ -1601,9 +1601,9 @@ async fn sqlite_fetches_and_discards_unregistered_kinds() {
         .opts(InsertOpts::default().with_max_attempts(1))
         .await
         .unwrap();
-    let mut workers = WorkerRegistry::new();
+    let mut workers = Workers::new();
     workers
-        .register_fn(|_context: WorkContext, _job: Job<RuntimeArgs>| async move {
+        .add_fn(|_context: WorkContext, _job: Job<RuntimeArgs>| async move {
             Ok::<_, Infallible>(WorkOutcome::Complete)
         })
         .unwrap();
@@ -1811,10 +1811,10 @@ async fn extension_claimed_rows_fail_undecodable_attempts_like_river_claims() {
 async fn set_state_extension_sees_jobs_deleted_while_worked() {
     let (pool, database_path) = setup_file_pool(Duration::from_secs(5)).await;
     let pilot = ClaimingPilot::default();
-    let mut workers = WorkerRegistry::new();
+    let mut workers = Workers::new();
     let delete_pool = pool.clone();
     workers
-        .register_fn(move |_context: WorkContext, job: Job<SelfDeletingArgs>| {
+        .add_fn(move |_context: WorkContext, job: Job<SelfDeletingArgs>| {
             let pool = delete_pool.clone();
             async move {
                 sqlx::query("DELETE FROM river_job WHERE id = ?")

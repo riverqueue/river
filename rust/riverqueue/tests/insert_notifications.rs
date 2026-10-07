@@ -47,13 +47,13 @@ fn many(queues: &[&str]) -> Vec<InsertManyItem<NotificationArgs>> {
 #[cfg(feature = "sqlite")]
 #[tokio::test]
 async fn fetch_cooldown_validates_against_queue_poll_intervals() {
-    use riverqueue::{Error, QueueConfig, WorkContext, WorkOutcome, WorkerRegistry};
+    use riverqueue::{Error, QueueConfig, WorkContext, WorkOutcome, Workers};
 
     let (pool, path) = support::sqlite_file_pool(1).await;
     let workers = || {
-        let mut workers = WorkerRegistry::new();
+        let mut workers = Workers::new();
         workers
-            .register_fn(
+            .add_fn(
                 |_context: WorkContext, _job: riverqueue::Job<NotificationArgs>| async {
                     Ok::<_, std::convert::Infallible>(WorkOutcome::Complete)
                 },

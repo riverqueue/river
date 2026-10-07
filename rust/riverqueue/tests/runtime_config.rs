@@ -16,7 +16,7 @@ use riverqueue::{
     BoxError, Client, EventKind, EventReceiver, EventRecvError, Extensions, Hook, InsertContext,
     InsertMiddleware, InsertNext, InsertedJob, Job, JobArgs, JobRow, JobState, Metric,
     PeriodicJobs, Plugin, QueueConfig, SubscribeConfig, WorkContext, WorkError, WorkMiddleware,
-    WorkNext, WorkOutcome, Worker, WorkerRegistry, database::PostgresDatabase,
+    WorkNext, WorkOutcome, Worker, Workers, database::PostgresDatabase,
 };
 use serde::{Deserialize, Serialize};
 use sqlx::AssertSqlSafe;
@@ -258,8 +258,8 @@ async fn setup_runtime() -> (Client, Arc<RuntimeCounts>, support::PostgresSchema
     let pool = database.pool.clone();
     let schema = database.schema.clone();
 
-    let mut workers = WorkerRegistry::new();
-    workers.register::<RuntimeArgs, _>(RuntimeWorker).unwrap();
+    let mut workers = Workers::new();
+    workers.add::<RuntimeArgs, _>(RuntimeWorker).unwrap();
     let counts = Arc::new(RuntimeCounts::default());
     let client = Client::builder(PostgresDatabase::new(pool).with_schema(schema))
         .default_max_attempts(7)
@@ -288,8 +288,8 @@ async fn completion_burst_does_not_lag_large_subscription() {
     let pool = database.pool.clone();
     let schema = database.schema.clone();
 
-    let mut workers = WorkerRegistry::new();
-    workers.register::<BurstArgs, _>(BurstWorker).unwrap();
+    let mut workers = Workers::new();
+    workers.add::<BurstArgs, _>(BurstWorker).unwrap();
     let client = Client::builder(PostgresDatabase::new(pool.clone()).with_schema(schema.clone()))
         .id("rust-runtime-burst-test")
         .without_notifications()
@@ -367,9 +367,9 @@ async fn external_terminal_state_wins_worker_completion_race() {
 
     let finish = Arc::new(Semaphore::new(0));
     let started = Arc::new(Semaphore::new(0));
-    let mut workers = WorkerRegistry::new();
+    let mut workers = Workers::new();
     workers
-        .register::<TerminalRaceArgs, _>(TerminalRaceWorker {
+        .add::<TerminalRaceArgs, _>(TerminalRaceWorker {
             finish: Arc::clone(&finish),
             started: Arc::clone(&started),
         })
@@ -458,9 +458,9 @@ async fn remote_cancellation_overrides_worker_snooze() {
     let schema = database.schema.clone();
 
     let started = Arc::new(Semaphore::new(0));
-    let mut workers = WorkerRegistry::new();
+    let mut workers = Workers::new();
     workers
-        .register::<CancelSnoozeArgs, _>(CancelSnoozeWorker {
+        .add::<CancelSnoozeArgs, _>(CancelSnoozeWorker {
             started: Arc::clone(&started),
         })
         .unwrap();
@@ -508,9 +508,9 @@ async fn shutdown_waits_for_active_work_and_soft_stop_escalates() {
 
     let graceful_finish = Arc::new(Semaphore::new(0));
     let graceful_started = Arc::new(Semaphore::new(0));
-    let mut graceful_workers = WorkerRegistry::new();
+    let mut graceful_workers = Workers::new();
     graceful_workers
-        .register::<ShutdownArgs, _>(ShutdownWorker {
+        .add::<ShutdownArgs, _>(ShutdownWorker {
             finish: Arc::clone(&graceful_finish),
             started: Arc::clone(&graceful_started),
         })
@@ -583,9 +583,9 @@ async fn shutdown_waits_for_active_work_and_soft_stop_escalates() {
     );
 
     let escalation_started = Arc::new(Semaphore::new(0));
-    let mut escalation_workers = WorkerRegistry::new();
+    let mut escalation_workers = Workers::new();
     escalation_workers
-        .register::<ShutdownArgs, _>(ShutdownWorker {
+        .add::<ShutdownArgs, _>(ShutdownWorker {
             finish: Arc::new(Semaphore::new(0)),
             started: Arc::clone(&escalation_started),
         })
@@ -758,8 +758,8 @@ async fn poll_only_and_subscription_configuration() {
 fn start_without_runtime_returns_error_and_is_restartable() {
     let runtime = tokio::runtime::Runtime::new().unwrap();
     let database = runtime.block_on(support::PostgresSchema::new("rt_missing"));
-    let mut workers = WorkerRegistry::new();
-    workers.register::<BurstArgs, _>(BurstWorker).unwrap();
+    let mut workers = Workers::new();
+    workers.add::<BurstArgs, _>(BurstWorker).unwrap();
     let client = Client::builder(
         PostgresDatabase::new(database.pool.clone()).with_schema(database.schema.clone()),
     )

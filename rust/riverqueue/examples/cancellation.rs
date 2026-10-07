@@ -11,8 +11,8 @@ use std::{error::Error, time::Duration};
 
 use riverqueue::sqlx::PgPool;
 use riverqueue::{
-    Client, Job, JobArgs, QueueConfig, WorkCancelled, WorkContext, WorkOutcome, Worker,
-    WorkerRegistry, migrate::PostgresMigrator,
+    Client, Job, JobArgs, QueueConfig, WorkCancelled, WorkContext, WorkOutcome, Worker, Workers,
+    migrate::PostgresMigrator,
 };
 use serde::{Deserialize, Serialize};
 
@@ -49,8 +49,8 @@ impl Worker<CancellableReport> for CancellableReportWorker {
 async fn main() -> Result<(), Box<dyn Error>> {
     let pool = PgPool::connect(&std::env::var("DATABASE_URL")?).await?;
     PostgresMigrator::new(pool.clone()).migrate_up().await?;
-    let mut workers = WorkerRegistry::new();
-    workers.register(CancellableReportWorker)?;
+    let mut workers = Workers::new();
+    workers.add(CancellableReportWorker)?;
     let client = Client::builder(pool)
         .workers(workers)
         .queue("default", QueueConfig::new(1))

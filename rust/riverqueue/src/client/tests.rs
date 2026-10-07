@@ -479,9 +479,9 @@ async fn subscription_forwarder_stops_when_the_receiver_drops() {
     #[river(kind = "subscription_forwarder_test")]
     struct ForwarderArgs {}
 
-    let mut workers = WorkerRegistry::new();
+    let mut workers = Workers::new();
     workers
-        .register_fn(|_context: WorkContext, _job: Job<ForwarderArgs>| async {
+        .add_fn(|_context: WorkContext, _job: Job<ForwarderArgs>| async {
             Ok::<_, std::convert::Infallible>(WorkOutcome::Complete)
         })
         .unwrap();
@@ -674,9 +674,9 @@ async fn readiness_survives_a_notification_listener_panic() {
         .migrate_up()
         .await
         .unwrap();
-    let mut workers = WorkerRegistry::new();
+    let mut workers = Workers::new();
     workers
-        .register_fn(|_context: WorkContext, _job: Job<ReadinessArgs>| async {
+        .add_fn(|_context: WorkContext, _job: Job<ReadinessArgs>| async {
             Ok::<_, std::convert::Infallible>(WorkOutcome::Complete)
         })
         .unwrap();

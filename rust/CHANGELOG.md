@@ -10,11 +10,15 @@ Changes to River for Go are recorded in the [repository changelog](../CHANGELOG.
 
 ## [Unreleased]
 
+### Changed
+
+- **Breaking:** Renamed `WorkerRegistry` to `Workers`, `register` to `add`, and `register_fn` to `add_fn` to align worker registration with Go's naming. Both methods retain their `Result` return type and registration behavior. [PR #1469](https://github.com/riverqueue/river/pull/1469).
+
 ## [0.2.0] - 2026-10-06
 
 ### Changed
 
-- Renamed `Client::start_with_graceful_shutdown` to `Client::start_with_graceful_stop` to match River's standard start/stop terminology. This is a rare breaking name change as the new Rust API stabilizes. [PR #1467](https://github.com/riverqueue/river/pull/1467).
+- **Breaking:** Renamed `Client::start_with_graceful_shutdown` to `Client::start_with_graceful_stop` to match River's standard start/stop terminology. This is a rare breaking name change as the new Rust API stabilizes. [PR #1467](https://github.com/riverqueue/river/pull/1467).
 
 ## [0.1.0] - 2026-10-06
 

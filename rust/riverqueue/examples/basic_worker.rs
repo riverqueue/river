@@ -8,8 +8,8 @@ use std::error::Error;
 
 use riverqueue::sqlx::PgPool;
 use riverqueue::{
-    BoxError, Client, EventKind, Job, JobArgs, QueueConfig, WorkContext, WorkOutcome,
-    WorkerRegistry, migrate::PostgresMigrator,
+    BoxError, Client, EventKind, Job, JobArgs, QueueConfig, WorkContext, WorkOutcome, Workers,
+    migrate::PostgresMigrator,
 };
 use serde::{Deserialize, Serialize};
 
@@ -30,8 +30,8 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let pool = PgPool::connect(&std::env::var("DATABASE_URL")?).await?;
     // Apply River's schema before starting a client.
     PostgresMigrator::new(pool.clone()).migrate_up().await?;
-    let mut workers = WorkerRegistry::new();
-    workers.register_fn(send_email)?;
+    let mut workers = Workers::new();
+    workers.add_fn(send_email)?;
     let client = Client::builder(pool)
         .workers(workers)
         .queue("default", QueueConfig::new(10))

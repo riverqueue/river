@@ -13,7 +13,7 @@ use std::{
 
 use riverqueue::{
     Client, EventKind, EventReceiver, EventRecvError, InsertOpts, Job, JobArgs, QueueConfig,
-    SubscribeConfig, WorkContext, WorkOutcome, Worker, WorkerRegistry, database::SchemaName,
+    SubscribeConfig, WorkContext, WorkOutcome, Worker, Workers, database::SchemaName,
 };
 use serde::{Deserialize, Serialize};
 use sqlx::{
@@ -467,8 +467,8 @@ async fn run_benchmark(options: BenchOptions) -> Result<(), Box<dyn StdError + S
 }
 
 fn benchmark_client(pool: PgPool, max_workers: usize) -> Result<Client, riverqueue::Error> {
-    let mut workers = WorkerRegistry::new();
-    workers.register::<BenchmarkArgs, _>(BenchmarkWorker)?;
+    let mut workers = Workers::new();
+    workers.add::<BenchmarkArgs, _>(BenchmarkWorker)?;
     Client::builder(pool)
         .id("riverqueue-benchmark")
         .workers(workers)

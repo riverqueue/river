@@ -22,7 +22,7 @@ use riverqueue::{
     Client, EventKind, InsertBatch, InsertOpts, IntervalSchedule, Job, JobArgs, JobListOrderBy,
     JobListParams, JobRow, JobState, JobUpdateParams, MaintenanceConfig, PeriodicJob,
     PeriodicJobOpts, QueueConfig, QueueListParams, UniqueOpts, WorkContext, WorkError, WorkOutcome,
-    Worker, WorkerRegistry, WorkerTimeout,
+    Worker, WorkerTimeout, Workers,
     database::{PostgresDatabase, PostgresReindexConfig, PostgresReindexSchedule},
 };
 use riverqueue_migrate::{Direction, MigrateOpts};
@@ -1262,8 +1262,8 @@ async fn maintenance_cleans_old_jobs_and_queues_and_reindexes() {
     .await
     .unwrap();
 
-    let mut cleanup_workers = WorkerRegistry::new();
-    cleanup_workers.register::<EchoArgs, _>(EchoWorker).unwrap();
+    let mut cleanup_workers = Workers::new();
+    cleanup_workers.add::<EchoArgs, _>(EchoWorker).unwrap();
     let cleanup_client = Client::builder(
         PostgresDatabase::new(pool.clone()).with_reindex(
             PostgresReindexConfig::default()
@@ -1615,18 +1615,18 @@ async fn rescuer_honors_worker_timeout_and_retry_overrides() {
         .await
         .unwrap();
 
-    let mut workers = WorkerRegistry::new();
+    let mut workers = Workers::new();
     workers
-        .register::<RescueDefaultTimeoutArgs, _>(RescueDefaultTimeoutWorker)
+        .add::<RescueDefaultTimeoutArgs, _>(RescueDefaultTimeoutWorker)
         .unwrap();
     workers
-        .register::<RescueDisabledTimeoutArgs, _>(RescueDisabledTimeoutWorker)
+        .add::<RescueDisabledTimeoutArgs, _>(RescueDisabledTimeoutWorker)
         .unwrap();
     workers
-        .register::<RescueLongTimeoutArgs, _>(RescueLongTimeoutWorker)
+        .add::<RescueLongTimeoutArgs, _>(RescueLongTimeoutWorker)
         .unwrap();
     workers
-        .register::<RescueRetryOverrideArgs, _>(RescueRetryOverrideWorker)
+        .add::<RescueRetryOverrideArgs, _>(RescueRetryOverrideWorker)
         .unwrap();
     let client = Client::builder(
         PostgresDatabase::new(pool.clone())
@@ -1704,9 +1704,9 @@ async fn resumable_cursor_and_transactional_checkpoints() {
 
     let cursor_values = Arc::new(Mutex::new(Vec::new()));
     let validate_runs = Arc::new(AtomicUsize::new(0));
-    let mut workers = WorkerRegistry::new();
+    let mut workers = Workers::new();
     workers
-        .register::<ResumableCheckpointArgs, _>(ResumableCheckpointWorker {
+        .add::<ResumableCheckpointArgs, _>(ResumableCheckpointWorker {
             cursor_values: Arc::clone(&cursor_values),
             pool: pool.clone(),
             validate_runs: Arc::clone(&validate_runs),
@@ -1830,9 +1830,9 @@ async fn resumable_cursor_and_transactional_checkpoints() {
 async fn stop_and_cancel_fails_a_job_ignoring_cancellation() {
     let database = support::PostgresSchema::current("rs_interrupt").await;
 
-    let mut workers = WorkerRegistry::new();
+    let mut workers = Workers::new();
     workers
-        .register::<IgnoresCancelArgs, _>(IgnoresCancelWorker)
+        .add::<IgnoresCancelArgs, _>(IgnoresCancelWorker)
         .unwrap();
     let client = Client::builder(database.pool.clone())
         .id("rust-interrupt-client")
@@ -2010,12 +2010,10 @@ async fn transactional_inserts_become_visible_on_commit() {
 
 /// Builds the maintenance client shared by the pilot and rescuer tests.
 fn maintenance_client(pool: &PgPool, pilot: TestPilot) -> Client {
-    let mut maintenance_workers = WorkerRegistry::new();
+    let mut maintenance_workers = Workers::new();
+    maintenance_workers.add::<EchoArgs, _>(EchoWorker).unwrap();
     maintenance_workers
-        .register::<EchoArgs, _>(EchoWorker)
-        .unwrap();
-    maintenance_workers
-        .register::<TransactionalArgs, _>(TransactionalWorker { pool: pool.clone() })
+        .add::<TransactionalArgs, _>(TransactionalWorker { pool: pool.clone() })
         .unwrap();
     Client::builder(pool.clone())
         .id("rust-maintenance-client")
@@ -2088,11 +2086,11 @@ async fn wait_for_state(client: &Client, id: i64, expected: JobState) -> JobRow 
 /// Builds a client on the pool's current schema that works the basic
 /// conformance job kinds.
 fn worker_client(pool: &PgPool, resumable: ResumableWorker) -> Client {
-    let mut workers = WorkerRegistry::new();
-    workers.register::<CancelArgs, _>(CancelWorker).unwrap();
-    workers.register::<EchoArgs, _>(EchoWorker).unwrap();
-    workers.register::<FailArgs, _>(FailWorker).unwrap();
-    workers.register::<ResumableArgs, _>(resumable).unwrap();
+    let mut workers = Workers::new();
+    workers.add::<CancelArgs, _>(CancelWorker).unwrap();
+    workers.add::<EchoArgs, _>(EchoWorker).unwrap();
+    workers.add::<FailArgs, _>(FailWorker).unwrap();
+    workers.add::<ResumableArgs, _>(resumable).unwrap();
     Client::builder(pool.clone())
         .id("rust-conformance-client")
         .workers(workers)

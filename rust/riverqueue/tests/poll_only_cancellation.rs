@@ -12,7 +12,7 @@ use std::{convert::Infallible, sync::Arc, time::Duration};
 
 use riverqueue::{
     __private::Database, Client, EventKind, Job, JobArgs, JobState, QueueConfig, WorkContext,
-    WorkOutcome, WorkerRegistry,
+    WorkOutcome, Workers,
 };
 use serde::{Deserialize, Serialize};
 use tokio::sync::Semaphore;
@@ -62,10 +62,10 @@ impl Backend {
 async fn polls_for_remote_cancellation(backend: Backend) {
     for while_stopping in [false, true] {
         let started = Arc::new(Semaphore::new(0));
-        let mut workers = WorkerRegistry::new();
+        let mut workers = Workers::new();
         let worker_started = Arc::clone(&started);
         workers
-            .register_fn(move |context: WorkContext, _job: Job<WaitArgs>| {
+            .add_fn(move |context: WorkContext, _job: Job<WaitArgs>| {
                 let started = Arc::clone(&worker_started);
                 async move {
                     started.add_permits(1);

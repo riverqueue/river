@@ -6,7 +6,7 @@ mod support;
 
 use riverqueue::{Client, InsertOpts, JobArgs, JobMetadata, JobRow, JobUpdateParams};
 #[cfg(feature = "sqlite")]
-use riverqueue::{Job, JobState, QueueConfig, WorkContext, WorkOutcome, WorkerRegistry};
+use riverqueue::{Job, JobState, QueueConfig, WorkContext, WorkOutcome, Workers};
 use serde::{Deserialize, Serialize};
 #[cfg(feature = "sqlite")]
 use std::{convert::Infallible, time::Duration};
@@ -250,9 +250,9 @@ async fn sqlite_reads_metadata_with_large_numbers() {
 #[tokio::test]
 async fn sqlite_snooze_preserves_large_metadata_numbers() {
     let (pool, path) = support::sqlite_file_pool(4).await;
-    let mut workers = WorkerRegistry::new();
+    let mut workers = Workers::new();
     workers
-        .register_fn(|_context: WorkContext, _job: Job<SnoozeArgs>| async {
+        .add_fn(|_context: WorkContext, _job: Job<SnoozeArgs>| async {
             Ok::<_, Infallible>(WorkOutcome::Snooze(Duration::from_hours(1)))
         })
         .unwrap();

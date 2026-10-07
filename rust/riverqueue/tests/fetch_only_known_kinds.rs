@@ -11,7 +11,7 @@ use std::{collections::HashSet, convert::Infallible, time::Duration};
 
 use riverqueue::{
     __private::Database, Client, EventKind, Job, JobArgs, JobState, QueueConfig, WorkContext,
-    WorkOutcome, WorkerRegistry,
+    WorkOutcome, Workers,
 };
 use serde::{Deserialize, Serialize};
 
@@ -71,9 +71,9 @@ async fn claims_only_registered_kinds(backend: Backend) {
     let known = inserter.insert(KnownArgs {}).await.unwrap().job.row.id;
     let alias = inserter.insert(AliasArgs {}).await.unwrap().job.row.id;
 
-    let mut workers = WorkerRegistry::new();
+    let mut workers = Workers::new();
     workers
-        .register_fn(|_context: WorkContext, _job: Job<KnownArgs>| async {
+        .add_fn(|_context: WorkContext, _job: Job<KnownArgs>| async {
             Ok::<_, Infallible>(WorkOutcome::Complete)
         })
         .unwrap();

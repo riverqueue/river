@@ -23,7 +23,7 @@ use riverqueue::__private::{
 };
 use riverqueue::{
     BoxError, Client, ErrorHandler, ErrorHandlerDecision, Event, EventKind, InsertOpts, Job,
-    JobArgs, JobRow, JobState, QueueConfig, WorkContext, WorkOutcome, WorkResult, WorkerRegistry,
+    JobArgs, JobRow, JobState, QueueConfig, WorkContext, WorkOutcome, WorkResult, Workers,
 };
 use serde::{Deserialize, Serialize};
 use tokio::sync::{Notify, mpsc};
@@ -478,10 +478,10 @@ impl Run {
             signals: Signals::default(),
         };
         let env_slot = Arc::new(Mutex::new(None::<Env>));
-        let mut workers = WorkerRegistry::new();
+        let mut workers = Workers::new();
         let worker_env = Arc::clone(&env_slot);
         workers
-            .register_fn(move |context: WorkContext, job: Job<CoordinatorArgs>| {
+            .add_fn(move |context: WorkContext, job: Job<CoordinatorArgs>| {
                 let env = worker_env
                     .lock()
                     .unwrap()
@@ -491,13 +491,13 @@ impl Run {
                 async move { Ok::<_, BoxError>(run.await) }
             })
             .unwrap()
-            .register_fn(|_context: WorkContext, _job: Job<PeerArgs>| async {
+            .add_fn(|_context: WorkContext, _job: Job<PeerArgs>| async {
                 Ok::<_, BoxError>(WorkOutcome::Complete)
             })
             .unwrap();
         let busy_env = Arc::clone(&env_slot);
         workers
-            .register_fn(move |_context: WorkContext, _job: Job<BusyArgs>| {
+            .add_fn(move |_context: WorkContext, _job: Job<BusyArgs>| {
                 let env = busy_env.lock().unwrap().clone().expect("scenario started");
                 async move {
                     let released = env.busy.notified();

@@ -14,7 +14,7 @@ use riverqueue::{
     Client, Error, EventKind, InsertBatch, InsertContext, InsertMiddleware, InsertNext, InsertOpts,
     InsertedJob, Job, JobArgs, JobDeleteManyParams, JobListParams, JobState, JobUpdateParams,
     QueueConfig, QueueListParams, QueueSelector, QueueUpdateParams, UniqueOpts, WorkContext,
-    WorkOutcome, WorkerRegistry,
+    WorkOutcome, Workers,
 };
 use serde::{Deserialize, Serialize};
 
@@ -108,9 +108,9 @@ macro_rules! scenarios {
         async fn cancelled_job_that_succeeds_is_completed() {
             let fixture = Fixture::new().await;
             let (started_sender, mut started) = tokio::sync::mpsc::unbounded_channel();
-            let mut workers = WorkerRegistry::new();
+            let mut workers = Workers::new();
             workers
-                .register_fn(move |context: WorkContext, job: Job<BlockingArgs>| {
+                .add_fn(move |context: WorkContext, job: Job<BlockingArgs>| {
                     let started_sender = started_sender.clone();
                     async move {
                         let _ = started_sender.send(job.id());
@@ -389,10 +389,10 @@ macro_rules! scenarios {
                 ids.push(id);
             }
             let worked = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
-            let mut workers = WorkerRegistry::new();
+            let mut workers = Workers::new();
             let recorder = std::sync::Arc::clone(&worked);
             workers
-                .register_fn(move |_context: WorkContext, job: Job<HandleArgs>| {
+                .add_fn(move |_context: WorkContext, job: Job<HandleArgs>| {
                     let recorder = std::sync::Arc::clone(&recorder);
                     async move {
                         recorder.lock().unwrap().push(job.id());
@@ -423,9 +423,9 @@ macro_rules! scenarios {
         async fn cancel_reaches_a_running_job_on_a_poll_only_client() {
             let fixture = Fixture::new().await;
             let (started_sender, mut started) = tokio::sync::mpsc::unbounded_channel();
-            let mut workers = WorkerRegistry::new();
+            let mut workers = Workers::new();
             workers
-                .register_fn(move |context: WorkContext, job: Job<BlockingArgs>| {
+                .add_fn(move |context: WorkContext, job: Job<BlockingArgs>| {
                     let started_sender = started_sender.clone();
                     async move {
                         let _ = started_sender.send(job.id());
@@ -867,10 +867,10 @@ macro_rules! scenarios {
     };
 }
 
-fn workers() -> WorkerRegistry {
-    let mut workers = WorkerRegistry::new();
+fn workers() -> Workers {
+    let mut workers = Workers::new();
     workers
-        .register_fn(|_context: WorkContext, _job: Job<HandleArgs>| async {
+        .add_fn(|_context: WorkContext, _job: Job<HandleArgs>| async {
             Ok::<_, Infallible>(WorkOutcome::Complete)
         })
         .unwrap();

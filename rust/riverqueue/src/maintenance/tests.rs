@@ -32,7 +32,7 @@ use super::{
 };
 use crate::{
     Client, Job, JobArgs, JobState, MaintenanceConfig, QueueConfig, SchemaName, UniqueOpts,
-    WorkContext, WorkOutcome, Worker, WorkerRegistry, WorkerTimeout,
+    WorkContext, WorkOutcome, Worker, WorkerTimeout, Workers,
     database::{PostgresDatabase, PostgresReindexConfig},
 };
 
@@ -80,13 +80,11 @@ impl Worker<ShortTimeoutArgs> for ShortTimeoutWorker {
     }
 }
 
-fn workers() -> WorkerRegistry {
-    let mut workers = WorkerRegistry::new();
+fn workers() -> Workers {
+    let mut workers = Workers::new();
+    workers.add::<NoTimeoutArgs, _>(NoTimeoutWorker).unwrap();
     workers
-        .register::<NoTimeoutArgs, _>(NoTimeoutWorker)
-        .unwrap();
-    workers
-        .register::<ShortTimeoutArgs, _>(ShortTimeoutWorker)
+        .add::<ShortTimeoutArgs, _>(ShortTimeoutWorker)
         .unwrap();
     workers
 }

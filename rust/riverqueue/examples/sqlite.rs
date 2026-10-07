@@ -11,7 +11,7 @@ use std::{error::Error, str::FromStr, time::Duration};
 
 use riverqueue::sqlx::sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePoolOptions};
 use riverqueue::{
-    Client, EventKind, Job, JobArgs, QueueConfig, WorkContext, WorkOutcome, WorkerRegistry,
+    Client, EventKind, Job, JobArgs, QueueConfig, WorkContext, WorkOutcome, Workers,
     migrate::SqliteMigrator,
 };
 use serde::{Deserialize, Serialize};
@@ -49,8 +49,8 @@ async fn main() -> Result<(), Box<dyn Error>> {
     // Apply River's schema before starting a client.
     SqliteMigrator::new(pool.clone()).migrate_up().await?;
 
-    let mut workers = WorkerRegistry::new();
-    workers.register_fn(resize_image)?;
+    let mut workers = Workers::new();
+    workers.add_fn(resize_image)?;
     let client = Client::builder(pool.clone())
         .workers(workers)
         .queue("default", QueueConfig::new(4))

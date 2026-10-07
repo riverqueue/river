@@ -49,7 +49,7 @@ apply River's migrations, and start a client:
 use riverqueue::migrate::PostgresMigrator;
 use riverqueue::sqlx::PgPool;
 use riverqueue::{
-    BoxError, Client, Job, JobArgs, QueueConfig, WorkContext, WorkOutcome, WorkerRegistry,
+    BoxError, Client, Job, JobArgs, QueueConfig, WorkContext, WorkOutcome, Workers,
 };
 use serde::{Deserialize, Serialize};
 
@@ -75,8 +75,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // `riverqueue migrate-up` from `riverqueue-cli` at deploy time instead.
     PostgresMigrator::new(pool.clone()).migrate_up().await?;
 
-    let mut workers = WorkerRegistry::new();
-    workers.register_fn(send_email)?;
+    let mut workers = Workers::new();
+    workers.add_fn(send_email)?;
 
     let client = Client::builder(pool)
         .workers(workers)
@@ -229,8 +229,12 @@ completes the job. After the configured stuck threshold, River can abort a
 Tokio task that yields, which fails its attempt, but it can't stop CPU-bound
 work or a blocking call already in progress.
 
+Collect workers in [`Workers`], the equivalent of Go's `Workers` bundle.
+Use [`Workers::add`] to add a [`Worker`] implementation, like Go's `AddWorker`.
 Implement [`Worker`] when a kind needs a custom timeout or next-retry decision.
-Use `WorkerRegistry::register_fn` for an async function or capturing closure.
+Use [`Workers::add_fn`] for an async function or capturing closure; it combines
+Go's `WorkFunc` adapter and registration in one call. Both methods return
+`Result` so registration errors can be propagated with `?`.
 
 ## Events
 

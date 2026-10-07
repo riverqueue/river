@@ -25,7 +25,7 @@ use riverqueue::{
     __private::{DatabaseConnection, JobSetStateParams, Pilot, PilotError},
     AttemptError, BoxError, Client, ErrorHandler, ErrorHandlerDecision, EventKind, InsertOpts, Job,
     JobArgs, JobEventKind, JobRow, JobState, QueueConfig, RetryPolicy, WorkCancelled, WorkContext,
-    WorkOutcome, WorkResult, WorkerRegistry,
+    WorkOutcome, WorkResult, Workers,
     database::{PostgresDatabase, SchemaName},
 };
 use riverqueue_migrate::PostgresMigrator;
@@ -89,12 +89,12 @@ impl ErrorHandler for StuckSignal {
     }
 }
 
-fn blocking_workers(gate: &Gate, timeline: &Arc<BlockingTimeline>) -> WorkerRegistry {
-    let mut workers = WorkerRegistry::new();
+fn blocking_workers(gate: &Gate, timeline: &Arc<BlockingTimeline>) -> Workers {
+    let mut workers = Workers::new();
     let blocking_gate = gate.clone();
     let blocking_timeline = Arc::clone(timeline);
     workers
-        .register_fn(move |_context: WorkContext, job: Job<BlockingArgs>| {
+        .add_fn(move |_context: WorkContext, job: Job<BlockingArgs>| {
             let gate = blocking_gate.clone();
             let timeline = Arc::clone(&blocking_timeline);
             async move {
@@ -109,7 +109,7 @@ fn blocking_workers(gate: &Gate, timeline: &Arc<BlockingTimeline>) -> WorkerRegi
         .unwrap();
     let later_timeline = Arc::clone(timeline);
     workers
-        .register_fn(move |_context: WorkContext, _job: Job<ResilienceArgs>| {
+        .add_fn(move |_context: WorkContext, _job: Job<ResilienceArgs>| {
             let timeline = Arc::clone(&later_timeline);
             async move {
                 timeline
@@ -349,19 +349,19 @@ impl Drop for FaultProxy {
     }
 }
 
-fn completing_workers() -> WorkerRegistry {
+fn completing_workers() -> Workers {
     gated_workers(&Gate::default())
 }
 
-fn gated_workers(gate: &Gate) -> WorkerRegistry {
-    let mut workers = WorkerRegistry::new();
+fn gated_workers(gate: &Gate) -> Workers {
+    let mut workers = Workers::new();
     workers
-        .register_fn(|_context: WorkContext, _job: Job<ResilienceArgs>| async {
+        .add_fn(|_context: WorkContext, _job: Job<ResilienceArgs>| async {
             Ok::<_, Infallible>(WorkOutcome::Complete)
         })
         .unwrap();
     workers
-        .register_fn(
+        .add_fn(
             |_context: WorkContext, _job: Job<SnoozeForeverArgs>| async {
                 Ok::<_, Infallible>(WorkOutcome::Snooze(Duration::MAX))
             },
@@ -369,7 +369,7 @@ fn gated_workers(gate: &Gate) -> WorkerRegistry {
         .unwrap();
     let shutdown_gate = gate.clone();
     workers
-        .register_fn(move |context: WorkContext, job: Job<ShutdownArgs>| {
+        .add_fn(move |context: WorkContext, job: Job<ShutdownArgs>| {
             let gate = shutdown_gate.clone();
             async move {
                 gate.started.add_permits(1);
@@ -385,7 +385,7 @@ fn gated_workers(gate: &Gate) -> WorkerRegistry {
         .unwrap();
     let gate = gate.clone();
     workers
-        .register_fn(move |_context: WorkContext, _job: Job<GatedArgs>| {
+        .add_fn(move |_context: WorkContext, _job: Job<GatedArgs>| {
             let gate = gate.clone();
             async move {
                 let active = gate.active.fetch_add(1, Ordering::SeqCst) + 1;

@@ -8,7 +8,7 @@ mod support;
 use std::{convert::Infallible, time::Duration};
 
 use riverqueue::{
-    Client, Error, Job, JobArgs, JobState, QueueConfig, WorkContext, WorkOutcome, WorkerRegistry,
+    Client, Error, Job, JobArgs, JobState, QueueConfig, WorkContext, WorkOutcome, Workers,
     database::PostgresDatabase,
 };
 use serde::{Deserialize, Serialize};
@@ -302,10 +302,10 @@ async fn job_list_single_finalized_state_by_time() {
 #[river(kind = "parity_noop")]
 struct NoopArgs {}
 
-fn noop_workers() -> WorkerRegistry {
-    let mut workers = WorkerRegistry::new();
+fn noop_workers() -> Workers {
+    let mut workers = Workers::new();
     workers
-        .register_fn(|_context: WorkContext, _job: Job<NoopArgs>| async {
+        .add_fn(|_context: WorkContext, _job: Job<NoopArgs>| async {
             Ok::<_, Infallible>(WorkOutcome::Complete)
         })
         .unwrap();
