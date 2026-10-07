@@ -440,9 +440,11 @@ export class RuntimeServices {
       );
       this.#lastError = null;
       if (leader === null || leader === undefined) {
-        if (this.#leader !== null && !this.#hasTrustedLeadership()) {
-          await this.#loseLeadership(false);
-        }
+        // Like River for Go's elector, a held term that can't be renewed
+        // (it expired, or another process replaced it, even under this
+        // client's ID) ends at once, without resigning a term this client
+        // no longer holds.
+        if (this.#leader !== null) await this.#loseLeadership(false);
         return true;
       }
       const expired = this.#expiredTerm;

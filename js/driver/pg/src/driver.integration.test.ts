@@ -145,6 +145,17 @@ describe("PgDriver integration", () => {
     }
   });
 
+  it("clamps a wide maxAttempts to smallint like Go", async () => {
+    const inserted = await driver.jobInsertMany([
+      insertParams(`${filePrefix}_clamped`, { maxAttempts: 40_000 }),
+    ]);
+
+    expect(inserted[0]!.job.maxAttempts).toBe(32_767);
+    expect((await driver.jobGet(inserted[0]!.job.id))?.maxAttempts).toBe(
+      32_767
+    );
+  });
+
   it("truncates sub-microsecond timestamps like Go instead of rounding", async () => {
     // Postgres would round `.0000019` up to `.000002`; Go's pgx truncates.
     const scheduledAt = Temporal.Instant.from("2026-08-30T12:00:00.0000019Z");

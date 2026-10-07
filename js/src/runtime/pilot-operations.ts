@@ -720,8 +720,8 @@ function validatePreparedRow(
   if (typeof row.queue !== "string" || row.queue.length === 0) {
     fail("queue", "a non-empty string");
   }
-  if (!isIntegerBetween(row.maxAttempts, 1, 32_767)) {
-    fail("maxAttempts", "an integer from 1 to 32767");
+  if (!isIntegerBetween(row.maxAttempts, 1, Number.MAX_SAFE_INTEGER)) {
+    fail("maxAttempts", "a positive safe integer");
   }
   if (!isIntegerBetween(row.priority, 1, 4)) {
     fail("priority", "an integer from 1 to 4");

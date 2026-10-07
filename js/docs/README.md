@@ -204,7 +204,7 @@ match.
 ### Batches
 
 `insertMany` inserts a batch atomically and returns results in input order;
-an empty batch returns immediately. Items may use different definitions, and
+an empty batch is rejected. Items may use different definitions, and
 each item's `args` is checked against its own definition:
 
 <!-- ts-setup

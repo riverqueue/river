@@ -733,7 +733,7 @@ export async function jobInsertMany(
     [
       params.map(({ encodedArgs }) => encodedArgs),
       params.map(({ kind }) => kind),
-      params.map(({ maxAttempts }) => maxAttempts),
+      params.map(({ maxAttempts }) => clampSmallint(maxAttempts)),
       params.map(({ metadata }, index) =>
         JSON.stringify(
           nonces === null
@@ -741,7 +741,7 @@ export async function jobInsertMany(
             : { ...metadata, [UNIQUE_INSERT_NONCE_KEY]: nonces[index] }
         )
       ),
-      params.map(({ priority }) => priority),
+      params.map(({ priority }) => clampSmallint(priority)),
       params.map(({ queue }) => queue),
       params.map(({ scheduledAt }) => instantParameter(scheduledAt)),
       params.map(({ state }) => state),
@@ -1010,4 +1010,13 @@ function validateCompletionCommands(
       );
     }
   }
+}
+
+/**
+ * Clamps an integer to Postgres's 16-bit `smallint` columns. Like River
+ * for Go's Postgres drivers, an insert stores a wider `max_attempts` or
+ * `priority` as 32767 instead of failing; SQLite stores the full value.
+ */
+function clampSmallint(value: number): number {
+  return Math.min(value, 32_767);
 }

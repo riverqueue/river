@@ -120,6 +120,16 @@ describe("PrismaDriver integration", () => {
     expect(result.job.state).toBe("scheduled");
   });
 
+  it("clamps a wide maxAttempts to Postgres's smallint like Go", async () => {
+    const result = await client.insert(
+      job("clamped"),
+      {},
+      { maxAttempts: 40_000 }
+    );
+
+    expect(result.job.maxAttempts).toBe(32_767);
+  });
+
   it("preserves order for heterogeneous batches", async () => {
     const a = job("batch_a");
     const b = job("batch_b");
