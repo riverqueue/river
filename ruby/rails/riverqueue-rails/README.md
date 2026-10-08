@@ -1,6 +1,6 @@
 # River for Rails
 
-`riverqueue-rails` integrates Active Job with River's existing PostgreSQL/SQLite
+`riverqueue-rails` integrates Active Job with River's existing Postgres/SQLite
 runtime. It supports Rails 7.2, 8.0, and 8.1 and lives separately from the
 Rails-independent core gem. Database gems remain application-selected.
 
@@ -183,8 +183,8 @@ worker/plugin registrations or periodic configuration; these retain Ruby objects
 Keep Rails' `:test` adapter and `ActiveJob::TestHelper` for ordinary application
 tests. Use `:river` and a migrated isolated database for persistence/runtime
 integration tests. Disable transactional fixtures for threaded worker tests.
-The repository's `make test` includes this gem's PostgreSQL and SQLite tests.
-`RIVER_REQUIRE_DATABASES=1 make test` makes missing PostgreSQL an error.
+The repository's `make test` includes this gem's Postgres and SQLite tests.
+`RIVER_REQUIRE_DATABASES=1 make test` makes missing Postgres an error.
 
 Outside a Rails app, instantiate `ActiveJob::QueueAdapters::RiverAdapter.new(client:)`
 and register `River::Rails::Worker` on your consuming River client. Rails-specific

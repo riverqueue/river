@@ -22,7 +22,7 @@ function quote(identifier: string): string {
   return `"${identifier.replaceAll('"', '""')}"`;
 }
 
-describe("PostgreSQL migrator", () => {
+describe("Postgres migrator", () => {
   let pool: pg.Pool;
   let schema: string;
   let schemas: string[];

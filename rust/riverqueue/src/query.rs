@@ -379,7 +379,7 @@ impl JobListParams {
     }
 
     /// Matches jobs whose metadata contains this JSON object, like
-    /// PostgreSQL's `@>` operator.
+    /// Postgres's `@>` operator.
     #[must_use]
     pub fn metadata(mut self, metadata: Map<String, Value>) -> Self {
         self.metadata = Some(metadata);
@@ -562,7 +562,7 @@ pub(crate) struct JobListKeyset {
     pub(crate) after: Option<JobListAfter>,
     pub(crate) direction: SortDirection,
     /// Whether the time field may be null for listed jobs. Nulls then sort
-    /// explicitly last ascending and first descending, the PostgreSQL
+    /// explicitly last ascending and first descending, the Postgres
     /// default, so that every backend agrees and cursors can match them.
     pub(crate) nullable: bool,
     /// Time field ordered before ID, or `None` to order by ID alone.

@@ -7,7 +7,7 @@
 //! back. Without a caller transaction, River's own transaction rolls the
 //! whole operation back.
 //!
-//! PostgreSQL scenarios run in a unique schema and fail rather than skip when
+//! Postgres scenarios run in a unique schema and fail rather than skip when
 //! `RIVER_RUST_DATABASE_URL` is unset; SQLite scenarios use temporary files.
 
 #![cfg(any(all(feature = "postgres", river_postgres_tests), feature = "sqlite"))]
@@ -500,7 +500,7 @@ mod postgres {
 
     scenarios!();
 
-    // A statement the database rejects aborts a PostgreSQL transaction.
+    // A statement the database rejects aborts a Postgres transaction.
     // River doesn't hide that behind a savepoint, so the caller's
     // transaction can only be rolled back, along with its earlier work.
     #[tokio::test(flavor = "multi_thread")]
@@ -543,7 +543,7 @@ mod postgres {
         // A write directly in the caller's transaction, so that even one
         // savepoint around all of River's writes would be detected.
         plain.insert(args("direct")).tx(&mut tx).await.unwrap();
-        // More than PostgreSQL's cached subtransaction ID limit.
+        // More than Postgres's cached subtransaction ID limit.
         for index in 0..70 {
             client
                 .insert(args(&format!("single_{index}")))

@@ -5,10 +5,10 @@ import {
   UnsupportedCapabilityError,
 } from "riverqueue";
 
-/** Backend name recorded on PostgreSQL errors. */
+/** Backend name recorded on Postgres errors. */
 const POSTGRES_BACKEND = "postgres";
 
-/** A failed PostgreSQL operation, retryable when the cause is transient. */
+/** A failed Postgres operation, retryable when the cause is transient. */
 export function databaseError(
   operation: string,
   message: string,
@@ -22,7 +22,7 @@ export function databaseError(
   });
 }
 
-/** Invalid PostgreSQL driver configuration or input. */
+/** Invalid Postgres driver configuration or input. */
 export function configurationError(
   operation: string,
   message: string
@@ -32,7 +32,7 @@ export function configurationError(
   });
 }
 
-/** A PostgreSQL operation unavailable for the configured connection. */
+/** A Postgres operation unavailable for the configured connection. */
 export function unsupportedError(
   capability: string,
   message: string

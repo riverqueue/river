@@ -621,7 +621,7 @@ describe("RuntimeServices", () => {
     let failing = true;
     const timedOutBatch = (batch: RuntimeMaintenanceBatch | undefined) => {
       expect(batch?.timeoutMs).toBe(5);
-      // Like PostgreSQL's statement_timeout, the backend stops the batch at
+      // Like Postgres's statement_timeout, the backend stops the batch at
       // its timeout.
       return new Promise<number>((resolve, reject) => {
         if (!failing) {

@@ -26,7 +26,7 @@ export interface MigrationStorage {
   readonly backend: MigrationBackend;
   /** Read the applied versions of `line` without holding a connection. */
   readVersions(line: string): Promise<readonly number[]>;
-  /** Fill in placeholders such as the PostgreSQL schema. */
+  /** Fill in placeholders such as the Postgres schema. */
   renderSql(sql: string): string;
   /** Run `run` with a session bound to one connection. */
   withSession<T>(run: (session: MigrationSession) => Promise<T>): Promise<T>;

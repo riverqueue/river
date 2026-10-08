@@ -62,7 +62,7 @@ const MAINTENANCE_START_BACKOFF: BackoffPolicy = Object.freeze({
 const RESCUE_DECISION_CONCURRENCY = 32;
 const SCHEDULER_NOTIFICATION_LOOKAHEAD_MS = 5;
 
-/** PostgreSQL indexes River rebuilds by default to control table bloat. */
+/** Postgres indexes River rebuilds by default to control table bloat. */
 export const REINDEXER_INDEX_NAMES_DEFAULT = Object.freeze([
   "river_job_args_index",
   "river_job_kind",

@@ -28,6 +28,7 @@
 - **Testing**: use require variants instead of assert.
 - **Helpers**: use `Func` suffix for function variables, not `Fn`.
 - **Documentation**: include comments for exported functions and types.
+- **Terminology**: prefer "Postgres" over "PostgreSQL".
 - **Naming**: use idiomatic Go names; see `.golangci.yaml` for allowed short variable names.
 
 ## Package Naming and Organization

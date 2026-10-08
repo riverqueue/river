@@ -7,13 +7,13 @@ Pin and verify a release or repository revision containing these APIs
 before changing an application; do not assume an older installed gem supports
 them. Sidekiq references were checked on September 7, 2026.
 
-River stores jobs in PostgreSQL or SQLite and can insert them in the same
+River stores jobs in Postgres or SQLite and can insert them in the same
 transaction as application records. Workers run in Ruby threads. Redis payloads
 are not River rows: changing gems alone does not move existing jobs.
 
 ## Why migrate to River?
 
-For applications already using PostgreSQL or SQLite, River offers:
+For applications already using Postgres or SQLite, River offers:
 
 - **Atomic enqueueing:** application changes and jobs commit or roll back
   together in one database transaction. Sidekiq's
@@ -83,7 +83,7 @@ third-party extensions, rather than mapping the purchased edition as a whole.
 
 ## 2. Install a driver and provision the schema
 
-For an Active Record application using PostgreSQL:
+For an Active Record application using Postgres:
 
 ```ruby
 # Gemfile: keep Sidekiq while it drains existing work.

@@ -1,5 +1,5 @@
 -- Rebuild river_job so automatically generated IDs are never reused after the
--- job holding the largest ID is deleted. Unlike PostgreSQL sequences, SQLite's
+-- job holding the largest ID is deleted. Unlike Postgres sequences, SQLite's
 -- default ROWID allocator may otherwise reuse that deleted ID.
 
 -- Rebuilding river_job would discard schema installed by River Pro. Check

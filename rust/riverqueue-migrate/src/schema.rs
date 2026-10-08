@@ -1,10 +1,10 @@
-//! PostgreSQL schema names.
+//! Postgres schema names.
 
 use std::fmt;
 
 use thiserror::Error;
 
-/// PostgreSQL's maximum identifier length.
+/// Postgres's maximum identifier length.
 const POSTGRES_IDENTIFIER_MAX: usize = 63;
 
 /// Longest River notification topic, which a schema name must leave room for.
@@ -14,7 +14,7 @@ const NOTIFICATION_TOPIC_LONGEST: &str = "river_leadership";
 /// notification channels.
 pub const SCHEMA_MAX_LEN: usize = POSTGRES_IDENTIFIER_MAX - NOTIFICATION_TOPIC_LONGEST.len() - 1;
 
-/// The PostgreSQL schema River's tables live in.
+/// The Postgres schema River's tables live in.
 ///
 /// [`SchemaName::current`] uses the connection's current schema (normally
 /// `public`, following `search_path`). An explicit schema is quoted wherever
@@ -33,7 +33,7 @@ pub const SCHEMA_MAX_LEN: usize = POSTGRES_IDENTIFIER_MAX - NOTIFICATION_TOPIC_L
 pub struct SchemaName(Option<String>);
 
 impl SchemaName {
-    /// Uses PostgreSQL's current schema.
+    /// Uses Postgres's current schema.
     #[must_use]
     pub const fn current() -> Self {
         Self(None)
@@ -44,7 +44,7 @@ impl SchemaName {
     /// Any name is accepted and quoted when rendered, including mixed case
     /// and punctuation such as
     /// `river-prod`. Names containing NUL are rejected, as are names too long
-    /// to prefix River's notification topics within PostgreSQL's identifier
+    /// to prefix River's notification topics within Postgres's identifier
     /// limit.
     ///
     /// # Errors
@@ -84,7 +84,7 @@ impl SchemaName {
         }
     }
 
-    /// Returns the explicit schema quoted as a PostgreSQL identifier, for
+    /// Returns the explicit schema quoted as a Postgres identifier, for
     /// SQL that names the schema itself, or `None` for the connection's
     /// current schema.
     #[must_use]
@@ -92,7 +92,7 @@ impl SchemaName {
         self.0.as_deref().map(quote_identifier)
     }
 
-    /// Prefix used by River's canonical PostgreSQL migration templates.
+    /// Prefix used by River's canonical Postgres migration templates.
     #[cfg(feature = "postgres")]
     pub(crate) fn migration_prefix(&self) -> String {
         self.quoted_identifier()
@@ -100,7 +100,7 @@ impl SchemaName {
     }
 }
 
-/// Quotes a PostgreSQL identifier, doubling embedded quotes like Go's
+/// Quotes a Postgres identifier, doubling embedded quotes like Go's
 /// `dbutil.SafeIdentifier`.
 fn quote_identifier(identifier: &str) -> String {
     format!("\"{}\"", identifier.replace('"', "\"\""))
@@ -122,7 +122,7 @@ impl fmt::Display for SchemaName {
 #[derive(Debug, Error)]
 #[non_exhaustive]
 pub enum SchemaNameError {
-    /// Schema contains a NUL character, which PostgreSQL identifiers cannot.
+    /// Schema contains a NUL character, which Postgres identifiers cannot.
     #[error("schema name cannot contain NUL: {0:?}")]
     Invalid(String),
 

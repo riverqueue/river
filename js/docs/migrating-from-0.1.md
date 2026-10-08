@@ -168,7 +168,7 @@ passed to `new Client()` is rejected; use `createTestClient` from
 would lose precision. Use `id.toString()` for logs, URLs, and JSON. Review any
 ID arithmetic by hand rather than converting back to `number`.
 
-Every timestamp on a job row is a `Temporal.Instant`. It keeps PostgreSQL's
+Every timestamp on a job row is a `Temporal.Instant`. It keeps Postgres's
 microseconds and carries no local time zone, so review code that relied on
 `Date`'s local-time methods. Convert with `new Date(instant.epochMilliseconds)`
 where an API needs a `Date`.
@@ -201,7 +201,7 @@ with the jobs. River needs a connection of its own for that:
   transaction on the root client's `$transaction`, so construct it with the
   root `PrismaClient`, not a transaction client.
 
-On PostgreSQL, the transaction adds a `BEGIN` and a `COMMIT` round trip to
+On Postgres, the transaction adds a `BEGIN` and a `COMMIT` round trip to
 each call that 0.1 ran as a single statement. To insert many jobs, pass them
 to one `insertMany` call.
 
@@ -212,7 +212,7 @@ build's `insertManyFast` should insert large batches with one `insertMany`
 call instead, which differs in three ways: it resolves with one result per
 row rather than a count; a unique conflict is reported as that row's
 `status: "duplicate"` instead of being skipped (SQLite) or failing the whole
-batch (PostgreSQL); and insert middleware and hooks run for every row.
+batch (Postgres); and insert middleware and hooks run for every row.
 
 ## Prisma
 

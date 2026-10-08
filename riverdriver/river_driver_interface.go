@@ -130,7 +130,7 @@ type Driver[TTx any] interface {
 
 	// SQLFragmentColumnContainsAll generates an SQL fragment to be included as
 	// a predicate in a `WHERE` query for a collection column containing all of
-	// the given values. PostgreSQL uses array containment while SQLite compares
+	// the given values. Postgres uses array containment while SQLite compares
 	// values from a JSON array.
 	//
 	// API is not stable. DO NOT USE.
@@ -138,7 +138,7 @@ type Driver[TTx any] interface {
 
 	// SQLFragmentColumnContainsAny generates an SQL fragment to be included as
 	// a predicate in a `WHERE` query for a collection column containing at least
-	// one of the given values. PostgreSQL uses array overlap while SQLite
+	// one of the given values. Postgres uses array overlap while SQLite
 	// compares values from a JSON array.
 	//
 	// API is not stable. DO NOT USE.

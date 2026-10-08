@@ -10,7 +10,7 @@ RSpec.describe "ActiveRecord migrations" do
   [:postgres, :sqlite].each do |adapter|
     context "with #{adapter}", database: adapter do
       around do |example|
-        skip "PostgreSQL unavailable" if adapter == :postgres && !PG_AVAILABLE
+        skip "Postgres unavailable" if adapter == :postgres && !PG_AVAILABLE
 
         ClientTestDatabase.with_active_record(adapter, migrate: false) do |driver|
           @driver = driver

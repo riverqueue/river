@@ -741,7 +741,7 @@
       "area": "config",
       "detail": "bool",
       "id": "config.PollOnly",
-      "rationale": "Disables LISTEN in favor of polling. Implementations provide an equivalent notification-free mode, which clients also enter on their own on a PostgreSQL server without LISTEN/NOTIFY, like YugabyteDB by default.",
+      "rationale": "Disables LISTEN in favor of polling. Implementations provide an equivalent notification-free mode, which clients also enter on their own on a Postgres server without LISTEN/NOTIFY, like YugabyteDB by default.",
       "scenarios": [
         "poll_only_remote_cancellation",
         "simulated_yugabyte_polling",
@@ -1511,7 +1511,7 @@
       "area": "driver",
       "detail": "func(ctx context.Context, key int64) (*struct{}, error)",
       "id": "driver.Executor.PGAdvisoryXactLock",
-      "rationale": "Go driver-seam method for PostgreSQL advisory lock helper.",
+      "rationale": "Go driver-seam method for Postgres advisory lock helper.",
       "source": "riverdriver/river_driver_interface.go:riverdriver.Executor.PGAdvisoryXactLock",
       "java_surface": "Database, Sql, Migrator (internal JDBC implementation)"
     },
@@ -2753,7 +2753,7 @@
       "area": "migration",
       "detail": "create_river_migration up:79def9ab1643 down:34c87dc594bf",
       "id": "migration.postgres.001",
-      "rationale": "Main-line PostgreSQL schema version.",
+      "rationale": "Main-line Postgres schema version.",
       "scenarios": [
         "candidate_migrator_reference_runtime",
         "historical_migration_down_up",
@@ -2767,7 +2767,7 @@
       "area": "migration",
       "detail": "initial_schema up:8915c00d08ed down:8e7e73755b3e",
       "id": "migration.postgres.002",
-      "rationale": "Main-line PostgreSQL schema version.",
+      "rationale": "Main-line Postgres schema version.",
       "scenarios": [
         "candidate_migrator_reference_runtime",
         "historical_migration_down_up",
@@ -2781,7 +2781,7 @@
       "area": "migration",
       "detail": "river_job_tags_non_null up:dedb183bb302 down:bca44f6f0e92",
       "id": "migration.postgres.003",
-      "rationale": "Main-line PostgreSQL schema version.",
+      "rationale": "Main-line Postgres schema version.",
       "scenarios": [
         "candidate_migrator_reference_runtime",
         "historical_migration_down_up",
@@ -2795,7 +2795,7 @@
       "area": "migration",
       "detail": "pending_and_more up:3f7418b0cf78 down:91b5ced7b9d7",
       "id": "migration.postgres.004",
-      "rationale": "Main-line PostgreSQL schema version.",
+      "rationale": "Main-line Postgres schema version.",
       "scenarios": [
         "candidate_migrator_reference_runtime",
         "historical_migration_down_up",
@@ -2809,7 +2809,7 @@
       "area": "migration",
       "detail": "migration_unique_client up:b760f487152c down:de84dca49a5d",
       "id": "migration.postgres.005",
-      "rationale": "Main-line PostgreSQL schema version.",
+      "rationale": "Main-line Postgres schema version.",
       "scenarios": [
         "candidate_migrator_reference_runtime",
         "historical_migration_down_up",
@@ -2823,7 +2823,7 @@
       "area": "migration",
       "detail": "bulk_unique up:3b133f7ce466 down:726483f6e5aa",
       "id": "migration.postgres.006",
-      "rationale": "Main-line PostgreSQL schema version.",
+      "rationale": "Main-line Postgres schema version.",
       "scenarios": [
         "candidate_migrator_reference_runtime",
         "historical_migration_down_up",
@@ -2837,7 +2837,7 @@
       "area": "migration",
       "detail": "notification_outbox_sqlite_jsonb_and_sql_cleanup up:47ec8031b88e down:9131aae23518",
       "id": "migration.postgres.007",
-      "rationale": "Main-line PostgreSQL schema version.",
+      "rationale": "Main-line Postgres schema version.",
       "scenarios": [
         "candidate_migrator_reference_runtime",
         "historical_migration_down_up",
@@ -2851,7 +2851,7 @@
       "area": "migration",
       "detail": "job_id_autoincrement up:0c3750a947d6 down:0c3750a947d6",
       "id": "migration.postgres.008",
-      "rationale": "Main-line PostgreSQL schema version.",
+      "rationale": "Main-line Postgres schema version.",
       "scenarios": [
         "candidate_migrator_reference_runtime",
         "historical_migration_down_up",

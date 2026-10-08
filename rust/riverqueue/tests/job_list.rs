@@ -1,8 +1,8 @@
 //! Job list ordering and keyset pagination on every backend.
 //!
-//! Each scenario runs against PostgreSQL (in a unique schema, failing rather
+//! Each scenario runs against Postgres (in a unique schema, failing rather
 //! than skipping when `RIVER_RUST_DATABASE_URL` is unset) and SQLite (in a
-//! temporary file). PostgreSQL scenarios build only with `--cfg river_postgres_tests`.
+//! temporary file). Postgres scenarios build only with `--cfg river_postgres_tests`.
 
 #![cfg(any(all(feature = "postgres", river_postgres_tests), feature = "sqlite"))]
 

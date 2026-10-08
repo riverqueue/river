@@ -26,7 +26,7 @@ async function invoke(
   return { exitCode, stderr, stdout };
 }
 
-describe("riverqueue with PostgreSQL", () => {
+describe("riverqueue with Postgres", () => {
   let pool: pg.Pool;
   let schema: string;
 

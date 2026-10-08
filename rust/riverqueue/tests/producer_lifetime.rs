@@ -3,7 +3,7 @@
 //! attempt, queue removal that waits for that shutdown and keeps the name
 //! reserved, live reconfiguration, and extension queue settings.
 //!
-//! PostgreSQL scenarios run in a unique schema and fail rather than skip when
+//! Postgres scenarios run in a unique schema and fail rather than skip when
 //! `RIVER_RUST_DATABASE_URL` is unset; SQLite scenarios use temporary files.
 
 #![cfg(any(all(feature = "postgres", river_postgres_tests), feature = "sqlite"))]

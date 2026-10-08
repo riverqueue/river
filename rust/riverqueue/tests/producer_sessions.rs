@@ -2,7 +2,7 @@
 //! River applies to what it returns, per-attempt accounting through
 //! `job_finished`, and configuration changes.
 //!
-//! PostgreSQL scenarios run in a unique schema and fail rather than skip when
+//! Postgres scenarios run in a unique schema and fail rather than skip when
 //! `RIVER_RUST_DATABASE_URL` is unset; SQLite scenarios use temporary files.
 
 #![cfg(any(all(feature = "postgres", river_postgres_tests), feature = "sqlite"))]

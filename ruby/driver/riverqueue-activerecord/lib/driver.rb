@@ -3,7 +3,7 @@
 require "securerandom"
 
 module River::Driver
-  # Provides an ActiveRecord driver for River supporting PostgreSQL, YugabyteDB,
+  # Provides an ActiveRecord driver for River supporting Postgres, YugabyteDB,
   # and SQLite.
   #
   # Used in conjunction with a River client like:
@@ -17,7 +17,7 @@ module River::Driver
     # Connection class whose pool and transaction context this driver uses.
     attr_reader :connection_class
 
-    # Uses an established PostgreSQL or SQLite connection. The class must be
+    # Uses an established Postgres or SQLite connection. The class must be
     # ActiveRecord::Base or an abstract Active Record class. Routing follows its
     # current role/shard; configure consumers explicitly for each database.
     def initialize(connection_class: ::ActiveRecord::Base)

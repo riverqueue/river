@@ -44,7 +44,7 @@ const COMPLETION_BATCH_DELAY: Duration = Duration::from_millis(10);
 /// The bounded channel then applies backpressure to workers, as River Go's
 /// backlog wait does.
 pub(super) const COMPLETION_BACKLOG_LIMIT: usize = COMPLETION_BATCH_SIZE * 2;
-/// Most concurrent batch writes River OSS issues on PostgreSQL.
+/// Most concurrent batch writes River OSS issues on Postgres.
 #[cfg(feature = "postgres")]
 const COMPLETION_POSTGRES_CONCURRENCY: usize = 2;
 /// Attempts in one retry cycle, matching River Go's `numRetries`.
@@ -489,7 +489,7 @@ async fn persist_with_retries(
 /// writes its durable wakeup inside the completion transaction instead.
 #[cfg_attr(
     not(feature = "postgres"),
-    allow(clippy::unused_async, reason = "only PostgreSQL sends a notification")
+    allow(clippy::unused_async, reason = "only Postgres sends a notification")
 )]
 async fn notify_interrupted_jobs(inner: &ClientInner, batch: &[CompletionUpdate], rows: &[JobRow]) {
     let interrupted = batch
@@ -551,7 +551,7 @@ async fn notify_interrupted_jobs(inner: &ClientInner, batch: &[CompletionUpdate]
 /// current row is returned so its event reflects the state that won.
 #[allow(
     clippy::too_many_lines,
-    reason = "keeps PostgreSQL batch and transactionally equivalent SQLite completion together"
+    reason = "keeps Postgres batch and transactionally equivalent SQLite completion together"
 )]
 pub(super) async fn persist_completion_batch(
     inner: &ClientInner,

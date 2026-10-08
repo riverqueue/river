@@ -157,7 +157,7 @@ export class PgRuntime implements RuntimeDriver<ClientBase> {
   }
 
   /**
-   * The configured PostgreSQL schema containing River's tables, or undefined
+   * The configured Postgres schema containing River's tables, or undefined
    * when River uses the connection's `search_path`.
    */
   get schema(): string | undefined {
@@ -175,7 +175,7 @@ export class PgRuntime implements RuntimeDriver<ClientBase> {
     if (this.pool === null) {
       throw unsupportedError(
         "runtime",
-        "the PostgreSQL worker runtime requires PgDriver to be constructed with a Pool"
+        "the Postgres worker runtime requires PgDriver to be constructed with a Pool"
       );
     }
     const minimumPoolSize =
@@ -186,7 +186,7 @@ export class PgRuntime implements RuntimeDriver<ClientBase> {
     if (this.pool.options.max < minimumPoolSize) {
       throw configurationError(
         "runtimeStartPreflight",
-        `the PostgreSQL worker runtime requires Pool max to be at least ${minimumPoolSize} for the enabled worker, notification, maintenance, and reindex services`
+        `the Postgres worker runtime requires Pool max to be at least ${minimumPoolSize} for the enabled worker, notification, maintenance, and reindex services`
       );
     }
   }
@@ -591,7 +591,7 @@ export class PgRuntime implements RuntimeDriver<ClientBase> {
   }
 
   /**
-   * Send one or more PostgreSQL notifications on a River topic.
+   * Send one or more Postgres notifications on a River topic.
    *
    * @internal
    */
@@ -604,7 +604,7 @@ export class PgRuntime implements RuntimeDriver<ClientBase> {
   }
 
   /**
-   * Yield namespaced PostgreSQL notifications with reconnect recovery.
+   * Yield namespaced Postgres notifications with reconnect recovery.
    *
    * Notifications are hints only: callers must retain polling because NOTIFY
    * is not durable and a connection may be between reconnect attempts. An
@@ -929,13 +929,13 @@ function validateSchema(value: string): void {
   if (!RIVER_SCHEMA_RE.test(value)) {
     throw configurationError(
       "construct",
-      "PostgreSQL schema must start with a letter or underscore and contain only letters, numbers, and underscores"
+      "Postgres schema must start with a letter or underscore and contain only letters, numbers, and underscores"
     );
   }
   if (Buffer.byteLength(value, "utf8") > RIVER_SCHEMA_MAX_BYTES) {
     throw configurationError(
       "construct",
-      `PostgreSQL schema must not exceed ${RIVER_SCHEMA_MAX_BYTES} bytes so River notification topics remain valid`
+      `Postgres schema must not exceed ${RIVER_SCHEMA_MAX_BYTES} bytes so River notification topics remain valid`
     );
   }
 }

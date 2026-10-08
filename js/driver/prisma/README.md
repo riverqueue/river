@@ -39,7 +39,7 @@ await prisma.$transaction(async (tx) => {
 ```
 
 See the [runnable Prisma example](../../examples/prisma) for Prisma's generated
-client and PostgreSQL adapter setup.
+client and Postgres adapter setup.
 
 The Prisma client and transaction remain caller-owned. River neither connects
 nor disconnects Prisma. Apply River migrations separately with

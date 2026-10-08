@@ -3,7 +3,7 @@
 require "securerandom"
 
 module River::Driver
-  # Provides a Sequel driver for River supporting PostgreSQL, YugabyteDB, and SQLite.
+  # Provides a Sequel driver for River supporting Postgres, YugabyteDB, and SQLite.
   #
   # Used in conjunction with a River client like:
   #
@@ -18,7 +18,7 @@ module River::Driver
   class Sequel
     include River::Driver::Runtime
 
-    # Creates a driver backed by a connected Sequel::Database for PostgreSQL or
+    # Creates a driver backed by a connected Sequel::Database for Postgres or
     # SQLite.
     def initialize(db)
       @db = db

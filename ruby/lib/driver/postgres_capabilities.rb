@@ -1,7 +1,7 @@
 # frozen_string_literal: true
 
 module River::Driver
-  # PostgreSQL-compatible servers differ in conflict detection and notification
+  # Postgres-compatible servers differ in conflict detection and notification
   # support. Keep these rules aligned with Go's PostgresCapabilities.
   class PostgresCapabilities
     attr_reader :supports_listen_notify, :unique_insert_mode, :unique_insert_sql

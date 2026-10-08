@@ -9,7 +9,7 @@ make test/ruby/conformance
 ```
 
 This generates `conformance/testdata/` and runs `ruby/spec/conformance_spec.rb`.
-No PostgreSQL server, pinned upstream checkout, protocol adapter, or separately
+No Postgres server, pinned upstream checkout, protocol adapter, or separately
 maintained golden files are needed. Missing fixtures fail with instructions to
 regenerate them. The regular Ruby suite includes these checks too.
 
@@ -29,7 +29,7 @@ The fixture checks cover:
 
 The Ruby workflow runs on Ruby changes. The shared Conformance workflow also
 runs these tests when Go code changes. The ordinary driver suites retain
-PostgreSQL notification delivery/commit-ordering tests and shared PostgreSQL /
+Postgres notification delivery/commit-ordering tests and shared Postgres /
 SQLite insertion, transaction, uniqueness, and worker tests.
 
 This replaces the old `insert-only-v1` adapter and its pinned external harness.
@@ -39,17 +39,17 @@ protocol is not part of the Ruby API.
 
 ## Coverage gaps and API differences
 
-Ruby's runtime still polls job and queue state rather than consuming PostgreSQL
+Ruby's runtime still polls job and queue state rather than consuming Postgres
 LISTEN events or the SQLite outbox. The fixture target checks notification
 emission, not dispatch. Ruby does not emit or handle `request_resign`; other
 clients' requests therefore cannot force a Ruby leader to resign. Completing
 that coverage would require a notification listener and runtime dispatch path.
-The ordinary driver suites verify PostgreSQL delivery, commit ordering, and
+The ordinary driver suites verify Postgres delivery, commit ordering, and
 rollback for queue controls and resignations as well as insertion/cancellation.
 
 Shared snooze-counter fixtures cover non-negative integers and absent counters.
 Recovery from other JSON values is implementation-specific. Ruby's shared driver
-tests cover its lenient conversion rules separately on PostgreSQL and SQLite.
+tests cover its lenient conversion rules separately on Postgres and SQLite.
 
 Cron retains Ruby's existing Fugit extensions: six fields with seconds, Sunday
 as 7, hour 24, and descending ranges. These four expressions are accepted in

@@ -1,6 +1,6 @@
-# PostgreSQL worker example
+# Postgres worker example
 
-This example migrates a PostgreSQL database, inserts a job, and works it in
+This example migrates a Postgres database, inserts a job, and works it in
 the same process: the handler snoozes once as if a payment provider were busy,
 then succeeds and inserts a follow-up job through the worker's own client. It
 shuts down gracefully when the follow-up completes or on `SIGTERM`.
@@ -9,7 +9,7 @@ It uses `node-postgres`, Zod for validation, and structured logging through
 the job's `logger` (which writes warnings and errors to `console` unless the
 client is given a logger such as pino).
 
-From the repository root, with a disposable PostgreSQL database:
+From the repository root, with a disposable Postgres database:
 
 ```sh
 pnpm install

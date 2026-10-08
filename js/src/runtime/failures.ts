@@ -77,7 +77,7 @@ export function isPermanentRuntimeError(error: unknown): boolean {
 
 /**
  * One-line operator description of an error and its `cause` chain, including
- * backend codes such as a PostgreSQL SQLSTATE, for background-failure logs.
+ * backend codes such as a Postgres SQLSTATE, for background-failure logs.
  */
 export function describeError(error: unknown): string {
   const parts: string[] = [];

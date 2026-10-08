@@ -27,7 +27,7 @@ module River::Driver
     end
 
     # Notifications and rows must commit together. The insertion drivers call
-    # this inside their transaction; PostgreSQL defers delivery until commit.
+    # this inside their transaction; Postgres defers delivery until commit.
     private def postgres_notify_insert(params)
       queues = params.select { |param| param.state == River::JOB_STATE_AVAILABLE }.map(&:queue).uniq
       return if queues.empty?
@@ -558,7 +558,7 @@ module River::Driver
       params.map do |param|
         key = param.unique_key
         if key && !key.empty? && River::UniqueBitmask.to_states((param.unique_states || "0").to_i(2)).include?(param.state)
-          # PostgreSQL rejects batches that upsert the same indexed row twice.
+          # Postgres rejects batches that upsert the same indexed row twice.
           raise ArgumentError, "unique key appears more than once in batch" if keys[key]
 
           keys[key] = true
@@ -594,7 +594,7 @@ module River::Driver
       finalized = params.sort_by == :finalized_at && params.states&.length == 1 &&
         %w[cancelled completed discarded].include?(params.states.first)
       # Schemas require finalized timestamps for terminal states. Spell this out
-      # so PostgreSQL can use the partial (state, finalized_at) index.
+      # so Postgres can use the partial (state, finalized_at) index.
       clauses << "finalized_at IS NOT NULL" if finalized
       # Explicit NULLS LAST prevents a backward index scan, even when there are
       # no nulls. Only request it for timestamps that can actually be null.
@@ -626,7 +626,7 @@ module River::Driver
       if runtime_postgres?
         "metadata || #{runtime_json(metadata)}"
       else
-        # PostgreSQL's || replaces top-level values, including JSON null.
+        # Postgres's || replaces top-level values, including JSON null.
         # JSON Merge Patch would recursively merge objects and delete nulls.
         merged = metadata.reduce("metadata") do |expression, (key, value)|
           path = runtime_quote("$.#{JSON.generate(key.to_s)}")

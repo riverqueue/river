@@ -1,6 +1,6 @@
 /**
- * Transactional River jobs on PostgreSQL and SQLite. Define a {@link com.riverqueue.JobType},
- * insert through a {@link com.riverqueue.Client}, and register worker lambdas through {@link
+ * Transactional River jobs on Postgres and SQLite. Define a {@link com.riverqueue.JobType}, insert
+ * through a {@link com.riverqueue.Client}, and register worker lambdas through {@link
  * com.riverqueue.Workers.Builder}. Only a running {@code Workers} instance owns resources; close it
  * or call {@code stop()} when the application stops.
  *

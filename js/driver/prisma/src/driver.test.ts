@@ -104,7 +104,7 @@ describe("PrismaDriver", () => {
     expect(() => void client.jobs).not.toThrow();
   });
 
-  it("keeps exact IDs and PostgreSQL timestamp precision", async () => {
+  it("keeps exact IDs and Postgres timestamp precision", async () => {
     prisma.rowsToReturn = [fakePrismaRow()];
 
     const result = await driver.jobInsert(fakeInsertParams());

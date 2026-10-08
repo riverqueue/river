@@ -12,7 +12,7 @@
 //!   window elapses, and a new term starts only after the previous term's
 //!   services have stopped.
 //! - Every maintenance database call is selected against the term token. On
-//!   PostgreSQL, cancellation and timeouts are enforced server-side with
+//!   Postgres, cancellation and timeouts are enforced server-side with
 //!   `SET LOCAL statement_timeout` and `pg_cancel_backend`, so abandoned work
 //!   does not keep holding locks.
 
@@ -177,7 +177,7 @@ impl From<Error> for MaintenanceError {
 
 impl From<sqlx::Error> for MaintenanceError {
     fn from(error: sqlx::Error) -> Self {
-        // PostgreSQL reports a `statement_timeout` expiry as `query_canceled`.
+        // Postgres reports a `statement_timeout` expiry as `query_canceled`.
         // Explicit cancellation through `pg_cancel_backend` is reported as
         // `Cancelled` before a database error is ever mapped.
         if let sqlx::Error::Database(database_error) = &error
@@ -363,7 +363,7 @@ async fn batch_backoff(cancel: &CancellationToken) -> Result<(), MaintenanceErro
 /// Runs a SQLite operation under the term token and a client-side deadline.
 ///
 /// SQLite executes statements on the client, so dropping the future cannot
-/// leave server-side work holding locks the way it can on PostgreSQL.
+/// leave server-side work holding locks the way it can on Postgres.
 #[cfg(feature = "sqlite")]
 async fn sqlite_cancellable<T, E>(
     cancel: &CancellationToken,

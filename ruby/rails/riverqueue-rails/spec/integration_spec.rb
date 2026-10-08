@@ -85,7 +85,7 @@ if RiverTestDatabase.enabled?(:postgres)
   rescue PG::Error => error
     raise if ENV["CI"] == "true" || ENV["RIVER_REQUIRE_DATABASES"] == "1"
 
-    warn "Skipping Rails PostgreSQL tests: #{error.message}"
+    warn "Skipping Rails Postgres tests: #{error.message}"
   end
 end
 

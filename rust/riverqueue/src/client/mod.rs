@@ -81,7 +81,7 @@ pub(crate) const ATTEMPTED_BY_MAX: i32 = 100;
 const EVENT_BUFFER_CAPACITY: usize = 10_000;
 const PENDING_CANCELLATION_LIMIT: usize = 10_000;
 const PENDING_CANCELLATION_RETENTION: Duration = Duration::from_mins(1);
-// Large queues otherwise become limited by a single PostgreSQL claim round trip.
+// Large queues otherwise become limited by a single Postgres claim round trip.
 // Concurrent `SKIP LOCKED` claims safely divide the available worker slots.
 const PARALLEL_FETCH_MINIMUM: usize = 1_000;
 const QUEUE_CONFIG_POLL_INTERVAL: Duration = Duration::from_secs(2);
@@ -180,7 +180,7 @@ impl ClientInner {
         &self.database
     }
 
-    /// Returns the PostgreSQL server's capabilities, detecting them with
+    /// Returns the Postgres server's capabilities, detecting them with
     /// `executor` the first time.
     #[cfg(feature = "postgres")]
     pub(crate) async fn postgres_capabilities<'e>(
@@ -197,9 +197,9 @@ impl ClientInner {
     }
 
     /// Whether this client hears committed notifications through a notifier,
-    /// a PostgreSQL listener or SQLite outbox poller, like River Go's client
+    /// a Postgres listener or SQLite outbox poller, like River Go's client
     /// notifier. A poll-only client has none, and neither does a client of a
-    /// PostgreSQL server without `LISTEN`/`NOTIFY` once that's detected.
+    /// Postgres server without `LISTEN`/`NOTIFY` once that's detected.
     pub(crate) fn has_notifier(&self) -> bool {
         !self.poll_only && self.database.delivers_notifications()
     }

@@ -1,6 +1,6 @@
 # `@riverqueue/migrate`
 
-River's PostgreSQL and SQLite migrations, with a runner that applies them.
+River's Postgres and SQLite migrations, with a runner that applies them.
 Requires Node.js 26 or newer.
 
 River never migrates on its own: clients don't touch the schema when they are
@@ -8,7 +8,7 @@ constructed or started. Run migrations as a deployment step, either with this
 package or with the `riverqueue` command from `@riverqueue/cli`, and keep
 `@riverqueue/migrate` on the same version as `riverqueue`.
 
-## PostgreSQL
+## Postgres
 
 Pass the driver your client uses, so the pool and schema are configured once:
 
@@ -52,7 +52,7 @@ statements. With `{ database }`, migrations run directly on that handle,
 which waits for a busy database for its own `timeout`.
 
 Version 8 rebuilds SQLite's `river_job` table with an `AUTOINCREMENT` key, so
-a deleted job's ID is never handed to a new job; on PostgreSQL it changes
+a deleted job's ID is never handed to a new job; on Postgres it changes
 nothing. Like River for Go's migration, it refuses to run in either direction
 while the database holds a `river_job_sequence`, `river_job_workflow_scheduling`,
 or `river_workflow` object, which extensions install alongside River's tables

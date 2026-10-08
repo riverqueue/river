@@ -84,7 +84,7 @@ module River
           @mutex.synchronize do
             @closed = true
             # Drop invalid/incomplete UTF-8 sequences (including a character cut
-            # at the byte limit) and NULs, which PostgreSQL JSONB cannot represent.
+            # at the byte limit) and NULs, which Postgres JSONB cannot represent.
             [@data.dup.force_encoding(Encoding::UTF_8).scrub("").delete("\0"), @truncated]
           end
         end

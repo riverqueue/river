@@ -26,9 +26,9 @@ its uniqueness and notification capabilities.
 ## Schema and migrations
 
 Run migrations before inserting jobs or starting workers. The bundled `river`
-command uses Go's canonical PostgreSQL and SQLite migrations; no Go installation
+command uses Go's canonical Postgres and SQLite migrations; no Go installation
 is needed. After installing a River driver and its database adapter, create your
-application's PostgreSQL database and run:
+application's Postgres database and run:
 
 ```sh
 export DATABASE_URL=postgres://localhost/my_app
@@ -57,7 +57,7 @@ both are in your bundle.
 For River Pro, install `riverqueue-pro`, apply the main migrations above, then
 run `bundle exec river migrate-up --line pro` against the same database.
 
-See the [migration guide](migrations.md) for the Ruby API, PostgreSQL schemas,
+See the [migration guide](migrations.md) for the Ruby API, Postgres schemas,
 target versions, downgrade precautions, and existing SQLite Pro installations.
 Test schema snapshots under `spec/support` are test-only and must not be used
 to provision production databases.
@@ -160,7 +160,7 @@ For simple jobs, `River::JobArgsHash.new(:kind, hash)` avoids defining an argume
 ### [Transactional enqueueing](https://riverqueue.com/docs/transactional-enqueueing)
 
 Insertion hooks and middleware execute inside the insertion transaction. If
-they raise, their database writes and the enqueue roll back together. PostgreSQL
+they raise, their database writes and the enqueue roll back together. Postgres
 insert notifications are delivered only when the surrounding transaction commits.
 
 Inserts automatically join a transaction opened through the same Active Record connection or Sequel database object. A rollback also rolls back the job:

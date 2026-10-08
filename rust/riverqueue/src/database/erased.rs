@@ -69,7 +69,7 @@ impl Database {
     /// Whether the backend delivers notifications to listeners when a
     /// transaction commits, like Go's `SupportsListener`. SQLite clients poll
     /// a notification outbox instead, so operations River commits itself also
-    /// wake the local client directly. A PostgreSQL-compatible server without
+    /// wake the local client directly. A Postgres-compatible server without
     /// `LISTEN`/`NOTIFY`, like YugabyteDB by default, has no listener once
     /// detected.
     pub(crate) fn supports_listener(&self) -> bool {
@@ -82,7 +82,7 @@ impl Database {
     }
 
     /// Whether committed notifications reach other clients: through
-    /// `LISTEN`/`NOTIFY` on PostgreSQL, assumed until a server without it is
+    /// `LISTEN`/`NOTIFY` on Postgres, assumed until a server without it is
     /// detected, and through the notification outbox on SQLite.
     pub(crate) fn delivers_notifications(&self) -> bool {
         match &self.inner {
@@ -93,7 +93,7 @@ impl Database {
         }
     }
 
-    /// Returns the PostgreSQL server capabilities cache, or `None` for
+    /// Returns the Postgres server capabilities cache, or `None` for
     /// another backend.
     #[cfg(feature = "postgres")]
     #[cfg_attr(
@@ -113,8 +113,8 @@ impl Database {
         }
     }
 
-    /// Returns the PostgreSQL schema, or `None` for a backend without
-    /// PostgreSQL schemas.
+    /// Returns the Postgres schema, or `None` for a backend without
+    /// Postgres schemas.
     #[must_use]
     pub fn postgres_schema(&self) -> Option<&SchemaName> {
         match &self.inner {

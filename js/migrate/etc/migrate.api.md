@@ -41,7 +41,7 @@ export declare function createMigrator(
  * Load River's bundled main migration line for a backend, ordered by version.
  *
  * The SQL files ship with this package and are verified against recorded
- * checksums on every load. PostgreSQL SQL contains a schema placeholder that
+ * checksums on every load. Postgres SQL contains a schema placeholder that
  * a migrator fills in, so run migrations through {@link createMigrator}
  * instead of executing this SQL directly.
  *
@@ -173,7 +173,7 @@ export type MigrationTarget =
  *
  * Create one with {@link createMigrator}. Each version runs in its own
  * transaction together with its `river_migration` bookkeeping. Concurrent
- * migrators for the same schema serialize: PostgreSQL uses a
+ * migrators for the same schema serialize: Postgres uses a
  * transaction-scoped advisory lock and SQLite uses an immediate write
  * transaction, and a version finished by another migrator is skipped rather
  * than run twice.
@@ -242,7 +242,7 @@ export type MigratorSource = ClientDriver | MigrationTarget;
 ## `PgClientMigrationTarget`
 
 ```ts
-/** Migrate PostgreSQL through one dedicated connection. */
+/** Migrate Postgres through one dedicated connection. */
 export interface PgClientMigrationTarget {
   /**
    * A connected node-postgres `Client` or `PoolClient` that is not inside a
@@ -261,7 +261,7 @@ export interface PgClientMigrationTarget {
 
 ```ts
 /**
- * A PostgreSQL connection that can run River's migrations, such as a
+ * A Postgres connection that can run River's migrations, such as a
  * node-postgres `Client` or a `PoolClient` checked out of a pool.
  *
  * The connection must not be inside a transaction: every migration version
@@ -279,7 +279,7 @@ export interface PgMigrationClient {
 ## `PgMigrationPool`
 
 ```ts
-/** A PostgreSQL connection pool such as a node-postgres `Pool`. */
+/** A Postgres connection pool such as a node-postgres `Pool`. */
 export interface PgMigrationPool {
   /** Check out a dedicated connection for migrating. */
   connect(): Promise<PgMigrationPoolClient>;
@@ -304,7 +304,7 @@ export interface PgMigrationPoolClient extends PgMigrationClient {
 ## `PgMigrationQueryResult`
 
 ```ts
-/** Result shape that River reads from PostgreSQL queries. */
+/** Result shape that River reads from Postgres queries. */
 export interface PgMigrationQueryResult<TRow> {
   rows: TRow[];
 }
@@ -313,7 +313,7 @@ export interface PgMigrationQueryResult<TRow> {
 ## `PgPoolMigrationTarget`
 
 ```ts
-/** Migrate PostgreSQL through a connection pool. */
+/** Migrate Postgres through a connection pool. */
 export interface PgPoolMigrationTarget {
   /**
    * A node-postgres `Pool`. The migrator checks out one connection per call

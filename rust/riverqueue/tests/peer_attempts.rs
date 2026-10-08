@@ -1,7 +1,7 @@
 //! Peer attempts: jobs a running attempt claims and completes alongside its
 //! own, owned by River from the claim's commit until each outcome persists.
 //!
-//! Every scenario uses generic claim statements written here, on PostgreSQL
+//! Every scenario uses generic claim statements written here, on Postgres
 //! (in a unique schema, failing rather than skipping when
 //! `RIVER_RUST_DATABASE_URL` is unset) and SQLite (in a temporary file).
 

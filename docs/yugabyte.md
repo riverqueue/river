@@ -1,6 +1,6 @@
 # YugabyteDB
 
-The PostgreSQL drivers automatically use polling when YugabyteDB's
+The Postgres drivers automatically use polling when YugabyteDB's
 `yb_enable_listen_notify` setting is absent or disabled. This includes YugabyteDB
 2025.2.1, even with the default `PollOnly: false`. New jobs are picked up on the
 `FetchPollInterval`, and queue pause, resume, and metadata changes are picked up

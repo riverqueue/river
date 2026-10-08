@@ -39,7 +39,7 @@ then inserts and works no-op jobs while reporting rough throughput and p95
 end-to-end latency. Use only a disposable development or benchmark database.
 
 Options:
-      --database-url URL       PostgreSQL URL (or set DATABASE_URL)
+      --database-url URL       Postgres URL (or set DATABASE_URL)
       --schema NAME            River schema (default: current schema)
       --duration DURATION      Stop after a Go-style duration such as 30s or 5m
   -n, --num-total-jobs COUNT   Insert COUNT jobs, then work them all

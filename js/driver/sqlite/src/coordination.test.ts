@@ -388,7 +388,7 @@ describe("SqliteDriver connection coordination", () => {
     const other = await fileSetup();
 
     await driver.operationScope(undefined, async (tx) => {
-      // Nothing is locked yet, so these run as they would on PostgreSQL.
+      // Nothing is locked yet, so these run as they would on Postgres.
       await driver.jobInsert({ args: {}, kind: "before_first" });
       await expect(driver.jobGet(1n)).resolves.not.toBeNull();
       await transaction(database, () => undefined);

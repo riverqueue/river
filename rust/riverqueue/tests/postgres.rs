@@ -939,7 +939,7 @@ async fn insert_many_variants_preserve_order_and_transactionality() {
         Err(riverqueue::Error::InvalidJob(_))
     ));
 
-    // Like River Go, whose single upsert PostgreSQL refuses, a batch may not
+    // Like River Go, whose single upsert Postgres refuses, a batch may not
     // repeat a unique key, and nothing of it is written.
     let unique_opts = InsertOpts::default().with_unique(UniqueOpts::new().with_by_args(true));
     let repeated = client
@@ -1997,7 +1997,7 @@ async fn transactional_inserts_become_visible_on_commit() {
     let pool_connection = client
         .database()
         .as_postgres()
-        .expect("client is configured for PostgreSQL")
+        .expect("client is configured for Postgres")
         .pool()
         .acquire()
         .await

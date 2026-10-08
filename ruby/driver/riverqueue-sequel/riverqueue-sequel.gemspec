@@ -3,8 +3,8 @@
 Gem::Specification.new do |s|
   s.name = "riverqueue-sequel"
   s.version = "0.13.0"
-  s.summary = "Sequel PostgreSQL and SQLite driver for the River Ruby gem."
-  s.description = "Sequel PostgreSQL and SQLite driver for inserting and working River jobs in Ruby."
+  s.summary = "Sequel Postgres and SQLite driver for the River Ruby gem."
+  s.description = "Sequel Postgres and SQLite driver for inserting and working River jobs in Ruby."
   s.authors = ["Blake Gentry", "Brandur Leach"]
   s.email = "brandur@brandur.org"
   s.files = Dir.glob("lib/**/*")

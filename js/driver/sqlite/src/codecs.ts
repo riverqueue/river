@@ -153,8 +153,8 @@ function decodeJsonObject(value: unknown, field: string): SqliteJsonObject {
 /**
  * Decode one `river_job` row exactly as leniently as Go's `riversqlite` does.
  *
- * SQLite columns are wider than PostgreSQL's, so another engine may persist
- * values River's PostgreSQL schema would reject: `attempt` and `max_attempts`
+ * SQLite columns are wider than Postgres's, so another engine may persist
+ * values River's Postgres schema would reject: `attempt` and `max_attempts`
  * are unbounded integers, and JSON `null` is accepted for `tags`,
  * `attempted_by`, and `errors` (Go decodes it as an empty list). Negative counts
  * clamp to zero like Go, and counts beyond `Number.MAX_SAFE_INTEGER` saturate,

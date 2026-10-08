@@ -1,9 +1,9 @@
 # YugabyteDB
 
-Both SQL drivers support YugabyteDB through its PostgreSQL-compatible YSQL
-endpoint. Use the `pg` gem and the usual PostgreSQL connection configuration;
+Both SQL drivers support YugabyteDB through its Postgres-compatible YSQL
+endpoint. Use the `pg` gem and the usual Postgres connection configuration;
 no separate River driver or client flag is required. Apply the bundled
-[PostgreSQL migrations](migrations.md).
+[Postgres migrations](migrations.md).
 
 ```ruby
 db = Sequel.connect("postgres://yugabyte@localhost:5433/my_app")
@@ -21,11 +21,11 @@ Ruby follows Go's database detection and unique-insert strategies:
 | Server | Duplicate detection |
 | --- | --- |
 | YugabyteDB | A random nonce in reserved metadata `river:unique_nonce` |
-| PostgreSQL 18+ | `OLD.id IS NOT NULL` in `RETURNING` |
-| Earlier PostgreSQL | `xmax != 0` |
+| Postgres 18+ | `OLD.id IS NOT NULL` in `RETURNING` |
+| Earlier Postgres | `xmax != 0` |
 
-Yugabyte's product identification takes precedence over its PostgreSQL version.
-The nonce is generated per returning insert batch, just as in Go's PostgreSQL
+Yugabyte's product identification takes precedence over its Postgres version.
+The nonce is generated per returning insert batch, just as in Go's Postgres
 drivers. Existing jobs without a nonce are still recognized as duplicates;
 application metadata is preserved, apart from the reserved nonce key.
 
@@ -59,7 +59,7 @@ not replay application transactions or hooks automatically.
 
 ## Verification
 
-Normal driver tests mirror Go's PostgreSQL-based Yugabyte simulations, covering
+Normal driver tests mirror Go's Postgres-based Yugabyte simulations, covering
 an absent, disabled, or enabled notification setting. Disabled simulations make
 `pg_notify` raise to detect accidental broadcasts. These do not emulate
 Yugabyte's storage or transaction semantics.

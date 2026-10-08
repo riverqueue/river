@@ -1,6 +1,6 @@
 /**
- * PostgreSQL-compatible servers without `xmax` or `LISTEN`/`NOTIFY`, like
- * YugabyteDB, simulated on PostgreSQL the way River for Go's tests do.
+ * Postgres-compatible servers without `xmax` or `LISTEN`/`NOTIFY`, like
+ * YugabyteDB, simulated on Postgres the way River for Go's tests do.
  *
  * A test schema shadows `version()` and `current_setting(text, boolean)`
  * ahead of `pg_catalog` on the connections' `search_path`, so River detects
@@ -27,7 +27,7 @@ const migrationDirectory = fileURLToPath(
 
 /** Which server a test schema simulates. */
 type Server =
-  /** PostgreSQL 17, before `RETURNING OLD`. */
+  /** Postgres 17, before `RETURNING OLD`. */
   | "postgres17"
   /** YugabyteDB before 2025.2.3, without `yb_enable_listen_notify`. */
   | "yugabyte_unavailable"
@@ -47,7 +47,7 @@ function listenNotify(server: Server): boolean {
   return server === "postgres17" || server === "yugabyte_enabled";
 }
 
-describe("PostgreSQL servers like YugabyteDB, simulated", () => {
+describe("Postgres servers like YugabyteDB, simulated", () => {
   const cleanups: (() => Promise<void>)[] = [];
 
   afterEach(async () => {
@@ -167,7 +167,7 @@ describe("PostgreSQL servers like YugabyteDB, simulated", () => {
     const client = new Client(new PgDriver(pool));
     const job = defineJob({ kind: "yugabyte_quiet" });
 
-    // Each of these notifies on PostgreSQL; the shadowed pg_notify raises.
+    // Each of these notifies on Postgres; the shadowed pg_notify raises.
     const { job: inserted } = await client.insert(job, {});
     await expect(client.jobs.cancel(inserted.id)).resolves.toMatchObject({
       state: "cancelled",

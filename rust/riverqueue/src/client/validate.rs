@@ -94,7 +94,7 @@ pub(super) fn validate_identifier(identifier: &str, description: &str) -> Result
         || !characters.all(|character| character == '_' || character.is_ascii_alphanumeric())
     {
         return Err(Error::invalid_job(format!(
-            "invalid PostgreSQL {description} identifier {identifier:?}"
+            "invalid Postgres {description} identifier {identifier:?}"
         )));
     }
     Ok(())

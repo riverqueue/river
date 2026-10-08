@@ -531,7 +531,7 @@ export async function jobList(
   );
   const jobState = db.type("river_job_state");
   // Like River's Go list builder: equality on a single state lets
-  // PostgreSQL use an index's time ordering (ANY does not fix the state),
+  // Postgres use an index's time ordering (ANY does not fix the state),
   // and an explicit non-null finalized time matches the partial index for
   // finalized states.
   const singleState =
@@ -636,7 +636,7 @@ export async function jobInsert(
   if (result === undefined) {
     throw databaseError(
       "jobInsert",
-      "PostgreSQL returned no row for an inserted job"
+      "Postgres returned no row for an inserted job"
     );
   }
   return result;
@@ -760,7 +760,7 @@ export async function jobInsertMany(
   if (result.rows.length !== params.length) {
     throw databaseError(
       "jobInsertMany",
-      `PostgreSQL returned ${result.rows.length} rows for ${params.length} inserts`
+      `Postgres returned ${result.rows.length} rows for ${params.length} inserts`
     );
   }
   return result.rows.map((row, index) => {

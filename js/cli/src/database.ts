@@ -27,10 +27,10 @@ const POSTGRES_DEFAULTS = {
   statement_timeout: 10_000,
 } as const;
 
-/** `--statement-timeout`, accepted by commands that use PostgreSQL. */
+/** `--statement-timeout`, accepted by commands that use Postgres. */
 export const STATEMENT_TIMEOUT_OPTION: OptionSpec = {
   description:
-    "PostgreSQL statement_timeout, such as 30s or 5m (default: a " +
+    "Postgres statement_timeout, such as 30s or 5m (default: a " +
     "statement_timeout parameter in --database-url, otherwise 10s)",
   type: "string",
   valueName: "DURATION",
@@ -41,10 +41,10 @@ const SQLITE_BUSY_TIMEOUT_MS = 5_000;
 /**
  * Interpret `--database-url`.
  *
- * `postgres://` and `postgresql://` URLs select PostgreSQL. `sqlite://PATH`
+ * `postgres://` and `postgresql://` URLs select Postgres. `sqlite://PATH`
  * selects SQLite, where `PATH` is a file path (`sqlite:///abs/river.db` or
  * `sqlite://relative/river.db`), `:memory:`, or a `file:` URL. Without a URL,
- * PostgreSQL is configured from `PG*` environment variables when
+ * Postgres is configured from `PG*` environment variables when
  * `PGDATABASE` is set, as node-postgres and River's Go CLI do.
  */
 export function parseDatabaseUrl(
@@ -58,7 +58,7 @@ export function parseDatabaseUrl(
     }
     throw new UsageError(
       "--database-url is required unless PGDATABASE and other PG* " +
-        "environment variables configure PostgreSQL",
+        "environment variables configure Postgres",
       command
     );
   }
@@ -100,7 +100,7 @@ export function statementTimeoutValue(
     : parseDuration(command, "--statement-timeout", value);
 }
 
-/** Open a PostgreSQL pool for a CLI command. */
+/** Open a Postgres pool for a CLI command. */
 export function openPostgresPool(
   location: Extract<DatabaseLocation, { backend: "postgres" }>,
   options: {
@@ -136,7 +136,7 @@ export function openSqliteDatabase(
 }
 
 /**
- * Describe a PostgreSQL target for confirmation prompts without exposing a
+ * Describe a Postgres target for confirmation prompts without exposing a
  * password.
  */
 export function describePostgresTarget(connectionString: string): string {

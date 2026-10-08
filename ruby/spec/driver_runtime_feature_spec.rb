@@ -30,7 +30,7 @@ RSpec.describe "River shared driver runtime edge cases", database: :sqlite do
 
   let(:sqlite_driver) { River::Driver::Sequel.new(SQLITE_DB) }
 
-  it "does not issue PostgreSQL notifications when Yugabyte disables them" do
+  it "does not issue Postgres notifications when Yugabyte disables them" do
     capabilities = River::Driver::PostgresCapabilities.new(product: "YugabyteDB", version_num: 150_012, yb_listen_notify_enabled: false)
     postgres_driver.define_singleton_method(:postgres_capabilities) { capabilities }
     postgres_driver.define_singleton_method(:runtime_execute) { |_sql| raise "unexpected notification" }
@@ -41,7 +41,7 @@ RSpec.describe "River shared driver runtime edge cases", database: :sqlite do
     expect { postgres_driver.send(:runtime_notify, "river_control", {action: "cancel"}) }.not_to raise_error
   end
 
-  it "does not use the SQLite notification cleaner on PostgreSQL" do
+  it "does not use the SQLite notification cleaner on Postgres" do
     expect(postgres_driver.notification_delete_before(horizon: Time.now.utc)).to eq(0)
   end
 
@@ -64,7 +64,7 @@ RSpec.describe "River shared driver runtime edge cases", database: :sqlite do
     expect(driver.job_list(:all)).to equal(expected)
   end
 
-  it "builds PostgreSQL claim SQL with row locking and array history" do
+  it "builds Postgres claim SQL with row locking and array history" do
     sql = nil
     driver = Object.new.extend(River::Driver::Runtime)
     driver.define_singleton_method(:runtime_postgres?) { true }
@@ -114,7 +114,7 @@ RSpec.describe "River shared driver runtime edge cases", database: :sqlite do
     expect(errors).to include("7")
   end
 
-  it "renders every shared PostgreSQL-specific SQL value" do
+  it "renders every shared Postgres-specific SQL value" do
     expect(postgres_driver.send(:runtime_tag_contains, "tag")).to include("tags @>")
     expect(postgres_driver.send(:runtime_metadata_equals, :tenant, 7)).to include("metadata ->", "::jsonb")
     expect(postgres_driver.send(:runtime_state, River::JOB_STATE_AVAILABLE)).to end_with("::river_job_state")
@@ -126,7 +126,7 @@ RSpec.describe "River shared driver runtime edge cases", database: :sqlite do
     expect(postgres_driver.send(:runtime_queue_columns)).to eq("name, created_at, metadata, paused_at, updated_at")
   end
 
-  it "accepts already-decoded JSON and Time values from PostgreSQL adapters" do
+  it "accepts already-decoded JSON and Time values from Postgres adapters" do
     metadata = {"ready" => true}
     time = Time.utc(2026, 1, 2, 3, 4, 5)
 

@@ -3,7 +3,7 @@
 //! middleware run once and see the stored arguments, nothing decodes the
 //! stored row first, and the job keeps its identity with a new ID.
 //!
-//! PostgreSQL scenarios run in a unique schema and fail rather than skip when
+//! Postgres scenarios run in a unique schema and fail rather than skip when
 //! `RIVER_RUST_DATABASE_URL` is unset; SQLite scenarios use temporary files.
 
 #![cfg(any(all(feature = "postgres", river_postgres_tests), feature = "sqlite"))]

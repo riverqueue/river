@@ -35,7 +35,7 @@ function recordingLogger(entries: LogEntry[]): Logger {
   };
 }
 
-describe("PostgreSQL runtime resilience", () => {
+describe("Postgres runtime resilience", () => {
   let admin: pg.Pool;
 
   beforeAll(async () => {
@@ -113,7 +113,7 @@ describe("PostgreSQL runtime resilience", () => {
 
       await expect(client.insert(job, {})).rejects.toMatchObject({
         message: expect.stringContaining(
-          'River needs PostgreSQL\'s DateStyle to be ISO, not "SQL, DMY"'
+          'River needs Postgres\'s DateStyle to be ISO, not "SQL, DMY"'
         ),
         name: "ConfigurationError",
       });
@@ -266,7 +266,7 @@ describe("PostgreSQL runtime resilience", () => {
     }
   });
 
-  it("bounds concurrent work to the caller-owned PostgreSQL pool", async () => {
+  it("bounds concurrent work to the caller-owned Postgres pool", async () => {
     const applicationName = `${filePrefix}_pool`;
     const pool = new pg.Pool({
       application_name: applicationName,

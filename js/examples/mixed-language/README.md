@@ -1,6 +1,6 @@
 # Mixed-language producer example
 
-This PostgreSQL example inserts a versioned payload under the stable job kind
+This Postgres example inserts a versioned payload under the stable job kind
 `mixed_language.generate_report`, then reads the durable row back without any
 JavaScript-private metadata. A Go, Rust, or JavaScript worker can register that
 same kind and decode the same JSON contract.

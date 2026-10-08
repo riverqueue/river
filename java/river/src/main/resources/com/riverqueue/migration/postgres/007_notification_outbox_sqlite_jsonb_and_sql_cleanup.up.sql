@@ -16,7 +16,7 @@ CREATE INDEX river_notification_topic_id_idx ON /* TEMPLATE: schema */river_noti
 --
 -- SQLite JSONB conversion.
 --
--- No-op. PostgreSQL already stores River JSON columns as jsonb.
+-- No-op. Postgres already stores River JSON columns as jsonb.
 
 --
 -- SQL cleanup.

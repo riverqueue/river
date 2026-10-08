@@ -47,7 +47,7 @@ const TEXT_PARSERS: ReadonlyMap<number, (value: string) => unknown> = new Map<
 ]);
 
 /**
- * Query-scoped PostgreSQL parsers for River's exact persisted values.
+ * Query-scoped Postgres parsers for River's exact persisted values.
  *
  * This object delegates unknown OIDs to node-postgres and never mutates its
  * process-global parser registry. It is safe to use with caller-owned pools.
@@ -87,7 +87,7 @@ export const PG_EXACT_TYPES: CustomTypesConfig = {
 function parseBinaryInt8(value: Buffer): bigint {
   if (value.byteLength !== 8) {
     throw new RangeError(
-      `invalid PostgreSQL int8 binary length: ${value.byteLength}`
+      `invalid Postgres int8 binary length: ${value.byteLength}`
     );
   }
   return value.readBigInt64BE();
@@ -99,9 +99,7 @@ function parseBinaryTimestamptz(value: Buffer): Temporal.Instant {
     postgresMicroseconds === 9_223_372_036_854_775_807n ||
     postgresMicroseconds === -9_223_372_036_854_775_808n
   ) {
-    throw new RangeError(
-      "PostgreSQL infinite timestamps are not River instants"
-    );
+    throw new RangeError("Postgres infinite timestamps are not River instants");
   }
 
   const unixNanoseconds =
@@ -120,9 +118,7 @@ function parseTextArray(value: string): string[] {
 function parseTextBool(value: string): boolean {
   if (value === "t") return true;
   if (value === "f") return false;
-  throw new RangeError(
-    `invalid PostgreSQL bool text: ${JSON.stringify(value)}`
-  );
+  throw new RangeError(`invalid Postgres bool text: ${JSON.stringify(value)}`);
 }
 
 /** Decode `bytea` in either `bytea_output` format, `hex` or `escape`. */
@@ -130,7 +126,7 @@ function parseTextBytea(value: string): Buffer {
   if (value.startsWith("\\x")) {
     const hex = value.slice(2);
     if (!/^(?:[0-9a-fA-F]{2})*$/.test(hex)) {
-      throw new RangeError("invalid PostgreSQL bytea hex text");
+      throw new RangeError("invalid Postgres bytea hex text");
     }
     return Buffer.from(hex, "hex");
   }
@@ -139,7 +135,7 @@ function parseTextBytea(value: string): Buffer {
     const character = value[index];
     if (character !== "\\") {
       const code = value.charCodeAt(index);
-      if (code > 0xff) throw new RangeError("invalid PostgreSQL bytea text");
+      if (code > 0xff) throw new RangeError("invalid Postgres bytea text");
       bytes.push(code);
     } else if (value[index + 1] === "\\") {
       bytes.push(0x5c);
@@ -147,7 +143,7 @@ function parseTextBytea(value: string): Buffer {
     } else {
       const octal = value.slice(index + 1, index + 4);
       if (!/^[0-3][0-7]{2}$/.test(octal)) {
-        throw new RangeError("invalid PostgreSQL bytea escape text");
+        throw new RangeError("invalid Postgres bytea escape text");
       }
       bytes.push(Number.parseInt(octal, 8));
       index += 3;
@@ -159,7 +155,7 @@ function parseTextBytea(value: string): Buffer {
 function parseTextInt4(value: string): number {
   if (!/^-?(0|[1-9]\d*)$/.test(value)) {
     throw new RangeError(
-      `invalid PostgreSQL integer text: ${JSON.stringify(value)}`
+      `invalid Postgres integer text: ${JSON.stringify(value)}`
     );
   }
   return Number.parseInt(value, 10);
@@ -168,7 +164,7 @@ function parseTextInt4(value: string): number {
 function parseTextInt8(value: string): bigint {
   if (!/^-?(0|[1-9]\d*)$/.test(value)) {
     throw new RangeError(
-      `invalid PostgreSQL int8 text: ${JSON.stringify(value)}`
+      `invalid Postgres int8 text: ${JSON.stringify(value)}`
     );
   }
   return BigInt(value);
@@ -176,9 +172,7 @@ function parseTextInt8(value: string): bigint {
 
 function parseTextTimestamptz(value: string): Temporal.Instant {
   if (value === "infinity" || value === "-infinity") {
-    throw new RangeError(
-      "PostgreSQL infinite timestamps are not River instants"
-    );
+    throw new RangeError("Postgres infinite timestamps are not River instants");
   }
 
   const match =
@@ -187,7 +181,7 @@ function parseTextTimestamptz(value: string): Temporal.Instant {
     );
   if (match === null) {
     throw new RangeError(
-      `invalid PostgreSQL timestamptz text: ${JSON.stringify(value)}`
+      `invalid Postgres timestamptz text: ${JSON.stringify(value)}`
     );
   }
 
@@ -218,7 +212,7 @@ function isoYearFromBc(value: string): string {
 }
 
 /**
- * Write a PostgreSQL offset as `±HH:MM` or `±HH:MM:SS`. Historical local
+ * Write a Postgres offset as `±HH:MM` or `±HH:MM:SS`. Historical local
  * mean times, such as `+05:53:28`, have seconds.
  */
 function normalizeOffset(value: string): string {

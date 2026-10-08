@@ -714,7 +714,7 @@ export class RuntimeController {
 
   /**
    * Whether this runtime hears notifications: it isn't poll-only, its driver
-   * can subscribe, and the database delivers them, which a PostgreSQL
+   * can subscribe, and the database delivers them, which a Postgres
    * driver detects from the server.
    */
   async #listens(): Promise<boolean> {

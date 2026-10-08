@@ -1,6 +1,6 @@
 # River for Java
 
-Prerelease Java 21 client and worker runtime for River's PostgreSQL and SQLite
+Prerelease Java 21 client and worker runtime for River's Postgres and SQLite
 schemas. Jobs are ordinary River jobs: another language can insert, cancel,
 retry, or work them using the same database.
 
@@ -9,7 +9,7 @@ retry, or work them using the same database.
 Define job arguments as a record, give the job a stable kind, and register a
 worker lambda. This complete `Example.java` starts a client, inserts a job,
 waits for its completion, and stops the workers. Set `DATABASE_URL` to a
-PostgreSQL URL or a file-backed SQLite JDBC URL.
+Postgres URL or a file-backed SQLite JDBC URL.
 
 ```java
 import com.riverqueue.*;
@@ -76,7 +76,7 @@ for each operation. River never closes an application-owned data source. An
 
 ## Migration CLI
 
-The `river-cli` executable JAR includes PostgreSQL and SQLite JDBC drivers and
+The `river-cli` executable JAR includes Postgres and SQLite JDBC drivers and
 runs with Java 21 or newer. It needs no Go installation or application classpath.
 Build it as described under [Installation](#installation), then run:
 
@@ -94,7 +94,7 @@ java -jar "$RIVER_CLI" migrate-up
 The Maven executable artifact is `com.riverqueue:river-cli` with version
 `0.48.0-alpha.1` and classifier `all`. Copy that single JAR into your deployment image to run
 migrations before starting workers. `--database-url URL` overrides `DATABASE_URL`.
-`--schema background_jobs` selects a PostgreSQL schema; an actual migration up
+`--schema background_jobs` selects a Postgres schema; an actual migration up
 creates it if needed. Listing and dry runs do not create schemas or migration tables.
 
 | Command | Behavior |
@@ -117,7 +117,7 @@ java -jar "$RIVER_CLI" migrate-get --version 3 --up > river_3.up.sql
 java -jar "$RIVER_CLI" migrate-get --driver sqlite --all --up > river_sqlite.up.sql
 ```
 
-SQL export defaults to PostgreSQL without a database URL. Use `--driver sqlite`
+SQL export defaults to Postgres without a database URL. Use `--driver sqlite`
 for SQLite, or select the dialect through the URL. Export accepts comma-separated
 `--version` values or `--all`; `--exclude-version 1` excludes migration history
 setup when exporting for another migration framework. Exit codes are `0` for
@@ -605,7 +605,7 @@ with independent connections are not suitable for this runtime.
 
 ## Alternate schema
 
-For PostgreSQL, select an [alternate schema](https://riverqueue.com/docs/alternate-schema)
+For Postgres, select an [alternate schema](https://riverqueue.com/docs/alternate-schema)
 on the `Database` used by both migrations and clients. All collaborating clients
 must target the same schema. The migrator creates it if needed.
 
@@ -656,7 +656,7 @@ ignores interrupts; handlers must cooperate with cancellation.
 and other River clients through the database. The leader runs periodic insertion
 and [maintenance](https://riverqueue.com/docs/maintenance-services): scheduling
 due jobs, rescuing abandoned attempts, cleaning expired jobs and queues, and
-reindexing configured PostgreSQL indexes. Leadership is enabled by default.
+reindexing configured Postgres indexes. Leadership is enabled by default.
 
 `rescueAfter` must not be shorter than `jobTimeout`, so another client does not
 rescue an attempt that is still allowed to run. Its default is one hour, plus an
@@ -698,13 +698,13 @@ make check/modzip
 ```
 
 `test/java` runs library and executable CLI tests and checks formatting. Client
-and worker tests use PostgreSQL when `RIVER_TEST_DATABASE_URL` is set, with a
+and worker tests use Postgres when `RIVER_TEST_DATABASE_URL` is set, with a
 fresh schema for each test that is removed afterward. Otherwise they use SQLite.
 `test/java/postgres` requires that URL; `test/java/sqlite` explicitly uses SQLite
-and excludes PostgreSQL-only tests, even if a URL is set in your environment.
+and excludes Postgres-only tests, even if a URL is set in your environment.
 `test/java/conformance` needs no external database: it runs the JUnit tests tagged
 `conformance`, using temporary SQLite databases for storage checks even if a
-PostgreSQL URL is set. The full SQLite and PostgreSQL targets run these checks
+Postgres URL is set. The full SQLite and Postgres targets run these checks
 against their selected backend. These targets first generate fresh fixtures
 directly from this checkout's Go implementation, just like
 `test/js/conformance` and `test/rust/conformance`.
@@ -742,7 +742,7 @@ discovery. The Make targets invoke the Go tools by file from the root workspace;
 the module is not part of `go.work` and must not be tagged as a Go module.
 
 The Java CI workflow follows the Rust and JavaScript layout: a quality/package
-job, a JDK 21/25 matrix running unit and SQLite tests, and a PostgreSQL 14–18
+job, a JDK 21/25 matrix running unit and SQLite tests, and a Postgres 14–18
 matrix running client, worker, and migration tests on JDK 25. All jobs use the
 shared Java setup action and Maven dependency caching. The whole workflow is
 filtered to changes in Java, its build configuration, fixtures, and canonical
@@ -777,7 +777,7 @@ The full peer matrix uses `multi` with `RIVER_CONFORMANCE_PEER_FILE` set to a
 colon-separated list of Rust and JS candidate descriptors, and
 `RIVERQUEUE_JS_ROOT` pointing to the JS checkout. `multi-soak` also requires
 `RIVER_CONFORMANCE_MULTI_ENGINE_SOAK_DURATION=5m` (or longer). The upstream
-harness currently has a PostgreSQL soak; SQLite endurance validation repeats
+harness currently has a Postgres soak; SQLite endurance validation repeats
 `TestMultiEngineSQLiteConformance` with `-count=5`.
 
 `python3 bin/import-reference.py --check /path/to/reference` verifies the legacy

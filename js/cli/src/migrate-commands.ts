@@ -47,7 +47,7 @@ const LINE_OPTION: OptionSpec = {
 
 const SCHEMA_OPTION: OptionSpec = {
   description:
-    "PostgreSQL schema containing River's tables (default: the search_path)",
+    "Postgres schema containing River's tables (default: the search_path)",
   type: "string",
   valueName: "NAME",
 };
@@ -113,7 +113,7 @@ Choose versions with --version (comma-separated or repeated) or --all, and
 a direction with --up or --down. With --all, down migrations print newest
 first. --exclude-version 1 skips the tables River uses to track its own
 migrations. No database connection is made: --database-url only selects
-PostgreSQL (the default) or SQLite SQL.
+Postgres (the default) or SQLite SQL.
 
   {program} migrate-get --version 3 --up > river_3.up.sql
   {program} migrate-get --all --exclude-version 1 --up > river.up.sql
@@ -297,7 +297,7 @@ async function runMigrateGet(
   const backend = sqlDialect(command, stringValue(values, "database-url"));
   const schema = stringValue(values, "schema");
   if (backend === "sqlite" && schema !== undefined) {
-    throw new UsageError("--schema only applies to PostgreSQL", command);
+    throw new UsageError("--schema only applies to Postgres", command);
   }
 
   const migrations =
@@ -357,7 +357,7 @@ async function withMigrator(
       ["--statement-timeout", statementTimeoutMs],
     ] as const) {
       if (value !== undefined) {
-        throw new UsageError(`${flag} only applies to PostgreSQL`, command);
+        throw new UsageError(`${flag} only applies to Postgres`, command);
       }
     }
     const database = openSqliteDatabase(location);

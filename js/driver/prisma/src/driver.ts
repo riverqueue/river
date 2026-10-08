@@ -50,9 +50,9 @@ export interface PrismaTransactionOptions {
   timeout?: number;
 }
 
-/** PostgreSQL configuration owned by the adapter. */
+/** Postgres configuration owned by the adapter. */
 export interface PrismaDriverOptions {
-  /** PostgreSQL schema containing River's tables and functions. */
+  /** Postgres schema containing River's tables and functions. */
   schema?: string;
   /**
    * Limits for the interactive transaction River opens for an insertion
@@ -95,7 +95,7 @@ interface PrismaJobRow extends Record<string, unknown> {
 }
 
 /**
- * River's insertion adapter for Prisma on PostgreSQL.
+ * River's insertion adapter for Prisma on Postgres.
  *
  * The Prisma client is caller-owned. A caller-owned transaction client may be
  * supplied as `{ tx }` and is used for the exact operation. Schema selection
@@ -375,7 +375,7 @@ export class PrismaInserter implements InsertDriver<PrismaClientLike> {
     const queryable = options?.tx ?? this.#prisma;
     // A server without LISTEN/NOTIFY, like YugabyteDB by default, gets none.
     if (!(await this.#detect(queryable)).supportsListenNotify) return;
-    // Counting the notifications' rows makes PostgreSQL send each one while
+    // Counting the notifications' rows makes Postgres send each one while
     // returning no `void` column for Prisma to decode.
     await queryable.$queryRawUnsafe(
       `
@@ -436,7 +436,7 @@ export class PrismaInserter implements InsertDriver<PrismaClientLike> {
       }[]
     >(POSTGRES_CAPABILITIES_SQL);
     if (row === undefined) {
-      throw new Error("PostgreSQL returned no server capabilities");
+      throw new Error("Postgres returned no server capabilities");
     }
     this.#capabilities ??= postgresCapabilitiesFromRow(row);
     return this.#capabilities;
@@ -534,12 +534,12 @@ function utcText(column: string): string {
 function validateSchema(value: string): void {
   if (!RIVER_SCHEMA_RE.test(value)) {
     throw new TypeError(
-      "PostgreSQL schema must start with a letter or underscore and contain only letters, numbers, and underscores"
+      "Postgres schema must start with a letter or underscore and contain only letters, numbers, and underscores"
     );
   }
   if (Buffer.byteLength(value, "utf8") > RIVER_SCHEMA_MAX_BYTES) {
     throw new TypeError(
-      `PostgreSQL schema must not exceed ${RIVER_SCHEMA_MAX_BYTES} bytes so River notification topics remain valid`
+      `Postgres schema must not exceed ${RIVER_SCHEMA_MAX_BYTES} bytes so River notification topics remain valid`
     );
   }
 }

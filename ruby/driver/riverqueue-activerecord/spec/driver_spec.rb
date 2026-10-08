@@ -12,7 +12,7 @@ RSpec.describe River::Driver::ActiveRecord do
   end
 
   {
-    "PostgreSQL" => {adapter: :postgres, available: PG_AVAILABLE},
+    "Postgres" => {adapter: :postgres, available: PG_AVAILABLE},
     "SQLite" => {adapter: :sqlite, available: true}
   }.each do |name, config|
     next unless config[:available]
@@ -66,7 +66,7 @@ RSpec.describe River::Driver::ActiveRecord do
           expect(insert_res.job.errors).to eq([])
         end
 
-        it "persists PostgreSQL args as a JSON object rather than a JSON string" do
+        it "persists Postgres args as a JSON object rather than a JSON string" do
           next unless config[:adapter] == :postgres
 
           insert_res = client.insert(SimpleArgs.new(job_num: 1))
@@ -283,7 +283,7 @@ RSpec.describe River::Driver::ActiveRecord do
         end
       end
 
-      # PostgreSQL-only: test the raw row conversion used by upsert_all
+      # Postgres-only: test the raw row conversion used by upsert_all
       next unless config[:adapter] == :postgres
 
       describe "#postgres_to_job_row_from_raw" do

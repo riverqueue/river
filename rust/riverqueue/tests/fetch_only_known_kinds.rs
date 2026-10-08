@@ -1,6 +1,6 @@
 //! Clients built with `fetch_only_known_kinds`, on every backend.
 //!
-//! PostgreSQL tests run in a unique schema and fail rather than skip when
+//! Postgres tests run in a unique schema and fail rather than skip when
 //! `RIVER_RUST_DATABASE_URL` is unset; SQLite tests use a temporary file.
 
 #![cfg(any(all(feature = "postgres", river_postgres_tests), feature = "sqlite"))]

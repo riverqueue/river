@@ -15,13 +15,13 @@ import type {
   MigrationStorage,
 } from "./storage.js";
 
-/** Result shape that River reads from PostgreSQL queries. */
+/** Result shape that River reads from Postgres queries. */
 export interface PgMigrationQueryResult<TRow> {
   rows: TRow[];
 }
 
 /**
- * A PostgreSQL connection that can run River's migrations, such as a
+ * A Postgres connection that can run River's migrations, such as a
  * node-postgres `Client` or a `PoolClient` checked out of a pool.
  *
  * The connection must not be inside a transaction: every migration version
@@ -41,7 +41,7 @@ export interface PgMigrationPoolClient extends PgMigrationClient {
   release(error?: Error): void;
 }
 
-/** A PostgreSQL connection pool such as a node-postgres `Pool`. */
+/** A Postgres connection pool such as a node-postgres `Pool`. */
 export interface PgMigrationPool {
   /** Check out a dedicated connection for migrating. */
   connect(): Promise<PgMigrationPoolClient>;
@@ -56,7 +56,7 @@ const POSTGRES_IDENTIFIER_MAX_BYTES = 63;
 const TEMPLATE_SCHEMA = "/* TEMPLATE: schema */";
 
 // Transaction-scoped so that it is released on commit or rollback and works
-// through transaction-pooling proxies. The key uses the schema PostgreSQL
+// through transaction-pooling proxies. The key uses the schema Postgres
 // resolves rather than how the caller spelled it, so an omitted schema and
 // its explicit name serialize against each other.
 const LOCK_SQL =
@@ -117,7 +117,7 @@ export class PgMigrationStorage implements MigrationStorage {
     try {
       client = await connection.pool.connect();
     } catch (error: unknown) {
-      throw new MigrationError("failed to connect to PostgreSQL", {
+      throw new MigrationError("failed to connect to Postgres", {
         backend: "postgres",
         operation: "connect",
         cause: error,
@@ -259,7 +259,7 @@ export class PgMigrationStorage implements MigrationStorage {
   }
 }
 
-/** Throw unless `value` can name a PostgreSQL schema. */
+/** Throw unless `value` can name a Postgres schema. */
 function validateSchema(value: string): void {
   const fail = (message: string): never => {
     throw new MigrationError(message, {
@@ -268,14 +268,14 @@ function validateSchema(value: string): void {
     });
   };
   if (typeof value !== "string" || value.length === 0) {
-    fail("PostgreSQL schema must be a non-empty string");
+    fail("Postgres schema must be a non-empty string");
   }
   if (value.includes("\0")) {
-    fail("PostgreSQL schema must not contain a NUL byte");
+    fail("Postgres schema must not contain a NUL byte");
   }
   if (Buffer.byteLength(value, "utf8") > POSTGRES_IDENTIFIER_MAX_BYTES) {
     fail(
-      `PostgreSQL schema must not exceed ${POSTGRES_IDENTIFIER_MAX_BYTES} bytes`
+      `Postgres schema must not exceed ${POSTGRES_IDENTIFIER_MAX_BYTES} bytes`
     );
   }
 }

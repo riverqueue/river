@@ -94,7 +94,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 20
 
-    # The packed `node:test` suite runs its PostgreSQL tests against this
+    # The packed `node:test` suite runs its Postgres tests against this
     # database, and RIVER_REQUIRE_POSTGRES makes them fail instead of skip
     # when DATABASE_URL is missing.
     services:
@@ -200,7 +200,7 @@ jobs:
       - run: pnpm run test
 
   test_integration:
-    name: Test (integration, PostgreSQL ${{ matrix.postgres-version }})
+    name: Test (integration, Postgres ${{ matrix.postgres-version }})
     runs-on: ubuntu-latest
     timeout-minutes: 20
 

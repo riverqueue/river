@@ -7,7 +7,7 @@ import java.util.UUID;
 import org.junit.jupiter.api.extension.AfterEachCallback;
 import org.junit.jupiter.api.extension.ExtensionContext;
 
-/** Isolates each test in a SQLite file or a PostgreSQL schema owned by that test. */
+/** Isolates each test in a SQLite file or a Postgres schema owned by that test. */
 final class TestDatabase implements AfterEachCallback {
   private final List<Database> databases = new ArrayList<>();
 
@@ -27,11 +27,11 @@ final class TestDatabase implements AfterEachCallback {
     if (!backend.equals("postgres"))
       throw new IllegalArgumentException("Unknown test backend: " + backend);
     if (url == null || url.isBlank())
-      throw new IllegalStateException("RIVER_TEST_DATABASE_URL is required for PostgreSQL tests");
+      throw new IllegalStateException("RIVER_TEST_DATABASE_URL is required for Postgres tests");
     var database =
         Database.connect(url).withSchema("java_" + UUID.randomUUID().toString().replace("-", ""));
     if (database.dialect() != Database.Dialect.POSTGRES)
-      throw new IllegalArgumentException("RIVER_TEST_DATABASE_URL must select PostgreSQL");
+      throw new IllegalArgumentException("RIVER_TEST_DATABASE_URL must select Postgres");
     databases.add(database);
     new Migrator(database).migrate();
     return database;

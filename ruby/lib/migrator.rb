@@ -9,7 +9,7 @@ module River
 
     attr_reader :migrations
 
-    # Creates a migrator for an installed River driver. PostgreSQL schemas must
+    # Creates a migrator for an installed River driver. Postgres schemas must
     # already exist and use simple SQL identifiers; SQLite uses its main schema.
     # The optional migrations_path is a root containing backend/line/*.sql.
     def initialize(driver, line: "main", migrations_path: File.expand_path("../migration", __dir__.to_s), schema: nil)

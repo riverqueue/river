@@ -10,9 +10,9 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// DBPoolWithYugabyteVersion returns a PostgreSQL pool that reports a Yugabyte
+// DBPoolWithYugabyteVersion returns a Postgres pool that reports a Yugabyte
 // version and LISTEN/NOTIFY setting. A nil setting simulates versions where it
-// doesn't exist. This exercises detection on ordinary PostgreSQL; it does not
+// doesn't exist. This exercises detection on ordinary Postgres; it does not
 // emulate Yugabyte's storage or transaction semantics.
 //
 // The schema must be isolated to this test. When notifications are disabled,

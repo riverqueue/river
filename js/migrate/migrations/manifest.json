@@ -51,19 +51,19 @@
       },
       {
         "file": "007_notification_outbox_sqlite_jsonb_and_sql_cleanup.down.sql",
-        "sha256": "9131aae235187dbdaaa822dab2a475a884e917d9af05e3c98fb95c152eaa769a"
+        "sha256": "2771765becc5baa0a8af4406cb4d58ea6d3fb0ebdbf72a0c23ccc72da623caeb"
       },
       {
         "file": "007_notification_outbox_sqlite_jsonb_and_sql_cleanup.up.sql",
-        "sha256": "47ec8031b88e69004de2def5bc3109d969f71ee4c33a1e7dac2fb8c9dd19182d"
+        "sha256": "af01339fcb1687de1f768a570b6ad1e51d23300082aed60440f6a662a0e39d85"
       },
       {
         "file": "008_job_id_autoincrement.down.sql",
-        "sha256": "0c3750a947d6494db07d56f5d3735a5e49a2cbfa1f7a09771227c31c8147bf70"
+        "sha256": "678b3b02deb2f798c3fda3a73c974fc1fe48c6b88688b94f0f7700132b30626f"
       },
       {
         "file": "008_job_id_autoincrement.up.sql",
-        "sha256": "0c3750a947d6494db07d56f5d3735a5e49a2cbfa1f7a09771227c31c8147bf70"
+        "sha256": "678b3b02deb2f798c3fda3a73c974fc1fe48c6b88688b94f0f7700132b30626f"
       }
     ],
     "sqlite": [
@@ -129,7 +129,7 @@
       },
       {
         "file": "008_job_id_autoincrement.up.sql",
-        "sha256": "049c9bf615f24a326bcc31ddc87b46f76e3de11e3eea3b2b9e1358131b3f3bed"
+        "sha256": "3ce6d941f4c434adbd87e69089fa5e99b6047e5b51e611c9845e1d0d3c080e0f"
       }
     ]
   },

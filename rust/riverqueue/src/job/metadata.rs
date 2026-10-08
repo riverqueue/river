@@ -7,7 +7,7 @@ use serde_json::{Map, Value, value::RawValue};
 
 /// A JSON object whose original value tokens remain intact.
 ///
-/// PostgreSQL may store numbers beyond the range of `serde_json::Value`, so
+/// Postgres may store numbers beyond the range of `serde_json::Value`, so
 /// decoding the entire object into a map can make an otherwise valid job
 /// unreadable. This type keeps the persisted text and decodes only requested
 /// fields. Database-side metadata merges preserve unrelated value tokens.

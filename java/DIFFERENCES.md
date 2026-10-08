@@ -40,7 +40,7 @@
 - SQL is kept in dialect-specific resource catalogs. The Go sqlc driver seam is
   not part of the Java API.
 - SQLite follows Go's JSONB storage and millisecond timestamp representation;
-  PostgreSQL uses microsecond timestamps. These are shared storage contracts,
+  Postgres uses microsecond timestamps. These are shared storage contracts,
   not configurable Java serialization choices.
 
 No intentional differences in stored uniqueness hashes, job state values, reserved

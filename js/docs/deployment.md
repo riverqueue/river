@@ -63,7 +63,7 @@ language's kinds on every client that may lead. A client claims only from its
 own queues, so such a placeholder handler never runs; it only lets the rescuer
 apply the normal retry policy. Give it the same timeout as the real worker so
 the rescuer waits just as long before treating the job as stuck. This applies
-to both PostgreSQL and SQLite.
+to both Postgres and SQLite.
 
 JavaScript uses `bigint` and `Temporal.Instant` so it does not silently truncate
 values produced by Go or Rust. Serialize with River's JSON-safe helpers at HTTP,

@@ -38,7 +38,7 @@ tracing = "0.1.44"
 [workspace.lints.rust]
 missing_debug_implementations = "warn"
 unsafe_code = "forbid"
-# `--cfg river_postgres_tests` builds the PostgreSQL integration tests, which
+# `--cfg river_postgres_tests` builds the Postgres integration tests, which
 # need `RIVER_RUST_DATABASE_URL`; `make test/rust` sets it when the URL is set.
 unexpected_cfgs = { level = "warn", check-cfg = ["cfg(river_postgres_tests)"] }
 

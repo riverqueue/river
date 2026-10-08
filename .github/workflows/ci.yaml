@@ -147,7 +147,7 @@ jobs:
     strategy:
       matrix:
         # Keep both supported Go versions covered without repeating SQLite,
-        # libSQL, and Turso tests for every PostgreSQL version.
+        # libSQL, and Turso tests for every Postgres version.
         go-version: ["1.27", "1.26"]
         include:
           # Only the newest Go version runs with the race detector.
@@ -181,18 +181,18 @@ jobs:
     timeout-minutes: 10
 
     steps:
-      # CLI tests use each runner's bundled PostgreSQL version; the database
-      # test matrix above covers supported PostgreSQL versions separately.
-      # GitHub's Linux image includes PostgreSQL with its service disabled.
-      - name: Set up PostgreSQL (Linux)
+      # CLI tests use each runner's bundled Postgres version; the database
+      # test matrix above covers supported Postgres versions separately.
+      # GitHub's Linux image includes Postgres with its service disabled.
+      - name: Set up Postgres (Linux)
         if: runner.os == 'Linux'
         run: |
           sudo systemctl start postgresql.service
           sudo -u postgres psql -c "ALTER USER postgres WITH PASSWORD 'postgres'"
           sudo -u postgres createdb river_dev
 
-      # GitHub's Windows image exposes its PostgreSQL binaries via PGBIN.
-      - name: Set up PostgreSQL (Windows)
+      # GitHub's Windows image exposes its Postgres binaries via PGBIN.
+      - name: Set up Postgres (Windows)
         if: runner.os == 'Windows'
         shell: pwsh
         env:

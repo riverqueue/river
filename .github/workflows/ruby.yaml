@@ -61,7 +61,7 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          # Latest Ruby against all supported PostgreSQL versions.
+          # Latest Ruby against all supported Postgres versions.
           - ruby: "4.0"
             postgres: 18
             primary: true
@@ -74,7 +74,7 @@ jobs:
           - ruby: "4.0"
             postgres: 14
 
-          # Older Ruby versions against the latest PostgreSQL only.
+          # Older Ruby versions against the latest Postgres only.
           - ruby: "3.4"
             postgres: 18
           - ruby: "3.3"
@@ -192,7 +192,7 @@ jobs:
         with:
           ruby-version: "4.0"
           working-directory: ruby/rails/riverqueue-rails
-      # Reuse the runner, PostgreSQL service, and installed gems across versions.
+      # Reuse the runner, Postgres service, and installed gems across versions.
       - name: Test Rails 7.2
         env:
           RAILS_VERSION: "~> 7.2.0"

@@ -379,7 +379,7 @@ func exerciseExecutorTx[TTx any](ctx context.Context, t *testing.T,
 			// unless the legacy fallback is explicitly enabled.
 			driver, schema := driverWithSchema(ctx, t, nil)
 			if driver.DatabaseName() != riverdriver.DatabaseNamePostgres {
-				t.Skip("uses PostgreSQL tuple transaction IDs to detect hidden subtransactions")
+				t.Skip("uses Postgres tuple transaction IDs to detect hidden subtransactions")
 			}
 			tx, err := driver.GetExecutor().Begin(ctx)
 			require.NoError(t, err)
@@ -388,7 +388,7 @@ func exerciseExecutorTx[TTx any](ctx context.Context, t *testing.T,
 			// Include a write directly in the caller's transaction so that
 			// even one savepoint encompassing all helper writes is detected.
 			_ = testfactory.Job(ctx, t, tx, &testfactory.JobOpts{Schema: schema})
-			const numJobs = 80 // Exceeds PostgreSQL's cached subtransaction ID limit.
+			const numJobs = 80 // Exceeds Postgres's cached subtransaction ID limit.
 			for range numJobs {
 				require.NoError(t, dbutil.WithTx(ctx, tx, func(ctx context.Context, execTx riverdriver.ExecutorTx) error {
 					return dbutil.WithTx(ctx, execTx, func(ctx context.Context, execTx riverdriver.ExecutorTx) error {

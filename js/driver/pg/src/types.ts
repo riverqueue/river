@@ -1,13 +1,13 @@
 import type { ClientBase } from "pg";
 import type { AttemptError, JobRow, JsonObject } from "riverqueue";
 
-/** Construction options owned by the PostgreSQL backend. */
+/** Construction options owned by the Postgres backend. */
 export interface PgDriverOptions {
-  /** PostgreSQL schema containing River's tables and functions. */
+  /** Postgres schema containing River's tables and functions. */
   schema?: string;
 }
 
-/** Options common to PostgreSQL semantic operations. */
+/** Options common to Postgres semantic operations. */
 export interface PgOperationOptions {
   /** Caller-owned transaction connection used for the entire operation. */
   tx?: ClientBase;
@@ -93,7 +93,7 @@ export interface PgLeaderTermParams extends PgLeaderElectParams {
   electedAt: Temporal.Instant;
 }
 
-/** A PostgreSQL notification emitted through River's namespaced channels. */
+/** A Postgres notification emitted through River's namespaced channels. */
 export interface PgNotification {
   payload: string;
   topic: string;

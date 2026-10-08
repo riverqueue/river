@@ -21,7 +21,7 @@ RSpec.shared_examples "overflowing metadata counters" do
     driver.job_claim(id: inserted.id, attempted_by: "worker", now: now - 120)
 
     expect(driver.job_rescue_stuck(horizon: now - 60, now: now, retry_policy: River::DefaultClientRetryPolicy.new)).to eq(1)
-    # PostgreSQL expands the exponent into an exact integer; SQLite retains it
+    # Postgres expands the exponent into an exact integer; SQLite retains it
     # as a floating-point value that Ruby decodes as infinity.
     expected = driver.send(:runtime_postgres?) ? 10**999 + 1 : 1
     expect(client.job_get(inserted.id)).to have_attributes(state: "retryable", metadata: include("river:rescue_count" => expected))

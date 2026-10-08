@@ -1,4 +1,4 @@
-//! PostgreSQL runtime behavior under malformed rows and database faults.
+//! Postgres runtime behavior under malformed rows and database faults.
 //!
 //! These tests require `RIVER_RUST_DATABASE_URL` and fail when it is missing.
 //! Each test migrates a uniquely named schema so concurrent runs against one
@@ -175,7 +175,7 @@ impl Gate {
 
 fn database_url() -> String {
     std::env::var("RIVER_RUST_DATABASE_URL")
-        .expect("RIVER_RUST_DATABASE_URL must point at a disposable PostgreSQL test database")
+        .expect("RIVER_RUST_DATABASE_URL must point at a disposable Postgres test database")
 }
 
 /// A migrated schema with a unique name, dropped by [`TestSchema::drop`].
@@ -247,7 +247,7 @@ impl TestSchema {
     }
 }
 
-/// A TCP proxy between a client and PostgreSQL that can make the database
+/// A TCP proxy between a client and Postgres that can make the database
 /// unavailable: it resets open connections and refuses new ones until
 /// restored. Unlike terminating backends, this keeps the database down for
 /// the client while other connections still work.
@@ -312,7 +312,7 @@ impl FaultProxy {
         }
     }
 
-    /// A pool that reaches PostgreSQL only through the proxy. A short acquire
+    /// A pool that reaches Postgres only through the proxy. A short acquire
     /// timeout keeps operations failing quickly while the database is down.
     fn pool(&self, max_connections: u32) -> PgPool {
         PgPoolOptions::new()
@@ -1016,7 +1016,7 @@ async fn snooze_preserves_metadata_numbers_beyond_float_range() {
     .await;
     run.stop().await.unwrap();
     let snoozed = client.jobs().get(snoozed.job.row.id).await.unwrap();
-    // PostgreSQL expands `1e400` in jsonb; the snooze must keep it intact.
+    // Postgres expands `1e400` in jsonb; the snooze must keep it intact.
     assert!(snoozed.metadata.get_raw("unrelated").unwrap().get().len() > 400);
     assert_eq!(snoozed.metadata.get::<i64>("snoozes").unwrap(), Some(1));
 

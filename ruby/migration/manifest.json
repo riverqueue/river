@@ -12,10 +12,10 @@
     "postgresql/main/005_migration_unique_client.up.sql": "b760f487152c7d92102869d46b8a64dc1e2094d5675e690ffbe52a747eee8431",
     "postgresql/main/006_bulk_unique.down.sql": "726483f6e5aa7dd02cdd974cd7bf716973a8d0a97ba6dbc5dc5304aaf54c7ad7",
     "postgresql/main/006_bulk_unique.up.sql": "3b133f7ce4662d3dc8bd4a57628e0e116a300b2635a79315557aa1369849f0fb",
-    "postgresql/main/007_notification_outbox_sqlite_jsonb_and_sql_cleanup.down.sql": "9131aae235187dbdaaa822dab2a475a884e917d9af05e3c98fb95c152eaa769a",
-    "postgresql/main/007_notification_outbox_sqlite_jsonb_and_sql_cleanup.up.sql": "47ec8031b88e69004de2def5bc3109d969f71ee4c33a1e7dac2fb8c9dd19182d",
-    "postgresql/main/008_job_id_autoincrement.down.sql": "0c3750a947d6494db07d56f5d3735a5e49a2cbfa1f7a09771227c31c8147bf70",
-    "postgresql/main/008_job_id_autoincrement.up.sql": "0c3750a947d6494db07d56f5d3735a5e49a2cbfa1f7a09771227c31c8147bf70",
+    "postgresql/main/007_notification_outbox_sqlite_jsonb_and_sql_cleanup.down.sql": "2771765becc5baa0a8af4406cb4d58ea6d3fb0ebdbf72a0c23ccc72da623caeb",
+    "postgresql/main/007_notification_outbox_sqlite_jsonb_and_sql_cleanup.up.sql": "af01339fcb1687de1f768a570b6ad1e51d23300082aed60440f6a662a0e39d85",
+    "postgresql/main/008_job_id_autoincrement.down.sql": "678b3b02deb2f798c3fda3a73c974fc1fe48c6b88688b94f0f7700132b30626f",
+    "postgresql/main/008_job_id_autoincrement.up.sql": "678b3b02deb2f798c3fda3a73c974fc1fe48c6b88688b94f0f7700132b30626f",
     "sqlite/main/001_create_river_migration.down.sql": "34c87dc594bf7520bc3ae69f6f0da8d2d9a472616ab38b37e63d4e3838da06d2",
     "sqlite/main/001_create_river_migration.up.sql": "d15597cb0bb884fb0727d2a29ad8313842708b55fd561a5fe62e37aad5f34298",
     "sqlite/main/002_initial_schema.down.sql": "900508ba08d0ca3c8451eb2854cd9ab837166ef55736393524253b6228438470",
@@ -31,7 +31,7 @@
     "sqlite/main/007_notification_outbox_sqlite_jsonb_and_sql_cleanup.down.sql": "55bffeb528b40dffc0cbec2f22d1463aef37a8b3d7977f83729cc505bb77c745",
     "sqlite/main/007_notification_outbox_sqlite_jsonb_and_sql_cleanup.up.sql": "441a05e1d9aa4f151877ccf725b0b0a86f27013442297d4b621c05676270d0b0",
     "sqlite/main/008_job_id_autoincrement.down.sql": "04871283fe5d4cab4ac70da28d8509aa7ba765994d528c2dcc7ebe0ee596710c",
-    "sqlite/main/008_job_id_autoincrement.up.sql": "049c9bf615f24a326bcc31ddc87b46f76e3de11e3eea3b2b9e1358131b3f3bed"
+    "sqlite/main/008_job_id_autoincrement.up.sql": "3ce6d941f4c434adbd87e69089fa5e99b6047e5b51e611c9845e1d0d3c080e0f"
   },
   "source": "riverdriver/"
 }

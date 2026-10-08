@@ -233,12 +233,12 @@ function programHelp(program: string): string {
   const width = Math.max(...commands.map(({ name }) => name.length)) + 2;
   return formatHelp({
     description: `
-Command-line tools for River, the job queue for PostgreSQL and SQLite.
+Command-line tools for River, the job queue for Postgres and SQLite.
 
 Commands:
 ${commands.map(({ name, summary }) => `  ${name.padEnd(width)}${summary}`).join("\n")}
 
-Commands that use a database take --database-url. PostgreSQL commands other
+Commands that use a database take --database-url. Postgres commands other
 than bench also read the standard PG* environment variables when PGDATABASE
 is set. Run "${program} <command> --help" for a command's flags, and
 "${program} --version" for version information.`,

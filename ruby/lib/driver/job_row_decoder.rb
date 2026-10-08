@@ -23,7 +23,7 @@ module River::Driver
     def self.error_time(value)
       return ZERO_TIME unless value.is_a?(String)
 
-      # Keep Ruby's existing acceptance of PostgreSQL-style timestamps too.
+      # Keep Ruby's existing acceptance of Postgres-style timestamps too.
       Time.parse(value).utc
     rescue ArgumentError
       ZERO_TIME
@@ -63,7 +63,7 @@ module River::Driver
     end
 
     def decoded(field, value, type: nil, strings: false, default: nil)
-      # Sequel's PostgreSQL JSON and array wrappers delegate to Ruby values.
+      # Sequel's Postgres JSON and array wrappers delegate to Ruby values.
       value = value.__getobj__ if value.respond_to?(:__getobj__)
       return default if value.nil?
 

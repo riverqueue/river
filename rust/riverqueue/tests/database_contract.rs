@@ -108,12 +108,12 @@ async fn rejects_an_executor_from_another_backend() {
     let sqlite_pool = sqlite_pool();
 
     let Err(error) = postgres.executor(&sqlite_pool) else {
-        panic!("SQLite executor should not be accepted by a PostgreSQL client");
+        panic!("SQLite executor should not be accepted by a Postgres client");
     };
     assert_eq!(error.expected(), DatabaseKind::Postgres);
     assert_eq!(error.actual(), DatabaseKind::Sqlite);
     assert_eq!(
         error.to_string(),
-        "database executor mismatch: expected PostgreSQL, received SQLite"
+        "database executor mismatch: expected Postgres, received SQLite"
     );
 }

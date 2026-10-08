@@ -1,4 +1,4 @@
-//! PostgreSQL implementation of River's storage operations.
+//! Postgres implementation of River's storage operations.
 
 use chrono::{DateTime, Utc};
 use serde_json::{Map, Value};
@@ -11,7 +11,7 @@ use crate::database::postgres_capabilities::CapabilitiesCache;
 use crate::query::{JobListSqlPart, JobListTimeField};
 use crate::{Error, JobListParams, JobRow, JobState, Queue, SchemaName};
 
-/// PostgreSQL storage bound to one connection.
+/// Postgres storage bound to one connection.
 pub(super) struct PostgresBackend<'c> {
     /// The database's detected server capabilities, or `None` to detect
     /// them for each statement that needs them.
@@ -434,7 +434,7 @@ fn job_list_sql_parts(
     );
     let state_type = schema.qualify("river_job_state");
     // Like Go (upstream 35c4eab8), a single-state list without metadata
-    // predicates compares state with equality so PostgreSQL can use the
+    // predicates compares state with equality so Postgres can use the
     // `(state, <time>)` index ordering, and a single finalized state ordered by
     // `finalized_at` states the non-null invariant that the partial
     // finalized-time index requires. Bulk deletion keeps the generic form.

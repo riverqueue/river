@@ -34,7 +34,7 @@ const companionTable = `${prefix}_companion`;
 
 class CompanionClient extends PilotClient<ClientBase> {}
 
-describe("PostgreSQL pilot", () => {
+describe("Postgres pilot", () => {
   let admin: pg.Pool;
 
   beforeAll(async () => {
@@ -896,7 +896,7 @@ describe("PostgreSQL pilot", () => {
     }
   });
 
-  it("runs producer sessions and services through PostgreSQL transactions", async () => {
+  it("runs producer sessions and services through Postgres transactions", async () => {
     const own = `${prefix}_own_claim`;
     const standard = `${prefix}_standard_claim`;
     const finished = new Map<bigint, number>();
@@ -1454,7 +1454,7 @@ describe("PostgreSQL pilot", () => {
     const run = await client.start();
     await run.stop();
 
-    // PostgreSQL's rendering of the stored JSONB, which keeps `1.0` and
+    // Postgres's rendering of the stored JSONB, which keeps `1.0` and
     // orders keys by length.
     expect(texts).toEqual(['{"scale": 100, "retries": 1.0}']);
   });
@@ -1811,7 +1811,7 @@ describe("PostgreSQL pilot", () => {
         // A write directly in the caller's transaction, so that even one
         // savepoint around all of River's writes would be detected.
         await note(tx, "application");
-        // More than PostgreSQL's cached subtransaction ID limit.
+        // More than Postgres's cached subtransaction ID limit.
         const ids: bigint[] = [];
         for (let index = 0; index < 70; index++) {
           ids.push((await client.insert(job, {}, { tx })).job.id);

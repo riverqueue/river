@@ -121,7 +121,7 @@ pub(crate) enum BackendError {
     Json(#[from] serde_json::Error),
 }
 
-/// Reports SQLite failures the way PostgreSQL's reach callers: as SQLx's own
+/// Reports SQLite failures the way Postgres's reach callers: as SQLx's own
 /// error, with stored values River can't decode as [`sqlx::Error::Decode`].
 impl From<BackendError> for sqlx::Error {
     fn from(error: BackendError) -> Self {
@@ -643,7 +643,7 @@ fn push_attempted_by_appended(query: &mut QueryBuilder<Sqlite>, params: &ClaimJo
 ///
 /// The caller keeps selection and this update in one transaction. Eligibility
 /// beyond the final running-state guard is deliberately the selector's
-/// responsibility, matching the PostgreSQL interception path.
+/// responsibility, matching the Postgres interception path.
 pub(crate) async fn claim_selected(
     connection: &mut SqliteConnection,
     params: &ClaimJobs<'_>,
@@ -797,7 +797,7 @@ pub(crate) async fn list(
 }
 
 /// Pushes conditions that the JSON object `source` (an SQL expression)
-/// contains `fragment`, with PostgreSQL's `jsonb @>` semantics: each key must
+/// contains `fragment`, with Postgres's `jsonb @>` semantics: each key must
 /// be present with a contained value. Keys and scalars are bound, so no JSON
 /// path quoting is involved.
 fn push_contains_object(
@@ -820,7 +820,7 @@ fn push_contains_object(
 }
 
 /// Pushes a condition that the `json_each` row `alias` contains `fragment`.
-/// Like PostgreSQL, scalars match only scalars of the same type (numbers
+/// Like Postgres, scalars match only scalars of the same type (numbers
 /// compare numerically), objects match objects containing every key, and an
 /// array matches an array containing each of its elements.
 fn push_contains_value(

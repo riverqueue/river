@@ -48,7 +48,7 @@ export function notifyInsert(
   );
 }
 
-/** Send one or more PostgreSQL notifications on a River topic. */
+/** Send one or more Postgres notifications on a River topic. */
 export async function notifyMany(
   db: PgDatabase,
   topic: string,
@@ -72,7 +72,7 @@ export async function notifyMany(
 }
 
 /**
- * Yield namespaced PostgreSQL notifications from one LISTEN connection.
+ * Yield namespaced Postgres notifications from one LISTEN connection.
  *
  * Notifications are hints only: callers must retain polling because NOTIFY
  * is not durable. An idle connection is pinged every five seconds, like
@@ -96,7 +96,7 @@ export async function* listen(
   if (db.pool === null) {
     throw unsupportedError(
       "listen",
-      "PostgreSQL LISTEN requires constructing PgDriver with a Pool"
+      "Postgres LISTEN requires constructing PgDriver with a Pool"
     );
   }
   if (topics.length === 0 || signal.aborted) return;
@@ -111,7 +111,7 @@ export async function* listen(
     setupTimeout.abort(
       databaseError(
         "listen",
-        `PostgreSQL LISTEN connection setup did not finish within ${setupTimeoutMs} ms`
+        `Postgres LISTEN connection setup did not finish within ${setupTimeoutMs} ms`
       )
     );
   }, setupTimeoutMs);
@@ -352,7 +352,7 @@ async function currentSchema(client: PgQueryable): Promise<string> {
   if (typeof schema !== "string" || schema.length === 0) {
     throw databaseError(
       "listen",
-      "PostgreSQL returned no current schema for LISTEN"
+      "Postgres returned no current schema for LISTEN"
     );
   }
   return schema;
@@ -372,13 +372,13 @@ function namespacedChannel(schema: string, topic: string): string {
   if (topic.length === 0 || topic.includes("\0")) {
     throw configurationError(
       "listen",
-      "PostgreSQL notification topics must be non-empty and contain no NUL byte"
+      "Postgres notification topics must be non-empty and contain no NUL byte"
     );
   }
   if (Buffer.byteLength(channel, "utf8") > POSTGRES_IDENTIFIER_MAX_BYTES) {
     throw configurationError(
       "listen",
-      `PostgreSQL notification channel must not exceed ${POSTGRES_IDENTIFIER_MAX_BYTES} bytes`
+      `Postgres notification channel must not exceed ${POSTGRES_IDENTIFIER_MAX_BYTES} bytes`
     );
   }
   return channel;
@@ -414,7 +414,7 @@ async function pingListener(
   } catch (cause: unknown) {
     throw databaseError(
       "listen",
-      "PostgreSQL LISTEN connection did not answer a ping",
+      "Postgres LISTEN connection did not answer a ping",
       cause
     );
   } finally {

@@ -22,7 +22,7 @@ export default defineConfig({
     ],
   },
   test: {
-    // Every PostgreSQL integration fixture owns the canonical River tables.
+    // Every Postgres integration fixture owns the canonical River tables.
     // Keep files sequential so one fixture cannot truncate another's rows.
     fileParallelism: false,
     include: ["**/*.integration.test.ts"],

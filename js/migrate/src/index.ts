@@ -1,5 +1,5 @@
 /**
- * River's database migrations for PostgreSQL and SQLite, and a runner that
+ * River's database migrations for Postgres and SQLite, and a runner that
  * applies them explicitly during deployment.
  *
  * @packageDocumentation

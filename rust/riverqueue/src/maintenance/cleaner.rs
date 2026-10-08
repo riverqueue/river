@@ -110,7 +110,7 @@ async fn clean_jobs_batch(
     }
 }
 
-/// Runs the job cleaner's deletion on PostgreSQL.
+/// Runs the job cleaner's deletion on Postgres.
 #[cfg(feature = "postgres")]
 pub(crate) async fn postgres_delete_finalized_jobs(
     connection: &mut sqlx::PgConnection,

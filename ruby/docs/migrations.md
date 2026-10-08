@@ -1,7 +1,7 @@
 # Schema migrations
 
 River Ruby includes a migration API and the `river` command. Neither needs
-Go installed. The gems bundle byte-for-byte copies of the PostgreSQL and SQLite
+Go installed. The gems bundle byte-for-byte copies of the Postgres and SQLite
 SQL from Go's River drivers, pinned to release v0.48.0 through migration 008;
 only the upstream schema template placeholders are substituted when executing
 them.
@@ -24,7 +24,7 @@ bundle exec river migrate-up --database-url sqlite://storage/river.sqlite3
 
 `DATABASE_URL` supplies the URL when `--database-url` is omitted. ActiveRecord
 uses `sqlite3:` URLs instead of Sequel's `sqlite:` URLs. To target an existing
-PostgreSQL schema, pass `--schema jobs`; otherwise the connection's current
+Postgres schema, pass `--schema jobs`; otherwise the connection's current
 schema is used. Schema names must be simple SQL identifiers. SQLite always
 uses its main schema.
 
@@ -52,12 +52,12 @@ migrator.migrate(dry_run: true, target: 8)
 migrator.migrate(direction: :down) # One version; no interactive confirmation.
 ```
 
-The API accepts either driver and optionally `schema:` for PostgreSQL. `migrate`
+The API accepts either driver and optionally `schema:` for Postgres. `migrate`
 returns the migration records applied (or planned in dry-run mode), with their
 version, name, and original up/down SQL. Each version's SQL and history update
 commit in their own transaction. A failing version rolls back while earlier
 versions remain committed, so rerunning resumes safely. Do not wrap the migrator
-in an application transaction: some PostgreSQL changes require a real commit
+in an application transaction: some Postgres changes require a real commit
 before the next version can run.
 
 An up migration targeting an already-applied version does nothing, even when
@@ -75,7 +75,7 @@ Pro SQL is distributed only inside `riverqueue-pro`, not the public core gem.
 SQLite main migration 008 rebuilds `river_job` with `AUTOINCREMENT` so deleted
 job IDs are not reused. Its upgrade and downgrade refuse to run while Pro's
 workflow/sequence schema is installed; coordinate that upgrade with Pro before
-running it on an existing Pro database. PostgreSQL migration 008 is a no-op.
+running it on an existing Pro database. Postgres migration 008 is a no-op.
 
 Migrate main first, then Pro:
 
@@ -92,7 +92,7 @@ River::Pro::Migrator.new(driver).migrate
 ```
 
 Remove other migration lines before downgrading main. Run only one migration
-process at a time across languages. Ruby migrators take a PostgreSQL advisory
+process at a time across languages. Ruby migrators take a Postgres advisory
 lock per schema; SQLite takes a write lock per version and checks for concurrent
 history changes. These are not shared locks with Go's migration runner.
 

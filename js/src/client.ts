@@ -1494,7 +1494,7 @@ function validateJobId(id: bigint): bigint {
 /**
  * Reject a batch in which a unique key appears more than once among the jobs
  * whose state it covers, before anything is written. River for Go writes a
- * batch in one statement, which PostgreSQL refuses when two rows claim the
+ * batch in one statement, which Postgres refuses when two rows claim the
  * same key, and checks SQLite batches the same way.
  */
 function rejectRepeatedUniqueKeys(params: readonly JobInsertParams[]): void {

@@ -294,7 +294,7 @@ export async function maintenanceLeaderAcquire(
   held: RuntimeLeader | null,
   signal?: AbortSignal
 ): Promise<RuntimeLeader | null> {
-  // PostgreSQL's clock is authoritative for cross-host lease expiry. The
+  // Postgres's clock is authoritative for cross-host lease expiry. The
   // runtime keeps a separate monotonic local trust deadline. Like Go River,
   // only the held term is renewed and an unexpired term is never adopted,
   // even one with this client's leader ID.
@@ -600,7 +600,7 @@ export async function maintenanceReindex(
   if (db.pool === null) {
     throw unsupportedError(
       "maintenance",
-      "PostgreSQL reindex maintenance requires a Pool"
+      "Postgres reindex maintenance requires a Pool"
     );
   }
   if (
@@ -719,7 +719,7 @@ async function withMaintenanceLeader<T>(
   if (db.pool === null) {
     throw unsupportedError(
       "maintenance",
-      "PostgreSQL maintenance requires a Pool"
+      "Postgres maintenance requires a Pool"
     );
   }
   batch?.signal.throwIfAborted();
@@ -888,7 +888,7 @@ function validateIndexName(value: string): void {
   ) {
     throw configurationError(
       "index",
-      `PostgreSQL index names must contain 1 to ${POSTGRES_IDENTIFIER_MAX_BYTES} bytes without NUL`
+      `Postgres index names must contain 1 to ${POSTGRES_IDENTIFIER_MAX_BYTES} bytes without NUL`
     );
   }
 }

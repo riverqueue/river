@@ -17,7 +17,7 @@ module ClientTestDatabase
       search_path = pg_catalog_last ? "#{schema},pg_catalog" : "#{schema},public"
       ActiveRecord::Base.establish_connection(config.merge(pool: 20, schema_search_path: search_path))
       # Create and drop through the test pool to avoid opening separate admin
-      # connections for every example. PostgreSQL permits a not-yet-created
+      # connections for every example. Postgres permits a not-yet-created
       # schema in search_path.
       ActiveRecord::Base.connection.execute("CREATE SCHEMA #{schema}")
       schema_created = true

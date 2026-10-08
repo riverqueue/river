@@ -112,7 +112,7 @@ export interface MaintenanceBatcherOptions {
  * batch by its timeout, and trips the service's reduced batch size breaker
  * when a batch times out.
  *
- * A batch times out when it's still running at its deadline. PostgreSQL
+ * A batch times out when it's still running at its deadline. Postgres
  * enforces the timeout on the server, so the batch fails and rolls back like
  * Go's. SQLite statements can't be interrupted, so a SQLite batch that
  * overruns keeps its work; it still counts as a timeout for the breaker.

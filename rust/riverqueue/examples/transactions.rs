@@ -34,7 +34,7 @@ async fn confirm_order(
     let pool = client
         .database()
         .as_postgres()
-        .expect("this example uses PostgreSQL")
+        .expect("this example uses Postgres")
         .pool()
         .clone();
 

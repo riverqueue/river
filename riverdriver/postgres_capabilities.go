@@ -2,7 +2,7 @@ package riverdriver
 
 import "strings"
 
-// PostgresCapabilities describes database features detected by PostgreSQL drivers.
+// PostgresCapabilities describes database features detected by Postgres drivers.
 // Drivers cache a successful detection for their lifetime.
 type PostgresCapabilities struct {
 	SupportsListenNotify bool

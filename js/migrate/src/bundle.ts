@@ -33,7 +33,7 @@ const MIGRATION_FILE_RE =
  * Load River's bundled main migration line for a backend, ordered by version.
  *
  * The SQL files ship with this package and are verified against recorded
- * checksums on every load. PostgreSQL SQL contains a schema placeholder that
+ * checksums on every load. Postgres SQL contains a schema placeholder that
  * a migrator fills in, so run migrations through {@link createMigrator}
  * instead of executing this SQL directly.
  *

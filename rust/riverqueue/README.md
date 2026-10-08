@@ -1,7 +1,7 @@
 # riverqueue
 
 `riverqueue` is the Rust and Tokio client for [River](https://riverqueue.com),
-a fast and reliable background job system backed by PostgreSQL or SQLite. It
+a fast and reliable background job system backed by Postgres or SQLite. It
 shares River's database schema and job protocol with River for Go, so Rust
 and Go services can insert and work jobs in the same database.
 
@@ -23,7 +23,7 @@ Rust version is 1.95.
 
 | Feature | Default | Enables |
 |---|---|---|
-| `postgres` | yes | PostgreSQL through SQLx |
+| `postgres` | yes | Postgres through SQLx |
 | `sqlite` | no | SQLite 3.45 or newer through SQLx |
 | `chrono-tz` | no | IANA zone names such as `America/New_York` in cron `CRON_TZ=` and `TZ=` prefixes |
 
@@ -268,7 +268,7 @@ results are persisted, and independent jobs have no global completion order.
 
 One client at a time holds a database lease and runs the leader-owned
 services: the job scheduler, the stuck-job rescuer, the job and queue cleaners,
-the periodic job enqueuer, the PostgreSQL reindexer, and the SQLite
+the periodic job enqueuer, the Postgres reindexer, and the SQLite
 notification cleaner. Losing the lease or stopping the client stops them
 immediately.
 
@@ -332,7 +332,7 @@ async fn sqlite_client() -> Result<Client, Box<dyn std::error::Error>> {
 - [`queue`] and [`query`]: queue records and job list filters and cursors.
 - [`periodic`]: schedules and runtime periodic job registration.
 - [`extension`]: hooks, middleware, policies, and metrics.
-- [`database`]: PostgreSQL and SQLite database options, and the transactions
+- [`database`]: Postgres and SQLite database options, and the transactions
   River's `.tx` methods accept.
 - [`error`]: structured errors that keep their sources.
 - [`protocol`]: wire values such as notification topics and unique keys, for
@@ -352,7 +352,7 @@ are explicit, as in `ClientBuilder::without_job_timeout` and
 
 The crate's `examples` directory has runnable programs for a basic worker,
 graceful shutdown, cancellation, transactional enqueueing and completion,
-unique and periodic jobs, events, custom PostgreSQL schemas, SQLite, and a
+unique and periodic jobs, events, custom Postgres schemas, SQLite, and a
 Rust and Go service sharing one database. The
 [River documentation](https://riverqueue.com/docs) explains queueing concepts.
 

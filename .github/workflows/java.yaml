@@ -93,7 +93,7 @@ jobs:
         run: make test/java/sqlite
 
   postgres:
-    name: Test (PostgreSQL ${{ matrix.postgres-version }})
+    name: Test (Postgres ${{ matrix.postgres-version }})
     runs-on: ubuntu-latest
     timeout-minutes: 15
     strategy:
@@ -128,5 +128,5 @@ jobs:
         with:
           go-version-file: go.work
 
-      - name: PostgreSQL client, worker, and migration tests
+      - name: Postgres client, worker, and migration tests
         run: make test/java/postgres
