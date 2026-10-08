@@ -1,77 +1,128 @@
 # River for Rust
 
-This workspace contains River's Rust implementation. It shares River's database schema and job protocol with River for Go on Postgres and SQLite, with an API designed for Rust and Tokio. The Rust crates are versioned independently of River for Go.
+River is a fast, reliable background job system backed by Postgres or SQLite. Its Rust implementation uses Tokio and shares River's database schema and job protocol with the other languages, so services can insert and work jobs in the same database.
 
-## Workspace crates
+## Installation
 
-- `riverqueue`: typed client, worker runtime, CRUD, queues, events, extensions,
-  periodic/resumable jobs, and maintenance.
-- `riverqueue-macros`: `#[derive(JobArgs)]`.
-- `riverqueue-migrate`: canonical River migration lines.
-- `riverqueue-cli`: the `riverqueue` command-line program for migrations and
-  benchmarks.
-- `riverqueue-test`: typed fixtures and worker-test helpers.
+```toml
+[dependencies]
+riverqueue = "0.3.0"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "signal"] }
+```
 
-The API uses a caller-owned SQLx pool, Tokio, typed workers, and
-`CancellationToken`. `Client` isn't generic over the database: it accepts a
-Postgres or SQLite pool, and there's no driver trait to implement.
+The quick start below uses these dependencies. River runs on Tokio, and job
+arguments derive Serde's `Serialize` and `Deserialize`. The minimum supported
+Rust version is 1.95.
+
+| Feature | Default | Enables |
+|---|---|---|
+| `postgres` | yes | Postgres through SQLx |
+| `sqlite` | no | SQLite 3.45 or newer through SQLx |
+| `chrono-tz` | no | IANA zone names such as `America/New_York` in cron `CRON_TZ=` and `TZ=` prefixes |
+
+For SQLite alone, use
+`riverqueue = { version = "0.3.0", default-features = false, features = ["sqlite"] }`.
+
+River's API uses types from SQLx (pools and transactions), Chrono
+(timestamps), `serde_json` (metadata, outputs, and other JSON values), and
+`tokio-util` (the worker's `CancellationToken`). The crate re-exports each one
+as `riverqueue::sqlx`, `riverqueue::chrono`, `riverqueue::serde_json`, and
+`riverqueue::tokio_util`. Use the re-exports, or depend on versions
+compatible with River's (SQLx 0.9, Chrono 0.4, `serde_json` 1, and
+`tokio-util` 0.7), so the types match. River doesn't choose a TLS
+implementation for SQLx; enable one of SQLx's TLS features in your own SQLx
+dependency if your database connections use TLS.
 
 ## Quick start
 
-The [`riverqueue` crate README](riverqueue/README.md) walks through defining
-a job, registering a worker, inserting, and starting a client.
+Set `DATABASE_URL` to your application's Postgres database. Define serializable job arguments, register a worker, apply migrations, and start a client:
 
-To run Rust clients alongside River Go against one database, including schema and protocol compatibility, queue and kind layout, unique jobs, and rolling deployment and rollback, see the [mixed deployment guide](riverqueue/docs/mixed-deployments.md), also published as `riverqueue::guide::mixed_deployments`.
+```rust,no_run
+use riverqueue::migrate::PostgresMigrator;
+use riverqueue::sqlx::PgPool;
+use riverqueue::{
+    BoxError, Client, Job, JobArgs, QueueConfig, WorkContext, WorkOutcome, Workers,
+};
+use serde::{Deserialize, Serialize};
 
-Runnable examples in `riverqueue/examples` cover workers and graceful
-shutdown, cancellation, transactional completion, unique and periodic jobs,
-event subscriptions, custom schemas, SQLite, and a mixed Go and Rust
-deployment; `riverqueue-migrate/examples` covers migrations.
+#[derive(Clone, Debug, Deserialize, JobArgs, Serialize)]
+#[river(kind = "send_email")]
+struct SendEmail {
+    address: String,
+}
 
-Run the Rust suite from the repository root:
+async fn send_email(
+    context: WorkContext,
+    job: Job<SendEmail>,
+) -> Result<WorkOutcome, BoxError> {
+    println!("sending email to {}", job.args.address);
+    context.record_output(serde_json::json!({"delivered": true}))?;
+    Ok(WorkOutcome::Complete)
+}
 
-```sh
-make lint/rust
-make test/rust
-make doc/rust
-make check/rust/package
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let pool = PgPool::connect(&std::env::var("DATABASE_URL")?).await?;
+    // Create or upgrade River's tables. Applications often run
+    // `riverqueue migrate-up` from `riverqueue-cli` at deploy time instead.
+    PostgresMigrator::new(pool.clone()).migrate_up().await?;
+
+    let mut workers = Workers::new();
+    workers.add_fn(send_email)?;
+
+    let client = Client::builder(pool)
+        .workers(workers)
+        .queue("default", QueueConfig::new(10))
+        .build()?;
+    // Work jobs until Ctrl-C, then stop fetching and let running jobs finish.
+    let mut run = client.start_with_graceful_stop(async {
+        let _ = tokio::signal::ctrl_c().await;
+    })?;
+
+    client
+        .insert(SendEmail {
+            address: "person@example.com".to_owned(),
+        })
+        .await?;
+
+    run.wait().await?;
+    Ok(())
+}
 ```
 
-For basic end-to-end performance figures, the `riverqueue` binary from
-`riverqueue-cli` has the Rust equivalent of `river bench`. It truncates the selected River job table,
-so use a disposable database:
+Run the application and press Ctrl-C to stop fetching jobs and let active workers finish. Apply migrations before starting any clients; production deployments can use the [`riverqueue` CLI](riverqueue-cli/README.md) as a separate deployment step.
 
-```sh
-make bench/rust DATABASE_URL=postgres://localhost/river_bench \
-  RUST_BENCH_ARGS='--duration 30s'
-```
+A client without queues or workers can insert jobs without being started. Job kinds and serialized JSON fields must agree between languages sharing a job.
 
-The command supports continuous burn, fixed `--num-total-jobs` burn-down,
-custom schemas, tunable worker/pool/batch sizes, periodic jobs/sec output, and a
-final jobs/sec plus p95 end-to-end latency summary. Use `riverqueue bench
---help` for all options.
+## Transactions and other features
 
-Postgres integration tests require a disposable database. They build only
-with `--cfg river_postgres_tests`, which the Makefile targets pass to rustc
-and rustdoc, building into `target/postgres-tests`:
+Insert jobs in the same transaction as application data by chaining `.tx(&mut transaction)` onto `client.insert(args)`. The job becomes available only when that transaction commits. The [insertion guide](riverqueue/README.md#inserting-jobs) covers transaction helpers and error handling.
 
-```sh
-RIVER_RUST_DATABASE_URL=postgres://localhost/river_rust_test \
-  make test/rust/postgres
-```
+- [Job and queue administration](riverqueue/README.md#managing-jobs-and-queues), including cancellation, retries, and pausing queues.
+- [Worker outcomes and cancellation](riverqueue/README.md#worker-outcomes-and-cancellation), including snoozing and graceful stopping.
+- [Unique, periodic, and resumable jobs](riverqueue/README.md#reliability-features).
+- [Event subscriptions](riverqueue/README.md#events) for logging and metrics.
+- [Leader election and maintenance](riverqueue/README.md#leadership-and-maintenance) for scheduling, rescue, and cleanup.
+- [Postgres and SQLite support](riverqueue/README.md#database-support) with caller-owned SQLx pools.
 
-CI runs unit, doc, and SQLite tests on each supported Rust version, and
-Postgres tests against versions 14 through 18. Rust tests check unique
-keys, retry bounds, cron schedules, and snooze counts against fixtures that
-River's Go implementation generates into `conformance/testdata`, which isn't
-committed. The `make test/rust` targets generate them first, so Go is needed
-to run the tests; when running `cargo test` directly, run `make
-generate/fixtures` beforehand. A missing fixture fails its test.
+## Crates
 
-`make check/rust/package` builds the five publishable crate archives and
-verifies that each one builds from its packaged sources, resolving the
-exact-version workspace dependencies from the other archives. It does not
-publish anything. Release tags use `rust/vX.Y.Z`, independently of Go
-module tags.
+| Crate | Purpose |
+| --- | --- |
+| [`riverqueue`](riverqueue/README.md) | Typed client, workers, job and queue administration, and maintenance |
+| [`riverqueue-macros`](riverqueue-macros/README.md) | `#[derive(JobArgs)]` |
+| [`riverqueue-migrate`](riverqueue-migrate/README.md) | River's database migrations |
+| [`riverqueue-cli`](riverqueue-cli/README.md) | The `riverqueue` command for migrations and benchmarks |
+| [`riverqueue-test`](riverqueue-test/README.md) | Fixtures and worker test helpers |
 
-See [Rust development](docs/development.md#releasing-a-new-version) for the release procedure.
+The Rust crates are versioned together, independently of River for Go.
+
+## Documentation
+
+See the [client guide](riverqueue/README.md), [API reference](https://docs.rs/riverqueue), and [mixed deployment guide](riverqueue/docs/mixed-deployments.md). The [examples](riverqueue/examples) cover workers, graceful stopping, transactions, unique and periodic jobs, events, custom schemas, and SQLite.
+
+## Development
+
+See [developing River for Rust](docs/development.md).

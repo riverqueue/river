@@ -2,7 +2,7 @@
 
 River is a fast, reliable background job system backed by Postgres or SQLite.
 This implementation runs on Node.js and shares River's database protocol with
-River for Go and Rust, so services in all three languages can insert and work
+River's other language implementations, so services can insert and work
 the same jobs in the same database.
 
 ## Requirements
@@ -93,6 +93,17 @@ For SQLite, install `@riverqueue/driver-sqlite` instead of the Postgres
 packages; it uses Node's built-in `node:sqlite`. See the
 [SQLite driver](./driver/sqlite/README.md).
 
+## Transactions and other features
+
+[Insert jobs in an application transaction](./docs/README.md#transactions) so the job and its related database changes commit or roll back together. River supports transactions with node-postgres, Prisma, and SQLite.
+
+- [Bulk insertion](./docs/README.md#batches) and [unique jobs](./docs/README.md#unique-jobs).
+- [Retries, timeouts, cancellation, and snoozing](./docs/errors-and-retries.md).
+- [Periodic jobs](./docs/periodic-jobs.md) and [resumable jobs](./docs/resumable-jobs.md).
+- [Job and queue administration](./docs/README.md#query-and-control-jobs).
+- [Logging, events, and metrics](./docs/observability.md).
+- [Worker threads](./worker-threads/README.md) for CPU-bound handlers.
+
 ## Packages
 
 | Package                      | Purpose                                                             |
@@ -120,7 +131,9 @@ Start with the [guide](./docs/README.md), then the topic guides:
 - [Running alongside Go and Rust](./docs/deployment.md)
 - [Migrating from `riverqueue` 0.1](./docs/migrating-from-0.1.md)
 
-API reference documentation is generated with `pnpm run docs:api`.
+## Development
+
+See [developing River for JavaScript and TypeScript](./docs/development.md).
 
 ## License
 
