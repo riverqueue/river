@@ -81,9 +81,9 @@ func MetadataUpdatesFromWorkContext(ctx context.Context) (map[string]any, bool) 
 }
 
 // NextSnoozeCount returns the snooze count recorded on a job that's snoozed
-// again: its metadata's current `snoozes` value plus one. The current value is
-// read leniently, so a missing, non-numeric, or malformed count reads as zero
-// and a fractional one truncates toward zero.
+// again: its metadata's current integer `snoozes` value plus one, starting at
+// one when absent. Invalid values are read leniently; their exact coercion is
+// not part of the cross-language protocol.
 func NextSnoozeCount(metadata []byte) int64 {
 	return gjson.GetBytes(metadata, "snoozes").Int() + 1
 }

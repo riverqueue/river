@@ -50,20 +50,10 @@ describe("completionCommand", () => {
       readonly snooze_counters: readonly SnoozeCounterCase[];
     };
     expect(golden.snooze_counters.length).toBeGreaterThan(0);
-    const now = Temporal.Instant.from("2026-09-01T00:00:00Z");
-
-    const results = golden.snooze_counters.map(({ metadata, name }) => {
-      const command = completionCommand(
-        job(metadata),
-        "client",
-        { outcome: snooze({ seconds: 30 }), status: "succeeded" },
-        now,
-        now,
-        now,
-        5_000
-      );
-      return [name, numberText(command.metadata?.snoozes)];
-    });
+    const results = golden.snooze_counters.map(({ metadata, name }) => [
+      name,
+      numberText(snoozeCommand(metadata).metadata?.snoozes),
+    ]);
 
     expect(results).toEqual(
       golden.snooze_counters.map(({ expected_snoozes, name }) => [
@@ -71,6 +61,31 @@ describe("completionCommand", () => {
         numberText(expected_snoozes),
       ])
     );
+  });
+
+  it.each([
+    "2.9",
+    "-2",
+    "1e400",
+    "9223372036854775807",
+    "9223372036854775808",
+    '"4"',
+    '"4.5"',
+    '"1e3"',
+    '" 5"',
+    '"abc"',
+    "true",
+    "false",
+    "null",
+    "[3]",
+    '{"count":3}',
+  ])("recovers safely from invalid snooze counter %s", (raw) => {
+    const metadata = parseJson(`{"snoozes":${raw}}`) as JsonObject;
+    const command = snoozeCommand(metadata);
+
+    expect(command.kind).toBe("snooze");
+    expect(command.scheduledAt).not.toBeNull();
+    expect(BigInt(numberText(command.metadata?.snoozes))).toBeGreaterThan(0n);
   });
 });
 
@@ -103,4 +118,17 @@ function numberText(value: JsonValue | undefined): string {
   if (typeof value === "number") return String(value);
   if (isExactJsonNumber(value)) return value.rawJSON;
   throw new Error(`not a JSON number: ${JSON.stringify(value)}`);
+}
+
+function snoozeCommand(metadata: JsonObject) {
+  const now = Temporal.Instant.from("2026-09-01T00:00:00Z");
+  return completionCommand(
+    job(metadata),
+    "client",
+    { outcome: snooze({ seconds: 30 }), status: "succeeded" },
+    now,
+    now,
+    now,
+    5_000
+  );
 }
