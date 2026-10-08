@@ -16,8 +16,9 @@ use crate::client::{ClientInner, PeerLedger, peers};
 use crate::error::{Chain, panic_message};
 use crate::extension::{WorkEndpoint, WorkNext};
 use crate::{
-    AttemptError, BoxError, Client, Error, ErrorHandlerDecision, JobEventKind, JobRow, JobState,
-    PanicError, WorkCancelled, WorkContext, WorkError, WorkOutcome, WorkResult, WorkerTimeout,
+    AttemptError, BoxError, Client, Error, ErrorHandlerDecision, JobEventKind, JobMetadata, JobRow,
+    JobState, PanicError, WorkCancelled, WorkContext, WorkError, WorkOutcome, WorkResult,
+    WorkerTimeout,
 };
 
 /// Runs one claimed job's attempt and persists its result.
@@ -547,7 +548,7 @@ pub(super) async fn persist_result(
                     JobState::Scheduled
                 };
                 let mut metadata = metadata_updates;
-                let snoozes = go_json_int(row.metadata.get_raw("snoozes")).wrapping_add(1);
+                let snoozes = next_snooze_count(&row.metadata);
                 metadata.insert("snoozes".to_owned(), Value::from(snoozes));
                 (
                     state,
@@ -694,64 +695,24 @@ pub(crate) fn default_retry_delay(row: &JobRow, now: DateTime<Utc>, seed: u64) -
         .min(Duration::from_nanos(MAX_RETRY_NANOS))
 }
 
-/// Coerces a metadata value to an integer exactly like Go's `gjson.Int`, which
-/// the Go executor uses to read the `snoozes` counter. Numbers truncate toward
-/// zero, numeric strings of optional sign and digits parse, `true` is one, and
-/// everything else is zero.
-fn go_json_int(value: Option<&serde_json::value::RawValue>) -> i64 {
-    fn parse_digits(text: &str) -> Option<i64> {
-        let (negative, digits) = text
-            .strip_prefix('-')
-            .map_or((false, text), |digits| (true, digits));
-        if digits.is_empty() {
-            return None;
-        }
-        let mut number = 0_i64;
-        for byte in digits.bytes() {
-            if !byte.is_ascii_digit() {
-                return None;
-            }
-            number = number.wrapping_mul(10).wrapping_add(i64::from(byte - b'0'));
-        }
-        Some(if negative {
-            number.wrapping_neg()
-        } else {
-            number
-        })
-    }
-
-    const MAX_SAFE_INTEGER: f64 = 9_007_199_254_740_991.0;
-    match value.map(serde_json::value::RawValue::get) {
-        Some("true") => 1,
-        Some(raw) if raw.starts_with('"') => serde_json::from_str::<String>(raw)
-            .ok()
-            .and_then(|text| parse_digits(&text))
-            .unwrap_or(0),
-        Some(raw) if raw.starts_with(['-', '0', '1', '2', '3', '4', '5', '6', '7', '8', '9']) => {
-            let float = raw.parse::<f64>().unwrap_or(0.0);
-            if (-MAX_SAFE_INTEGER..=MAX_SAFE_INTEGER).contains(&float) {
-                #[expect(
-                    clippy::cast_possible_truncation,
-                    reason = "Go truncates safe floats toward zero"
-                )]
-                return float as i64;
-            }
-            #[expect(
-                clippy::cast_possible_truncation,
-                reason = "Go falls back to a float conversion for huge numbers"
-            )]
-            parse_digits(raw).unwrap_or(float as i64)
-        }
-        _ => 0,
-    }
+/// Increments an integer counter, restarting missing, invalid, or overflowing
+/// counters at one. Invalid-value recovery is not a cross-language contract.
+fn next_snooze_count(metadata: &JobMetadata) -> i64 {
+    metadata
+        .get::<i64>("snoozes")
+        .ok()
+        .flatten()
+        .filter(|count| *count >= 0)
+        .and_then(|count| count.checked_add(1))
+        .unwrap_or(1)
 }
 
 #[cfg(test)]
-mod go_json_int_tests {
+mod snooze_counter_tests {
     use crate::{JobMetadata, conformance::read_fixture};
     use serde::Deserialize;
 
-    use super::go_json_int;
+    use super::next_snooze_count;
 
     #[derive(Deserialize)]
     struct Fixture {
@@ -766,12 +727,37 @@ mod go_json_int_tests {
     }
 
     #[test]
+    fn invalid_counters_recover_without_panicking() {
+        for raw in [
+            "2.9",
+            "-2",
+            "1e3",
+            "1e400",
+            "9223372036854775807",
+            "9223372036854775808",
+            r#""4""#,
+            r#""4.5""#,
+            r#""1e3""#,
+            r#"" 5""#,
+            r#""abc""#,
+            "true",
+            "false",
+            "null",
+            "[3]",
+            r#"{"count":3}"#,
+        ] {
+            let metadata: JobMetadata = format!(r#"{{"snoozes":{raw}}}"#).parse().unwrap();
+            assert!(next_snooze_count(&metadata) > 0, "{raw}");
+        }
+    }
+
+    #[test]
     fn snooze_counter_matches_go_fixture() {
         let fixture: Fixture = serde_json::from_str(&read_fixture("snooze_counters.json")).unwrap();
         assert!(!fixture.snooze_counters.is_empty());
         for case in fixture.snooze_counters {
             assert_eq!(
-                go_json_int(case.metadata.get_raw("snoozes")).wrapping_add(1),
+                next_snooze_count(&case.metadata),
                 case.expected_snoozes,
                 "{}",
                 case.name
