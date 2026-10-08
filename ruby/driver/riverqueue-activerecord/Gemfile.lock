@@ -1,7 +1,7 @@
 PATH
   remote: ../..
   specs:
-    riverqueue (0.12.0)
+    riverqueue (0.13.0)
       logger (> 0, < 1000)
       optparse (> 0, < 1000)
       securerandom (> 0, < 1000)
@@ -10,10 +10,10 @@ PATH
 PATH
   remote: .
   specs:
-    riverqueue-activerecord (0.12.0)
+    riverqueue-activerecord (0.13.0)
       activerecord (> 0, < 1000)
       activesupport (> 0, < 1000)
-      riverqueue (= 0.12.0)
+      riverqueue (= 0.13.0)
 
 GEM
   remote: https://rubygems.org/

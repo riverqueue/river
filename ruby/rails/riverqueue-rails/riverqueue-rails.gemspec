@@ -2,7 +2,7 @@
 
 Gem::Specification.new do |s|
   s.name = "riverqueue-rails"
-  s.version = "0.12.0"
+  s.version = "0.13.0"
   s.summary = "Active Job and Rails integration for River."
   s.authors = ["Blake Gentry", "Brandur Leach"]
   s.files = Dir.glob("lib/**/*") + ["README.md"]

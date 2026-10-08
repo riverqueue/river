@@ -7,10 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.13.0] - 2026-10-08
+
 ### Added
 
 - Expanded checks against Go-generated conformance fixtures to cover cron schedules, snooze counters, all shared metadata keys, and queue-control and leadership notification emission through both SQL drivers. [PR #1463](https://github.com/riverqueue/river/pull/1463).
 - Added `CRON_TZ=` / `TZ=` prefixes, `?` wildcards, and Go-style `@every` durations to `PeriodicCron`. [PR #1463](https://github.com/riverqueue/river/pull/1463).
+
+### Changed
+
+- Ruby is now developed in the main [River repository](https://github.com/riverqueue/river/tree/master/ruby). Gem names and require paths are unchanged. The four public gems (`riverqueue`, `riverqueue-activerecord`, `riverqueue-sequel`, and `riverqueue-rails`) are released together. [PR #1463](https://github.com/riverqueue/river/pull/1463).
+- **Breaking:** Job insertion accepts only `available`, `pending`, and `scheduled` states. `running`, `retryable`, and terminal states are rejected, including when set by insertion hooks. [PR #1463](https://github.com/riverqueue/river/pull/1463).
+- **Breaking:** Insertion rejects queue names containing characters other than ASCII letters, digits, underscores, hyphens, colons, or periods. Nonzero `UniqueOpts#by_period` values must be at least one second. [PR #1463](https://github.com/riverqueue/river/pull/1463).
+- **Breaking:** Attempt counts must be between 0 and 32,767, and `max_attempts` must be between 1 and 32,767. These bounds also apply on SQLite. `job_retry` raises `ArgumentError` when another attempt would exceed the limit. [PR #1463](https://github.com/riverqueue/river/pull/1463).
+- **Breaking:** Job and queue metadata updates require a Hash; JSON-encoded strings are no longer accepted. Pass an empty Hash to clear metadata. Updates to `attempted_by` require string entries. [PR #1463](https://github.com/riverqueue/river/pull/1463).
 
 ### Fixed
 
