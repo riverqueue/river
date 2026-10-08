@@ -13,7 +13,7 @@
   </properties>
   <dependencyManagement><dependencies>
     <dependency><groupId>tools.jackson.core</groupId><artifactId>jackson-databind</artifactId><version>3.2.3</version></dependency>
-    <dependency><groupId>org.postgresql</groupId><artifactId>postgresql</artifactId><version>42.7.9</version></dependency>
+    <dependency><groupId>org.postgresql</groupId><artifactId>postgresql</artifactId><version>42.7.12</version></dependency>
     <dependency><groupId>org.xerial</groupId><artifactId>sqlite-jdbc</artifactId><version>3.53.4.0</version></dependency>
     <dependency><groupId>org.junit.jupiter</groupId><artifactId>junit-jupiter</artifactId><version>5.13.4</version></dependency>
   </dependencies></dependencyManagement>
