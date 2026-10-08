@@ -146,8 +146,8 @@ repository. Follow its README; do not include it in the public release below.
 2. Update `CHANGELOG.md` to include the new version and open a pull request with those changes and the ones to the gemspecs and `Gemfile.lock`s above.
 
 3. After the PR is merged, pull master and rebuild all gems with `make build`.
-   Push those rebuilt archives, then tag the release with the Ruby-specific prefix
-   (plain `v*` tags are reserved for Go):
+   Push those rebuilt archives, then tag the release with the `ruby/` language
+   prefix, for example `ruby/v0.13.0` (plain `v*` tags are reserved for Go):
 
     ```shell
     git pull origin master
@@ -158,8 +158,8 @@ repository. Follow its README; do not include it in the public release below.
     pushd driver/riverqueue-sequel && gem push riverqueue-sequel-${VERSION#v}.gem && popd
     pushd rails/riverqueue-rails && gem push riverqueue-rails-${VERSION#v}.gem && popd
 
-    git tag riverqueue-ruby-$VERSION
-    git push origin riverqueue-ruby-$VERSION
+    git tag ruby/$VERSION
+    git push origin ruby/$VERSION
     ```
 
 4. Cut a new GitHub release by visiting [new release](https://github.com/riverqueue/river/releases/new), selecting the new tag, and copying in the version's `CHANGELOG.md` content as the release body.

@@ -11,7 +11,7 @@ on:
       - "conformance/**"
       - "riverdriver/**/*.sql"
       - "ruby/**"
-    tags: ["riverqueue-ruby-v*"]
+    tags: ["ruby/v*"]
   pull_request:
     paths:
       - ".github/workflows/ruby.yaml"
