@@ -77,7 +77,7 @@ export interface MigrateVersion {
  *
  * Create one with {@link createMigrator}. Each version runs in its own
  * transaction together with its `river_migration` bookkeeping. Concurrent
- * migrators for the same schema serialize: PostgreSQL uses a
+ * migrators for the same schema serialize: Postgres uses a
  * transaction-scoped advisory lock and SQLite uses an immediate write
  * transaction, and a version finished by another migrator is skipped rather
  * than run twice.
@@ -139,7 +139,7 @@ export type MigratorSource = ClientDriver | MigrationTarget;
 export type MigrationTarget =
   PgClientMigrationTarget | PgPoolMigrationTarget | SqliteMigrationTarget;
 
-/** Migrate PostgreSQL through one dedicated connection. */
+/** Migrate Postgres through one dedicated connection. */
 export interface PgClientMigrationTarget {
   /**
    * A connected node-postgres `Client` or `PoolClient` that is not inside a
@@ -153,7 +153,7 @@ export interface PgClientMigrationTarget {
   readonly schema?: string | undefined;
 }
 
-/** Migrate PostgreSQL through a connection pool. */
+/** Migrate Postgres through a connection pool. */
 export interface PgPoolMigrationTarget {
   /**
    * A node-postgres `Pool`. The migrator checks out one connection per call

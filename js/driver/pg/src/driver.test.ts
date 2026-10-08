@@ -71,7 +71,7 @@ function mockPgClient() {
     rows: [] as Record<string, unknown>[],
   };
   const query = vi.fn(async (config: QueryConfig<unknown[]>) => {
-    // Answer the driver's one-time server detection as PostgreSQL 17,
+    // Answer the driver's one-time server detection as Postgres 17,
     // outside the statements each test inspects.
     // LISTEN and ping queries are plain SQL strings, not query configs.
     if (
@@ -161,7 +161,7 @@ describe("PgDriver surface", () => {
   });
 });
 
-describe("PostgreSQL exact type parsing", () => {
+describe("Postgres exact type parsing", () => {
   it("preserves exact JSON and JSONB numbers", () => {
     const parseJson = PG_EXACT_TYPES.getTypeParser(114, "text");
 
@@ -213,7 +213,7 @@ describe("PostgreSQL exact type parsing", () => {
     );
   });
 
-  it("decodes binary timestamptz values at PostgreSQL's epoch", () => {
+  it("decodes binary timestamptz values at Postgres's epoch", () => {
     const parser = PG_EXACT_TYPES.getTypeParser(1184, "binary");
     const encoded = Buffer.alloc(8);
     encoded.writeBigInt64BE(1n);
@@ -268,7 +268,7 @@ describe("PostgreSQL exact type parsing", () => {
     }
   });
 
-  it("rejects PostgreSQL timestamp infinity", () => {
+  it("rejects Postgres timestamp infinity", () => {
     const parser = PG_EXACT_TYPES.getTypeParser(1184, "text");
 
     expect(() => parser("infinity")).toThrow(/infinite timestamps/);
@@ -893,7 +893,7 @@ describe("PgDriver", () => {
       await vi.advanceTimersByTimeAsync(1_000);
       // The caller resubscribes; the listener doesn't reconnect on its own.
       await expect(failed).resolves.toMatchObject({
-        message: "PostgreSQL LISTEN connection did not answer a ping",
+        message: "Postgres LISTEN connection did not answer a ping",
         name: "DatabaseOperationError",
       });
       expect(halfOpen.release).toHaveBeenCalledWith(true);
@@ -941,7 +941,7 @@ describe("PgDriver", () => {
       await vi.advanceTimersByTimeAsync(1);
       await expect(failed).resolves.toMatchObject({
         message:
-          "PostgreSQL LISTEN connection setup did not finish within 1000 ms",
+          "Postgres LISTEN connection setup did not finish within 1000 ms",
         name: "DatabaseOperationError",
       });
       expect(halfOpen.release).toHaveBeenCalledWith(true);
@@ -1513,7 +1513,7 @@ describe("PgDriver", () => {
       }),
       null,
     ]);
-    // Truncated to PostgreSQL's microseconds like Go's pgx.
+    // Truncated to Postgres's microseconds like Go's pgx.
     expect(config.values![5]).toEqual([
       "2026-08-30T14:00:01.123456Z",
       null,
@@ -1777,7 +1777,7 @@ describe("PgDriver", () => {
     await expect(promise).rejects.toMatchObject({
       backend: "postgres",
       code: "database",
-      message: "PostgreSQL operation jobGet failed",
+      message: "Postgres operation jobGet failed",
       operation: "jobGet",
     });
     await expect(promise).rejects.not.toHaveProperty("sql");

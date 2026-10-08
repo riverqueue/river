@@ -1,6 +1,6 @@
 # River TypeScript Example: Prisma
 
-A minimal example demonstrating how to use the [River](https://github.com/riverqueue/river/tree/master/js) TypeScript client with [Prisma](https://www.prisma.io/) to insert background jobs into PostgreSQL.
+A minimal example demonstrating how to use the [River](https://github.com/riverqueue/river/tree/master/js) TypeScript client with [Prisma](https://www.prisma.io/) to insert background jobs into Postgres.
 
 The example defines typed jobs and shows single insertion, scheduling, batch
 insertion, and a caller-owned Prisma interactive transaction that commits an
@@ -10,7 +10,7 @@ application row and its River job atomically.
 
 - Node.js >= 26
 - pnpm
-- PostgreSQL with [River's schema](https://riverqueue.com/docs) migrated
+- Postgres with [River's schema](https://riverqueue.com/docs) migrated
 
 ## Setup
 

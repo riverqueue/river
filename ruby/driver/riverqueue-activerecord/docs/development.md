@@ -15,7 +15,7 @@ $ createdb river_test
 
 Tests migrate their own disposable schemas using the bundled SQL and leave
 existing tables untouched. The database user needs permission to create and drop
-schemas. Set `TEST_DATABASE_URL` to use a different PostgreSQL database.
+schemas. Set `TEST_DATABASE_URL` to use a different Postgres database.
 
 Generate shared fixtures from the repository root with `make generate/fixtures`
 before invoking the driver specs directly.

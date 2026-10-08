@@ -1,6 +1,6 @@
 # River for JavaScript and TypeScript
 
-River is a fast, reliable background job system backed by PostgreSQL or SQLite.
+River is a fast, reliable background job system backed by Postgres or SQLite.
 This implementation runs on Node.js and shares River's database protocol with
 River for Go and Rust, so services in all three languages can insert and work
 the same jobs in the same database.
@@ -28,9 +28,9 @@ the same jobs in the same database.
 Keep every `@riverqueue/*` package on the same version as `riverqueue`; the
 packages declare that as an exact peer dependency.
 
-## Quickstart with PostgreSQL
+## Quickstart with Postgres
 
-Install the core package, the PostgreSQL driver, migrations, and a validator
+Install the core package, the Postgres driver, migrations, and a validator
 (any [Standard Schema](https://standardschema.dev) library works; this uses
 Zod):
 
@@ -89,7 +89,7 @@ River never closes the pool you give it and never migrates on its own. Web
 servers that only insert jobs construct the same `Client` without `queues` or
 `workers` and never call `start()`.
 
-For SQLite, install `@riverqueue/driver-sqlite` instead of the PostgreSQL
+For SQLite, install `@riverqueue/driver-sqlite` instead of the Postgres
 packages; it uses Node's built-in `node:sqlite`. See the
 [SQLite driver](./driver/sqlite/README.md).
 
@@ -98,10 +98,10 @@ packages; it uses Node's built-in `node:sqlite`. See the
 | Package                      | Purpose                                                             |
 | ---------------------------- | ------------------------------------------------------------------- |
 | `riverqueue`                 | Job definitions, insertion, workers, runtime, queries, and events   |
-| `@riverqueue/driver-pg`      | PostgreSQL through `node-postgres`                                  |
+| `@riverqueue/driver-pg`      | Postgres through `node-postgres`                                    |
 | `@riverqueue/driver-prisma`  | Insert jobs inside Prisma transactions                              |
 | `@riverqueue/driver-sqlite`  | SQLite through Node's built-in `node:sqlite`                        |
-| `@riverqueue/migrate`        | PostgreSQL and SQLite migrations                                    |
+| `@riverqueue/migrate`        | Postgres and SQLite migrations                                      |
 | `@riverqueue/worker-threads` | Run CPU-bound handlers on worker threads                            |
 | `@riverqueue/test`           | Test helpers for producers and workers                              |
 | `@riverqueue/cli`            | The `riverqueue` command: migrations, benchmarks, and a 0.1 codemod |

@@ -1,5 +1,5 @@
 // Runs the driver against a real generated Prisma client and Prisma's
-// PostgreSQL adapter, rather than the `pg`-backed stand-in the other
+// Postgres adapter, rather than the `pg`-backed stand-in the other
 // integration tests use, so Prisma's own parameter and result handling is
 // covered. The client is generated into a temporary directory at startup.
 import { execFile } from "node:child_process";

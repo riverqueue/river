@@ -626,7 +626,7 @@ impl ClientBuilder {
     ///
     /// The client then polls for new jobs every queue's fetch poll interval,
     /// and every two seconds for queue changes and for cancellations of its
-    /// running jobs requested by other clients. A client using a PostgreSQL
+    /// running jobs requested by other clients. A client using a Postgres
     /// server without `LISTEN`/`NOTIFY`, like YugabyteDB by default, runs
     /// this way on its own.
     #[must_use]

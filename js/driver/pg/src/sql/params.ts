@@ -13,7 +13,7 @@ export function instantParameter(
     : postgresTimestamp(value);
 }
 
-/** Require a row limit that fits PostgreSQL's `int`. */
+/** Require a row limit that fits Postgres's `int`. */
 export function validateLimit(
   value: number,
   label = "queue list maximum"

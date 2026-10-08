@@ -1,16 +1,16 @@
 # River TypeScript Example: node-postgres
 
-A minimal example demonstrating how to use the [River](https://github.com/riverqueue/river/tree/master/js) TypeScript client with `node-postgres` (`pg`) to insert background jobs into PostgreSQL.
+A minimal example demonstrating how to use the [River](https://github.com/riverqueue/river/tree/master/js) TypeScript client with `node-postgres` (`pg`) to insert background jobs into Postgres.
 
 The example defines typed jobs and shows single insertion, scheduling, batch
-insertion, and an explicit caller-owned PostgreSQL transaction that commits an
+insertion, and an explicit caller-owned Postgres transaction that commits an
 application row and its River job atomically.
 
 ## Prerequisites
 
 - Node.js >= 26
 - pnpm
-- PostgreSQL with [River's schema](https://riverqueue.com/docs) migrated
+- Postgres with [River's schema](https://riverqueue.com/docs) migrated
 
 ## Setup
 

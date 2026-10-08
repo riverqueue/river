@@ -4,11 +4,11 @@ Each database lives in its own driver package, so an application installs only
 the database it uses. The core API never exposes one database's types as
 universal: a client's transaction type comes from its driver.
 
-## PostgreSQL
+## Postgres
 
 `@riverqueue/driver-pg` is the complete `node-postgres` runtime. The
 application owns the pool; River never ends it. River reads timestamps in
-PostgreSQL's default ISO `DateStyle` and rejects any other with a
+Postgres's default ISO `DateStyle` and rejects any other with a
 `ConfigurationError`; a server configured otherwise needs `DateStyle=ISO` for
 River's connections, such as through the pool's
 `options: "-c DateStyle=ISO"`.
@@ -44,7 +44,7 @@ migrator, and CLI.
 
 ### YugabyteDB
 
-River's PostgreSQL drivers detect YugabyteDB from the server's `version()`
+River's Postgres drivers detect YugabyteDB from the server's `version()`
 the first time they need to, and cache what they find for the driver's
 lifetime, like River for Go. YugabyteDB has no `xmax`, so a unique insertion
 marks each row with a `river:unique_nonce` metadata value instead, as on
@@ -55,17 +55,17 @@ claims new jobs every queue's `pollInterval`, rereads queue pauses, resumes,
 and metadata, and checks its running jobs for cancellations every
 `queueControlPollInterval` (two seconds by default), including while a stop
 drains them. After enabling notifications, construct a new driver, for
-example by restarting, so River detects them. On PostgreSQL 18 and later,
+example by restarting, so River detects them. On Postgres 18 and later,
 unique insertions read the conflicting row through `RETURNING OLD`.
 
-On PostgreSQL, `@riverqueue/migrate` serializes concurrent migrators with a
+On Postgres, `@riverqueue/migrate` serializes concurrent migrators with a
 transaction-scoped advisory lock. YugabyteDB has advisory locks only behind a
 preview flag, so there, like River for Go's migrator everywhere, it takes no
 lock; run one migrator at a time.
 
 `@riverqueue/driver-prisma` is deliberately producer-only. It lets application
 writes and job insertion share a Prisma transaction, but it does not claim or
-work jobs. Use the PostgreSQL runtime in worker services.
+work jobs. Use the Postgres runtime in worker services.
 
 ## SQLite
 

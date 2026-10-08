@@ -29,7 +29,7 @@ export interface PrismaClientLike {
 
 ```ts
 /**
- * River's insertion adapter for Prisma on PostgreSQL.
+ * River's insertion adapter for Prisma on Postgres.
  *
  * The Prisma client is caller-owned. A caller-owned transaction client may be
  * supplied as `{ tx }` and is used for the exact operation. Schema selection
@@ -53,9 +53,9 @@ export declare class PrismaDriver {
 ## `PrismaDriverOptions`
 
 ```ts
-/** PostgreSQL configuration owned by the adapter. */
+/** Postgres configuration owned by the adapter. */
 export interface PrismaDriverOptions {
-  /** PostgreSQL schema containing River's tables and functions. */
+  /** Postgres schema containing River's tables and functions. */
   schema?: string;
   /**
    * Limits for the interactive transaction River opens for an insertion

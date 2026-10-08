@@ -148,7 +148,7 @@ async fn go_notification_fixtures_dispatch_correctly() {
     assert_eq!(fixture.notifications.len(), names.len());
 
     // Dispatch is synchronous and needs no database connection. Exercise it
-    // in both PostgreSQL-only and SQLite-only builds.
+    // in both Postgres-only and SQLite-only builds.
     #[cfg(feature = "postgres")]
     let pool = sqlx::PgPool::connect_lazy("postgres://localhost/unused").unwrap();
     #[cfg(not(feature = "postgres"))]

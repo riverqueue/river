@@ -42,7 +42,7 @@ export interface PgInsertRow extends PgJobRow {
 export interface PgQueueDatabaseRow extends QueryResultRow {
   created_at: Temporal.Instant;
   metadata: unknown;
-  /** `metadata::text`, PostgreSQL's rendering of the stored JSONB. */
+  /** `metadata::text`, Postgres's rendering of the stored JSONB. */
   metadata_text: string;
   name: string;
   paused_at: Temporal.Instant | null;

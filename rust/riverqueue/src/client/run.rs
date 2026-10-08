@@ -36,7 +36,7 @@ impl Client {
     /// unpersisted, stops the client: work is then cancelled, every worker is
     /// awaited, and [`RunHandle::wait`] returns the error.
     ///
-    /// With notifications enabled on PostgreSQL, the client opens one
+    /// With notifications enabled on Postgres, the client opens one
     /// dedicated listener connection with the pool's connect options. It is
     /// not taken from, and does not count against, the pool's
     /// `max_connections`.

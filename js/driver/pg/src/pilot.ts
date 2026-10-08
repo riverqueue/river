@@ -1,5 +1,5 @@
 /**
- * The PostgreSQL database River gives a client's pilot: pool connections,
+ * The Postgres database River gives a client's pilot: pool connections,
  * transactions, and the claim and notification statements a
  * companion runs inside its own transactions.
  */

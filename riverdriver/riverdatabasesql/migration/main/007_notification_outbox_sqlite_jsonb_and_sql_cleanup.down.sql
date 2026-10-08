@@ -47,7 +47,7 @@ ALTER TABLE /* TEMPLATE: schema */river_queue
 --
 -- SQLite JSONB conversion rollback.
 --
--- No-op. PostgreSQL already stores River JSON columns as jsonb.
+-- No-op. Postgres already stores River JSON columns as jsonb.
 
 --
 -- Notification outbox rollback.

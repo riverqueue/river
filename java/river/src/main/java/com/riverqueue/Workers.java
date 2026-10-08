@@ -803,7 +803,7 @@ public final class Workers implements AutoCloseable {
                   });
           initialized = true;
           // The initial cursor skips earlier notifications, including inserts since the first
-          // fetch. Poll again once listening starts, as the PostgreSQL listener does.
+          // fetch. Poll again once listening starts, as the Postgres listener does.
           wake.release();
           observe("listen_ready");
         }

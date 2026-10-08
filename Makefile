@@ -78,7 +78,7 @@ RUST_SEMVER_BASELINE_REV ?= $(shell git tag --list 'rust/v*' --sort=-v:refname |
 TEST_DATABASE ?= all
 
 # Only filter the shared driver suite. Other packages have SQLite-named tests
-# that use PostgreSQL or mocks and should stay in the regular test run.
+# that use Postgres or mocks and should stay in the regular test run.
 sqlite_test_pattern := ^(Test.*(LibSQL|SQLite|Turso)|Example_(libSQL|sqlite|turso))
 test_submodules := $(submodules)
 legacy_driver_test_flags := -run '/WithTx$$'
@@ -159,7 +159,7 @@ ifneq ($(TEST_DATABASE),sqlite)
 test:: ; cd ./riverdriver/riverdrivertest && RIVER_USE_LEGACY_SUBTRANSACTIONS=1 go test . -run '^TestDriverRiverPgxV5$$/.*/WithTx$$' -timeout 2m
 endif
 
-# `--cfg river_postgres_tests` builds the Rust PostgreSQL integration tests.
+# `--cfg river_postgres_tests` builds the Rust Postgres integration tests.
 # It goes to both rustc and rustdoc so any doctest gated on it runs too, and
 # into its own target directory so switching it on and off doesn't rebuild
 # the ordinary build's artifacts. The default is absolute: trybuild resolves a
@@ -174,20 +174,20 @@ test/java: generate/fixtures verify/java-migrations
 test/java: test/java/tools
 	$(MVN) --batch-mode --no-transfer-progress -f java/pom.xml verify
 
-# Fixture comparisons use temporary SQLite databases, with no PostgreSQL or legacy adapter.
+# Fixture comparisons use temporary SQLite databases, with no Postgres or legacy adapter.
 .PHONY: test/java/conformance
 test/java/conformance: ## Run Java tests that check Go-generated conformance fixtures
 test/java/conformance: generate/fixtures
 	$(MVN) --batch-mode --no-transfer-progress -f java/pom.xml -pl river test -Dgroups=conformance -Driver.test.database=sqlite
 
 .PHONY: test/java/postgres
-test/java/postgres: ## Run Java tests with PostgreSQL client and worker coverage (requires RIVER_TEST_DATABASE_URL)
+test/java/postgres: ## Run Java tests with Postgres client and worker coverage (requires RIVER_TEST_DATABASE_URL)
 test/java/postgres: generate/fixtures verify/java-migrations
 	@test -n "$$RIVER_TEST_DATABASE_URL" || { echo "RIVER_TEST_DATABASE_URL is required" >&2; exit 1; }
 	$(MVN) --batch-mode --no-transfer-progress -f java/pom.xml verify -Driver.test.database=postgres
 
 .PHONY: test/java/sqlite
-test/java/sqlite: ## Run Java unit, SQLite, and executable CLI tests without PostgreSQL
+test/java/sqlite: ## Run Java unit, SQLite, and executable CLI tests without Postgres
 test/java/sqlite: generate/fixtures verify/java-migrations
 	$(MVN) --batch-mode --no-transfer-progress -f java/pom.xml verify -Driver.test.database=sqlite -DexcludedGroups=postgres
 
@@ -196,9 +196,9 @@ test/java/tools: ## Test Java's Go maintenance tools
 	go test ./java/bin/check-packages/*.go
 	go test ./java/bin/sync-migrations/*.go
 
-# PostgreSQL integration tests need RIVER_RUST_DATABASE_URL. Without it
+# Postgres integration tests need RIVER_RUST_DATABASE_URL. Without it
 # test/rust still runs unit, doc, and SQLite integration tests, and fails in CI
-# so a missing URL cannot turn the PostgreSQL suite into a silent pass.
+# so a missing URL cannot turn the Postgres suite into a silent pass.
 .PHONY: test/js
 test/js: ## Run JavaScript unit tests
 test/js: build/js
@@ -217,19 +217,19 @@ test/js/conformance: generate/fixtures
 # postgres://localhost:5432/river_test), migrated with
 # `node js/cli/dist/bin.js migrate-up`.
 .PHONY: test/js/integration
-test/js/integration: ## Run JavaScript integration tests against PostgreSQL
+test/js/integration: ## Run JavaScript integration tests against Postgres
 test/js/integration: build/js
 	pnpm -C js run test:integration
 
 .PHONY: test/rust
-test/rust: ## Run Rust unit and SQLite tests, plus PostgreSQL tests when RIVER_RUST_DATABASE_URL is set
+test/rust: ## Run Rust unit and SQLite tests, plus Postgres tests when RIVER_RUST_DATABASE_URL is set
 test/rust: generate/fixtures
 	@if [ -n "$$RIVER_RUST_DATABASE_URL" ]; then \
 		cd rust && $(RUST_POSTGRES_TESTS_ENV) cargo test --workspace --all-features --locked; \
 	elif [ -n "$$CI" ]; then \
-		echo "RIVER_RUST_DATABASE_URL is required in CI to run the Rust PostgreSQL tests" >&2; exit 1; \
+		echo "RIVER_RUST_DATABASE_URL is required in CI to run the Rust Postgres tests" >&2; exit 1; \
 	else \
-		echo "RIVER_RUST_DATABASE_URL is unset; skipping Rust PostgreSQL integration tests"; \
+		echo "RIVER_RUST_DATABASE_URL is unset; skipping Rust Postgres integration tests"; \
 		cd rust && cargo test --workspace --features riverqueue/sqlite,riverqueue-migrate/sqlite --locked; \
 	fi
 
@@ -241,13 +241,13 @@ test/rust/conformance: generate/fixtures
 	cd rust && cargo test -p riverqueue --features chrono-tz --lib --test protocol_fixtures --locked
 
 .PHONY: test/rust/postgres
-test/rust/postgres: ## Run all Rust tests, including PostgreSQL integration tests (requires RIVER_RUST_DATABASE_URL)
+test/rust/postgres: ## Run all Rust tests, including Postgres integration tests (requires RIVER_RUST_DATABASE_URL)
 test/rust/postgres: generate/fixtures
 	@test -n "$$RIVER_RUST_DATABASE_URL" || { echo "RIVER_RUST_DATABASE_URL is required" >&2; exit 1; }
 	cd rust && $(RUST_POSTGRES_TESTS_ENV) cargo test --workspace --all-features --locked
 
 .PHONY: test/rust/sqlite
-test/rust/sqlite: ## Run Rust unit, doc, and SQLite integration tests without a PostgreSQL database
+test/rust/sqlite: ## Run Rust unit, doc, and SQLite integration tests without a Postgres database
 test/rust/sqlite: generate/fixtures
 	cd rust && cargo test --workspace --features riverqueue/sqlite,riverqueue-migrate/sqlite --locked
 
@@ -281,7 +281,7 @@ check/js/dependencies: ## Audit JavaScript advisories and production dependency 
 	pnpm -C js run license:check
 
 # Packs every published package and checks the archives in clean consumers,
-# including the 0.1 upgrade fixture. Its PostgreSQL tests run when
+# including the 0.1 upgrade fixture. Its Postgres tests run when
 # DATABASE_URL is set.
 .PHONY: check/js/package
 check/js/package: ## Build and verify publishable npm archives without publishing
@@ -341,7 +341,7 @@ endef
 $(foreach mod,$(submodules),$(eval $(call bench-target,$(mod))))
 
 .PHONY: bench/rust
-bench/rust: ## Run the destructive Rust PostgreSQL throughput benchmark
+bench/rust: ## Run the destructive Rust Postgres throughput benchmark
 	cd rust && cargo run --release --locked -p riverqueue-cli --bin riverqueue -- bench $(if $(DATABASE_URL),--database-url "$(DATABASE_URL)") $(RUST_BENCH_ARGS)
 
 .PHONY: tidy

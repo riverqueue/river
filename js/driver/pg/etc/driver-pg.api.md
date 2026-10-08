@@ -37,9 +37,9 @@ export declare class PgDriver {
 ## `PgDriverOptions`
 
 ```ts
-/** Construction options owned by the PostgreSQL backend. */
+/** Construction options owned by the Postgres backend. */
 export interface PgDriverOptions {
-  /** PostgreSQL schema containing River's tables and functions. */
+  /** Postgres schema containing River's tables and functions. */
   schema?: string;
 }
 ```

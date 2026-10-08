@@ -1,6 +1,6 @@
 //! Shared fixtures for maintenance, leadership, and storage parity tests.
 //!
-//! PostgreSQL tests run in a freshly migrated schema with a unique name so that
+//! Postgres tests run in a freshly migrated schema with a unique name so that
 //! concurrent test binaries sharing one disposable database never clobber each
 //! other. They fail rather than skip when `RIVER_RUST_DATABASE_URL` is unset.
 
@@ -41,7 +41,7 @@ pub fn unique_suffix() -> String {
     )
 }
 
-/// A uniquely named PostgreSQL schema owned by one test, migrated unless
+/// A uniquely named Postgres schema owned by one test, migrated unless
 /// created by an `unmigrated` constructor.
 #[cfg(feature = "postgres")]
 pub struct PostgresSchema {
@@ -89,7 +89,7 @@ impl PostgresSchema {
         name.truncate(riverqueue::migrate::SCHEMA_MAX_LEN);
         let mut options: PgConnectOptions = url
             .parse()
-            .expect("parse RIVER_RUST_DATABASE_URL as PostgreSQL connect options");
+            .expect("parse RIVER_RUST_DATABASE_URL as Postgres connect options");
         if search_path {
             // Test schema names are lowercase identifiers, so no quoting is
             // needed in the startup parameter.

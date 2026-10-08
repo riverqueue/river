@@ -10,7 +10,7 @@ RSpec.describe "Sequel migrations" do
   [:postgres, :sqlite].each do |adapter|
     context "with #{adapter}", database: adapter do
       around do |example|
-        skip "PostgreSQL unavailable" if adapter == :postgres && !DB
+        skip "Postgres unavailable" if adapter == :postgres && !DB
 
         ClientTestDatabase.with_sequel(adapter, migrate: false) do |driver|
           @driver = driver

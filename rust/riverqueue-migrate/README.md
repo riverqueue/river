@@ -1,11 +1,11 @@
 # riverqueue-migrate
 
-River's PostgreSQL and SQLite migrations for Rust, identical to the ones River
+River's Postgres and SQLite migrations for Rust, identical to the ones River
 for Go applies, so either language can migrate a database the other uses. The
 `riverqueue` command from the `riverqueue-cli` crate runs the same migrations
 from a shell.
 
-Use `PostgresMigrator` for PostgreSQL and `SqliteMigrator` for SQLite:
+Use `PostgresMigrator` for Postgres and `SqliteMigrator` for SQLite:
 
 ```rust,no_run
 use riverqueue_migrate::{Direction, MigrateOpts, PostgresMigrator, SqliteMigrator};

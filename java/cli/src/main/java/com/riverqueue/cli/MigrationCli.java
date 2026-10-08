@@ -45,7 +45,7 @@ public final class MigrationCli {
         && !url.startsWith("jdbc:postgresql:")
         && !url.startsWith("sqlite:")
         && !url.startsWith("jdbc:sqlite:"))
-      throw new Usage("Expected a PostgreSQL URL or a SQLite JDBC URL");
+      throw new Usage("Expected a Postgres URL or a SQLite JDBC URL");
     Database database;
     try {
       database =
@@ -101,10 +101,10 @@ public final class MigrationCli {
     out.println("  version        Print CLI version");
     out.println();
     out.println("Connection options:");
-    out.println("  --database-url URL    PostgreSQL or SQLite JDBC URL; defaults to DATABASE_URL");
+    out.println("  --database-url URL    Postgres or SQLite JDBC URL; defaults to DATABASE_URL");
     out.println(
         "  --driver DRIVER       postgres or sqlite; selects dialect for offline SQL export");
-    out.println("  --schema NAME         PostgreSQL schema (default: connection's current schema)");
+    out.println("  --schema NAME         Postgres schema (default: connection's current schema)");
     out.printf(
         "  --line NAME           Migration line: %s (default: main)%n", String.join(", ", lines));
     out.println();

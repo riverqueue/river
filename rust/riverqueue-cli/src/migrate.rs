@@ -83,7 +83,7 @@ pub(crate) async fn run(
         #[cfg(feature = "sqlite")]
         {
             if args.schema.is_some() {
-                return Err("--schema is only supported for PostgreSQL".into());
+                return Err("--schema is only supported for Postgres".into());
             }
             CommandMigrator::Sqlite(SqliteMigrator::new(
                 SqlitePool::connect(&args.database_url).await?,
@@ -91,7 +91,7 @@ pub(crate) async fn run(
         }
     } else {
         #[cfg(not(feature = "postgres"))]
-        return Err("PostgreSQL support requires the `postgres` feature".into());
+        return Err("Postgres support requires the `postgres` feature".into());
         #[cfg(feature = "postgres")]
         {
             let pool = PgPool::connect(&args.database_url).await?;

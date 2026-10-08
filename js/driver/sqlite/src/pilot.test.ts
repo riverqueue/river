@@ -1202,7 +1202,7 @@ describe("SQLite caller transactions", () => {
        BEGIN SELECT RAISE(ABORT, 'insert failed'); END`
     );
 
-    // Unlike PostgreSQL, SQLite undoes only the failed statement, so the
+    // Unlike Postgres, SQLite undoes only the failed statement, so the
     // caller's transaction keeps River's earlier write and its own work,
     // and the caller still rolls back on the error.
     await rolledBack(database, async (tx) => {

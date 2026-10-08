@@ -6,7 +6,7 @@
 )]
 #![cfg_attr(
     not(all(feature = "postgres", feature = "sqlite")),
-    doc = "River's PostgreSQL and SQLite migrations for Rust. The full crate documentation, \
+    doc = "River's Postgres and SQLite migrations for Rust. The full crate documentation, \
            from the README, builds with both the `postgres` and `sqlite` features, as on \
            [docs.rs](https://docs.rs/riverqueue-migrate)."
 )]
@@ -195,7 +195,7 @@ impl std::fmt::Display for ValidateResult {
     }
 }
 
-/// Canonical PostgreSQL migration bundle.
+/// Canonical Postgres migration bundle.
 #[cfg(feature = "postgres")]
 pub const POSTGRES_MIGRATIONS: [Migration; 8] = [
     migration!(1, "create_river_migration", "001_create_river_migration"),
@@ -246,7 +246,7 @@ pub enum Error {
     },
 }
 
-/// Applies and validates River's PostgreSQL migration history.
+/// Applies and validates River's Postgres migration history.
 #[cfg(feature = "postgres")]
 #[derive(Clone, Debug)]
 pub struct PostgresMigrator {
@@ -262,7 +262,7 @@ impl PostgresMigrator {
         &POSTGRES_MIGRATIONS
     }
 
-    /// Creates a migrator for PostgreSQL's current schema.
+    /// Creates a migrator for Postgres's current schema.
     #[must_use]
     pub fn new(pool: PgPool) -> Self {
         Self {

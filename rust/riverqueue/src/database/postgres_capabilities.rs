@@ -1,7 +1,7 @@
-//! Features of a PostgreSQL-compatible server that River adapts to, like
+//! Features of a Postgres-compatible server that River adapts to, like
 //! River Go's `riverdriver.PostgresCapabilities`.
 //!
-//! YugabyteDB speaks PostgreSQL's protocol but has no `xmax` system column
+//! YugabyteDB speaks Postgres's protocol but has no `xmax` system column
 //! and, unless configured for it, no `LISTEN`/`NOTIFY`. River detects the
 //! server once per database and caches the result, so enabling Yugabyte's
 //! notifications takes effect only for a new database value, such as after
@@ -26,9 +26,9 @@ pub(crate) enum UniqueInsertMode {
     /// The proposed row's metadata carries a random nonce, and a returned
     /// row without it is an existing one. Used where `xmax` is unavailable.
     MetadataNonce,
-    /// PostgreSQL 18's `OLD` row in `RETURNING`.
+    /// Postgres 18's `OLD` row in `RETURNING`.
     ReturningOld,
-    /// PostgreSQL's `xmax` system column, nonzero for an updated row.
+    /// Postgres's `xmax` system column, nonzero for an updated row.
     Xmax,
 }
 
@@ -45,7 +45,7 @@ impl UniqueInsertMode {
     }
 }
 
-/// Features detected from a PostgreSQL-compatible server.
+/// Features detected from a Postgres-compatible server.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct PostgresCapabilities {
     /// Whether `pg_notify` delivers notifications to listeners. Without it,

@@ -58,7 +58,7 @@ pub(super) async fn run_dynamic_queues(
 ) -> Result<(), Error> {
     // Without a notifier, running jobs learn of cancellation requests by
     // polling until every producer has drained. Whether the client has one is
-    // known only once a PostgreSQL server's capabilities are detected, so the
+    // known only once a Postgres server's capabilities are detected, so the
     // poll checks each time.
     let _cancellation_poll = AbortOnDrop(tokio::spawn(poll_job_cancellations(
         Arc::clone(&inner),
@@ -145,7 +145,7 @@ fn jittered_fetch_poll_interval(interval: Duration) -> Duration {
 /// Cancels this client's running attempts whose jobs have a cancellation
 /// request, checking every [`QUEUE_CONFIG_POLL_INTERVAL`] while the client
 /// has no notifier, like River Go's producers without one. That's checked
-/// each time, since a PostgreSQL server's lack of `LISTEN`/`NOTIFY` is
+/// each time, since a Postgres server's lack of `LISTEN`/`NOTIFY` is
 /// detected only once the client runs.
 /// It keeps checking after `stopping` fires, so jobs can still be cancelled
 /// while producers drain; the caller aborts it once they have.
@@ -760,7 +760,7 @@ pub(super) async fn run_queue(
             // Like Go's `pollForSettingChanges`, only a client without a
             // notifier polls queue state; one with a notifier learns of
             // changes from control notifications, and a listener reconnect
-            // broadcasts a refresh of every queue. Whether a PostgreSQL
+            // broadcasts a refresh of every queue. Whether a Postgres
             // server supports notifications is detected only once the client
             // runs, so this is checked on each tick.
             _ = queue_config_poll.tick() => (false, !inner.has_notifier()),
@@ -875,7 +875,7 @@ pub(super) async fn run_queue(
                     Err(SessionClaimError::Protocol(protocol_error)) => break Err(protocol_error),
                 }
             }
-            // Boxed: two concurrent PostgreSQL claims make a large future.
+            // Boxed: two concurrent Postgres claims make a large future.
             _ => Box::pin(fetch_available(&inner, &queue, available, &fetch_cancel)).await,
         };
         last_fetch = Some(tokio::time::Instant::now());
@@ -1022,7 +1022,7 @@ async fn claim_through_session(
 }
 
 /// Claims available jobs with River's own statements, splitting a large
-/// PostgreSQL claim in two.
+/// Postgres claim in two.
 async fn fetch_available(
     inner: &ClientInner,
     queue: &str,
@@ -1147,7 +1147,7 @@ pub(crate) async fn standard_claim(
     }
 }
 
-/// River's PostgreSQL claim statement for this client's schema.
+/// River's Postgres claim statement for this client's schema.
 #[cfg(feature = "postgres")]
 fn standard_claim_sql(inner: &ClientInner) -> String {
     let table = inner.schema.qualify("river_job");

@@ -119,7 +119,7 @@ pub(crate) fn saturating_i16(value: i64) -> i16 {
     i16::try_from(value).unwrap_or(if value < 0 { i16::MIN } else { i16::MAX })
 }
 
-/// A PostgreSQL job row. Columns the database constrains decode strictly, while
+/// A Postgres job row. Columns the database constrains decode strictly, while
 /// those that can hold values River can't represent are kept as their decode
 /// results.
 #[cfg(feature = "postgres")]

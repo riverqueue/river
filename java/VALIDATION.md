@@ -1,7 +1,7 @@
 # Validation
 
 The original port and API review were validated locally on macOS arm64 with
-JDK 25, Maven, PostgreSQL 18, and the SQLite JDBC driver pinned in `pom.xml`.
+JDK 25, Maven, Postgres 18, and the SQLite JDBC driver pinned in `pom.xml`.
 The adapters also ran on JDK 27. The build now targets Java 21; the Java 21
 compatibility trial is recorded below. Formatting works on JDK 21 and 25.
 
@@ -16,11 +16,11 @@ References:
 |---|---|
 | Maven native tests and formatting | Passed, 112 library tests and 7 CLI tests |
 | Insert-only profile | Passed |
-| Full PostgreSQL profile, maintenance, resilience | Passed |
+| Full Postgres profile, maintenance, resilience | Passed |
 | SQLite storage/runtime and resilience | Passed |
-| Go + Java + Rust + JS on PostgreSQL and SQLite | Passed |
+| Go + Java + Rust + JS on Postgres and SQLite | Passed |
 | Same-host enqueue, worker, and mixed performance gate | Passed with the original throughput and p95 limits |
-| Four-engine PostgreSQL soak | Passed, five minutes |
+| Four-engine Postgres soak | Passed, five minutes |
 | Four-engine SQLite endurance | Passed, five repetitions of the upstream multi-engine suite |
 
 The native tests include exact unique-key goldens, cron/maintenance goldens,
@@ -45,10 +45,10 @@ failure; no Go source was changed to suppress it.
 The CLI tests cover environment/argument handling, offline SQL export, dry runs,
 targets and step limits, and launching the executable JAR without an external
 classpath. Library tests cover concurrent SQLite initialization, migration
-rollback, legacy migration history, and PostgreSQL schema creation and removal.
-All were run with PostgreSQL enabled; no tests were skipped.
+rollback, legacy migration history, and Postgres schema creation and removal.
+All were run with Postgres enabled; no tests were skipped.
 
-After the migration CLI changes, the PostgreSQL mixed conformance suite and both
+After the migration CLI changes, the Postgres mixed conformance suite and both
 SQLite storage/runtime suites passed against the pinned Go reference. The
 README quick start was compiled and run; its remaining Java examples compiled,
 and its SQLite testing example ran successfully.
@@ -59,9 +59,9 @@ The API review added regression coverage for typed retrieval and mixed-kind
 batches, checked JDBC hook failure recovery, queue notification atomicity,
 committed completion followed by a handler exception, and repeated graceful-stop
 timeouts without implicit cancellation, and job-aware retry policies. All 112 library and 7 CLI tests passed
-with PostgreSQL enabled and no skips; Maven's formatting checks passed.
+with Postgres enabled and no skips; Maven's formatting checks passed.
 
-The PostgreSQL maintenance, mixed-engine, and resilience suites and the SQLite
+The Postgres maintenance, mixed-engine, and resilience suites and the SQLite
 storage, runtime, and resilience suites were rerun against the pinned Go
 reference. All README Java blocks compiled; the quickstart and SQLite JUnit
 example executed successfully. The Rust/JS matrix, performance, and soak entries
@@ -71,7 +71,7 @@ above record the earlier port validation and were not repeated for this API pass
 
 Validated on macOS arm64 with Temurin 21.0.12.1 and OpenJDK 25.0.1. On both
 JDKs, the full Maven build and formatting checks passed: 114 library tests and
-7 CLI tests, with PostgreSQL enabled and no skips. The library and executable
+7 CLI tests, with Postgres enabled and no skips. The library and executable
 CLI target Java 21 (class file version 65), including when built on JDK 25.
 
 The changes replace unnamed `_` variables with named parameters and use
@@ -81,7 +81,7 @@ tests launch a JVM with exactly one carrier and use latches to test blocking
 claims and leadership callbacks. Both failed before the lock change and pass
 after it. No public API or dependency changes were needed.
 
-With both `JAVA_HOME` and `PATH` selecting JDK 21, the PostgreSQL maintenance,
+With both `JAVA_HOME` and `PATH` selecting JDK 21, the Postgres maintenance,
 mixed-engine, and resilience suites and the SQLite storage, runtime, and
 resilience suites passed against the pinned Go reference. All README Java
 blocks compiled on JDK 21; the quickstart and SQLite JUnit example executed.
@@ -93,7 +93,7 @@ the earlier results above do not establish their behavior on JDK 21.
 ## Runtime and option review (2026-10-05)
 
 The full Maven build and formatting checks passed on Temurin 21.0.12.1 and
-OpenJDK 25.0.1: 126 library tests and 7 CLI tests, with PostgreSQL enabled and
+OpenJDK 25.0.1: 126 library tests and 7 CLI tests, with Postgres enabled and
 no skips. Eleven regression cases reproduced failures before the fixes and
 passed afterward. They cover throwing observers/subscribers/error handlers,
 throwing or invalid retry policies, terminal attempts bypassing retry policies,
@@ -101,7 +101,7 @@ distinct IDs when reusing a builder, and immutable query metadata. A further
 test verifies the `uniqueBy(String...)` overload against stored uniqueness keys,
 including literal dots in field names.
 
-On JDK 21, the PostgreSQL maintenance, mixed-engine, and resilience suites and
+On JDK 21, the Postgres maintenance, mixed-engine, and resilience suites and
 the SQLite storage, runtime, and resilience suites passed against the pinned Go
 reference. Rust/JS peer, performance, and soak suites were not repeated for this
 review. No Go code or shared SQL was changed.
@@ -116,8 +116,8 @@ copies. The Java branch leaves `js/` and `rust/` identical to this reference.
 | Check | Result |
 | --- | --- |
 | `make test/java/conformance` on JDK 21 | Passed, 142 fixture tests, no database required |
-| PostgreSQL 14, 15, 16, 17, and 18 on JDK 25 | Passed, 175 library tests and 7 CLI tests per version, no skips |
-| PostgreSQL 18 on JDK 21 | Passed, 175 library tests and 7 CLI tests, no skips |
+| Postgres 14, 15, 16, 17, and 18 on JDK 25 | Passed, 175 library tests and 7 CLI tests per version, no skips |
+| Postgres 18 on JDK 21 | Passed, 175 library tests and 7 CLI tests, no skips |
 | SQLite on JDK 21 and 25 | Passed, 174 library tests and 7 CLI tests per JDK, no skips |
 | `make test/rust/conformance` | Passed, 127 tests, including notification dispatch |
 | Go `make test` and `make lint` | Passed in the working checkout |
@@ -143,11 +143,11 @@ metadata: Go counts `true` as one before incrementing. Cron cases with no next
 occurrence explicitly assert that the schedule is exhausted.
 
 The CI layout separates quality/package checks, a JDK 21/25 SQLite matrix, and a
-PostgreSQL 14–18 matrix on JDK 25. Client and worker tests share assertions across
-backends. PostgreSQL tests create and remove a schema per case; the version
+Postgres 14–18 matrix on JDK 25. Client and worker tests share assertions across
+backends. Postgres tests create and remove a schema per case; the version
 matrix left no test schemas behind. The SQLite runs used an unreachable
-PostgreSQL URL to verify that the explicit SQLite target remains independent.
-The PostgreSQL target fails without its required database URL.
+Postgres URL to verify that the explicit SQLite target remains independent.
+The Postgres target fails without its required database URL.
 
 Negative checks during the alignment verified missing-fixture diagnostics,
 missing/changed/extra migration detection, rejection of test/fixture/adapter
@@ -168,7 +168,7 @@ duration validation, and rescue configuration.
 | Check | Result |
 | --- | --- |
 | `make test/java/sqlite` on JDK 21 and 25 | Passed, 192 library tests and 7 CLI tests per JDK, no skips |
-| `make test/java/postgres` on JDK 21 and 25, local PostgreSQL | Passed, 193 library tests and 7 CLI tests per JDK, no skips |
+| `make test/java/postgres` on JDK 21 and 25, local Postgres | Passed, 193 library tests and 7 CLI tests per JDK, no skips |
 | `make lint/java` and `make check/java/package` on JDK 21 | Passed, including adapter compilation and all five JARs |
 
 Tests hold the producer heartbeat or completion transaction behind latches to
@@ -206,10 +206,10 @@ isolated copy, this assertion fails against the previous implementation.
 
 | Check | Result |
 | --- | --- |
-| `make test/java/conformance` on JDK 21 | Passed, 148 tests, with an unreachable PostgreSQL URL |
+| `make test/java/conformance` on JDK 21 | Passed, 148 tests, with an unreachable Postgres URL |
 | `make test/java/sqlite` on JDK 21 and 25 | Passed, 198 library tests and 7 CLI tests per JDK, no skips |
-| `make test/java/postgres` on JDK 21 and 25, local PostgreSQL | Passed, 199 library tests and 7 CLI tests per JDK, no skips |
+| `make test/java/postgres` on JDK 21 and 25, local Postgres | Passed, 199 library tests and 7 CLI tests per JDK, no skips |
 | `make lint/java` and `make check/java/package` on JDK 21 | Passed, including migration verification and all five JARs |
 
-No Go, Rust, JavaScript, or shared fixture source was changed. PostgreSQL's
+No Go, Rust, JavaScript, or shared fixture source was changed. Postgres's
 version matrix and the historical multi-engine and soak suites were not rerun.

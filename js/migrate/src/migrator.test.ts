@@ -110,7 +110,7 @@ describe("createMigrator", () => {
     expect(() => createMigrator(source as never)).toThrow(message);
   });
 
-  it("rejects invalid PostgreSQL schemas", () => {
+  it("rejects invalid Postgres schemas", () => {
     const pool = {} as PgMigrationPool;
 
     expect(() => createMigrator({ pool, schema: "" })).toThrow("non-empty");
@@ -152,7 +152,7 @@ describe("createMigrator", () => {
   });
 });
 
-describe("PostgreSQL migrator", () => {
+describe("Postgres migrator", () => {
   it("renders a quoted custom schema for a dry run without connecting", async () => {
     const queries: { text: string; values?: readonly unknown[] }[] = [];
     const pool: PgMigrationPool = {
@@ -187,7 +187,7 @@ describe("PostgreSQL migrator", () => {
   });
 
   for (const [server, product, locks] of [
-    ["PostgreSQL", "PostgreSQL 17.4 on aarch64-apple-darwin", true],
+    ["Postgres", "PostgreSQL 17.4 on aarch64-apple-darwin", true],
     [
       "YugabyteDB",
       "PostgreSQL 15.12-YB-2025.2.1.0-b1 on x86_64-pc-linux-gnu",

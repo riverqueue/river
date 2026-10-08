@@ -256,11 +256,11 @@ try {
 ```
 
 Like River for Go, River runs its statements directly in your transaction and
-opens no savepoint or nested transaction in it, which on PostgreSQL would cost
+opens no savepoint or nested transaction in it, which on Postgres would cost
 a subtransaction for every call. When a call fails after River wrote to the
 database, for example because insert middleware or an `afterInsert` hook threw
 after the job was inserted, the write stays in your transaction, so roll it
-back as above. On PostgreSQL a database error also aborts the transaction. To
+back as above. On Postgres a database error also aborts the transaction. To
 recover from a failed call and continue the transaction, wrap the call in a
 savepoint of your own. Without `{ tx }`, River's own transaction rolls the
 whole call back.
@@ -359,8 +359,8 @@ If the transaction rolls back, so does the completion, and River records the
 attempt from the handler's result as usual: a thrown error fails it and a
 normal return completes it. `new Workers<PoolClient>()` types `completeTx`
 (and `ctx.client`) for node-postgres. Without it, `Workers` accepts the
-transaction of any installed River driver, so with both the PostgreSQL and
-SQLite drivers installed, passing a SQLite transaction to a PostgreSQL client's
+transaction of any installed River driver, so with both the Postgres and
+SQLite drivers installed, passing a SQLite transaction to a Postgres client's
 handler would compile and then fail at runtime.
 
 ## Run workers
@@ -450,7 +450,7 @@ after all others ascending and before all others descending.
 River never exposes a lossy database value:
 
 - job IDs and other 64-bit integers are `bigint`;
-- timestamps are `Temporal.Instant`, with PostgreSQL's microseconds; and
+- timestamps are `Temporal.Instant`, with Postgres's microseconds; and
 - job args and metadata are JSON, typed as `JsonValue`/`JsonObject`.
 
 At every JSON boundary River rejects `bigint`, non-finite numbers, integers
@@ -492,7 +492,7 @@ JSON-safe copy of a job (IDs as decimal strings, instants as ISO strings) and
 
 Runnable examples:
 
-- [PostgreSQL worker](../examples/pg-worker/README.md)
+- [Postgres worker](../examples/pg-worker/README.md)
 - [node-postgres insertion and transactions](../examples/node-postgres/README.md)
 - [Prisma insertion and transactions](../examples/prisma/README.md)
 - [SQLite worker](../examples/sqlite-worker/README.md)

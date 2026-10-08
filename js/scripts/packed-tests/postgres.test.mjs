@@ -28,7 +28,7 @@ const accountJob = defineJob({
 });
 
 describe(
-  "packed PostgreSQL driver",
+  "packed Postgres driver",
   { skip: DATABASE_URL === "" && "set DATABASE_URL to run" },
   () => {
     // Everything happens in a throwaway schema, so a shared database is safe.

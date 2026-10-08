@@ -929,7 +929,7 @@ func ExerciseClient[TTx any](ctx context.Context, t *testing.T,
 
 		client, bundle := setup(t)
 		if bundle.driver.DatabaseName() != riverdriver.DatabaseNamePostgres {
-			t.Skip("uses PostgreSQL array and JSON containment syntax")
+			t.Skip("uses Postgres array and JSON containment syntax")
 		}
 		now := time.Now().UTC().Truncate(time.Second)
 		wantIDs := make([]int64, 0, 3)

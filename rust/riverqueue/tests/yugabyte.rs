@@ -1,5 +1,5 @@
-//! PostgreSQL-compatible servers without `xmax` or `LISTEN`/`NOTIFY`, like
-//! YugabyteDB, simulated on PostgreSQL the way River Go's tests do.
+//! Postgres-compatible servers without `xmax` or `LISTEN`/`NOTIFY`, like
+//! YugabyteDB, simulated on Postgres the way River Go's tests do.
 //!
 //! A test schema shadows `version()` and `current_setting(text, boolean)`
 //! ahead of `pg_catalog` on the connections' `search_path`, so River detects
@@ -40,7 +40,7 @@ struct YugabyteArgs {
 /// Which server a test schema simulates.
 #[derive(Clone, Copy, Debug)]
 enum Server {
-    /// PostgreSQL 17, before `RETURNING OLD`.
+    /// Postgres 17, before `RETURNING OLD`.
     Postgres17,
     /// YugabyteDB before 2025.2.3, without `yb_enable_listen_notify`.
     YugabyteUnavailable,
@@ -138,7 +138,7 @@ impl Simulated {
 
 /// An insert-only client detects the server as it goes: unique inserts tell
 /// a duplicate from a new row with a nonce on Yugabyte and `xmax` before
-/// PostgreSQL 18, and notifications, cancellation, queue changes, and
+/// Postgres 18, and notifications, cancellation, queue changes, and
 /// resignation requests work without `pg_notify` when it's unavailable.
 #[tokio::test]
 async fn detects_the_server_without_starting() {

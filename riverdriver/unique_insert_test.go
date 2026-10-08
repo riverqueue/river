@@ -100,13 +100,13 @@ func TestUniqueInsertMetadataWithNonce(t *testing.T) {
 func TestUniqueInsertModeFromProductAndVersion(t *testing.T) {
 	t.Parallel()
 
-	t.Run("PostgreSQL17", func(t *testing.T) {
+	t.Run("Postgres17", func(t *testing.T) {
 		t.Parallel()
 
 		require.Equal(t, UniqueInsertModeXmax, UniqueInsertModeFromProductAndVersion("PostgreSQL 17.5", 170_005))
 	})
 
-	t.Run("PostgreSQL18", func(t *testing.T) {
+	t.Run("Postgres18", func(t *testing.T) {
 		t.Parallel()
 
 		require.Equal(t, UniqueInsertModeReturningOld, UniqueInsertModeFromProductAndVersion("PostgreSQL 18.0", 180_000))
@@ -118,7 +118,7 @@ func TestUniqueInsertModeFromProductAndVersion(t *testing.T) {
 		require.Equal(t, UniqueInsertModeMetadataNonce, UniqueInsertModeFromProductAndVersion("YugabyteDB", 180_000))
 	})
 
-	t.Run("YugabytePostgreSQLVersion", func(t *testing.T) {
+	t.Run("YugabytePostgresVersion", func(t *testing.T) {
 		t.Parallel()
 
 		require.Equal(t, UniqueInsertModeMetadataNonce, UniqueInsertModeFromProductAndVersion("PostgreSQL 15.2-YB-2.25.1.0-b0", 150_002))

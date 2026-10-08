@@ -67,7 +67,7 @@ export async function queueUpsert(
   if (row === undefined) {
     throw databaseError(
       "queueUpsert",
-      "PostgreSQL returned no row for an upserted queue"
+      "Postgres returned no row for an upserted queue"
     );
   }
   return toQueueRow(row);

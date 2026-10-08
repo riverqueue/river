@@ -73,7 +73,7 @@ benchmarks so results are comparable.`,
     },
     "database-url": {
       description:
-        "PostgreSQL database to benchmark (required; its River tables are emptied)",
+        "Postgres database to benchmark (required; its River tables are emptied)",
       type: "string",
       valueName: "URL",
     },
@@ -83,7 +83,7 @@ benchmarks so results are comparable.`,
       valueName: "DURATION",
     },
     "max-connections": {
-      description: `PostgreSQL pool size (default: ${DEFAULT_MAX_CONNECTIONS})`,
+      description: `Postgres pool size (default: ${DEFAULT_MAX_CONNECTIONS})`,
       type: "string",
       valueName: "N",
     },
@@ -100,7 +100,7 @@ benchmarks so results are comparable.`,
     },
     schema: {
       description:
-        "PostgreSQL schema containing River's tables (default: the search_path)",
+        "Postgres schema containing River's tables (default: the search_path)",
       type: "string",
       valueName: "NAME",
     },
@@ -198,10 +198,7 @@ async function runBench(
 ): Promise<number> {
   const location = parseDatabaseUrl("bench", options.databaseUrl, context.env);
   if (location.backend !== "postgres") {
-    throw new UsageError(
-      "only PostgreSQL databases can be benchmarked",
-      "bench"
-    );
+    throw new UsageError("only Postgres databases can be benchmarked", "bench");
   }
   const interactive =
     context.stdin.isTTY === true && context.stderr.isTTY === true;

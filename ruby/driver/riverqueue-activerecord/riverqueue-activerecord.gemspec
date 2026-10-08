@@ -3,8 +3,8 @@
 Gem::Specification.new do |s|
   s.name = "riverqueue-activerecord"
   s.version = "0.13.0"
-  s.summary = "ActiveRecord PostgreSQL and SQLite driver for the River Ruby gem."
-  s.description = "ActiveRecord PostgreSQL and SQLite driver for inserting and working River jobs in Ruby."
+  s.summary = "ActiveRecord Postgres and SQLite driver for the River Ruby gem."
+  s.description = "ActiveRecord Postgres and SQLite driver for inserting and working River jobs in Ruby."
   s.authors = ["Blake Gentry", "Brandur Leach"]
   s.email = "brandur@brandur.org"
   s.files = Dir.glob("lib/**/*")

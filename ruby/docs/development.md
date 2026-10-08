@@ -36,18 +36,18 @@ Package suites run in separate processes, four at a time by default. Set
 `TEST_JOBS=1` for serial execution, or choose another concurrency with
 `make test TEST_JOBS=2`. Each package retains its own coverage checks.
 
-CI runs Ruby 4.0 against PostgreSQL 14–18, and Ruby 3.2–3.4 against PostgreSQL 18.
+CI runs Ruby 4.0 against Postgres 14–18, and Ruby 3.2–3.4 against Postgres 18.
 SQLite and conformance checks run separately on Ruby 4.0. One Rails job tests
-Rails 7.2, 8.0, and 8.1 on Ruby 4.0, reusing its PostgreSQL service and gems.
+Rails 7.2, 8.0, and 8.1 on Ruby 4.0, reusing its Postgres service and gems.
 
 Use `TEST_DATABASE=postgres` or `TEST_DATABASE=sqlite` to select a backend;
 the default is `all`. CI merges the core and driver coverage reports from
-PostgreSQL and SQLite to enforce 100% line and branch coverage. Filtered local
+Postgres and SQLite to enforce 100% line and branch coverage. Filtered local
 runs collect coverage without enforcing that threshold individually.
 
 Real database tests run by default. `RIVER_REQUIRE_DATABASES=1` requires both
 the selected databases to be available instead of permitting local skips. CI
-also requires them. Set `TEST_DATABASE_URL` to override the PostgreSQL test
+also requires them. Set `TEST_DATABASE_URL` to override the Postgres test
 database URL. Tests create and migrate disposable schemas with the bundled SQL;
 the database user must be able to create and drop schemas. No existing River tables are needed. The Go toolchain from `../go.work` is
 required to generate the conformance fixtures before running core tests.
@@ -58,19 +58,19 @@ speed is independent of existing data in `public`, which is left untouched.
 
 Both driver packages run the same insertion and runtime contracts from
 `spec/driver_shared_examples.rb` and `spec/driver_runtime_shared_examples.rb`
-against PostgreSQL and SQLite. These cover job state transitions, scheduling,
+against Postgres and SQLite. These cover job state transitions, scheduling,
 rescue, metadata, filtering, deletion, transactions, queues, and leadership.
 Adapter-specific conversion tests remain in each driver's suite.
 
 The driver suites also exercise Go-style Yugabyte capability simulations on
-PostgreSQL. For actual YSQL storage/transaction checks, run `make test/yugabyte`
+Postgres. For actual YSQL storage/transaction checks, run `make test/yugabyte`
 with `YUGABYTE_DATABASE_URL` pointing to a disposable database. See
 [Yugabyte verification](yugabyte.md#verification).
 
 `spec/client_driver_shared_examples.rb` additionally starts real worker threads
 for each combination, testing transaction visibility and rollback, committed
 bulk insertion, output, retries, and exhausted jobs. These tests need committed
-data, so they use disposable PostgreSQL schemas and temporary file-backed SQLite
+data, so they use disposable Postgres schemas and temporary file-backed SQLite
 databases, initialized by batching the bundled canonical migration SQL, not
 the shared public job tables. Migration tests still use `River::Migrator`,
 covering upgrades, downgrades, legacy history, rollback, and populated data. See [migrations](migrations.md)
@@ -82,10 +82,10 @@ for both SQL adapters and Rails. Generate fixtures first with
 
 ## Conformance and migrations
 
-`make test/conformance` checks shared Go-generated fixtures without PostgreSQL.
+`make test/conformance` checks shared Go-generated fixtures without Postgres.
 See [conformance](conformance.md) for coverage and known parity gaps.
 
-`make verify` checks bundled PostgreSQL and SQLite migrations against the
+`make verify` checks bundled Postgres and SQLite migrations against the
 canonical files in `../riverdriver/`, including filenames, bytes, license, and
 manifest checksums. It requires only Ruby, not installed gems or a database.
 Run `ruby scripts/sync_migrations.rb` to update the bundle after Go migrations

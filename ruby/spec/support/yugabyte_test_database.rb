@@ -1,7 +1,7 @@
 # frozen_string_literal: true
 
 # Like Go's DBPoolWithYugabyteVersion, this exercises product/setting detection
-# on PostgreSQL, not Yugabyte's storage or transaction semantics. The caller must
+# on Postgres, not Yugabyte's storage or transaction semantics. The caller must
 # own an isolated schema and put it ahead of pg_catalog in every connection's
 # search_path. An unavailable pg_notify deliberately raises instead of no-oping.
 module YugabyteTestDatabase

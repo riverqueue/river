@@ -25,21 +25,21 @@ Run `npx riverqueue --help` for every command, and
 
 `--database-url` selects the database:
 
-- `postgres://…` or `postgresql://…` for PostgreSQL. Without
-  `--database-url`, PostgreSQL commands use the standard `PG*` environment
+- `postgres://…` or `postgresql://…` for Postgres. Without
+  `--database-url`, Postgres commands use the standard `PG*` environment
   variables when `PGDATABASE` is set.
 - `sqlite://PATH` for SQLite, for example `sqlite:///var/lib/app/river.db`
   for an absolute path or `sqlite://river.db` for a relative one.
 
 Other common flags:
 
-- `--schema NAME`: the PostgreSQL schema holding River's tables. It must match
+- `--schema NAME`: the Postgres schema holding River's tables. It must match
   the `schema` given to `PgDriver`.
 - `--target-version N`: the version to end at. With `migrate-down`,
   `--target-version 0` reverts every migration and drops River's tables.
 - `--max-steps N`: run at most N migrations.
 - `--dry-run` and `--show-sql`: print what would run, with its SQL.
-- `--statement-timeout DURATION`: PostgreSQL's `statement_timeout`, such as
+- `--statement-timeout DURATION`: Postgres's `statement_timeout`, such as
   `30s` or `5m`. It defaults to a `statement_timeout` parameter in the URL,
   and otherwise to 10 seconds, as in River's Go CLI.
 
@@ -80,7 +80,7 @@ describes what it rewrites and what it leaves for review.
 `riverqueue bench` inserts and works no-op jobs and reports throughput. It is
 destructive: it empties River's `river_job`, `river_leader`, `river_queue`,
 and `river_notification` tables and runs `VACUUM FULL` on `river_job`, so
-use it only on a disposable PostgreSQL database. It requires an explicit
+use it only on a disposable Postgres database. It requires an explicit
 `--database-url` (it never reads `PG*` variables or `DATABASE_URL`), and
 `--yes` unless it can ask for confirmation in an interactive terminal.
 

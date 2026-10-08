@@ -126,7 +126,7 @@ impl<'a> Jobs<'a> {
     /// the deleted rows in list order.
     ///
     /// At most the filter's limit of jobs are deleted. Running jobs are
-    /// skipped before the limit applies, and PostgreSQL also skips jobs
+    /// skipped before the limit applies, and Postgres also skips jobs
     /// locked by another transaction rather than waiting for them.
     ///
     /// # Errors

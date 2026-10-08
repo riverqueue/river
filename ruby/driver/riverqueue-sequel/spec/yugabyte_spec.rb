@@ -18,8 +18,8 @@ RSpec.describe "Sequel Yugabyte compatibility", database: :postgres do
     end
     it_behaves_like "Yugabyte driver compatibility", ENV["YUGABYTE_LISTEN_NOTIFY_ENABLED"] == "1"
     if ENV["YUGABYTE_LISTEN_NOTIFY_ENABLED"] == "1"
-      it_behaves_like "PostgreSQL insert notifications"
-      it_behaves_like "PostgreSQL cancellation notifications"
+      it_behaves_like "Postgres insert notifications"
+      it_behaves_like "Postgres cancellation notifications"
     end
   elsif DB
     [nil, false, true].each do |notifications|
@@ -33,8 +33,8 @@ RSpec.describe "Sequel Yugabyte compatibility", database: :postgres do
         end
         it_behaves_like "Yugabyte driver compatibility", notifications
         if notifications
-          it_behaves_like "PostgreSQL insert notifications"
-          it_behaves_like "PostgreSQL cancellation notifications"
+          it_behaves_like "Postgres insert notifications"
+          it_behaves_like "Postgres cancellation notifications"
         end
       end
     end

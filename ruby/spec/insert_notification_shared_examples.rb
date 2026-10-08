@@ -3,7 +3,7 @@
 require "pg"
 require_relative "support/conformance_fixtures"
 
-shared_context "PostgreSQL notification listener" do |topic|
+shared_context "Postgres notification listener" do |topic|
   around do |example|
     @insert_listener = PG.connect(ENV["TEST_DATABASE_URL"] || "postgres://localhost/river_test")
     row = @driver.send(:runtime_query_rows, "SELECT current_schema() AS name").first
@@ -32,8 +32,8 @@ shared_context "PostgreSQL notification listener" do |topic|
   end
 end
 
-shared_examples "PostgreSQL insert notifications" do
-  include_context "PostgreSQL notification listener", "river_insert"
+shared_examples "Postgres insert notifications" do
+  include_context "Postgres notification listener", "river_insert"
 
   it "notifies each available queue once and delivers only after the caller commits" do
     client = River::Client.new(@driver)
@@ -67,8 +67,8 @@ shared_examples "PostgreSQL insert notifications" do
   end
 end
 
-shared_examples "PostgreSQL cancellation notifications" do
-  include_context "PostgreSQL notification listener", "river_control"
+shared_examples "Postgres cancellation notifications" do
+  include_context "Postgres notification listener", "river_control"
 
   it "publishes Go-compatible cancellation only when the transaction commits" do
     client = River::Client.new(@driver)
@@ -145,8 +145,8 @@ shared_examples "SQLite cancellation notifications" do
   end
 end
 
-shared_examples "PostgreSQL queue control notifications" do
-  include_context "PostgreSQL notification listener", "river_control"
+shared_examples "Postgres queue control notifications" do
+  include_context "Postgres notification listener", "river_control"
 
   it "publishes Go's pause, resume, and metadata payloads only after commit" do
     @driver.queue_upsert("priority")
@@ -188,8 +188,8 @@ shared_examples "PostgreSQL queue control notifications" do
   end
 end
 
-shared_examples "PostgreSQL leadership notifications" do
-  include_context "PostgreSQL notification listener", "river_leadership"
+shared_examples "Postgres leadership notifications" do
+  include_context "Postgres notification listener", "river_leadership"
 
   it "broadcasts Go's resignation payload only when the leader's deletion commits" do
     @driver.leader_acquire("client-1")

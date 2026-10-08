@@ -1,4 +1,4 @@
-//! PostgreSQL tests of individual maintenance services, ported from Go's
+//! Postgres tests of individual maintenance services, ported from Go's
 //! `internal/maintenance` and `internal/leadership` suites. Each test uses its
 //! own freshly migrated schema and fails when `RIVER_RUST_DATABASE_URL` is
 //! unset.
@@ -327,7 +327,7 @@ impl Pilot for StaleSnapshotPilot {
         connection: DatabaseConnection<'_>,
         params: &RescueManyParams,
     ) -> Result<RescueAction, PilotError> {
-        let connection = connection.into_postgres().expect("PostgreSQL connection");
+        let connection = connection.into_postgres().expect("Postgres connection");
         let completed = self.completed.lock().unwrap().clone();
         let reclaimed = self.reclaimed.lock().unwrap().clone();
         assert!(params.jobs.iter().any(|job| completed.contains(&job.id)));

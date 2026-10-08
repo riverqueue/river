@@ -74,7 +74,7 @@ async fn postgres_reads_metadata_with_large_numbers() {
     let big = raw_field(&original.metadata, "big_integer").to_owned();
     let beyond = raw_field(&original.metadata, "beyond_float").to_owned();
     assert_eq!(big, "123456789012345678901234567890");
-    assert!(beyond.len() > 400); // PostgreSQL expands `1e400` in jsonb.
+    assert!(beyond.len() > 400); // Postgres expands `1e400` in jsonb.
 
     let updated = client
         .jobs()
@@ -154,7 +154,7 @@ async fn postgres_insert_opts_keep_metadata_number_tokens() {
             raw_field(&row.metadata, "long_decimal"),
             "0.1000000000000000055511151231257827"
         );
-        // PostgreSQL expands `1e400` in jsonb rather than rejecting it.
+        // Postgres expands `1e400` in jsonb rather than rejecting it.
         let beyond = raw_field(&row.metadata, "beyond_float");
         assert!(beyond.starts_with('1') && beyond.len() > 400, "{beyond}");
     }

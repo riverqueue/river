@@ -41,7 +41,7 @@ required-features = ["sqlite"]
 
 [dev-dependencies]
 serde_json.workspace = true
-# The PostgreSQL tests decode schema snapshots as JSON.
+# The Postgres tests decode schema snapshots as JSON.
 sqlx = { workspace = true, features = ["json"] }
 tokio = { workspace = true, features = ["rt-multi-thread"] }
 

@@ -152,7 +152,7 @@ pub(super) fn dispatch_notification(
     }
 }
 
-/// Listens for PostgreSQL notifications until cancelled.
+/// Listens for Postgres notifications until cancelled.
 ///
 /// The listener uses a dedicated connection opened with the client pool's
 /// connect options, like River Go's hijacked listener connection, so it never
@@ -268,10 +268,7 @@ async fn listen_until_error(
                 )
             })??
             .ok_or_else(|| {
-                Error::runtime_context(
-                    "notification listener",
-                    "PostgreSQL current_schema() is null",
-                )
+                Error::runtime_context("notification listener", "Postgres current_schema() is null")
             })?,
         };
         schema.insert(resolved).clone()

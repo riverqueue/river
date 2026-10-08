@@ -1,4 +1,4 @@
-//! Keeps River's tables in their own PostgreSQL schema.
+//! Keeps River's tables in their own Postgres schema.
 //!
 //! ```sh
 //! DATABASE_URL=postgres://localhost/river_example cargo run -p riverqueue --example custom_schema
@@ -32,7 +32,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
         client
             .database()
             .as_postgres()
-            .expect("client is configured for PostgreSQL")
+            .expect("client is configured for Postgres")
             .schema()
     );
     Ok(())

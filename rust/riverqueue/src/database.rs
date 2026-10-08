@@ -18,7 +18,7 @@ use sqlx::{Sqlite, SqliteConnection, SqlitePool};
 use sqlx::{Transaction, pool::PoolConnection};
 use thiserror::Error;
 
-/// Begins a PostgreSQL transaction that is never abandoned half-started.
+/// Begins a Postgres transaction that is never abandoned half-started.
 ///
 /// SQLx 0.9 records a transaction only once the server has answered `BEGIN`. If
 /// the future beginning it is dropped after `BEGIN` reaches the server but
@@ -127,7 +127,7 @@ pub(crate) use private::DatabaseExecutorSealed as DatabaseExecutor;
 #[derive(Clone, Copy, Debug)]
 #[non_exhaustive]
 pub enum ClientDatabase<'a> {
-    /// A PostgreSQL client's pool and options.
+    /// A Postgres client's pool and options.
     #[cfg(feature = "postgres")]
     Postgres(&'a PostgresDatabase),
     /// A SQLite client's pool.
@@ -136,7 +136,7 @@ pub enum ClientDatabase<'a> {
 }
 
 impl<'a> ClientDatabase<'a> {
-    /// Returns the PostgreSQL pool and options, or `None` for another
+    /// Returns the Postgres pool and options, or `None` for another
     /// backend.
     #[cfg(feature = "postgres")]
     #[must_use]
@@ -175,7 +175,7 @@ impl<'a> ClientDatabase<'a> {
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 #[non_exhaustive]
 pub enum DatabaseKind {
-    /// PostgreSQL.
+    /// Postgres.
     #[cfg(feature = "postgres")]
     Postgres,
     /// SQLite and compatible implementations.
@@ -187,21 +187,21 @@ impl fmt::Display for DatabaseKind {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter.write_str(match self {
             #[cfg(feature = "postgres")]
-            Self::Postgres => "PostgreSQL",
+            Self::Postgres => "Postgres",
             #[cfg(feature = "sqlite")]
             Self::Sqlite => "SQLite",
         })
     }
 }
 
-/// A PostgreSQL source and its backend-specific River options.
+/// A Postgres source and its backend-specific River options.
 ///
 /// River detects what the server supports the first time it needs to know
-/// and remembers it for this value and its clones. On PostgreSQL 18 and
+/// and remembers it for this value and its clones. On Postgres 18 and
 /// later, a unique insert tells a new row from an existing one with
 /// `RETURNING OLD`, and with `xmax` before that.
 ///
-/// YugabyteDB works as a PostgreSQL server. It has no `xmax`, so a unique
+/// YugabyteDB works as a Postgres server. It has no `xmax`, so a unique
 /// insert marks its row with a random `river:unique_nonce` metadata value,
 /// as on SQLite. Unless its `yb_enable_listen_notify` setting is on, it has
 /// no `LISTEN`/`NOTIFY` either: River then sends no notifications, and a
@@ -223,7 +223,7 @@ pub struct PostgresDatabase {
 
 #[cfg(feature = "postgres")]
 impl PostgresDatabase {
-    /// Uses a PostgreSQL pool and the connection's current schema.
+    /// Uses a Postgres pool and the connection's current schema.
     #[must_use]
     pub fn new(pool: PgPool) -> Self {
         Self {
@@ -246,7 +246,7 @@ impl PostgresDatabase {
         &self.capabilities
     }
 
-    /// Returns the database with PostgreSQL's periodic concurrent index
+    /// Returns the database with Postgres's periodic concurrent index
     /// rebuilding configured.
     #[must_use]
     pub fn with_reindex(mut self, reindex: PostgresReindexConfig) -> Self {
@@ -261,13 +261,13 @@ impl PostgresDatabase {
         self.reindex.extend_default_index_names(names);
     }
 
-    /// Returns PostgreSQL reindexer configuration.
+    /// Returns Postgres reindexer configuration.
     #[must_use]
     pub const fn reindex(&self) -> &PostgresReindexConfig {
         &self.reindex
     }
 
-    /// Returns the database with an explicit PostgreSQL schema for River
+    /// Returns the database with an explicit Postgres schema for River
     /// objects and notification channels.
     #[must_use]
     pub fn with_schema(mut self, schema: SchemaName) -> Self {
@@ -275,7 +275,7 @@ impl PostgresDatabase {
         self
     }
 
-    /// Returns the configured PostgreSQL schema.
+    /// Returns the configured Postgres schema.
     #[must_use]
     pub const fn schema(&self) -> &SchemaName {
         &self.schema
@@ -293,7 +293,7 @@ impl fmt::Debug for PostgresDatabase {
     }
 }
 
-/// PostgreSQL-specific concurrent reindexer configuration.
+/// Postgres-specific concurrent reindexer configuration.
 #[cfg(feature = "postgres")]
 #[derive(Clone, Debug)]
 pub struct PostgresReindexConfig {
@@ -396,7 +396,7 @@ impl Default for PostgresReindexConfig {
     }
 }
 
-/// Schedule used by PostgreSQL's concurrent reindexer.
+/// Schedule used by Postgres's concurrent reindexer.
 #[cfg(feature = "postgres")]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[non_exhaustive]

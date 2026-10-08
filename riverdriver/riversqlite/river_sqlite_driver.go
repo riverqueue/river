@@ -381,14 +381,14 @@ func (e *Executor) JobCountByQueueAndState(ctx context.Context, params *riverdri
 		return nil, interpretError(err)
 	}
 
-	// The PostgreSQL drivers implement this query with an `all_queues` CTE and
+	// The Postgres drivers implement this query with an `all_queues` CTE and
 	// LEFT JOINs, so they return one row per requested queue, including queues
 	// that currently have no jobs. The input queue list is deduplicated in SQL.
 	// The SQLite sqlc driver only reliably supports `sqlc.slice` in `IN (...)`,
 	// and we haven't found a workable way to bind a parameterized list through
 	// `json_each(...)` to produce equivalent SQL. The SQLite SQL query therefore
 	// returns only queues with matching rows, and this wrapper fills in missing
-	// queues to match PostgreSQL behavior.
+	// queues to match Postgres behavior.
 	countsByQueue := make(map[string]struct {
 		CountAvailable int64
 		CountRunning   int64
@@ -643,7 +643,7 @@ func (e *Executor) JobInsertFastMany(ctx context.Context, params *riverdriver.Jo
 	uniqueNoncesInBatch := make(map[string]bool, len(params.Jobs))
 	uniqueKeysInBatch := make(map[string]bool, len(params.Jobs))
 	for i, job := range params.Jobs {
-		// PostgreSQL rejects a statement that affects the same unique row twice.
+		// Postgres rejects a statement that affects the same unique row twice.
 		// SQLite allows it, so reject repeated keys covered by the unique index.
 		if len(job.UniqueKey) > 0 && job.UniqueStates&uniquestates.UniqueStatesToBitmask([]rivertype.JobState{job.State}) != 0 {
 			key := string(job.UniqueKey)

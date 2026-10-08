@@ -1,6 +1,6 @@
 //! River's Rust command-line interface.
 //!
-//! Runs River migrations against PostgreSQL or SQLite and benchmarks the
+//! Runs River migrations against Postgres or SQLite and benchmarks the
 //! worker runtime:
 //!
 //! ```text

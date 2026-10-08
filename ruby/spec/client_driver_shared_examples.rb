@@ -5,7 +5,7 @@ require "riverqueue/testing"
 require_relative "runtime_draining_shared_examples"
 require_relative "runtime_finishing_shared_examples"
 
-RSpec.shared_examples "PostgreSQL state update races" do
+RSpec.shared_examples "Postgres state update races" do
   it "skips a concurrent retry when selecting jobs for bulk deletion" do
     client = River::Client.new(@driver)
     first, second = 2.times.map do
@@ -141,7 +141,7 @@ RSpec.shared_examples "PostgreSQL state update races" do
   end
 end
 
-RSpec.shared_examples "PostgreSQL finalized job list plans" do
+RSpec.shared_examples "Postgres finalized job list plans" do
   it "uses the finalized-time index for single-state listings in both directions" do
     @driver.send(:runtime_execute, <<~SQL)
       INSERT INTO river_job (state, kind, args, finalized_at)
@@ -165,7 +165,7 @@ RSpec.shared_examples "PostgreSQL finalized job list plans" do
   end
 end
 
-RSpec.shared_examples "PostgreSQL rescue concurrency" do
+RSpec.shared_examples "Postgres rescue concurrency" do
   [:complete, :reclaim].each do |change|
     it "preserves a concurrent #{change} and rescues another stuck job in the batch" do
       now = Time.now.utc

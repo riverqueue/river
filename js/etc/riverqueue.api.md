@@ -321,7 +321,7 @@ export interface ClientOptions<Transaction = RegisteredTransaction> {
   /**
    * Disable notification streams and rely on polling alone. Running jobs
    * then learn of cancellations by polling every `queueControlPollInterval`.
-   * A client of a PostgreSQL server without `LISTEN`/`NOTIFY`, such as
+   * A client of a Postgres server without `LISTEN`/`NOTIFY`, such as
    * YugabyteDB without `yb_enable_listen_notify`, polls this way on its own.
    */
   readonly pollOnly?: boolean;
@@ -1791,9 +1791,9 @@ export interface MaintenanceOptions {
   readonly queueCleanerInterval?: DurationInput;
   /** Delete queues nothing has reported for this long. */
   readonly queueRetention?: DurationInput;
-  /** Indexes rebuilt by the PostgreSQL reindexer. */
+  /** Indexes rebuilt by the Postgres reindexer. */
   readonly reindexerIndexNames?: readonly string[];
-  /** When the PostgreSQL reindexer runs next after a given instant. */
+  /** When the Postgres reindexer runs next after a given instant. */
   readonly reindexerSchedule?: ReindexerSchedule;
   /** Bound on one index rebuild. */
   readonly reindexerTimeout?: DurationInput | null;
@@ -2335,7 +2335,7 @@ export type RegisteredTransaction = [keyof RiverTransactionRegistry] extends [
 ## `REINDEXER_INDEX_NAMES_DEFAULT`
 
 ```ts
-/** PostgreSQL indexes River rebuilds by default to control table bloat. */
+/** Postgres indexes River rebuilds by default to control table bloat. */
 export declare const REINDEXER_INDEX_NAMES_DEFAULT: readonly [
   "river_job_args_index",
   "river_job_kind",

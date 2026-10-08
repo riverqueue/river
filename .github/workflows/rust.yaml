@@ -61,7 +61,7 @@ jobs:
         with:
           tool: cargo-semver-checks@0.51.0
 
-      - name: Lint, including PostgreSQL-only and SQLite-only builds
+      - name: Lint, including Postgres-only and SQLite-only builds
         run: make lint/rust
 
       - name: Documentation and examples
@@ -162,5 +162,5 @@ jobs:
           go-version-file: go.work
       - name: Create test database
         run: PGPASSWORD=postgres createdb -h localhost -U postgres river_rust_test
-      - name: Rust unit, SQLite, and PostgreSQL tests
+      - name: Rust unit, SQLite, and Postgres tests
         run: make test/rust

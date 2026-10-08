@@ -65,7 +65,7 @@ export interface PilotDatabase<Transaction> {
 
   /**
    * Run `callback` with a native handle River has borrowed for it, which is
-   * not in a transaction: a pooled client on PostgreSQL, or River's own
+   * not in a transaction: a pooled client on Postgres, or River's own
    * connection on SQLite while River's lock on it is held. Use it for reads
    * and single autocommit statements. `signal` stops only the wait for the
    * handle. A transaction the callback leaves open is rolled back, and the
@@ -88,7 +88,7 @@ export interface PilotDatabase<Transaction> {
    * in a supplied `tx`, the call rejects.
    * `callback` runs at most once: it never runs when River can't begin, and
    * is never run again. On SQLite, River retries beginning while another
-   * connection holds the write lock; on PostgreSQL, a failure to lease a
+   * connection holds the write lock; on Postgres, a failure to lease a
    * connection or begin rejects at once. A failed commit rejects without
    * claiming whether the database kept the changes.
    *
@@ -214,7 +214,7 @@ export interface PilotStuckContext<Transaction> {
   readonly signal: AbortSignal;
   /**
    * The read's timeout in milliseconds, or `null` for none. River's standard
-   * read also sets it as the statement's timeout on PostgreSQL; a read the
+   * read also sets it as the statement's timeout on Postgres; a read the
    * pilot runs itself should do the same.
    */
   readonly timeoutMs: number | null;

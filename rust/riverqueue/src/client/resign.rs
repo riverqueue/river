@@ -37,7 +37,7 @@ request_type! {
     /// A leadership resignation request, returned by
     /// [`Client::request_resign`]. Await it to send the request.
     ///
-    /// A client without notifications, poll-only or using a PostgreSQL
+    /// A client without notifications, poll-only or using a Postgres
     /// server without `LISTEN`/`NOTIFY`, hears its own request directly once
     /// the request commits, and no other client hears it. If the request is
     /// dropped while that commit is in flight, the request may commit without

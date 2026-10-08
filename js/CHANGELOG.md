@@ -11,7 +11,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- JavaScript now implements full River client support for PostgreSQL and SQLite, interoperating with Go and Rust in the same database. Includes workers, graceful stopping and cancellation, leader election and maintenance, periodic and resumable jobs, job and queue management, hooks, middleware, events, migrations, CLI tooling, worker threads, and test helpers. Requires Node.js 26 with native `Temporal`; job IDs are `bigint` and timestamps are `Temporal.Instant`. This replaces the insert-only 0.1 API; see [migrating from 0.1](./docs/migrating-from-0.1.md) and `riverqueue codemod-0.1` for upgrades. [PR #1443](https://github.com/riverqueue/river/pull/1443).
+- JavaScript now implements full River client support for Postgres and SQLite, interoperating with Go and Rust in the same database. Includes workers, graceful stopping and cancellation, leader election and maintenance, periodic and resumable jobs, job and queue management, hooks, middleware, events, migrations, CLI tooling, worker threads, and test helpers. Requires Node.js 26 with native `Temporal`; job IDs are `bigint` and timestamps are `Temporal.Instant`. This replaces the insert-only 0.1 API; see [migrating from 0.1](./docs/migrating-from-0.1.md) and `riverqueue codemod-0.1` for upgrades. [PR #1443](https://github.com/riverqueue/river/pull/1443).
 
 ## [0.1.0] - 2026-06-01
 

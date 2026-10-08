@@ -3,7 +3,7 @@
 require "spec_helper"
 
 # The fixture-backed checks run once, alongside SQLite, without a Go setup in
-# every PostgreSQL matrix entry.
+# every Postgres matrix entry.
 return unless RiverTestDatabase.enabled?(:sqlite)
 require_relative "support/conformance_fixtures"
 require_relative "support/river_test_schema"
@@ -132,7 +132,7 @@ RSpec.describe "Go-generated conformance fixtures" do
   end
 
   # These exercise actual insertion/cancellation and the SQL outbox in both
-  # drivers without requiring a server. PostgreSQL delivery/commit ordering is
+  # drivers without requiring a server. Postgres delivery/commit ordering is
   # separately exercised by the shared driver specs.
   %w[activerecord sequel].each do |adapter|
     context "#{adapter} persisted protocol" do

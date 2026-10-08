@@ -14,7 +14,7 @@ POSTGRES_TEST_CONFIG = if RiverTestDatabase.enabled?(:postgres)
   rescue => e
     raise if ENV["CI"] == "true" || ENV["RIVER_REQUIRE_DATABASES"] == "1"
 
-    warn "PostgreSQL not available, skipping PostgreSQL tests: #{e.message}"
+    warn "Postgres not available, skipping Postgres tests: #{e.message}"
     nil
   end
 end

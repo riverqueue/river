@@ -700,7 +700,7 @@ impl Client {
         }
 
         // A unique key may appear only once among the batch's jobs whose
-        // state it covers. PostgreSQL rejects River Go's single upsert that
+        // state it covers. Postgres rejects River Go's single upsert that
         // would affect the same row twice, and River Go checks SQLite
         // batches the same way.
         let mut unique_keys = std::collections::HashSet::new();

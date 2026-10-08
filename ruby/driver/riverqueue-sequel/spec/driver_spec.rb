@@ -6,7 +6,7 @@ require_relative "../../../spec/row_decoding_shared_examples"
 
 RSpec.describe River::Driver::Sequel do
   if DB
-    context "with PostgreSQL", database: :postgres do
+    context "with Postgres", database: :postgres do
       around(:each) { |ex| test_transaction(&ex) }
 
       let!(:driver) { River::Driver::Sequel.new(DB) }
@@ -30,7 +30,7 @@ RSpec.describe River::Driver::Sequel do
         end
       end
 
-      describe "#to_job_row (PostgreSQL)" do
+      describe "#to_job_row (Postgres)" do
         it "converts a database record to `River::JobRow` with minimal properties" do
           river_job = DB[:river_job].returning.insert_select({
             id: 1,

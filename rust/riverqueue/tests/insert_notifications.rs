@@ -3,7 +3,7 @@
 //! path shares one window per queue, a rolled-back transaction still starts
 //! it, and each client keeps its own.
 //!
-//! PostgreSQL scenarios run in a unique schema and fail rather than skip when
+//! Postgres scenarios run in a unique schema and fail rather than skip when
 //! `RIVER_RUST_DATABASE_URL` is unset; SQLite scenarios use temporary files.
 
 #![cfg(any(all(feature = "postgres", river_postgres_tests), feature = "sqlite"))]

@@ -7,7 +7,7 @@ module RiverTestSchema
   def self.load(driver)
     migrations = River::Migrator.new(driver).migrations
     sql = migrations.map do |migration|
-      # PostgreSQL must commit new enum values before later migrations use them.
+      # Postgres must commit new enum values before later migrations use them.
       "BEGIN;\n#{migration.sql_up}\n;COMMIT;"
     end.join("\n")
     versions = migrations.map { |migration| "('main', #{migration.version})" }.join(", ")

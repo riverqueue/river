@@ -55,7 +55,7 @@ export interface JobListKeyset {
   readonly direction: SortDirection;
   /**
    * Whether the time field may be null for listed jobs. Nulls then sort
-   * explicitly last ascending and first descending, PostgreSQL's default, so
+   * explicitly last ascending and first descending, Postgres's default, so
    * every backend agrees and cursors can match them.
    */
   readonly nullable: boolean;
@@ -224,7 +224,7 @@ export interface RuntimeJobCleanupParams {
 
 /**
  * Bounds of one leader-owned maintenance batch. A backend that can cancel
- * database work should stop the batch after `timeoutMs`, like PostgreSQL's
+ * database work should stop the batch after `timeoutMs`, like Postgres's
  * `statement_timeout`; `signal` aborts at the timeout or when the leadership
  * term ends.
  */
@@ -402,7 +402,7 @@ export type RegisteredTransaction = [keyof RiverTransactionRegistry] extends [
 /**
  * Narrow protocol implemented by River's producer adapters.
  *
- * This is not the full runtime database engine boundary. PostgreSQL schema and
+ * This is not the full runtime database engine boundary. Postgres schema and
  * other backend-specific configuration belong to the adapter constructor.
  */
 export interface InsertDriver<

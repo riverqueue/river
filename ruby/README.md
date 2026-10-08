@@ -1,6 +1,6 @@
 # River for Ruby
 
-A PostgreSQL and SQLite job queue that shares River's schema with the Go, Rust,
+A Postgres and SQLite job queue that shares River's schema with the Go, Rust,
 and JavaScript clients. Includes Active Record and Sequel drivers, plus Rails
 and Active Job integration.
 
@@ -19,4 +19,4 @@ make lint/ruby typecheck/ruby
 ```
 
 Ruby 3.2 or later is required. `make test/ruby/conformance` runs only the
-Go-generated fixture checks and needs no PostgreSQL server.
+Go-generated fixture checks and needs no Postgres server.

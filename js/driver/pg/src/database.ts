@@ -29,7 +29,7 @@ import { PG_EXACT_TYPES } from "./exact-types.js";
 import { abortablePromise, PgClientLease } from "./lease.js";
 import type { PgOperationOptions } from "./types.js";
 
-/** PostgreSQL's maximum identifier length (`NAMEDATALEN - 1`). */
+/** Postgres's maximum identifier length (`NAMEDATALEN - 1`). */
 export const POSTGRES_IDENTIFIER_MAX_BYTES = 63;
 
 /** How long an abort waits for a pooled connection to cancel its statement. */
@@ -85,7 +85,7 @@ export class PgDatabase {
     if (row === undefined) {
       throw databaseError(
         "detectCapabilities",
-        "PostgreSQL returned no server capabilities"
+        "Postgres returned no server capabilities"
       );
     }
     // node-postgres reads timestamps as text, which River parses in the ISO
@@ -93,7 +93,7 @@ export class PgDatabase {
     if (typeof row.date_style !== "string" || !/^ISO\b/.test(row.date_style)) {
       throw configurationError(
         "detectCapabilities",
-        `River needs PostgreSQL's DateStyle to be ISO, not ${JSON.stringify(row.date_style)}; ` +
+        `River needs Postgres's DateStyle to be ISO, not ${JSON.stringify(row.date_style)}; ` +
           "set it for River's connections, for example with the Pool option " +
           "options: \"-c DateStyle=ISO\", or with ALTER ROLE ... SET DateStyle = 'ISO'"
       );
@@ -182,7 +182,7 @@ export class PgDatabase {
       if (cause instanceof RiverError) throw cause;
       throw databaseError(
         operation,
-        `PostgreSQL operation ${operation} failed`,
+        `Postgres operation ${operation} failed`,
         cause
       );
     }
@@ -233,7 +233,7 @@ export class PgDatabase {
   /**
    * Like {@link PgDatabase.query}, but stop waiting when `options.signal`
    * aborts. Without a caller transaction the statement runs on its own
-   * leased pool connection, which an abort destroys, first asking PostgreSQL
+   * leased pool connection, which an abort destroys, first asking Postgres
    * to cancel a statement that starts with `cancelPrefix`.
    */
   async queryAbortable<Row extends QueryResultRow = QueryResultRow>(
@@ -255,7 +255,7 @@ export class PgDatabase {
     if (options.tx !== undefined || this.pool === null) {
       // River cannot destroy a caller-owned connection. Cancellation still
       // bounds the caller's wait; pool-backed runtime queries below also end
-      // their PostgreSQL session so blocked work cannot continue in the pool.
+      // their Postgres session so blocked work cannot continue in the pool.
       return abortablePromise(
         this.query(
           operation,
@@ -284,7 +284,7 @@ export class PgDatabase {
     let queryActive = true;
     const abort = (): void => {
       if (!queryActive) return;
-      // Ask PostgreSQL to stop the statement as well: a destroyed socket is
+      // Ask Postgres to stop the statement as well: a destroyed socket is
       // only noticed once the statement finishes, so a lock wait would keep
       // running and could still commit.
       if (cancelPrefix !== undefined) this.cancelBackend(client, cancelPrefix);

@@ -1,6 +1,6 @@
 # River for Rust
 
-This workspace contains River's Rust implementation. It shares River's database schema and job protocol with River for Go on PostgreSQL and SQLite, with an API designed for Rust and Tokio. The Rust crates are versioned independently of River for Go.
+This workspace contains River's Rust implementation. It shares River's database schema and job protocol with River for Go on Postgres and SQLite, with an API designed for Rust and Tokio. The Rust crates are versioned independently of River for Go.
 
 ## Workspace crates
 
@@ -14,7 +14,7 @@ This workspace contains River's Rust implementation. It shares River's database 
 
 The API uses a caller-owned SQLx pool, Tokio, typed workers, and
 `CancellationToken`. `Client` isn't generic over the database: it accepts a
-PostgreSQL or SQLite pool, and there's no driver trait to implement.
+Postgres or SQLite pool, and there's no driver trait to implement.
 
 ## Quick start
 
@@ -51,7 +51,7 @@ custom schemas, tunable worker/pool/batch sizes, periodic jobs/sec output, and a
 final jobs/sec plus p95 end-to-end latency summary. Use `riverqueue bench
 --help` for all options.
 
-PostgreSQL integration tests require a disposable database. They build only
+Postgres integration tests require a disposable database. They build only
 with `--cfg river_postgres_tests`, which the Makefile targets pass to rustc
 and rustdoc, building into `target/postgres-tests`:
 
@@ -61,7 +61,7 @@ RIVER_RUST_DATABASE_URL=postgres://localhost/river_rust_test \
 ```
 
 CI runs unit, doc, and SQLite tests on each supported Rust version, and
-PostgreSQL tests against versions 14 through 18. Rust tests check unique
+Postgres tests against versions 14 through 18. Rust tests check unique
 keys, retry bounds, cron schedules, and snooze counts against fixtures that
 River's Go implementation generates into `conformance/testdata`, which isn't
 committed. The `make test/rust` targets generate them first, so Go is needed

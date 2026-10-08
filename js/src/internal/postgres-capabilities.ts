@@ -1,9 +1,9 @@
 /**
- * Features of a PostgreSQL-compatible server that River adapts to, like
+ * Features of a Postgres-compatible server that River adapts to, like
  * River for Go's `riverdriver.PostgresCapabilities`.
  *
- * YugabyteDB speaks PostgreSQL's protocol but has no `xmax` system column
- * and, unless configured for it, no `LISTEN`/`NOTIFY`. River's PostgreSQL
+ * YugabyteDB speaks Postgres's protocol but has no `xmax` system column
+ * and, unless configured for it, no `LISTEN`/`NOTIFY`. River's Postgres
  * drivers detect the server once and cache the result for the driver's
  * lifetime, so enabling Yugabyte's notifications takes effect only for a new
  * driver, such as after a restart.
@@ -31,12 +31,12 @@ export const POSTGRES_CAPABILITIES_SQL = `
  * - `metadata_nonce`: each proposed row's metadata carries a random nonce
  *   under {@link UNIQUE_INSERT_NONCE_KEY}, and a returned row without the
  *   one its insert wrote already existed. Used where `xmax` is unavailable.
- * - `returning_old`: PostgreSQL 18's `OLD` row in `RETURNING`.
- * - `xmax`: PostgreSQL's `xmax` system column, nonzero for an updated row.
+ * - `returning_old`: Postgres 18's `OLD` row in `RETURNING`.
+ * - `xmax`: Postgres's `xmax` system column, nonzero for an updated row.
  */
 export type UniqueInsertMode = "metadata_nonce" | "returning_old" | "xmax";
 
-/** Features detected from a PostgreSQL-compatible server. */
+/** Features detected from a Postgres-compatible server. */
 export interface PostgresCapabilities {
   /**
    * Whether `pg_notify` delivers notifications to listeners. Without it,
@@ -89,7 +89,7 @@ export function postgresCapabilitiesFromRow(row: {
     !Number.isSafeInteger(versionNum) ||
     typeof row.yb_listen_notify_enabled !== "boolean"
   ) {
-    throw new TypeError("unexpected PostgreSQL server capabilities row");
+    throw new TypeError("unexpected Postgres server capabilities row");
   }
   return postgresCapabilities(
     row.product,

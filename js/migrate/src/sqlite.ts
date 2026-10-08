@@ -16,7 +16,7 @@ import type {
 } from "./storage.js";
 
 // Reverting main version 5 rebuilds `river_migration` without its `line`
-// column, which would lose other lines' history. PostgreSQL's SQL refuses
+// column, which would lose other lines' history. Postgres's SQL refuses
 // this itself; SQLite cannot raise from plain SQL, so the migrator checks.
 const LINE_COLUMN_VERSION = 5;
 const TEMPLATE_SCHEMA = "/* TEMPLATE: schema */";
@@ -51,7 +51,7 @@ export class SqliteMigrationStorage implements MigrationStorage {
   }
 
   renderSql(sql: string): string {
-    // SQLite has no schemas, so the placeholder shared with PostgreSQL's SQL
+    // SQLite has no schemas, so the placeholder shared with Postgres's SQL
     // renders as nothing.
     return sql.replaceAll(TEMPLATE_SCHEMA, "");
   }

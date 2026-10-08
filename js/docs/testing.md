@@ -142,6 +142,6 @@ it("works a job end to end", async () => {
 `leaderElectionDisabled: true` keeps leader election and maintenance services
 out of short tests. A queue's `pollInterval` can't be shorter than its
 `fetchCooldown` (the client's `fetchCooldown`, 100 ms by default), so a test
-that polls faster lowers both. Use the PostgreSQL driver against a disposable
-database when a test depends on PostgreSQL behavior (`LISTEN`/`NOTIFY`, custom
+that polls faster lowers both. Use the Postgres driver against a disposable
+database when a test depends on Postgres behavior (`LISTEN`/`NOTIFY`, custom
 schemas, or concurrent clients).

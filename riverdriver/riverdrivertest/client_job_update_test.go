@@ -93,7 +93,7 @@ func exerciseClientJobUpdate[TTx any](ctx context.Context, t *testing.T,
 		bundle := setup(t)
 
 		if bundle.driver.DatabaseName() != riverdriver.DatabaseNamePostgres {
-			t.Skip("the retry race requires PostgreSQL row locking and statement snapshots")
+			t.Skip("the retry race requires Postgres row locking and statement snapshots")
 		}
 
 		// Hold the winner's row lock until the loser is waiting on it, so the

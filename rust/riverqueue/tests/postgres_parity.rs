@@ -1,4 +1,4 @@
-//! PostgreSQL parity tests for maintenance, leadership, and storage semantics
+//! Postgres parity tests for maintenance, leadership, and storage semantics
 //! that mirror the Go implementation.
 
 #![cfg(all(feature = "postgres", river_postgres_tests))]

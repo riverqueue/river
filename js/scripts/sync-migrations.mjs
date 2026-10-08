@@ -1,4 +1,4 @@
-// Mirrors River's canonical PostgreSQL and SQLite migrations, which live in
+// Mirrors River's canonical Postgres and SQLite migrations, which live in
 // the Go drivers of the River repository this workspace is part of, into
 // `migrate/migrations` with a manifest of SHA-256 digests. `--check` fails
 // instead of writing when the mirror or its manifest differs from River's

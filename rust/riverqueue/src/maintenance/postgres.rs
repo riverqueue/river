@@ -1,4 +1,4 @@
-//! PostgreSQL helpers that make maintenance statements cancellable and
+//! Postgres helpers that make maintenance statements cancellable and
 //! bounded on the server, not just abandoned by the client.
 
 use std::time::Duration;
@@ -136,7 +136,7 @@ pub(super) async fn cancellable_within<T>(
     }
 }
 
-/// Asks PostgreSQL to cancel the statement running on `backend_pid`.
+/// Asks Postgres to cancel the statement running on `backend_pid`.
 pub(super) async fn cancel_backend(pool: &PgPool, backend_pid: i32) {
     let result = tokio::time::timeout(
         CANCEL_GRACE,

@@ -1,6 +1,6 @@
 # `@riverqueue/driver-pg`
 
-This package is River's complete PostgreSQL backend for Node.js 26 and newer.
+This package is River's complete Postgres backend for Node.js 26 and newer.
 It accepts a caller-owned `pg.Pool`, performs insertion and runtime operations,
 and implements notifications, leadership, maintenance, and queue control.
 
@@ -70,7 +70,7 @@ and queue changes it may have missed.
 
 When River abandons an in-flight statement, such as a completion query that
 exceeded its 10 second bound or a reindex interrupted by shutdown, it destroys
-that connection and asks PostgreSQL to cancel the statement with
+that connection and asks Postgres to cancel the statement with
 `pg_cancel_backend` from another pooled connection. The cancellation only
 targets a backend still running that River statement. A statement can still
 commit before the cancellation arrives; River's attempt-identity guard keeps
@@ -103,7 +103,7 @@ so npm rejects a mismatched pair instead of loading two copies.
 
 River parses the values its queries return with its own parsers, so changes an
 application makes to node-postgres's global parsers (`pg.types.setTypeParser`)
-don't affect it. It reads timestamps in PostgreSQL's default `DateStyle` of
+don't affect it. It reads timestamps in Postgres's default `DateStyle` of
 `ISO`; a session with another `DateStyle` fails with a clear error.
 
 TypeScript users need TypeScript 6.0 or newer and `@types/node` and `@types/pg`,

@@ -182,7 +182,7 @@ describe("argument errors", () => {
         "--schema",
         "river",
       ],
-      "--schema only applies to PostgreSQL",
+      "--schema only applies to Postgres",
     ],
     [
       [
@@ -192,7 +192,7 @@ describe("argument errors", () => {
         "--statement-timeout",
         "5s",
       ],
-      "--statement-timeout only applies to PostgreSQL",
+      "--statement-timeout only applies to Postgres",
     ],
     [
       ["migrate-up", "--database-url", "sqlite://:memory:", "--line", "mian"],
@@ -250,7 +250,7 @@ describe("bench guards", () => {
     ],
     [
       ["bench", "--database-url", "sqlite:///tmp/river.db", "--yes"],
-      "only PostgreSQL databases can be benchmarked",
+      "only Postgres databases can be benchmarked",
     ],
     [
       [
@@ -405,7 +405,7 @@ describe("migrate-get", () => {
         "--schema",
         "s",
       ],
-      "--schema only applies to PostgreSQL",
+      "--schema only applies to Postgres",
     ],
   ])("rejects %j", async (argv, message) => {
     const result = await invoke(argv);

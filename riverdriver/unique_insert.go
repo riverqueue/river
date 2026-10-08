@@ -6,7 +6,7 @@ import (
 )
 
 // UniqueInsertMetadataKey is a reserved job metadata key used to detect unique
-// insert conflicts on databases that don't expose PostgreSQL system columns.
+// insert conflicts on databases that don't expose Postgres system columns.
 const UniqueInsertMetadataKey = "river:unique_nonce"
 
 // UniqueInsertMode is a database-specific strategy for detecting whether a
@@ -23,11 +23,11 @@ const (
 	// contains it.
 	UniqueInsertModeMetadataNonce
 
-	// UniqueInsertModeReturningOld uses PostgreSQL 18's OLD row support in
+	// UniqueInsertModeReturningOld uses Postgres 18's OLD row support in
 	// RETURNING.
 	UniqueInsertModeReturningOld
 
-	// UniqueInsertModeXmax uses PostgreSQL's xmax system column.
+	// UniqueInsertModeXmax uses Postgres's xmax system column.
 	UniqueInsertModeXmax
 )
 
@@ -104,7 +104,7 @@ func UniqueInsertMetadataWithNonce(metadata []byte, nonce string) ([]byte, error
 }
 
 // UniqueInsertModeFromProductAndVersion returns the unique insert mode
-// appropriate for a database product and its PostgreSQL-compatible server
+// appropriate for a database product and its Postgres-compatible server
 // version number.
 func UniqueInsertModeFromProductAndVersion(product string, version int32) UniqueInsertMode {
 	if postgresProductIsYugabyte(product) {

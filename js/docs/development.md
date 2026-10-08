@@ -67,9 +67,9 @@ consumer with Node's built-in `node --test`, so plain JavaScript exercises the
 installed tarballs with no transpiler or workspace alias in between: SQLite and
 worker-thread jobs end to end with exact int64 args, one shared `riverqueue`
 instance and error class hierarchy across packages, `require(esm)`, subpath
-exports, the CLI, and the test helpers. Its PostgreSQL tests run in a throwaway
+exports, the CLI, and the test helpers. Its Postgres tests run in a throwaway
 schema when `DATABASE_URL` is set. Database-free examples also run in this
-gate. `package:examples` runs the same packed examples with PostgreSQL when
+gate. `package:examples` runs the same packed examples with Postgres when
 `DATABASE_URL` is set. Neither command publishes anything.
 
 `package:check` and `migration:legacy` reject archive paths that escape the
@@ -150,7 +150,7 @@ recorded goldens establish. It has no threshold and is not a CI gate.
 
 ## Integration tests
 
-Integration tests run against a real PostgreSQL database with River's schema.
+Integration tests run against a real Postgres database with River's schema.
 Create a disposable test database, build the workspace, and apply the exact
 generated migrations from this checkout:
 
@@ -194,7 +194,7 @@ and on `js/v*` release tags. Each job installs the official Node.js build from
 cover build, both type-check lanes, generated migrations (compared with
 River's sources), API reports, TypeDoc, README snippets, the 0.1 fixture, lint,
 formatting, licenses, packed archives and examples, unit tests on Node 26.0.0
-and the current Node 26 release, and integration tests on PostgreSQL 14
+and the current Node 26 release, and integration tests on Postgres 14
 through 18.
 
 Unit tests compare unique keys, protocol values, notification dispatch,
@@ -204,7 +204,7 @@ files the Rust port reads. They aren't committed: `make test/js` generates
 them first, so Go is needed to run the unit tests, and `pnpm run test` needs
 a prior `make generate/fixtures` from the repository root. A missing fixture
 fails its test. `make test/js/conformance` runs just these checks, including
-both drivers' notification adapters without a PostgreSQL server. The two
+both drivers' notification adapters without a Postgres server. The two
 raw JSON unique-key cases involving duplicate keys or integer-key insertion
 order are Rust-only because JavaScript objects cannot preserve them.
 

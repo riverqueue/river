@@ -1,6 +1,6 @@
 # Testing River jobs
 
-Testing helpers ship in `riverqueue`. They use your real PostgreSQL or SQLite
+Testing helpers ship in `riverqueue`. They use your real Postgres or SQLite
 database through either driver; there is no fake queue, global testing mode,
 implicit migration, or automatic cleanup. Require them explicitly:
 

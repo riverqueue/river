@@ -36,7 +36,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Cancellation wins atomically over discarded attempts and other state transitions, including the last attempt or a worker that disables retries. [PR #1463](https://github.com/riverqueue/river/pull/1463).
 - Stuck-job rescue falls back to the default retry policy per job when an application policy fails or returns an invalid time, allowing recovery and cleanup to continue. [PR #1463](https://github.com/riverqueue/river/pull/1463).
 - Clients without consumer queues run configured periodic jobs and maintenance services. Adding periodic jobs starts maintenance when needed; registration is rejected when leader election is disabled. [PR #1463](https://github.com/riverqueue/river/pull/1463).
-- Bulk deletion excludes running jobs before applying its limit and locks eligible PostgreSQL rows so concurrent retries cannot cause deletion of jobs that no longer match the filters. [PR #1463](https://github.com/riverqueue/river/pull/1463).
+- Bulk deletion excludes running jobs before applying its limit and locks eligible Postgres rows so concurrent retries cannot cause deletion of jobs that no longer match the filters. [PR #1463](https://github.com/riverqueue/river/pull/1463).
 - Stuck-job rescue respects longer or disabled client and worker timeouts and scans past protected attempts without consuming the rescue limit. [PR #1463](https://github.com/riverqueue/river/pull/1463).
 - Snoozing and rescue tolerate JSON counters that overflow SQLite's floating-point representation. [PR #1463](https://github.com/riverqueue/river/pull/1463).
 - Snoozing tolerates nonnumeric metadata counters instead of failing on booleans or collections. Ruby-specific recovery cases are tested independently of the shared Go fixtures. [PR #1463](https://github.com/riverqueue/river/pull/1463).
@@ -47,21 +47,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Custom maintenance service failures are logged without blocking other services, stuck-job rescue, or cleanup. [PR #1463](https://github.com/riverqueue/river/pull/1463).
 - Job updates reject non-object metadata before writing to the database, preserving the existing job when invalid metadata is supplied. [PR #1463](https://github.com/riverqueue/river/pull/1463).
 - Job completion atomically checks for cancellation so a concurrent cancellation cannot be overwritten by completion, including when finalization hooks are configured. [PR #1463](https://github.com/riverqueue/river/pull/1463).
-- Job updates reject nonpositive attempt limits consistently on PostgreSQL and SQLite. [PR #1463](https://github.com/riverqueue/river/pull/1463).
+- Job updates reject nonpositive attempt limits consistently on Postgres and SQLite. [PR #1463](https://github.com/riverqueue/river/pull/1463).
 - Job lifecycle events report worker execution and completion durations separately using a monotonic clock. [PR #1463](https://github.com/riverqueue/river/pull/1463).
 - Finalization hooks that delete jobs honor concurrent cancellation and record the cancelled attempt instead of deleting it. [PR #1463](https://github.com/riverqueue/river/pull/1463).
 - Queue metadata writes and job metadata merges reject non-object values before changing persisted data. Job updates also reject non-string worker IDs in attempt histories. [PR #1463](https://github.com/riverqueue/river/pull/1463).
 - Unique inserts with `exclude_kind` preserve the existing job's kind when a different kind conflicts, on both databases and through both drivers. [PR #1463](https://github.com/riverqueue/river/pull/1463).
 - Retrying, snoozing, and interrupting jobs preserve the original queue-wait duration in lifecycle events. [PR #1463](https://github.com/riverqueue/river/pull/1463).
 - Invalid rescue counters no longer prevent other stuck jobs in the batch from being rescued. [PR #1463](https://github.com/riverqueue/river/pull/1463).
-- SQLite retains only the newest 100 worker IDs when claiming a job, matching PostgreSQL. [PR #1463](https://github.com/riverqueue/river/pull/1463).
+- SQLite retains only the newest 100 worker IDs when claiming a job, matching Postgres. [PR #1463](https://github.com/riverqueue/river/pull/1463).
 - Attempt-error serialization supports frozen timestamps and preserves the caller's timezone. [PR #1463](https://github.com/riverqueue/river/pull/1463).
 
 ## [0.12.0] - 2026-10-01
 
 ### Added
 
-- Add a full Ruby client for River with Go-compatible job insertion and execution on PostgreSQL, SQLite, and YugabyteDB through ActiveRecord or Sequel. Includes workers, retries, cancellation, periodic and resumable jobs, job-persisted logging, job administration, migration and worker CLIs, and testing helpers. Rails and Active Job integration is available through `riverqueue-rails`, with workflows, batches, sequences, concurrency controls, and other advanced features in the separately distributed `riverqueue-pro` gem. [PR #70](https://github.com/riverqueue/riverqueue-ruby/pull/70).
+- Add a full Ruby client for River with Go-compatible job insertion and execution on Postgres, SQLite, and YugabyteDB through ActiveRecord or Sequel. Includes workers, retries, cancellation, periodic and resumable jobs, job-persisted logging, job administration, migration and worker CLIs, and testing helpers. Rails and Active Job integration is available through `riverqueue-rails`, with workflows, batches, sequences, concurrency controls, and other advanced features in the separately distributed `riverqueue-pro` gem. [PR #70](https://github.com/riverqueue/riverqueue-ruby/pull/70).
 
 ## [0.11.0] - 2026-09-02
 
@@ -71,7 +71,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
-- Stop pulling in `pg` as a hard dependency of either driver. Applications now select their database adapter by including `pg` for PostgreSQL or `sqlite3` for SQLite. [PR #67](https://github.com/riverqueue/riverqueue-ruby/pull/67).
+- Stop pulling in `pg` as a hard dependency of either driver. Applications now select their database adapter by including `pg` for Postgres or `sqlite3` for SQLite. [PR #67](https://github.com/riverqueue/riverqueue-ruby/pull/67).
 
 ## [0.10.1] - 2026-04-09
 

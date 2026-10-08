@@ -391,7 +391,7 @@ export declare function finishResumable(
 /**
  * Narrow protocol implemented by River's producer adapters.
  *
- * This is not the full runtime database engine boundary. PostgreSQL schema and
+ * This is not the full runtime database engine boundary. Postgres schema and
  * other backend-specific configuration belong to the adapter constructor.
  */
 export interface InsertDriver<
@@ -881,7 +881,7 @@ export interface JobListKeyset {
   readonly direction: SortDirection;
   /**
    * Whether the time field may be null for listed jobs. Nulls then sort
-   * explicitly last ascending and first descending, PostgreSQL's default, so
+   * explicitly last ascending and first descending, Postgres's default, so
    * every backend agrees and cursors can match them.
    */
   readonly nullable: boolean;
@@ -1413,7 +1413,7 @@ export interface PilotDatabase<Transaction> {
   readonly schema: string | null;
   /**
    * Run `callback` with a native handle River has borrowed for it, which is
-   * not in a transaction: a pooled client on PostgreSQL, or River's own
+   * not in a transaction: a pooled client on Postgres, or River's own
    * connection on SQLite while River's lock on it is held. Use it for reads
    * and single autocommit statements. `signal` stops only the wait for the
    * handle. A transaction the callback leaves open is rolled back, and the
@@ -1437,7 +1437,7 @@ export interface PilotDatabase<Transaction> {
    * in a supplied `tx`, the call rejects.
    * `callback` runs at most once: it never runs when River can't begin, and
    * is never run again. On SQLite, River retries beginning while another
-   * connection holds the write lock; on PostgreSQL, a failure to lease a
+   * connection holds the write lock; on Postgres, a failure to lease a
    * connection or begin rejects at once. A failed commit rejects without
    * claiming whether the database kept the changes.
    *
@@ -1803,7 +1803,7 @@ export interface PilotStuckContext<Transaction> {
   readonly signal: AbortSignal;
   /**
    * The read's timeout in milliseconds, or `null` for none. River's standard
-   * read also sets it as the statement's timeout on PostgreSQL; a read the
+   * read also sets it as the statement's timeout on Postgres; a read the
    * pilot runs itself should do the same.
    */
   readonly timeoutMs: number | null;
@@ -1844,7 +1844,7 @@ export declare const POSTGRES_CAPABILITIES_SQL =
 ## `PostgresCapabilities`
 
 ```ts
-/** Features detected from a PostgreSQL-compatible server. */
+/** Features detected from a Postgres-compatible server. */
 export interface PostgresCapabilities {
   /**
    * Whether `pg_notify` delivers notifications to listeners. Without it,
@@ -1874,9 +1874,9 @@ export declare function postgresCapabilitiesFromRow(row: {
 
 ```ts
 /**
- * Encode an instant as a PostgreSQL `timestamptz` parameter the way Go's pgx
- * does: truncated to whole microseconds, PostgreSQL's precision, rather than
- * leaving PostgreSQL to round the sub-microsecond digits of its text input.
+ * Encode an instant as a Postgres `timestamptz` parameter the way Go's pgx
+ * does: truncated to whole microseconds, Postgres's precision, rather than
+ * leaving Postgres to round the sub-microsecond digits of its text input.
  * Truncation is toward the past, like pgx, so every engine stores the same
  * instant for the same value.
  */
@@ -2045,7 +2045,7 @@ export interface QueueUpdateParams {
 
 ```ts
 /**
- * Quote an identifier for PostgreSQL or SQLite, doubling embedded quotes.
+ * Quote an identifier for Postgres or SQLite, doubling embedded quotes.
  * It doesn't check the identifier's length or characters.
  */
 export declare function quoteIdentifier(value: string): string;
@@ -2357,7 +2357,7 @@ export type RuntimeLeader = LeaderTerm;
 ```ts
 /**
  * Bounds of one leader-owned maintenance batch. A backend that can cancel
- * database work should stop the batch after `timeoutMs`, like PostgreSQL's
+ * database work should stop the batch after `timeoutMs`, like Postgres's
  * `statement_timeout`; `signal` aborts at the timeout or when the leadership
  * term ends.
  */
@@ -2530,8 +2530,8 @@ export declare function uniqueInsertConflictSql(mode: UniqueInsertMode): string;
  * - `metadata_nonce`: each proposed row's metadata carries a random nonce
  *   under {@link UNIQUE_INSERT_NONCE_KEY}, and a returned row without the
  *   one its insert wrote already existed. Used where `xmax` is unavailable.
- * - `returning_old`: PostgreSQL 18's `OLD` row in `RETURNING`.
- * - `xmax`: PostgreSQL's `xmax` system column, nonzero for an updated row.
+ * - `returning_old`: Postgres 18's `OLD` row in `RETURNING`.
+ * - `xmax`: Postgres's `xmax` system column, nonzero for an updated row.
  */
 export type UniqueInsertMode = "metadata_nonce" | "returning_old" | "xmax";
 ```

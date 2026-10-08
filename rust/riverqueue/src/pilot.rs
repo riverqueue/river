@@ -148,7 +148,7 @@ pub struct ProducerConfiguration {
     /// Most jobs this client runs from the queue at once.
     pub max_workers: usize,
     /// The text of the queue's persisted metadata as the database renders
-    /// it: PostgreSQL's `metadata::text` or SQLite's `json(metadata)`. Unlike
+    /// it: Postgres's `metadata::text` or SQLite's `json(metadata)`. Unlike
     /// the parsed `queue.metadata`, it keeps key order, duplicate keys, and
     /// number literals, for decoding the metadata exactly like River Go's
     /// `encoding/json`.

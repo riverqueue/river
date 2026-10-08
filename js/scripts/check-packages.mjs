@@ -497,7 +497,7 @@ if (!completed) throw new Error("packed SQLite worker did not complete its job")
 
   // Exercise real behavior through the installed tarballs with Node's own
   // test runner, so no transpiler or workspace alias can hide a packaging
-  // failure. The PostgreSQL tests run only when DATABASE_URL is set.
+  // failure. The Postgres tests run only when DATABASE_URL is set.
   await cp(
     resolve(repositoryRoot, "scripts", "packed-tests"),
     join(consumerDirectory, "packed-tests"),

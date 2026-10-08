@@ -158,7 +158,7 @@ pub fn sqlite_timestamp(time: DateTime<Utc>) -> String {
     crate::database::sqlite::sqlite_time(time)
 }
 
-/// Adds an add-on crate's indexes to PostgreSQL's default reindexer list.
+/// Adds an add-on crate's indexes to Postgres's default reindexer list.
 ///
 /// Names already in the list are skipped. A caller who chose index names
 /// explicitly with `PostgresReindexConfig::with_index_names`, including an
@@ -283,7 +283,7 @@ impl fmt::Display for NotificationTopic {
 /// Sends notifications on a caller's transaction connection, like Go's
 /// `riverdriver.Executor.NotifyMany`.
 ///
-/// PostgreSQL issues `pg_notify` on the schema-qualified channel
+/// Postgres issues `pg_notify` on the schema-qualified channel
 /// (`<schema>.<topic>`, using `current_schema()` when no schema is
 /// configured), so delivery happens only when the transaction commits. A
 /// server without `LISTEN`/`NOTIFY`, like YugabyteDB by default, gets no
@@ -429,7 +429,7 @@ pub use crate::database::DatabaseKind;
 #[derive(Clone, Debug)]
 #[non_exhaustive]
 pub enum DatabaseConfig {
-    /// PostgreSQL backend configuration.
+    /// Postgres backend configuration.
     #[cfg(feature = "postgres")]
     Postgres { schema: SchemaName },
     /// SQLite backend configuration.
@@ -449,7 +449,7 @@ impl DatabaseConfig {
         }
     }
 
-    /// Returns PostgreSQL's configured schema, if selected.
+    /// Returns Postgres's configured schema, if selected.
     #[must_use]
     #[cfg(feature = "postgres")]
     pub const fn postgres_schema(&self) -> Option<&SchemaName> {
@@ -465,7 +465,7 @@ impl DatabaseConfig {
 #[doc(hidden)]
 #[non_exhaustive]
 pub enum DatabaseConnection<'connection> {
-    /// PostgreSQL transaction connection.
+    /// Postgres transaction connection.
     #[cfg(feature = "postgres")]
     Postgres(&'connection mut PgConnection),
     /// SQLite transaction connection.
@@ -496,7 +496,7 @@ impl<'connection> DatabaseConnection<'connection> {
         }
     }
 
-    /// Returns the PostgreSQL connection, if selected.
+    /// Returns the Postgres connection, if selected.
     #[must_use]
     #[cfg(feature = "postgres")]
     pub fn into_postgres(self) -> Option<&'connection mut PgConnection> {
@@ -533,7 +533,7 @@ impl fmt::Debug for DatabaseConnection<'_> {
 #[derive(Clone)]
 #[non_exhaustive]
 pub enum DatabasePool {
-    /// PostgreSQL pool.
+    /// Postgres pool.
     #[cfg(feature = "postgres")]
     Postgres(PgPool),
     /// SQLite pool.
@@ -553,7 +553,7 @@ impl DatabasePool {
         }
     }
 
-    /// Returns the caller-owned PostgreSQL pool, if selected.
+    /// Returns the caller-owned Postgres pool, if selected.
     #[must_use]
     #[cfg(feature = "postgres")]
     pub const fn postgres(&self) -> Option<&PgPool> {
@@ -864,7 +864,7 @@ pub trait Pilot: std::any::Any + Send + Sync + 'static {
     /// How many intercepted completion batches may run concurrently, like
     /// River Go's `PilotJobCompletionConcurrency`.
     ///
-    /// River never exceeds its backend's own limit (two on PostgreSQL, one on
+    /// River never exceeds its backend's own limit (two on Postgres, one on
     /// SQLite) and starts a second concurrent batch only when a full batch of
     /// completions is waiting. The default allows one batch at a time.
     fn job_set_state_concurrency(&self) -> usize {
@@ -1068,7 +1068,7 @@ pub struct NoopPilot;
 
 impl Pilot for NoopPilot {}
 
-/// Columns River selects to decode a PostgreSQL job row, qualified by
+/// Columns River selects to decode a Postgres job row, qualified by
 /// `alias`, for use with [`decode_postgres_job_row`].
 #[cfg(feature = "postgres")]
 #[must_use]

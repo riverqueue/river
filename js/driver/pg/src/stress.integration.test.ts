@@ -124,7 +124,7 @@ async function startFleet(
   };
 }
 
-describe("PostgreSQL multi-client stress", () => {
+describe("Postgres multi-client stress", () => {
   let admin: pg.Pool;
 
   beforeAll(async () => {

@@ -81,7 +81,7 @@ describe("PgDriver integration", () => {
     driver = testPgDriver(pool);
     // Maintenance operations act on every row, not just this file's kinds,
     // so start from empty River tables whatever ran against the database
-    // before (such as the packed PostgreSQL examples).
+    // before (such as the packed Postgres examples).
     await pool.query("TRUNCATE river_job, river_leader, river_queue");
   });
 
@@ -146,7 +146,7 @@ describe("PgDriver integration", () => {
   });
 
   it("truncates sub-microsecond timestamps like Go instead of rounding", async () => {
-    // PostgreSQL would round `.0000019` up to `.000002`; Go's pgx truncates.
+    // Postgres would round `.0000019` up to `.000002`; Go's pgx truncates.
     const scheduledAt = Temporal.Instant.from("2026-08-30T12:00:00.0000019Z");
     const createdAt = Temporal.Instant.from("2026-08-30T11:00:00.0000015Z");
 
@@ -168,7 +168,7 @@ describe("PgDriver integration", () => {
 
   it("keeps a reinserted job's creation time and encoded arguments", async () => {
     const createdAt = Temporal.Instant.from("2026-01-02T03:04:05.123456Z");
-    // PostgreSQL's clock rounds to microseconds.
+    // Postgres's clock rounds to microseconds.
     const before = Temporal.Now.instant().subtract({ seconds: 1 });
 
     const params = [
@@ -236,7 +236,7 @@ describe("PgDriver integration", () => {
     );
   });
 
-  it("decodes exact timestamps nested in PostgreSQL jsonb arrays", async () => {
+  it("decodes exact timestamps nested in Postgres jsonb arrays", async () => {
     const inserted = await driver.jobInsert(
       insertParams(`${filePrefix}_attempt_error`)
     );
@@ -284,7 +284,7 @@ describe("PgDriver integration", () => {
         insertParams(`${filePrefix}_batch_unique`, unique),
       ])
     ).rejects.toMatchObject({
-      // PostgreSQL's cardinality_violation: ON CONFLICT DO UPDATE can't
+      // Postgres's cardinality_violation: ON CONFLICT DO UPDATE can't
       // affect a row twice, as for River for Go's batch.
       cause: expect.objectContaining({ code: "21000" }),
     });
@@ -347,7 +347,7 @@ describe("PgDriver integration", () => {
     expect(stored.rows).toEqual([{ kind: jobA.kind }]);
   });
 
-  it("ordinarily inserts beyond PostgreSQL's bind-parameter limit", async () => {
+  it("ordinarily inserts beyond Postgres's bind-parameter limit", async () => {
     const params = Array.from({ length: 6_000 }, (_, index) =>
       insertParams(`${filePrefix}_ordinary_bulk`, {
         args: { index },

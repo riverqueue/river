@@ -14,7 +14,7 @@ import (
 func TestYugabyteCompatibility(t *testing.T) {
 	t.Parallel()
 
-	// YugabyteDB doesn't expose PostgreSQL's transaction-related system columns:
+	// YugabyteDB doesn't expose Postgres's transaction-related system columns:
 	// https://docs.yugabyte.com/stable/yugabyte-voyager/known-issues/postgresql/#system-columns-is-not-yet-supported
 	// The unique insert query may use xmax only because the entire expression is
 	// replaced when the driver detects YugabyteDB.
@@ -52,6 +52,6 @@ func TestYugabyteCompatibility(t *testing.T) {
 	require.NoError(t, err)
 
 	require.Empty(t, violations,
-		"YugabyteDB-incompatible PostgreSQL system columns must only appear inside SQL templates that replace them for YugabyteDB",
+		"YugabyteDB-incompatible Postgres system columns must only appear inside SQL templates that replace them for YugabyteDB",
 	)
 }
