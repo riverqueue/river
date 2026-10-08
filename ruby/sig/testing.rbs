@@ -1,0 +1,95 @@
+module RSpec
+  module Matchers
+    module Composable
+      def and: (untyped) -> untyped
+      def or: (untyped) -> untyped
+      private def surface_descriptions_in: (untyped) -> untyped
+      private def values_match?: (untyped, untyped) -> bool
+    end
+  end
+end
+
+module River
+  module Testing
+    class AssertionError < StandardError
+    end
+    class DrainLimitError < StandardError
+    end
+
+    JOB_ATTRIBUTES: Array[Symbol]
+
+    class ExecutionResult < Data
+      attr_reader id: Integer
+      attr_reader error: Exception?
+      attr_reader job: JobRow?
+      attr_reader outcome: Symbol
+      def self.new: (id: Integer, error: Exception?, job: JobRow?, outcome: Symbol) -> instance
+    end
+
+    def self.drain: (Client, queue: String | Symbol, ?max_jobs: Integer) -> Array[ExecutionResult]
+    def self.normalize_attributes: (Hash[Symbol, untyped]) -> Hash[Symbol, untyped]
+    def self.inserted_jobs: (Client, **untyped) ?{ () -> untyped } -> Array[JobRow]
+    def self.perform_job: (Client, Integer, ?allow_scheduled: bool) -> ExecutionResult
+    def self.jobs: (Client) -> Array[JobRow]
+
+    module Assertions
+      include Kernel
+      def assert_job_cancelled: (ExecutionResult) -> ExecutionResult
+      def assert_job_completed: (ExecutionResult) -> ExecutionResult
+      def assert_job_discarded: (ExecutionResult) -> ExecutionResult
+      def assert_job_inserted: (Client, **untyped) ?{ () -> untyped } -> JobRow
+      def assert_jobs_inserted: (Client, count: Integer, **untyped) ?{ () -> untyped } -> Array[JobRow]
+      def assert_no_jobs_inserted: (Client, **untyped) ?{ () -> untyped } -> Array[JobRow]
+      private def river_assert: (bool, String) -> untyped
+    end
+
+    interface _MinitestAssertions
+      def assert: (untyped, String) -> untyped
+    end
+
+    module Minitest : Object, _MinitestAssertions
+      include Assertions
+      private def river_assert: (bool, String) -> untyped
+    end
+
+    module RSpec
+      include Kernel
+      def have_job: (**untyped) -> JobMatcher
+      def insert_job: (Client, **untyped) -> InsertionMatcher
+      def insert_jobs: (Client, ?count: Integer, **untyped) -> InsertionMatcher
+
+      class JobMatcher
+        include ::RSpec::Matchers::Composable
+        @attributes: Hash[Symbol, untyped]
+        @comparison: Symbol
+        @count: Integer
+        @count_description: String
+        @rows: Array[JobRow]
+        def initialize: (Integer, Hash[Symbol, untyped]) -> void
+        def at_least: (Integer) -> self
+        def at_most: (Integer) -> self
+        def description: () -> String
+        def does_not_match?: (untyped) -> bool
+        def exactly: (Integer) -> self
+        def failure_message: () -> String
+        def failure_message_when_negated: () -> String
+        def matches?: (untyped) -> bool
+        def supports_block_expectations?: () -> bool
+        def supports_value_expectations?: () -> bool
+        private def candidates: (untyped) -> Array[JobRow]
+        private def matching_rows: (untyped) -> Array[JobRow]
+        private def set_count: (Integer, Symbol, String) -> self
+        private def verb: () -> String
+      end
+
+      class InsertionMatcher < JobMatcher
+        @client: Client
+        def initialize: (Client, Integer, Hash[Symbol, untyped]) -> void
+        def supports_block_expectations?: () -> bool
+        def supports_value_expectations?: () -> bool
+        private def candidates: (untyped) -> Array[JobRow]
+        private def verb: () -> String
+      end
+    end
+  end
+end

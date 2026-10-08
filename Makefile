@@ -28,6 +28,7 @@ generate: generate/fixtures
 generate: generate/java-migrations
 generate: generate/js-migrations
 generate: generate/migrations
+generate: generate/ruby-migrations
 generate: generate/rust-migrations
 generate: generate/sqlc
 
@@ -363,6 +364,7 @@ verify: ## Verify generated artifacts
 verify: verify/java-migrations
 verify: verify/js-migrations
 verify: verify/migrations
+verify: verify/ruby-migrations
 verify: verify/rust-migrations
 verify: verify/sqlc
 
@@ -387,3 +389,28 @@ verify/sqlc: ## Verify generated sqlc
 	cd riverdriver/riverdatabasesql/internal/dbsqlc && $(SQLC) diff
 	cd riverdriver/riverpgxv5/internal/dbsqlc && $(SQLC) diff
 	cd riverdriver/riversqlite/internal/dbsqlc && $(SQLC) diff
+
+# Ruby targets are separate from Go's default targets. Install gems with
+# `make -C ruby install` first.
+.PHONY: build/ruby lint/ruby test/ruby test/ruby/conformance typecheck/ruby
+build/ruby: ## Build the Ruby gems without publishing
+	$(MAKE) -C ruby build
+
+lint/ruby: ## Run Ruby style checks
+	$(MAKE) -C ruby lint
+
+test/ruby: ## Run Ruby core, Active Record, Sequel, and Rails tests
+	$(MAKE) -C ruby test
+
+test/ruby/conformance: ## Run Ruby tests that check Go-generated conformance fixtures
+	$(MAKE) -C ruby test/conformance
+
+typecheck/ruby: ## Check Ruby types with Steep
+	$(MAKE) -C ruby type-check
+
+.PHONY: generate/ruby-migrations verify/ruby-migrations
+generate/ruby-migrations: ## Sync database migrations to Ruby
+	ruby ruby/scripts/sync_migrations.rb
+
+verify/ruby-migrations: ## Verify Ruby migrations match the canonical migrations
+	ruby ruby/scripts/sync_migrations.rb --check

@@ -1,0 +1,402 @@
+class Thread
+  def self.handle_interrupt: [T] (Hash[Class, Symbol]) { () -> T } -> T
+end
+
+module River
+  FETCH_COOLDOWN_DEFAULT: Float
+  FETCH_POLL_INTERVAL_DEFAULT: Float
+  JOB_TIMEOUT_DEFAULT: Float
+  QUEUE_NAME_REGEX: Regexp
+  QUEUE_NUM_WORKERS_MAX: Integer
+
+  EVENT_JOB_CANCELLED: Symbol
+  EVENT_JOB_COMPLETED: Symbol
+  EVENT_JOB_FAILED: Symbol
+  EVENT_JOB_INTERRUPTED: Symbol
+  EVENT_JOB_SNOOZED: Symbol
+  EVENT_QUEUE_PAUSED: Symbol
+  EVENT_QUEUE_RESUMED: Symbol
+
+  Event: untyped
+  JobDeleteManyResult: untyped
+  JobListCursor: untyped
+  JobListResult: untyped
+  JobStatistics: untyped
+  QueueListResult: untyped
+  class Queue
+    def initialize: (String, Time, Hash[untyped, untyped], Time?, Time) -> void
+    def created_at: () -> Time
+    def metadata: () -> Hash[untyped, untyped]
+    def name: () -> String
+    def paused_at: () -> Time?
+    def updated_at: () -> Time
+  end
+
+  class Error < StandardError
+  end
+
+  class NotFoundError < Error
+  end
+
+  class JobRunningError < Error
+  end
+
+  class JobRowDecodeError < Error
+    attr_reader job: JobRow
+    def initialize: (JobRow, String) -> void
+  end
+
+  class JobCancelError < Error
+    @cause: untyped
+    attr_reader cause: untyped
+    def initialize: (?String, ?cause: untyped) -> void
+  end
+
+  class JobSnoozeError < Error
+    @duration: Float
+    attr_reader duration: Float
+    def initialize: (Numeric) -> void
+  end
+
+  class UnknownJobKindError < Error
+    @kind: untyped
+    attr_reader kind: untyped
+    def initialize: (untyped) -> void
+  end
+
+  class ClientNotStartedError < Error
+  end
+
+  class ClientAlreadyStartedError < Error
+  end
+
+  def self.job_cancel: (?(String | Exception)?) -> JobCancelError
+  def self.job_snooze: (Numeric) -> JobSnoozeError
+
+  class Workers
+    @workers: Hash[String, untyped]
+    def initialize: () -> void
+    def add: (untyped, ?untyped, ?aliases: Array[untyped]) -> self
+    def []: (String | Symbol) -> untyped
+    def fetch: (String | Symbol) -> untyped
+             | (String | Symbol, untyped) -> untyped
+             | (String | Symbol) { (String) -> untyped } -> untyped
+    def include?: (String | Symbol) -> bool
+    def kinds: () -> Array[String]
+  end
+
+  class Job
+    RESUMABLE_CURSOR_UNSET: Object
+    @client: Client
+    @logger: untyped
+    @metadata_updates: Hash[String, untyped]
+    @resumable_state: ResumableState
+    @row: JobRow
+    attr_reader client: Client
+    attr_reader row: JobRow
+    def initialize: (Client, JobRow) -> void
+    def __capture_resumable_metadata!: () -> untyped
+    def __finish_resumable_work!: () -> untyped
+    def __with_logger: [T] (untyped logger) { () -> T } -> T
+    def args: () -> untyped
+    def logger: () -> untyped
+    def metadata: () -> Hash[untyped, untyped]
+    def metadata_updates: () -> Hash[String, untyped]
+    def method_missing: (Symbol, *untyped, **untyped) -> untyped
+    def output=: (untyped) -> untyped
+    def resumable_checkpoint: (?cursor: untyped) -> JobRow
+    def respond_to_missing?: (Symbol, ?bool) -> bool
+    def resumable_set_cursor: (untyped) -> untyped
+    def resumable_step: (String | Symbol) { () -> untyped } -> untyped
+    def resumable_step_cursor: (String | Symbol, ?default: untyped) { (untyped) -> untyped } -> untyped
+    def update_metadata: (Hash[untyped, untyped]) -> self
+
+    private
+
+    def initialize_resumable_state: () -> ResumableState
+    def run_resumable_step: (String, cursor: bool, default: untyped) { () -> untyped } -> untyped
+                            | (String, cursor: bool, default: untyped) { (untyped) -> untyped } -> untyped
+  end
+
+  RESUMABLE_CURSOR_METADATA_KEY: String
+  RESUMABLE_STEP_METADATA_KEY: String
+
+  class ResumableState
+    attr_reader all_step_names: Hash[String, bool]
+    attr_accessor completed_step: String?
+    attr_reader cursors: Hash[String, untyped]
+    attr_accessor cursors_dirty: bool
+    attr_accessor resume_matched: bool
+    attr_reader resume_step: String?
+    attr_accessor step_name: String?
+    def initialize: (Hash[String, untyped]) -> void
+    def register: (String) -> bool
+  end
+
+  class DefaultClientRetryPolicy
+    MAX_DELAY: Rational
+    @random: untyped
+    def initialize: (?random: untyped) -> void
+    def next_retry: (untyped, ?untyped, ?now: Time) -> Time
+  end
+
+  class QueueConfig
+    @fetch_cooldown: Float?
+    @fetch_poll_interval: Float?
+    @max_workers: Integer
+    attr_reader fetch_cooldown: Float?
+    attr_reader fetch_poll_interval: Float?
+    attr_reader max_workers: Integer
+    def initialize: (max_workers: Integer, ?fetch_cooldown: Numeric?, ?fetch_poll_interval: Numeric?) -> void
+    def resolved_fetch_cooldown: (Config) -> Float
+    def resolved_fetch_poll_interval: (Config) -> Float
+  end
+
+  class Config
+    @cancelled_job_retention_period: Float?
+    @completed_job_retention_period: Float?
+    @discarded_job_retention_period: Float?
+    @error_handler: untyped
+    @fetch_cooldown: Float
+    @fetch_only_known_kinds: bool
+    @fetch_poll_interval: Float
+    @id: String
+    @job_timeout: Float?
+    @leader_election_disabled: bool
+    @logger: untyped
+    @maintenance_services: Array[untyped]
+    @periodic_jobs: Array[untyped]
+    @plugins: Array[untyped]
+    @queues: Hash[String, QueueConfig]
+    @retry_policy: untyped
+    @workers: Workers
+
+    attr_reader cancelled_job_retention_period: Float?
+    attr_reader completed_job_retention_period: Float?
+    attr_reader discarded_job_retention_period: Float?
+    attr_reader error_handler: untyped
+    attr_reader fetch_cooldown: Float
+    attr_reader fetch_only_known_kinds: bool
+    attr_reader fetch_poll_interval: Float
+    attr_reader id: String
+    attr_reader job_timeout: Float?
+    attr_reader leader_election_disabled: bool
+    attr_reader logger: untyped
+    attr_reader maintenance_services: Array[untyped]
+    attr_reader periodic_jobs: Array[untyped]
+    attr_reader plugins: Array[untyped]
+    attr_reader queues: Hash[String, QueueConfig]
+    attr_reader retry_policy: untyped
+    attr_reader workers: Workers
+
+    def initialize: (?queues: untyped, ?workers: untyped, ?id: untyped,
+      ?fetch_cooldown: untyped, ?fetch_only_known_kinds: bool, ?fetch_poll_interval: untyped, ?job_timeout: untyped,
+      ?leader_election_disabled: bool,
+      ?retry_policy: untyped, ?error_handler: untyped, ?plugins: untyped,
+      ?maintenance_services: untyped, ?periodic_jobs: untyped,
+      ?cancelled_job_retention_period: untyped, ?completed_job_retention_period: untyped,
+      ?discarded_job_retention_period: untyped, ?logger: untyped) -> void
+    def with: (**untyped) -> Config
+
+    private
+
+    def normalize_queues: (untyped) -> Hash[String, QueueConfig]
+    def retention: (untyped) -> Float?
+    def validate: () -> void
+  end
+
+  class Subscription
+    @closed: bool
+    @kinds: Array[Symbol]
+    @mutex: Mutex
+    @on_close: untyped
+    @queue: untyped
+    def initialize: (Array[Symbol | String], ?buffer_size: Integer, ?on_close: untyped) -> void
+    def close: () -> untyped
+    def each: () { (untyped) -> void } -> untyped
+            | () -> Enumerator[untyped, untyped]
+    def pop: (?bool) -> untyped
+    def publish: (untyped) -> untyped
+  end
+
+  class JobListParams
+    @after: untyped
+    @after_id: untyped
+    @ids: untyped
+    @kinds: untyped
+    @limit: Integer
+    @metadata: untyped
+    @priorities: untyped
+    @queues: untyped
+    @sort_by: Symbol
+    @sort_order: Symbol
+    @states: untyped
+    @tags_all: untyped
+    @tags_any: untyped
+    attr_reader after_id: untyped
+    attr_reader after: untyped
+    attr_reader ids: untyped
+    attr_reader kinds: untyped
+    attr_reader limit: Integer
+    attr_reader metadata: untyped
+    attr_reader priorities: untyped
+    attr_reader queues: untyped
+    attr_reader sort_by: Symbol
+    attr_reader sort_order: Symbol
+    attr_reader states: untyped
+    attr_reader tags_all: untyped
+    attr_reader tags_any: untyped
+    def initialize: (?after: untyped, ?after_id: untyped, ?ids: untyped, ?kinds: untyped, ?limit: untyped,
+      ?priorities: untyped, ?metadata: untyped, ?queues: untyped, ?sort_by: untyped,
+      ?sort_order: untyped, ?states: untyped, ?tags_all: untyped, ?tags_any: untyped) -> void
+    def filters?: () -> bool
+  end
+
+  class JobUpdateParams
+    UNSET: Object
+    @attempt: untyped
+    @attempted_at: untyped
+    @attempted_by: untyped
+    @errors: untyped
+    @finalized_at: untyped
+    @max_attempts: untyped
+    @metadata: untyped
+    @state: untyped
+    attr_reader attempt: untyped
+    attr_reader attempted_at: untyped
+    attr_reader attempted_by: untyped
+    attr_reader errors: untyped
+    attr_reader finalized_at: untyped
+    attr_reader max_attempts: untyped
+    attr_reader metadata: untyped
+    attr_reader state: untyped
+    def initialize: (?attempt: untyped, ?attempted_at: untyped, ?attempted_by: untyped,
+      ?errors: untyped, ?finalized_at: untyped, ?max_attempts: untyped,
+      ?metadata: untyped, ?state: untyped) -> void
+    def each: () { (Symbol, untyped) -> void } -> untyped
+            | () -> Enumerator[[Symbol, untyped], untyped]
+  end
+
+  class PeriodicJob
+    attr_reader constructor: untyped
+    attr_reader id: String?
+    attr_reader run_on_start: bool
+    attr_reader schedule: untyped
+    def initialize: (schedule: untyped, ?constructor: untyped, ?id: (String | Symbol)?, ?run_on_start: bool) ?{ () -> untyped } -> void
+    def next_at: (Time) -> Time
+  end
+
+  class PeriodicCron
+    @cron: untyped
+    @interval: Integer?
+    def initialize: (String, ?timezone: String) -> void
+    def next: (Time) -> Time
+    private
+    def parse_interval: (String) -> Integer
+  end
+
+  class PeriodicInterval
+    @seconds: Float
+    def initialize: (Numeric) -> void
+    def next: (Time) -> Time
+  end
+
+  class PeriodicJobBundle
+    @enabled: bool
+    @jobs: Hash[Integer, untyped]
+    @mutex: Mutex
+    @next_handle: Integer
+    @wake: untyped
+    def initialize: (Array[PeriodicJob], wake: untyped, ?enabled: bool) -> void
+    def add: (PeriodicJob) -> Integer
+    def add_many: (Array[PeriodicJob]) -> Array[Integer]
+    def clear: () -> self
+    def due: (Time) ?{ (PeriodicJob, StandardError) -> void } -> Array[PeriodicJob]
+    def empty?: () -> bool
+    def remove: (Integer) -> PeriodicJob?
+    def remove_by_id: (untyped) -> bool
+  end
+
+  class ClientRuntime
+    class Interrupted < StandardError
+    end
+
+    class JobTiming
+      attr_accessor finished_monotonic: Float
+      attr_reader queue_wait_duration: Float
+      attr_reader started_at: Time
+      attr_reader started_monotonic: Float
+
+      def initialize: (Time, Float, Time) -> void
+    end
+
+    @client: Client
+    @condition: ConditionVariable
+    @config: Config
+    @driver: _Driver
+    @maintenance_thread: Thread?
+    @mutex: Mutex
+    @periodic_jobs: PeriodicJobBundle
+    @performing: bool?
+    @producer_threads: Hash[String, Thread]
+    @queue_configs: Hash[String, QueueConfig]
+    @removed_queues: Hash[String, bool]
+    @running: Hash[Integer, untyped]
+    @started: bool
+    @stop_requested: bool
+    @stopped: bool
+    @subscriptions: Array[Subscription]
+    @threads: Array[Thread]
+
+    attr_reader periodic_jobs: PeriodicJobBundle
+    def initialize: (Client, _Driver, Config) -> void
+    def finish_claimed: (JobRow, ?Exception?) -> untyped
+    def healthy?: () -> bool
+    def interrupt_workers: () -> untyped
+    def perform_job: (Integer, ?allow_scheduled: bool) -> untyped
+    def publish_queue: (Symbol, Queue) -> untyped
+    def queue_add: (String, QueueConfig | Integer) -> QueueConfig
+    def queue_remove: (String) -> bool
+    def start: () -> self
+    def started?: () -> bool
+    def stop: (?cancel: bool, ?wait: bool) -> self
+    def stopped?: () -> bool
+    def subscribe: (Array[Symbol | String], ?buffer_size: Integer) -> Subscription
+    def wake: () -> untyped
+
+    private
+
+    def begin_work: (Integer) -> untyped
+    def check_remote_cancellations: (String) -> untyped
+    def error_handler_cancel?: (Exception, Job) -> bool
+    def execute: (JobRow) -> untyped
+    def finish_failed: (JobRow, Job, Exception, JobTiming, ?cancelled: bool, ?worker: untyped) -> untyped
+    def finish_interrupted: (JobRow, Job, JobTiming) -> untyped
+    def finish_snoozed: (JobRow, Job, JobSnoozeError, JobTiming) -> untyped
+    def finish_work: (Integer) -> untyped
+    def invoke_plugins: (Symbol, *untyped) -> Array[untyped]
+    def invoke_worker: (untyped, Job) -> untyped
+    def launch: (JobRow) -> untyped
+    def maintenance_loop: () -> untyped
+    def monotonic_now: () -> Float
+    def next_retry: (JobRow, Exception, Time, ?worker: untyped) -> Time
+    def next_snooze_count: (untyped) -> Integer
+    def retry_allowed?: (untyped, Job, Exception) -> untyped
+    def perform_work: (untyped, Job) -> untyped
+    def periodic_jobs_changed: () -> untyped
+    def producer_loop: (String, QueueConfig) -> untyped
+    def publish: (Symbol, JobRow, JobTiming) -> untyped
+    def queue_stopping?: (String) -> bool
+    def remove_subscription: (Subscription) -> Subscription?
+    def rescue_job?: (JobRow, Time) -> bool
+    def resolve_worker: (String) -> untyped
+    def run_periodic: (Time) -> untyped
+    def running_count: (String) -> Integer
+    def start_maintenance: () -> untyped
+    def start_producer: (String, QueueConfig) -> untyped
+    def stopping?: () -> bool
+    def wait: (Float | Integer) -> untyped
+    def wait_for_running_jobs: (String, Float | Integer) -> untyped
+    def worker_timeout: (untyped, Job) -> Float?
+  end
+end

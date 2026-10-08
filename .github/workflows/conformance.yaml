@@ -84,3 +84,11 @@ jobs:
 
       - name: Java fixture tests
         run: make test/java/conformance
+
+      - uses: ruby/setup-ruby@v1
+        with:
+          working-directory: ruby
+          bundler-cache: true
+
+      - name: Ruby fixture tests
+        run: make test/ruby/conformance

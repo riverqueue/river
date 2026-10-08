@@ -27,8 +27,8 @@ const conformanceModulePath = "github.com/riverqueue/river/conformance"
 
 // disallowedPathPattern matches paths, relative to a module's root, that must
 // never be published: fixture and testdata directories, JSON files, and the
-// conformance, Java, JavaScript, and Rust trees.
-var disallowedPathPattern = regexp.MustCompile(`(^|/)(fixtures?|testdata)/|\.json$|^(conformance|java|js|rust)/`)
+// conformance, Java, JavaScript, Ruby, and Rust trees.
+var disallowedPathPattern = regexp.MustCompile(`(^|/)(fixtures?|testdata)/|\.json$|^(conformance|java|js|ruby|rust)/`)
 
 func main() {
 	if len(os.Args) != 2 {

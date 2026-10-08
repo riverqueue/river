@@ -1,0 +1,8 @@
+module River
+  module UniqueArgs
+    def self.encode: (String json, bool? | Array[String | Symbol | Array[String | Symbol]] fields) -> String
+    def self.members: (String json) -> Hash[String, String]
+    def self.encode_object: (Hash[String, untyped] object) -> String
+    def self.encode_key: (String key) -> String
+  end
+end

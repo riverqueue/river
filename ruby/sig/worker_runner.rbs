@@ -1,0 +1,22 @@
+module Process
+  def self.exit!: (?Integer) -> bot
+end
+
+module River
+  module CLI
+    def self.run: (Array[String], ?err: untyped, ?out: untyped) -> Integer
+    def self.worker: (Array[String], out: untyped) -> Integer
+  end
+
+  class WorkerRunner
+    @client: Client
+    @finalization_timeout: Float
+    @out: untyped
+    @stop_timeout: Float
+    def initialize: (Client, ?finalization_timeout: Numeric, ?out: untyped, ?stop_timeout: Numeric) -> void
+    def run: () -> Integer
+    private def log: (String) -> void
+    private def monotonic_now: () -> Float
+    private def supervise: (IO) -> Integer
+  end
+end

@@ -1,0 +1,15 @@
+# frozen_string_literal: true
+
+source "https://rubygems.org"
+gemspec
+
+gem "riverqueue", path: "../.."
+gem "riverqueue-activerecord", path: "../../driver/riverqueue-activerecord"
+%w[actionmailer activejob activerecord railties].each do |name|
+  gem name, ENV.fetch("RAILS_VERSION", ">= 7.2"), "< 8.2"
+end
+gem "pg"
+gem "rspec-core"
+gem "rspec-expectations"
+gem "sqlite3"
+gem "standard"

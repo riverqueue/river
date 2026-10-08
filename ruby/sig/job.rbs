@@ -1,0 +1,74 @@
+module River
+  JOB_STATE_AVAILABLE: "available"
+  JOB_STATE_CANCELLED: "cancelled"
+  JOB_STATE_COMPLETED: "completed"
+  JOB_STATE_DISCARDED: "discarded"
+  JOB_STATE_PENDING: "pending"
+  JOB_STATE_RETRYABLE: "retryable"
+  JOB_STATE_RUNNING: "running"
+  JOB_STATE_SCHEDULED: "scheduled"
+
+  type jobStateAll = "available" | "cancelled" | "completed" | "discarded" | "pending" | "retryable" | "running" | "scheduled"
+  type jobStateInitial = "available" | "pending" | "scheduled"
+  type jobStateInitialInput = jobStateInitial | :available | :pending | :scheduled
+  type jobStateInput = jobStateAll | :available | :cancelled | :completed | :discarded | :pending | :retryable | :running | :scheduled
+
+  interface _JobArgs
+    def is_a?: (Class) -> bool
+    def kind: () -> (String | Symbol)
+    def respond_to?: (Symbol) -> bool
+    def to_json: () -> String
+  end
+
+  interface _JobArgsWithInsertOpts
+    include _JobArgs
+
+    def insert_opts: () -> InsertOpts?
+  end
+
+  type jobArgs = _JobArgs  | _JobArgsWithInsertOpts
+
+  class JobArgsHash
+    @hash: Hash[String | Symbol, untyped]
+    @kind: String
+
+    attr_reader kind: String
+
+    def initialize: (String | Symbol kind, Hash[String | Symbol, untyped] hash) -> void
+    def to_json: () -> String
+  end
+
+  class JobRow
+    attr_accessor __decode_error: JobRowDecodeError?
+    attr_accessor args: Hash[String, untyped]
+    attr_accessor attempt: Integer
+    attr_accessor attempted_at: Time?
+    attr_accessor attempted_by: Array[String]?
+    attr_accessor created_at: Time
+    attr_accessor errors: Array[AttemptError]?
+    attr_accessor finalized_at: Time?
+    attr_accessor id: Integer
+    attr_accessor kind: String
+    attr_accessor max_attempts: Integer
+    attr_accessor metadata: Hash[String, untyped]
+    attr_accessor priority: Integer
+    attr_accessor queue: String
+    attr_accessor scheduled_at: Time
+    attr_accessor state: jobStateAll
+    attr_accessor tags: Array[String]?
+    attr_accessor unique_key: String?
+    attr_accessor unique_states: Array[jobStateAll]?
+
+    def initialize: (id: Integer, args: Hash[String, untyped], attempt: Integer, ?attempted_at: Time?, ?attempted_by: Array[String]?, created_at: Time, ?errors: Array[AttemptError]?, ?finalized_at: Time?, kind: String, max_attempts: Integer, metadata: Hash[String, untyped], priority: Integer, queue: String, scheduled_at: Time, state: jobStateAll, ?tags: Array[String]?, ?unique_key: String?, ?unique_states: Array[jobStateAll]?) -> void
+  end
+
+  class AttemptError
+    attr_accessor at: Time
+    attr_accessor attempt: Integer
+    attr_accessor error: String
+    attr_accessor trace: String
+
+    def initialize: (at: Time, attempt: Integer, error: String, trace: String) -> void
+    def to_h: () -> Hash[Symbol, untyped]
+  end
+end

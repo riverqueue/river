@@ -1,0 +1,10 @@
+AllCops:
+  NewCops: disable
+  Exclude:
+    - ".ruby-lsp/**/*"
+    - "**/coverage/**/*"
+    - "**/vendor/**/*"
+
+Style/FrozenStringLiteralComment:
+  Enabled: true
+  EnforcedStyle: always

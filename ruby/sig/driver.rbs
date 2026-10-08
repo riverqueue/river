@@ -1,0 +1,172 @@
+module River
+  interface _Driver
+    def respond_to?: (Symbol, ?bool) -> bool
+    def init_driver: () -> void
+    def migration_backend: () -> Symbol
+    def migration_connection: [A] () { (untyped) -> A } -> A
+    def advisory_lock: (Integer) -> void
+    def job_cancel: (Integer, ?now: Time) -> JobRow?
+    def job_delete: (Integer) -> JobRow?
+    def job_delete_finalized: (**untyped) -> Integer
+    def job_delete_if_running: (Integer) -> (bool | :cancelled)
+    def job_delete_many: (JobListParams) -> Array[JobRow]
+    def job_get_available: (queue: String, max: Integer, attempted_by: String, ?kinds: Array[String]?, ?now: Time) -> Array[JobRow]
+    def job_claim: (id: Integer, attempted_by: String, ?allow_scheduled: bool, ?now: Time) -> JobRow?
+    def job_get_cancelled_ids: (Array[Integer]) -> Array[Integer]
+    def job_complete: (id: Integer, finalized_at: Time, ?metadata: Hash[untyped, untyped]?, ?now: Time) -> (JobRow | :cancelled)?
+    def job_get_by_kind_and_unique_properties: (Driver::JobGetByKindAndUniquePropertiesParam) -> JobRow?
+    def job_insert: (Driver::JobInsertParams) -> [JobRow, bool]
+    def job_insert_many: (Array[Driver::JobInsertParams]) -> Array[[JobRow, bool]]
+    def job_metadata_merge: (Integer, Hash[untyped, untyped]) -> JobRow?
+    def job_rescue_stuck: (**untyped) -> Integer
+    def job_retry: (Integer, ?now: Time) -> JobRow?
+    def job_schedule: (?now: Time, ?max: Integer) -> Integer
+    def job_set_state_if_running: (**untyped) -> JobRow?
+    def job_update: (Integer, JobUpdateParams) -> JobRow?
+    def leader_acquire: (String, ?ttl: Integer, ?now: Time) -> bool
+    def leader_release: (String) -> untyped
+    def leader_renew: (String, ?ttl: Integer, ?now: Time) -> bool
+    def notification_delete_before: (horizon: Time, ?max: Integer) -> Integer
+    def queue_get: (String) -> Queue?
+    def queue_list: (?max: Integer) -> Array[Queue]
+    def queue_pause: (String, ?now: Time) -> Array[Queue]
+    def queue_resume: (String, ?now: Time) -> Array[Queue]
+    def queue_update: (String, metadata: Hash[untyped, untyped], ?now: Time) -> Queue?
+    def queue_upsert: (String, ?metadata: Hash[untyped, untyped], ?now: Time) -> Queue?
+    def transaction: [T] () { () -> T } -> T
+
+    # this set of methods is used only in tests
+    def advisory_lock_try: (Integer) -> bool
+    def job_get_by_id: (Integer) -> JobRow?
+    def job_list: (?JobListParams | :all) -> Array[JobRow]
+    def rollback_exception: -> Exception
+  end
+
+  module Driver
+    class JobRowDecoder
+      ZERO_TIME: Time
+      @errors: Array[String]
+      def self.attempt_error: (untyped) -> AttemptError
+      def self.error_time: (untyped) -> Time
+      def self.error_integer: (untyped) -> Integer
+      def self.error_string: (untyped) -> String
+      def initialize: () -> void
+      def json: (Symbol, untyped, ?type: Class?, ?strings: bool, ?default: untyped) -> untyped
+      def decoded: (Symbol, untyped, ?type: Class?, ?strings: bool, ?default: untyped) -> untyped
+      def finish: (JobRow) -> JobRow
+    end
+
+    class PostgresCapabilities
+      attr_reader supports_listen_notify: bool
+      attr_reader unique_insert_mode: :metadata_nonce | :returning_old | :xmax
+      attr_reader unique_insert_sql: String
+      def initialize: (product: String, version_num: Integer, yb_listen_notify_enabled: bool) -> void
+
+      class Cache
+        @mutex: Mutex
+        @values: Hash[untyped, PostgresCapabilities]
+        def initialize: () -> void
+        def fetch: (untyped) { () -> PostgresCapabilities } -> PostgresCapabilities
+      end
+    end
+
+    class JobGetByKindAndUniquePropertiesParam
+      attr_accessor created_at: [Time, Time]?
+      attr_accessor encoded_args: String?
+      attr_accessor kind: String
+      attr_accessor queue: String?
+      attr_accessor state: Array[jobStateAll]?
+
+      def initialize: (kind: String, ?created_at: [Time, Time]?, ?encoded_args: String?, ?queue: String?, ?state: Array[jobStateAll]?) -> void
+    end
+
+    class JobInsertParams
+      attr_accessor args: untyped
+      attr_accessor encoded_args: String
+      attr_accessor kind: String
+      attr_accessor max_attempts: Integer
+      attr_accessor metadata: Hash[untyped, untyped]
+      attr_accessor priority: Integer
+      attr_accessor queue: String
+      attr_accessor scheduled_at: Time?
+      attr_accessor state: jobStateAll
+      attr_accessor tags: Array[String]?
+      attr_accessor unique_key: String?
+      attr_accessor unique_states: String?
+
+      def initialize: (?args: untyped, encoded_args: String, kind: String, max_attempts: Integer, ?metadata: Hash[untyped, untyped], priority: Integer, queue: String, scheduled_at: Time?, state: jobStateAll, tags: Array[String]?, ?unique_key: String?, ?unique_states: String?) -> void
+    end
+
+    module Runtime
+      def runtime_read_job: (untyped) -> untyped
+      def runtime_decode_sqlite_job: (untyped) -> JobRow
+      def runtime_decode_postgres_job: (untyped) -> JobRow
+      @postgres_capabilities_cache: PostgresCapabilities::Cache
+      def init_driver: () -> void
+      def postgres_capabilities: () -> PostgresCapabilities
+      def postgres_notify_insert: (Array[JobInsertParams]) -> void
+      def job_get_cancelled_ids: (Array[Integer]) -> Array[Integer]
+      def job_complete: (id: untyped, finalized_at: untyped, ?metadata: untyped, ?now: untyped) -> untyped
+      def job_cancel: (untyped, ?now: untyped) -> untyped
+      def job_delete: (untyped) -> untyped
+      def job_delete_finalized: (retention: untyped, ?now: untyped, ?max: untyped) -> untyped
+      def job_delete_if_running: (untyped) -> untyped
+      def job_delete_many: (untyped) -> untyped
+      def job_get_available: (queue: untyped, max: untyped, attempted_by: untyped, ?kinds: untyped, ?now: untyped) -> untyped
+      def job_claim: (id: untyped, attempted_by: untyped, ?allow_scheduled: untyped, ?now: untyped) -> untyped
+      private def runtime_claim_jobs: (untyped, untyped, untyped, untyped) -> untyped
+      def job_list: (?untyped) -> untyped
+      def job_metadata_merge: (untyped, untyped) -> untyped
+      def job_rescue_stuck: (horizon: untyped, retry_policy: untyped, ?now: untyped, ?max: untyped, ?logger: untyped, ?rescue_if: untyped) -> untyped
+      def job_retry: (untyped, ?now: untyped) -> untyped
+      def job_schedule: (?now: untyped, ?max: untyped) -> untyped
+      def job_set_state_if_running: (id: untyped, state: untyped, ?now: untyped, ?attempt: untyped, ?error: untyped, ?finalized_at: untyped, ?metadata: untyped, ?scheduled_at: untyped) -> untyped
+      def job_update: (untyped, untyped) -> untyped
+      def leader_acquire: (untyped, ?ttl: untyped, ?now: untyped) -> untyped
+      def leader_release: (untyped) -> untyped
+      def leader_renew: (untyped, ?ttl: untyped, ?now: untyped) -> untyped
+      def notification_delete_before: (horizon: untyped, ?max: untyped) -> untyped
+      def queue_get: (untyped) -> untyped
+      def queue_list: (?max: untyped) -> untyped
+      def queue_pause: (untyped, ?now: untyped) -> untyped
+      def queue_resume: (untyped, ?now: untyped) -> untyped
+      def queue_update: (untyped, metadata: untyped, ?now: untyped) -> untyped
+      def queue_upsert: (untyped, ?metadata: untyped, ?now: untyped) -> untyped
+
+      private
+
+      def job_get_by_id: (untyped) -> untyped
+      def runtime_append_error: (untyped) -> untyped
+      def runtime_cancel_attempted: () -> untyped
+      def runtime_connection_pool: () -> untyped
+      def runtime_cursor_clause: (untyped) -> String
+      def runtime_execute: (String) -> untyped
+      def runtime_in_clause: (untyped, untyped) -> untyped
+      def runtime_job_list_without_params: () -> untyped
+      def runtime_job_list: (JobListParams, ?for_delete: bool) -> Array[JobRow]
+      def runtime_job_rows: (String) -> untyped
+      def runtime_json: (untyped) -> untyped
+      def runtime_merge_metadata: (untyped) -> untyped
+      def runtime_metadata_equals: (untyped, untyped) -> untyped
+      def runtime_nullable_time: (untyped) -> untyped
+      def runtime_notify: (String, untyped) -> untyped
+      def sqlite_insert_nonces: (Array[JobInsertParams]) -> Array[String]
+      def runtime_parse_json: (untyped) -> untyped
+      def runtime_parse_time: (untyped) -> untyped
+      def runtime_postgres?: () -> bool
+      def runtime_query_rows: (String) -> untyped
+      def runtime_queue_columns: () -> untyped
+      def runtime_queue_from_row: (untyped) -> untyped
+      def runtime_quote: (untyped) -> String
+      def runtime_rescue_retry: (untyped, untyped, untyped, untyped, untyped) -> Time
+      def runtime_returning_ids: (untyped) -> untyped
+      def runtime_state: (untyped) -> untyped
+      def runtime_tag_contains: (untyped) -> untyped
+      def runtime_time: (untyped) -> untyped
+      def runtime_unique_violation_class: () -> singleton(Exception)
+      def runtime_update_value: (untyped, untyped) -> untyped
+      def runtime_value: (untyped, untyped) -> untyped
+      def transaction: () { () -> untyped } -> untyped
+    end
+  end
+end

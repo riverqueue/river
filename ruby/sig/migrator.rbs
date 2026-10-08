@@ -1,0 +1,44 @@
+class Gem::Specification
+  def self.find_all_by_name: (String, *untyped) -> Array[Gem::Specification]
+end
+
+module River
+  module MigrationCLI
+    def self.detect_driver: () -> String
+    def self.run: (Array[String], ?err: untyped, ?out: untyped) -> Integer
+  end
+  class Migrator
+    class Migration < Data
+      attr_reader version: Integer
+      attr_reader name: String
+      attr_reader sql_up: String
+      attr_reader sql_down: String
+      def self.new: (Integer, untyped, String, String) -> instance
+    end
+    class Status < Data
+      attr_reader version: Integer
+      attr_reader name: String
+      attr_reader applied: bool
+      def self.new: (Integer, String, bool) -> instance
+    end
+    @backend: Symbol
+    @connection: untyped
+    @driver: untyped
+    @line: String
+    @migrations: Array[Migration]
+    @mutex: Mutex
+    @requested_schema: untyped
+    @schema: untyped
+    attr_reader migrations: Array[Migration]
+    def initialize: (untyped, ?line: String, ?migrations_path: String, ?schema: untyped) -> void
+    def migrate: (?direction: Symbol, ?dry_run: bool, ?steps: untyped, ?target: untyped) -> Array[Migration]
+    def status: () -> Array[Status]
+    private
+    def execute: (String) -> untyped
+    def existing_versions: () -> Array[Integer]
+    def line_column?: () -> bool
+    def query: (String) -> untyped
+    def session: [A] (?lock: bool) { () -> A } -> A
+    def table: () -> String
+  end
+end

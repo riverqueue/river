@@ -1,0 +1,8 @@
+module River
+  class UniqueBitmask
+    def self.from_states: (Array[jobStateAll]) -> String
+    def self.to_states: (Integer) -> Array[jobStateAll]
+
+    JOB_STATE_BIT_POSITIONS: Hash[jobStateAll, Integer]
+  end
+end

@@ -1,0 +1,8 @@
+#!/usr/bin/env ruby
+# frozen_string_literal: true
+
+require_relative "../config/environment"
+require "riverqueue-rails"
+
+abort "Usage: bin/jobs start" unless ARGV == ["start"]
+exit River::Rails::Runner.start
