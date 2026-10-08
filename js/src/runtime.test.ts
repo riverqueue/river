@@ -3425,7 +3425,7 @@ describe("Client runtime", () => {
     driver.claim = [
       {
         ...fakeJob(),
-        metadata: { snoozes: "2", user: true },
+        metadata: { snoozes: 2, user: true },
       },
     ];
     const definition = defineJob({ kind: "test" });

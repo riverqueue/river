@@ -10,7 +10,8 @@ import { toMilliseconds } from "../internal/duration.js";
 import type { JobRow } from "../job.js";
 import {
   exactJsonNumber,
-  isExactJsonNumber,
+  isJsonNumber,
+  jsonNumberToBigInt,
   type ExactJsonNumber,
   type JsonValue,
 } from "../json.js";
@@ -165,54 +166,23 @@ export function completionCommand(
 }
 
 /**
- * The snooze count after one more snooze, like River for Go's executor,
- * which writes `int(gjson.GetBytes(metadata, "snoozes").Int()) + 1`: `true`
- * counts as 1, a decimal integer string as its value, a number truncated
- * toward zero, and anything else as 0, with int64 wraparound.
+ * Increment an integer counter, restarting missing, invalid, or overflowing
+ * counters at one. Invalid-value recovery is not a cross-language contract.
  */
 function nextSnoozeCount(
   value: JsonValue | undefined
 ): ExactJsonNumber | number {
-  const next = BigInt.asIntN(64, gjsonInt(value) + 1n);
-  return next >= BigInt(Number.MIN_SAFE_INTEGER) &&
-    next <= BigInt(Number.MAX_SAFE_INTEGER)
+  let count: bigint;
+  try {
+    count = isJsonNumber(value) ? jsonNumberToBigInt(value) : 0n;
+  } catch {
+    count = 0n;
+  }
+  const next =
+    count >= 0n && count < 9_223_372_036_854_775_807n ? count + 1n : 1n;
+  return next <= BigInt(Number.MAX_SAFE_INTEGER)
     ? Number(next)
     : exactJsonNumber(next.toString(10));
-}
-
-/** gjson's `Result.Int()` for a JSON value. */
-function gjsonInt(value: JsonValue | undefined): bigint {
-  if (value === true) return 1n;
-  if (typeof value === "string") return gjsonParseInt(value) ?? 0n;
-  if (typeof value !== "number" && !isExactJsonNumber(value)) return 0n;
-  const raw = typeof value === "number" ? String(value) : value.rawJSON;
-  const float = typeof value === "number" ? value : Number(value.rawJSON);
-  // gjson's safeInt, then its parse of the raw integer text, then Go's
-  // float conversion, which saturates out of range on arm64.
-  if (Math.abs(float) <= Number.MAX_SAFE_INTEGER) {
-    return BigInt(Math.trunc(float));
-  }
-  const parsed = gjsonParseInt(raw);
-  if (parsed !== undefined) return parsed;
-  if (Number.isNaN(float)) return 0n;
-  if (float >= 2 ** 63) return BigInt.asIntN(64, (1n << 63n) - 1n);
-  if (float <= -(2 ** 63)) return -(1n << 63n);
-  return BigInt(Math.trunc(float));
-}
-
-/**
- * gjson's `parseInt`: an optional `-` then decimal digits only, wrapping
- * like int64 arithmetic; undefined for anything else.
- */
-function gjsonParseInt(text: string): bigint | undefined {
-  const negative = text.startsWith("-");
-  const digits = negative ? text.slice(1) : text;
-  if (!/^[0-9]+$/.test(digits)) return undefined;
-  let result = 0n;
-  for (const digit of digits) {
-    result = BigInt.asIntN(64, result * 10n + BigInt(digit));
-  }
-  return negative ? BigInt.asIntN(64, -result) : result;
 }
 
 /** The event announcing a committed completion, by the job's new state. */

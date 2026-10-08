@@ -1480,6 +1480,40 @@ func TestJobExecutor_Execute(t *testing.T) {
 	})
 }
 
+func TestNextSnoozeCount_InvalidCounters(t *testing.T) {
+	t.Parallel()
+
+	for _, testCase := range []struct {
+		name  string
+		value string
+	}{
+		{name: "Array", value: `[3]`},
+		{name: "Boolean", value: `true`},
+		{name: "ExcessiveInteger", value: `9223372036854775808`},
+		{name: "ExcessiveNumber", value: `1e400`},
+		{name: "ExponentString", value: `"1e3"`},
+		{name: "FractionalNumber", value: `2.9`},
+		{name: "FractionalString", value: `"4.5"`},
+		{name: "MaxInteger", value: `9223372036854775807`},
+		{name: "NegativeInteger", value: `-2`},
+		{name: "Null", value: `null`},
+		{name: "NumericString", value: `"4"`},
+		{name: "Object", value: `{"count":3}`},
+		{name: "String", value: `"abc"`},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+
+			metadata := []byte(`{"snoozes":` + testCase.value + `}`)
+			require.NotPanics(t, func() {
+				// The return type guarantees an integer. Invalid-value coercion
+				// is intentionally not pinned to a particular result.
+				_ = NextSnoozeCount(metadata)
+			})
+		})
+	}
+}
+
 //
 // *Func types are copied from the top level River package because they can't be
 // accessed from here.
