@@ -1,0 +1,41 @@
+{
+  "reference_revision": "eb16420fed22ce479f4843f0accd4c4bfba0885e",
+  "checks": {
+    "postgres": {
+      "passed": true,
+      "summary": [
+        "ok  \tgithub.com/riverqueue/river/conformance/harness\t96.844s"
+      ]
+    },
+    "sqlite": {
+      "passed": true,
+      "summary": [
+        "ok  \tgithub.com/riverqueue/river/conformance/harness\t43.905s"
+      ]
+    },
+    "performance": {
+      "passed": true,
+      "summary": [
+        "ok  \tgithub.com/riverqueue/river/conformance/harness\t7.736s"
+      ]
+    },
+    "multi": {
+      "passed": true,
+      "summary": [
+        "ok  \tgithub.com/riverqueue/river/conformance/harness\t42.020s"
+      ]
+    },
+    "multi-soak": {
+      "passed": true,
+      "summary": [
+        "ok  \tgithub.com/riverqueue/river/conformance/harness\t306.372s"
+      ]
+    },
+    "sqlite-soak": {
+      "passed": true,
+      "summary": [
+        "ok  \tgithub.com/riverqueue/river/conformance/harness\t447.344s"
+      ]
+    }
+  }
+}

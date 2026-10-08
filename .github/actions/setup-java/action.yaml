@@ -1,0 +1,17 @@
+name: Set up Java workspace
+description: Install a supported JDK and cache Maven dependencies for the Java workspace.
+
+inputs:
+  java-version:
+    default: "25"
+    description: JDK version to use.
+
+runs:
+  using: composite
+  steps:
+    - uses: actions/setup-java@v6
+      with:
+        distribution: temurin
+        java-version: ${{ inputs.java-version }}
+        cache: maven
+        cache-dependency-path: "java/**/pom.xml"

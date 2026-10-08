@@ -1,0 +1,8 @@
+001_create_river_migration
+002_initial_schema
+003_river_job_tags_non_null
+004_pending_and_more
+005_migration_unique_client
+006_bulk_unique
+007_notification_outbox_sqlite_jsonb_and_sql_cleanup
+008_job_id_autoincrement
