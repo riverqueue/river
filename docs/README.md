@@ -85,6 +85,19 @@ if err := riverClient.Start(ctx); err != nil {
 `Workers` can also be omitted, but it's better to include it so River can check
 that inserted job kinds have a worker that can run them.
 
+### Sharing a schema between clients
+
+By default, clients using the same River tables elect a single leader to run
+maintenance services across all queues. `Queues` controls which queues a client
+works, but does not limit the leader's maintenance scope. For example, the job
+rescuer can discard a stuck job from another queue if its kind is not registered
+in the leader's `Workers` bundle.
+
+Clients sharing a schema should register all job kinds that may need rescue,
+even when they work different queues. For independent applications with separate
+worker registries, use separate Postgres schemas and set `Config.Schema` on each
+client. Migrate each schema before starting its clients.
+
 ### Stopping
 
 The client should also be stopped on program shutdown. There's a number of ways
