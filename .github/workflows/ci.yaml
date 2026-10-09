@@ -379,7 +379,7 @@ jobs:
     name: lint
     runs-on: ubuntu-latest
     env:
-      GOLANGCI_LINT_VERSION: v2.13.1
+      GOLANGCI_LINT_VERSION: v2.14.0
     permissions:
       contents: read
       # allow read access to pull request. Use with `only-new-issues` option.
@@ -425,7 +425,7 @@ jobs:
       - name: Setup sqlc
         uses: sqlc-dev/setup-sqlc@v5
         with:
-          sqlc-version: "1.31.0"
+          sqlc-version: "1.31.1"
 
       - name: Verify migrations match
         run: |
