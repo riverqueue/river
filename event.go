@@ -11,7 +11,10 @@ import (
 type EventKind string
 
 const (
-	// EventKindJobCancelled occurs when a job is cancelled.
+	// EventKindJobCancelled occurs when a client finishes working a job in the
+	// cancelled state. Cancelling a non-running job with Client.JobCancel or
+	// Client.JobCancelTx updates it directly without emitting this event;
+	// inspect the returned JobRow to observe that cancellation.
 	EventKindJobCancelled EventKind = "job_cancelled"
 
 	// EventKindJobCompleted occurs when a job is completed.
