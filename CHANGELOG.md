@@ -17,6 +17,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Fixed periodic jobs with `UniqueOpts.ByPeriod` using their insertion time instead of their scheduled occurrence to compute the unique key. Jobs inserted just before a period boundary now use the correct period, preventing skipped occurrences and duplicate inserts during leader handoffs. Explicit constructor schedules still take precedence. [PR #1427](https://github.com/riverqueue/river/pull/1427).
 - Fixed `rivertest.Worker` to honor a configured `Config.JobStuckThreshold` for stuck job detection. Previously, it always used an internal 5 second threshold, so the `Job appears to be stuck` log line was emitted at a different time than it would be under a real client. [PR #1418](https://github.com/riverqueue/river/pull/1418).
 - Fixed SQLite job cleanup stalling when excluded queues fill the oldest batch, and added support for included queue filters so per-queue retention works on SQLite. [PR #1417](https://github.com/riverqueue/river/pull/1417).
 - Fixed a unique insert skipped as a duplicate of a job of a different kind (possible with `UniqueOpts.ExcludeKind`) changing the existing job's kind to its own. [PR #1421](https://github.com/riverqueue/river/pull/1421).
