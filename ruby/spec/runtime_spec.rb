@@ -51,6 +51,25 @@ RSpec.describe "River worker runtime", database: :sqlite do
     RUNTIME_DB[:river_job].delete
   end
 
+  it "claims and completes jobs with a work block" do
+    workers = River::Workers.new
+    workers.add(:runtime) do |job|
+      job.output = {"doubled" => job.args.fetch("value") * 2}
+    end
+    client = build_client(workers.fetch(:runtime), workers: workers)
+    inserted = client.insert(River::JobArgsHash.new(:runtime, value: 3), queue: :runtime).job
+    client.start
+
+    completed = wait_until { (row = client.job_get(inserted.id)).state == River::JOB_STATE_COMPLETED && row }
+
+    expect(completed).to have_attributes(
+      attempt: 1,
+      metadata: have_attributes(to_h: include("output" => {"doubled" => 6}))
+    )
+  ensure
+    client&.stop_and_cancel
+  end
+
   it "claims, works, completes, emits events, and persists worker output" do
     worker = Class.new do
       def work(job)

@@ -12,8 +12,18 @@ module River
     #
     # With one argument, the kind is read from +worker.kind+ or
     # +worker.class.kind+. Pass a kind and worker separately to override it.
-    # Kinds and aliases accept symbols or strings.
-    def add(kind_or_worker, worker = nil, aliases: [])
+    # Alternatively, pass a kind and a block that receives a River::Job on each
+    # attempt. Block workers use the client's retry and timeout policies.
+    # Supply a worker or a block, not both. Kinds and aliases accept symbols or
+    # strings.
+    def add(kind_or_worker, worker = nil, aliases: [], &block)
+      if block
+        raise ArgumentError, "use a worker or a block, not both" unless worker.nil?
+        raise ArgumentError, "block workers require a string or symbol kind" unless kind_or_worker.is_a?(String) || kind_or_worker.is_a?(Symbol)
+
+        worker = BlockWorker.new(block)
+      end
+
       if worker
         kind = kind_or_worker.to_s
       else
@@ -54,6 +64,18 @@ module River
     def kinds
       @workers.keys.freeze
     end
+
+    # Adapts a registered block to the runtime's worker interface.
+    class BlockWorker
+      def initialize(work_func)
+        @work_func = work_func
+      end
+
+      def work(job)
+        @work_func.call(job)
+      end
+    end
+    private_constant :BlockWorker
   end
 
   # A job being worked, with access to its persisted row and attempt-local
