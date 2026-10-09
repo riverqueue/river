@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- When both the driver and pilot support it, which the PostgreSQL drivers do, the batch job completer now persists up to two full batches of job completions concurrently, improving completion throughput under heavy load. Results for the same job are still applied in order, but subscribers may receive completion events for different jobs in a different order than before, and the completer may briefly use one additional database connection. [PR #1434](https://github.com/riverqueue/river/pull/1434).
+
 ## [0.49.0] - 2026-10-05
 
 ⚠️ If using River Pro, make sure to upgrade it to at least River Pro v0.32.0 to get a compatible package.
