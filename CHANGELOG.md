@@ -9,7 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
-- Queue names containing a pipe (`|`) are now rejected. The queue name regex listed `|` inside a character class, where it's a literal rather than an alternation, so names like `a|b` were accepted despite the error message describing names as letters and numbers separated by underscores or hyphens. **Warning:** A queue whose name contains `|` will fail validation after upgrading. [PR #TBD](https://github.com/riverqueue/river/pull/TBD).
+- Queue names containing a pipe (`|`) are now rejected. The queue name regex listed `|` inside a character class, where it's a literal rather than an alternation, so names like `a|b` were accepted despite the error message describing names as letters and numbers separated by underscores or hyphens. **Warning:** A queue whose name contains `|` will fail validation after upgrading. [PR #1484](https://github.com/riverqueue/river/pull/1484).
 
 ## [0.48.0] - 2026-09-30
 
