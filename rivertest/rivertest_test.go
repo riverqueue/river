@@ -253,6 +253,41 @@ func TestRequireInsertedTx(t *testing.T) {
 				mockT.LogOutput())
 		})
 
+		t.Run("Metadata", func(t *testing.T) {
+			t.Parallel()
+
+			riverClient, bundle := setup(t)
+
+			_, err := riverClient.InsertTx(ctx, bundle.tx, Job2Args{Int: 123}, &river.InsertOpts{
+				Metadata: []byte(`{"key":"value","list":[1,2],"nested":{"enabled":true},"num":1}`),
+			})
+			require.NoError(t, err)
+
+			mockT := testutil.NewMockT(t)
+			opts := &RequireInsertedOpts{
+				Metadata: map[string]any{
+					"key":    "value",
+					"nested": map[string]any{"enabled": true},
+					"num":    int64(1),
+				},
+			}
+			_ = requireInsertedTx[*riverpgxv5.Driver](ctx, mockT, bundle.tx, &Job2Args{}, opts)
+			require.False(t, mockT.Failed, "Should have succeeded, but failed with: "+mockT.LogOutput())
+
+			mockT = testutil.NewMockT(t)
+			opts = &RequireInsertedOpts{
+				Metadata: map[string]any{
+					"key":     "wrong",
+					"missing": "value",
+				},
+			}
+			_ = requireInsertedTx[*riverpgxv5.Driver](ctx, mockT, bundle.tx, &Job2Args{}, opts)
+			require.True(t, mockT.Failed)
+			require.Equal(t,
+				failureString("Job with kind 'job2' metadata[key] \"value\" not equal to expected \"wrong\", metadata missing key 'missing'")+"\n",
+				mockT.LogOutput())
+		})
+
 		t.Run("Priority", func(t *testing.T) {
 			t.Parallel()
 
@@ -585,6 +620,36 @@ func TestRequireNotInsertedTx(t *testing.T) {
 			require.Equal(t,
 				failureString("Job with kind 'job2' max attempts equal to excluded %d", job.MaxAttempts)+"\n",
 				mockT.LogOutput())
+		})
+
+		t.Run("Metadata", func(t *testing.T) {
+			t.Parallel()
+
+			riverClient, bundle := setup(t)
+
+			_, err := riverClient.InsertTx(ctx, bundle.tx, Job2Args{Int: 123}, &river.InsertOpts{
+				Metadata: []byte(`{"key":"value"}`),
+			})
+			require.NoError(t, err)
+
+			mockT := testutil.NewMockT(t)
+			opts := emptyOpts()
+			opts.Metadata = map[string]any{
+				"key": "value",
+			}
+			requireNotInsertedTx[*riverpgxv5.Driver](ctx, mockT, bundle.tx, &Job2Args{}, opts)
+			require.True(t, mockT.Failed)
+			require.Equal(t,
+				failureString("Job with kind 'job2' metadata[key] equal to excluded \"value\"")+"\n",
+				mockT.LogOutput())
+
+			mockT = testutil.NewMockT(t)
+			opts = emptyOpts()
+			opts.Metadata = map[string]any{
+				"key": "other",
+			}
+			requireNotInsertedTx[*riverpgxv5.Driver](ctx, mockT, bundle.tx, &Job2Args{}, opts)
+			require.False(t, mockT.Failed)
 		})
 
 		t.Run("Priority", func(t *testing.T) {
