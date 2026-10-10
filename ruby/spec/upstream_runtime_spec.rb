@@ -7,11 +7,13 @@ require_relative "support/river_sqlite_schema_fixture"
 require_relative "row_decoding_shared_examples"
 require_relative "runtime_draining_shared_examples"
 require_relative "runtime_finishing_shared_examples"
+require_relative "transactional_completion_shared_examples"
 
 RSpec.describe "upstream runtime parity", database: :sqlite do
   it_behaves_like "SQLite corrupt job runtime"
   it_behaves_like "cancellation while draining"
   it_behaves_like "externally claimed job finalization"
+  it_behaves_like "transactional job completion"
 
   before do
     @database = Sequel.sqlite

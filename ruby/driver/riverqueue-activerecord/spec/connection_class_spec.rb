@@ -69,6 +69,34 @@ RSpec.describe "Active Record connection selection" do
         expect(@selected.job_list).to be_empty
       end
 
+      it "completes jobs in the selected connection's transaction" do
+        row = @client.insert(River::JobArgsHash.new(:selected, {})).job
+        job = River::Job.new(@client, @selected.job_claim(id: row.id, attempted_by: "test"))
+
+        SelectedRiverConnection.transaction do
+          @client.job_complete_tx(job)
+          raise ActiveRecord::Rollback
+        end
+
+        expect(@client.job_get(row.id)).to have_attributes(finalized_at: nil, state: "running")
+
+        SelectedRiverConnection.transaction { @client.job_complete_tx(job) }
+
+        expect(@client.job_get(row.id)).to have_attributes(finalized_at: be_a(Time), state: "completed")
+        expect(@primary.job_list).to be_empty
+      end
+
+      it "rejects job completion in an unrelated Base transaction" do
+        row = @client.insert(River::JobArgsHash.new(:selected, {})).job
+        job = River::Job.new(@client, @selected.job_claim(id: row.id, attempted_by: "test"))
+
+        ActiveRecord::Base.transaction do
+          expect { @client.job_complete_tx(job) }.to raise_error(River::Error, /requires an active transaction/)
+        end
+
+        expect(@client.job_get(row.id)).to have_attributes(finalized_at: nil, state: "running")
+      end
+
       if backend == :postgres
         it "detects capabilities again when the selected class replaces its pool" do
           capabilities = @selected.postgres_capabilities

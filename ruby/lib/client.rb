@@ -182,6 +182,37 @@ module River
       @driver.job_cancel(id) || raise(NotFoundError, "job not found: #{id}")
     end
 
+    # Completes a running Job and returns its updated JobRow, including pending
+    # metadata and output. The original JobRow is not modified.
+    #
+    # Requires and joins the caller's transaction on the same Active Record
+    # connection or Sequel database. Commit before returning from work;
+    # propagate rollback errors so the runtime can retry the job. A committed
+    # completion takes precedence over any subsequent worker error.
+    #
+    # Raises NotFoundError for a missing job, JobCancelError for a pending
+    # cancellation, and Error if there is no active transaction or the job is
+    # no longer running or completed.
+    def job_complete_tx(job)
+      raise ArgumentError, "job must be a River::Job" unless job.is_a?(Job)
+      raise ArgumentError, "job must belong to this client" unless job.client.equal?(self)
+      raise Error, "job must be running" unless job.row.state == JOB_STATE_RUNNING
+      raise Error, "job_complete_tx requires an active transaction on the driver's connection" unless @driver.in_transaction?
+
+      # Mark the attempt before the write: an interrupt can arrive after the
+      # database commits but before the driver returns. The runtime checks the
+      # persisted state because the caller may still roll back this transaction.
+      job.__completion_attempted = true
+      now = @time_now_utc.call
+      completed = @driver.job_complete(id: job.row.id, finalized_at: now, metadata: job.metadata_updates, now: now)
+      raise JobCancelError if completed == :cancelled
+
+      completed ||= job_get(job.row.id)
+      raise Error, "job must be running" unless completed.state == JOB_STATE_COMPLETED
+
+      completed
+    end
+
     # Deletes a job by ID and returns its former JobRow.
     #
     # Raises NotFoundError if the job does not exist and JobRunningError if it

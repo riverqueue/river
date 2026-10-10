@@ -206,6 +206,45 @@ end
 
 The equivalent works inside `ActiveRecord::Base.transaction` with the Active Record driver.
 
+### Transactional completion
+
+Call `job.client.job_complete_tx(job)` inside a transaction to commit application
+writes and job completion together (the equivalent of Go's `JobCompleteTx`):
+
+```ruby
+class FulfillOrderWorker
+  def work(job)
+    DB.transaction do
+      DB[:orders].where(id: job.args.fetch("order_id")).update(fulfilled: true)
+      job.output = {fulfilled: true}
+      job.client.job_complete_tx(job)
+    end
+  end
+end
+```
+
+With Active Record, use it inside a `ApplicationRecord.transaction` block. As
+with insertion, the transaction must use the driver's connection on the same
+thread. No explicit transaction argument is needed. Calling `job_complete_tx`
+without an active transaction on that connection raises `River::Error` without
+changing the job.
+
+`job_complete_tx` accepts the running `River::Job` passed to the worker and returns
+an updated `River::JobRow`, leaving the original job unchanged. Set output and
+metadata before calling it so they're included in the transaction. A missing
+job raises `River::NotFoundError`; a pending cancellation raises
+`River::JobCancelError`, allowing the transaction to roll back.
+Metadata added afterward, including persisted logs, is saved separately when
+the worker finishes.
+
+Make completion the last operation in the transaction and let the transaction
+commit before returning from `work`. Propagate errors that roll back the
+transaction so River retries the job. If you swallow a rollback and return
+successfully, River completes the job normally. Once completion commits, later
+worker errors cannot retry or cancel the job. River emits `:job_completed` when
+the worker finishes, and skips its usual finalization hooks for the already
+completed job.
+
 ### [Bulk insertion](https://riverqueue.com/docs/inserting-many-jobs)
 
 `#insert_many` inserts a batch atomically and returns one `River::JobInsertResult` per input. Use `River::InsertManyParams` when jobs need different options:
