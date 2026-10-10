@@ -39,6 +39,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Honor cancellations that arrive between claiming a job and starting its worker. [PR #1496](https://github.com/riverqueue/river/pull/1496).
 - Preserve worker wakeups that arrive between a fetch and the producer going to sleep. [PR #1496](https://github.com/riverqueue/river/pull/1496).
 
+### Fixed
+
+- The Active Record driver borrows a connection for each call instead of leasing one to the calling thread. Each job left a leased connection on its finished thread, and Active Record reset every one when it reclaimed it.
+
 ## [0.13.0] - 2026-10-08
 
 ### Added
