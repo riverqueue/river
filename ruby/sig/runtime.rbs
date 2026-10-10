@@ -94,11 +94,13 @@ module River
 
   class Job
     RESUMABLE_CURSOR_UNSET: Object
+    @__completion_attempted: bool
     @client: Client
     @logger: untyped
     @metadata_updates: Hash[String, untyped]
     @resumable_state: ResumableState
     @row: JobRow
+    attr_accessor __completion_attempted: bool
     attr_reader client: Client
     attr_reader row: JobRow
     def initialize: (Client, JobRow) -> void
@@ -380,6 +382,7 @@ module River
     def finish_failed: (JobRow, Job, Exception, JobTiming, ?cancelled: bool, ?worker: untyped) -> untyped
     def finish_interrupted: (JobRow, Job, JobTiming) -> untyped
     def finish_snoozed: (JobRow, Job, JobSnoozeError, JobTiming) -> untyped
+    def finish_transactional_completion: (Job, JobTiming) -> bool
     def finish_work: (Integer) -> untyped
     def invoke_plugins: (Symbol, *untyped) -> Array[untyped]
     def invoke_worker: (untyped, Job) -> untyped

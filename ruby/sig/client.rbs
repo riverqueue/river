@@ -24,6 +24,7 @@ module River
       ?scheduled_at: Time?, ?state: jobStateInitialInput?, ?tags: Array[String]?, ?unique_opts: UniqueOpts?) -> JobInsertResult
     def insert_many: (Array[jobArgs | InsertManyParams]) -> Array[JobInsertResult]
     def job_cancel: (Integer) -> JobRow
+    def job_complete_tx: (Job) -> JobRow
     def job_delete: (Integer) -> JobRow
     def job_delete_many: (?JobListParams?, ?after: untyped, ?after_id: untyped,
       ?ids: untyped, ?kinds: untyped, ?limit: untyped, ?metadata: untyped, ?priorities: untyped,

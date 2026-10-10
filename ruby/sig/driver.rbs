@@ -1,6 +1,7 @@
 module River
   interface _Driver
     def respond_to?: (Symbol, ?bool) -> bool
+    def in_transaction?: () -> bool
     def init_driver: () -> void
     def migration_backend: () -> Symbol
     def migration_connection: [A] () { (untyped) -> A } -> A

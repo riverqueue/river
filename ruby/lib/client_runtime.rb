@@ -303,6 +303,8 @@ module River
           finish_work(row.id)
         end
 
+        return [:completed, nil] if finish_transactional_completion(job, timing)
+
         finalize_hooks = @config.plugins.any? { |plugin| plugin.respond_to?(:job_finalize) }
         if finalize_hooks
           raise JobCancelError if @driver.job_get_cancelled_ids([row.id]).include?(row.id)
@@ -322,19 +324,22 @@ module River
         end
 
         [:completed, nil]
-      rescue JobSnoozeError => error
-        job.__capture_resumable_metadata!
-        [finish_snoozed(row, job, error, timing), error]
-      rescue JobCancelError => error
-        job.__capture_resumable_metadata!
-        finish_failed(row, job, error, timing, cancelled: true)
-        [:cancelled, error]
-      rescue Interrupted => error
-        job.__capture_resumable_metadata!
-        [finish_interrupted(row, job, timing), error]
       rescue => error
+        return [:completed, nil] if finish_transactional_completion(job, timing)
+
         job.__capture_resumable_metadata!
-        [finish_failed(row, job, error, timing, worker: worker), error]
+        outcome = case error
+        when JobSnoozeError
+          finish_snoozed(row, job, error, timing)
+        when JobCancelError
+          finish_failed(row, job, error, timing, cancelled: true)
+          :cancelled
+        when Interrupted
+          finish_interrupted(row, job, timing)
+        else
+          finish_failed(row, job, error, timing, worker: worker)
+        end
+        [outcome, error]
       ensure
         @mutex.synchronize do
           @running.delete(row.id)
@@ -408,6 +413,21 @@ module River
       )
       publish(EVENT_JOB_SNOOZED, updated, timing) if updated
       (updated&.state == JOB_STATE_CANCELLED) ? :cancelled : :snoozed
+    end
+
+    private def finish_transactional_completion(job, timing)
+      return false unless job.__completion_attempted
+
+      completed = @driver.job_get_by_id(job.row.id)
+      return false unless completed && completed.state == JOB_STATE_COMPLETED
+
+      # Work middleware (including persisted logging) can add metadata after the
+      # worker commits. Save it without changing the committed state or timestamp.
+      metadata = job.metadata_updates
+      completed = @driver.job_metadata_merge(job.row.id, metadata) || completed unless metadata.empty?
+
+      publish(EVENT_JOB_COMPLETED, completed, timing)
+      true
     end
 
     private def finish_work(id)

@@ -48,6 +48,11 @@ module River::Driver
       end
     end
 
+    # Reports whether this thread has a transaction on the configured connection.
+    def in_transaction?
+      @connection_class.connection_pool.with_connection(&:transaction_open?)
+    end
+
     def job_get_by_id(id)
       if @is_sqlite
         row = sqlite_job_rows("WHERE id = ? LIMIT 1", [id]).first

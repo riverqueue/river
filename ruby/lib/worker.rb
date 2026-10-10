@@ -81,6 +81,9 @@ module River
   # A job being worked, with access to its persisted row and attempt-local
   # metadata changes.
   class Job
+    # Internal runtime hint; persisted state determines whether completion committed.
+    attr_accessor :__completion_attempted
+
     # Client working this job.
     attr_reader :client
 
@@ -89,6 +92,7 @@ module River
 
     def initialize(client, row)
       @client = client
+      @__completion_attempted = false
       @logger = nil
       @metadata_updates = {}
       @row = row
