@@ -1,21 +1,24 @@
 # River [![Build Status](https://github.com/riverqueue/river/actions/workflows/ci.yaml/badge.svg?branch=master)](https://github.com/riverqueue/river/actions) [![Go Reference](https://pkg.go.dev/badge/github.com/riverqueue/river.svg)](https://pkg.go.dev/github.com/riverqueue/river)
 
-River is a robust high-performance job processing system for Go and Postgres.
+River is a fast, transactional job queue backed by Postgres or SQLite. It
+includes automatic retries, scheduling, unique jobs, and a web UI, with support
+for Go, [JavaScript/TypeScript], [Ruby], and [Rust]. All implementations are
+fully cross-compatible -- enqueue in one language and process in another.
 
 See [homepage], [docs], and [godoc], as well as the [River UI][riverui] and [its
 live demo][riveruidemo].
 
-Being built for Postgres, River encourages the use of the same database for
-application data and job queue. By enqueueing jobs transactionally along with
-other database changes, whole classes of distributed systems problems are
-avoided. Jobs are guaranteed to be enqueued if their transaction commits, are
-removed if their transaction rolls back, and aren't visible for work _until_
-commit. See [transactional enqueueing] for more background on this philosophy.
+River encourages using the same database for application data and the job
+queue. By enqueueing jobs transactionally along with other database changes,
+whole classes of distributed systems problems are avoided. Jobs are guaranteed
+to be enqueued if their transaction commits, are removed if their transaction
+rolls back, and aren't visible for work _until_ commit. See
+[transactional enqueueing] for more background on this philosophy.
 
 ## Job args and workers
 
-Jobs are defined in struct pairs, with an implementation of [`JobArgs`] and one
-of [`Worker`].
+In Go, jobs are defined in struct pairs, with an implementation of [`JobArgs`]
+and one of [`Worker`].
 
 Job args contain `json` annotations and define how jobs are serialized to and
 from the database, along with a "kind", a stable string that uniquely identifies
@@ -178,10 +181,11 @@ See the [`InsertAndWork` example] for complete code.
 
 ## Cross language enqueueing
 
-River supports inserting jobs in some non-Go languages which are then worked by Go implementations. This may be desirable in performance sensitive cases so that jobs can take advantage of Go's fast runtime.
+Jobs inserted by any of River's language implementations can be worked by
+another, so services in different languages can share a queue. See the source
+links above for each implementation's client and worker APIs.
 
-  - [Inserting jobs from Python](https://riverqueue.com/docs/python).
-  - [Inserting jobs from Ruby](https://riverqueue.com/docs/ruby).
+Jobs can also be [inserted from Python](https://riverqueue.com/docs/python).
 
 ## Development
 
@@ -195,8 +199,11 @@ See [developing River].
 [Batch job insertion]: https://riverqueue.com/docs/batch-job-insertion
 [Cancelling jobs]: https://riverqueue.com/docs/cancelling-jobs
 [Error and panic handling]: https://riverqueue.com/docs/error-handling
+[JavaScript/TypeScript]: https://github.com/riverqueue/river/tree/master/js
 [Multiple queues]: https://riverqueue.com/docs/multiple-queues
 [Periodic and cron jobs]: https://riverqueue.com/docs/periodic-jobs
+[Ruby]: https://github.com/riverqueue/river/tree/master/ruby
+[Rust]: https://github.com/riverqueue/river/tree/master/rust
 [Scheduled jobs]: https://riverqueue.com/docs/scheduled-jobs
 [Snoozing jobs]: https://riverqueue.com/docs/snoozing-jobs
 [Subscriptions]: https://riverqueue.com/docs/subscriptions
