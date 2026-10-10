@@ -27,6 +27,8 @@ module River
     def leader_release: (String) -> untyped
     def leader_renew: (String, ?ttl: Integer, ?now: Time) -> bool
     def notification_delete_before: (horizon: Time, ?max: Integer) -> Integer
+    def notification_listener: () -> untyped
+    def request_resign: () -> nil
     def queue_get: (String) -> Queue?
     def queue_list: (?max: Integer) -> Array[Queue]
     def queue_pause: (String, ?now: Time) -> Array[Queue]
@@ -54,6 +56,25 @@ module River
       def json: (Symbol, untyped, ?type: Class?, ?strings: bool, ?default: untyped) -> untyped
       def decoded: (Symbol, untyped, ?type: Class?, ?strings: bool, ?default: untyped) -> untyped
       def finish: (JobRow) -> JobRow
+    end
+
+    module NotificationListener
+      TOPICS: Array[String]
+      class Postgres
+        @connection: untyped
+        @channels: Hash[String, String]
+        def initialize: (untyped, String) -> void
+        def close: () -> untyped
+        def poll: (Float | Integer) -> Array[untyped]
+      end
+
+      class SQLite
+        @query: untyped
+        @last_id: Integer
+        def initialize: (untyped) -> void
+        def close: () -> nil
+        def poll: (Float | Integer) -> Array[untyped]
+      end
     end
 
     class PostgresCapabilities
@@ -126,6 +147,8 @@ module River
       def leader_release: (untyped) -> untyped
       def leader_renew: (untyped, ?ttl: untyped, ?now: untyped) -> untyped
       def notification_delete_before: (horizon: untyped, ?max: untyped) -> untyped
+      def notification_listener: () -> untyped
+      def request_resign: () -> nil
       def queue_get: (untyped) -> untyped
       def queue_list: (?max: untyped) -> untyped
       def queue_pause: (untyped, ?now: untyped) -> untyped
@@ -150,6 +173,8 @@ module River
       def runtime_metadata_equals: (untyped, untyped) -> untyped
       def runtime_nullable_time: (untyped) -> untyped
       def runtime_notify: (String, untyped) -> untyped
+      def notification_query: (String) -> untyped
+      def runtime_notification_connection: () -> untyped
       def sqlite_insert_nonces: (Array[JobInsertParams]) -> Array[String]
       def runtime_parse_json: (untyped) -> untyped
       def runtime_parse_time: (untyped) -> untyped

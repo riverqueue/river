@@ -36,6 +36,7 @@ RSpec.describe "River shared driver runtime edge cases", database: :sqlite do
     postgres_driver.define_singleton_method(:runtime_execute) { |_sql| raise "unexpected notification" }
     params = Struct.new(:state, :queue).new("available", "default")
 
+    expect(postgres_driver.notification_listener).to be_nil
     expect { postgres_driver.init_driver }.not_to raise_error
     expect { postgres_driver.send(:postgres_notify_insert, [params]) }.not_to raise_error
     expect { postgres_driver.send(:runtime_notify, "river_control", {action: "cancel"}) }.not_to raise_error
