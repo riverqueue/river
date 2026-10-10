@@ -151,9 +151,7 @@ RSpec.describe "Go-generated conformance fixtures" do
         (adapter == "activerecord") ? ConformanceRecord.remove_connection : database&.disconnect
       end
 
-      # Ruby emits these messages; its polling runtime does not consume
-      # request_resign or the other notification fixtures yet.
-      %w[cancel insert metadata_changed pause resigned resume].each do |name|
+      %w[cancel insert metadata_changed pause request_resign resigned resume].each do |name|
         fixture = protocol.fetch("notifications").find { |notification| notification.fetch("name") == name }
         raise "Missing #{name} notification fixture" unless fixture
 
@@ -177,13 +175,15 @@ RSpec.describe "Go-generated conformance fixtures" do
               @driver.queue_pause("priority")
               @driver.queue_resume("priority")
             end
+          when "request_resign"
+            @client.request_resign
           when "resigned"
             @driver.leader_acquire("client-1")
             @driver.leader_release("client-1")
           end
           notification = @driver.send(:runtime_query_rows, "SELECT topic, payload FROM river_notification ORDER BY id DESC LIMIT 1").first
           expect(@driver.send(:runtime_value, notification, :topic)).to eq(fixture.fetch("topic"))
-          topic = if name == "resigned"
+          topic = if %w[request_resign resigned].include?(name)
             "leadership"
           else
             ((name == "insert") ? "insert" : "control")

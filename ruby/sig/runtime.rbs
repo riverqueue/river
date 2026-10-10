@@ -160,6 +160,8 @@ module River
   end
 
   class Config
+    @poll_only: bool
+    attr_reader poll_only: bool
     @cancelled_job_retention_period: Float?
     @completed_job_retention_period: Float?
     @discarded_job_retention_period: Float?
@@ -198,7 +200,7 @@ module River
 
     def initialize: (?queues: untyped, ?workers: untyped, ?id: untyped,
       ?fetch_cooldown: untyped, ?fetch_only_known_kinds: bool, ?fetch_poll_interval: untyped, ?job_timeout: untyped,
-      ?leader_election_disabled: bool,
+      ?leader_election_disabled: bool, ?poll_only: bool,
       ?retry_policy: untyped, ?error_handler: untyped, ?plugins: untyped,
       ?maintenance_services: untyped, ?periodic_jobs: untyped,
       ?cancelled_job_retention_period: untyped, ?completed_job_retention_period: untyped,
@@ -341,13 +343,22 @@ module River
     @condition: ConditionVariable
     @config: Config
     @driver: _Driver
+    @fetching_queues: Hash[String, Array[Integer]]
+    @leader: bool
+    @maintenance_condition: ConditionVariable
+    @maintenance_generation: Integer
     @maintenance_thread: Thread?
     @mutex: Mutex
-    @periodic_jobs: PeriodicJobBundle
+    @notification_thread: Thread?
+    @notifications_disabled: bool
     @performing: bool?
+    @periodic_jobs: PeriodicJobBundle
     @producer_threads: Hash[String, Thread]
     @queue_configs: Hash[String, QueueConfig]
+    @queue_generations: Hash[String, Integer]
+    @queue_paused: Hash[String, bool]
     @removed_queues: Hash[String, bool]
+    @resign_requested: bool
     @running: Hash[Integer, untyped]
     @started: bool
     @stop_requested: bool
@@ -388,22 +399,30 @@ module River
     def monotonic_now: () -> Float
     def next_retry: (JobRow, Exception, Time, ?worker: untyped) -> Time
     def next_snooze_count: (untyped) -> Integer
+    def notification_loop: (untyped) -> untyped
+    def notifications_stopping?: () -> bool
     def retry_allowed?: (untyped, Job, Exception) -> untyped
     def perform_work: (untyped, Job) -> untyped
     def periodic_jobs_changed: () -> untyped
     def producer_loop: (String, QueueConfig) -> untyped
     def publish: (Symbol, JobRow, JobTiming) -> untyped
     def queue_stopping?: (String) -> bool
+    def receive_notification: (untyped, untyped) -> untyped
     def remove_subscription: (Subscription) -> Subscription?
     def rescue_job?: (JobRow, Time) -> bool
     def resolve_worker: (String) -> untyped
     def run_periodic: (Time) -> untyped
     def running_count: (String) -> Integer
     def start_maintenance: () -> untyped
+    def start_notifications: () -> untyped
     def start_producer: (String, QueueConfig) -> untyped
     def stopping?: () -> bool
     def wait: (Float | Integer) -> untyped
+    def wait_for_maintenance: (Float | Integer, Integer) -> untyped
+    def wait_for_queue: (String, Float | Integer, Integer) -> untyped
     def wait_for_running_jobs: (String, Float | Integer) -> untyped
+    def wake_maintenance: () -> untyped
+    def wake_queue: (String) -> untyped
     def worker_timeout: (untyped, Job) -> Float?
   end
 end

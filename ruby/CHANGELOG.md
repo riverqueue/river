@@ -9,7 +9,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Receive Postgres and SQLite notifications for insertions, queue controls, cancellation, and leadership handoffs, with reconnect recovery and a `poll_only` option. [PR #1496](https://github.com/riverqueue/river/pull/1496).
+- Add `Client#request_resign` to request that the maintenance leader relinquish leadership after the caller's transaction commits. [PR #1496](https://github.com/riverqueue/river/pull/1496).
 - Allow `River::Workers#add` to register a kind and a work block, using the client's default retry and timeout policies. [PR #1486](https://github.com/riverqueue/river/pull/1486).
+
+### Fixed
+
+- Wake workers when scheduled jobs become available or jobs are manually retried, including workers in other clients. [PR #1496](https://github.com/riverqueue/river/pull/1496).
+- Honor cancellations that arrive between claiming a job and starting its worker. [PR #1496](https://github.com/riverqueue/river/pull/1496).
+- Preserve worker wakeups that arrive between a fetch and the producer going to sleep. [PR #1496](https://github.com/riverqueue/river/pull/1496).
 
 ## [0.13.0] - 2026-10-08
 

@@ -335,7 +335,10 @@ RSpec.describe River::ClientRuntime do
   it "allows queue changes during startup without launching a producer twice" do
     driver = Object.new
     value = runtime(driver: driver, queues: {branch: 1})
-    driver.define_singleton_method(:queue_upsert) { |name| value.queue_add("dynamic", 1) if name == "branch" }
+    driver.define_singleton_method(:queue_upsert) do |name|
+      value.queue_add("dynamic", 1) if name == "branch"
+      Struct.new(:name, :paused_at).new(name, nil)
+    end
     value.define_singleton_method(:producer_loop) { |*_args| }
     value.define_singleton_method(:start_maintenance) {}
 
@@ -416,7 +419,7 @@ RSpec.describe River::ClientRuntime do
       []
     end
     value = runtime(driver: driver)
-    value.define_singleton_method(:wait) { |_duration| @stop_requested = true }
+    value.define_singleton_method(:wait_for_queue) { |_queue, _duration, _generation| @stop_requested = true }
 
     value.send(:producer_loop, "branch", River::QueueConfig.new(max_workers: 1))
 
@@ -502,7 +505,7 @@ RSpec.describe River::ClientRuntime do
     fetched_at = []
     job = row
     driver = Object.new
-    driver.define_singleton_method(:queue_get) { |_| Struct.new(:paused_at).new(paused_at) }
+    driver.define_singleton_method(:queue_get) { |_| Struct.new(:name, :paused_at).new("branch", paused_at) }
     driver.define_singleton_method(:job_get_available) do |**|
       fetched_at << now
       [job]
@@ -515,6 +518,8 @@ RSpec.describe River::ClientRuntime do
       paused_at = Time.now.utc
       now += duration
     end
+
+    value.define_singleton_method(:wait_for_queue) { |_, duration, _| wait(duration) }
 
     value.send(:producer_loop, "branch", River::QueueConfig.new(max_workers: 1, fetch_cooldown: 1, fetch_poll_interval: 1))
 
@@ -531,7 +536,7 @@ RSpec.describe River::ClientRuntime do
       checks >= 2
     end
 
-    value.define_singleton_method(:wait) { |_duration| }
+    value.define_singleton_method(:wait_for_maintenance) { |_duration, _generation| }
 
     value.send(:maintenance_loop)
 
@@ -546,7 +551,7 @@ RSpec.describe River::ClientRuntime do
       driver.define_singleton_method(method) { |**_options| calls << method }
     end
     value = runtime(driver: driver)
-    value.define_singleton_method(:wait) { |_duration| @stop_requested = true }
+    value.define_singleton_method(:wait_for_maintenance) { |_duration, _generation| @stop_requested = true }
 
     value.send(:maintenance_loop)
     expect(calls).to eq([:job_schedule, :job_rescue_stuck, :job_delete_finalized])
@@ -606,7 +611,7 @@ RSpec.describe River::ClientRuntime do
     healthy_service.define_singleton_method(:run) { |*_args| calls << :healthy_service }
     value = described_class.new(Object.new, driver, config.with(logger: Logger.new(output), maintenance_services: [service, healthy_service]))
     waits = 0
-    value.define_singleton_method(:wait) do |_duration|
+    value.define_singleton_method(:wait_for_maintenance) do |_duration, _generation|
       waits += 1
       @stop_requested = true if waits == 2
     end

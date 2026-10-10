@@ -157,6 +157,10 @@ module River::Driver
       time.getutc.round(3).strftime("%Y-%m-%d %H:%M:%S.%3N")
     end
 
+    private def notification_query(sql)
+      @connection_class.connection_pool.with_connection { runtime_query_rows(sql) }
+    end
+
     private def postgres_insert_params_to_hash(insert_params, nonce)
       metadata = insert_params.metadata || {}
       metadata = metadata.merge(UNIQUE_INSERT_METADATA_KEY => nonce) if nonce
@@ -234,6 +238,15 @@ module River::Driver
       else
         @job_model.find_by_sql("SELECT * FROM river_job #{suffix}").map { |row| to_job_row_from_model(row) }
       end
+    end
+
+    private def runtime_notification_connection
+      params, schema = @connection_class.connection_pool.with_connection do |connection|
+        [connection.raw_connection.conninfo_hash, connection.select_value("SELECT current_schema()")]
+      end
+      params.compact!
+      params[:connect_timeout] = "5" unless params[:connect_timeout].to_i.positive?
+      [::PG.connect(params), schema]
     end
 
     private def runtime_postgres?

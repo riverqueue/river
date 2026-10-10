@@ -9,7 +9,8 @@ require_relative "river_test_schema"
 # tables: migrate an empty disposable schema with the bundled canonical SQL.
 module ClientTestDatabase
   def self.with_active_record(adapter, migrate: true, pg_catalog_last: false)
-    original = ActiveRecord::Base.connection_db_config.configuration_hash
+    # The core suite may not have configured a connection yet.
+    original = ActiveRecord::Base.remove_connection
     if adapter == :postgres
       ActiveRecord::Base.establish_connection(ENV["TEST_DATABASE_URL"] || "postgres://localhost/river_test")
       schema = "river_client_test_#{SecureRandom.hex(8)}"
@@ -42,7 +43,8 @@ module ClientTestDatabase
     begin
       ActiveRecord::Base.connection.execute("DROP SCHEMA #{schema} CASCADE") if schema_created
     ensure
-      ActiveRecord::Base.establish_connection(original)
+      ActiveRecord::Base.remove_connection
+      ActiveRecord::Base.establish_connection(original) if original
     end
   end
 
