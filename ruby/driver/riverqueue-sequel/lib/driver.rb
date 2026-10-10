@@ -242,6 +242,15 @@ module River::Driver
       @db.literal(value)
     end
 
+    # Runs an UPDATE on river_job and decodes the rows it changed.
+    private def runtime_returning_jobs(sql)
+      if @is_sqlite
+        @db.fetch("#{sql}\nRETURNING #{SQLITE_JOB_COLUMNS}").all.map { |row| runtime_decoded_job { sqlite_to_job_row_from_raw(row) } }
+      else
+        @db.fetch("#{sql}\nRETURNING river_job.*").all.map { |row| runtime_decoded_job { postgres_to_job_row(row) } }
+      end
+    end
+
     private def runtime_value(row, key)
       row[key] || row[key.to_s]
     end
