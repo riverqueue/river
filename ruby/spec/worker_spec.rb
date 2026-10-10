@@ -3,6 +3,86 @@
 require "spec_helper"
 
 RSpec.describe River::Workers do
+  describe "block workers" do
+    it "accepts a proc as the work block" do
+      work_func = ->(job) { job.args.fetch("value") * 2 }
+      registry = described_class.new.add(:example, &work_func)
+
+      expect(registry.fetch(:example).work(Struct.new(:args).new({"value" => 3}))).to eq(6)
+    end
+
+    it "passes the job to the block and preserves its return value" do
+      received = []
+      result = Object.new
+      registry = described_class.new
+      registration = registry.add(:example) do |job|
+        received << job
+        result
+      end
+      job = Object.new
+
+      expect(registration).to equal(registry)
+      expect(received).to be_empty
+      expect(registry.fetch(:example).work(job)).to equal(result)
+      expect(received).to eq([job])
+    end
+
+    it "propagates exceptions including cancellation and snooze signals" do
+      [RuntimeError.new("failed"), River.job_cancel("cancelled"), River.job_snooze(60)].each do |error|
+        registry = described_class.new.add(:example) { |_job| raise error }
+
+        expect { registry.fetch(:example).work(Object.new) }.to raise_error { |raised| expect(raised).to equal(error) }
+      end
+    end
+
+    it "registers string and symbol kinds with aliases" do
+      ["example", :example].each do |kind|
+        registry = described_class.new.add(kind, aliases: [:old_example, "legacy"]) { |_job| :worked }
+
+        expect(registry.kinds).to contain_exactly("example", "old_example", "legacy")
+        expect(registry.fetch(:old_example)).to equal(registry.fetch(:example))
+        expect(registry.fetch(:legacy).work(Object.new)).to eq(:worked)
+      end
+    end
+
+    it "rejects a block without an explicit string or symbol kind" do
+      worker_class = Class.new { def self.kind = :example }
+      [worker_class, worker_class.new].each do |worker|
+        registry = described_class.new
+
+        expect { registry.add(worker) { |_job| } }
+          .to raise_error(ArgumentError, "block workers require a string or symbol kind")
+        expect(registry.kinds).to be_empty
+      end
+    end
+
+    it "rejects a duplicate alias without partially registering the block worker" do
+      worker = Object.new
+      registry = described_class.new.add(:existing, worker)
+
+      expect { registry.add(:fresh, aliases: [:existing]) { |_job| } }
+        .to raise_error(ArgumentError, 'worker for kind "existing" is already registered')
+      expect(registry.kinds).to eq(["existing"])
+      expect(registry.fetch(:existing)).to equal(worker)
+    end
+
+    it "rejects a duplicate primary kind without replacing the block worker" do
+      registry = described_class.new.add(:example) { |_job| :original }
+
+      expect { registry.add(:example) { |_job| :replacement } }
+        .to raise_error(ArgumentError, 'worker for kind "example" is already registered')
+      expect(registry.fetch(:example).work(Object.new)).to eq(:original)
+    end
+
+    it "rejects a worker and a block supplied together" do
+      registry = described_class.new
+
+      expect { registry.add(:example, Object.new, aliases: [:old_example]) { |_job| } }
+        .to raise_error(ArgumentError, "use a worker or a block, not both")
+      expect(registry.kinds).to be_empty
+    end
+  end
+
   it "registers and fetches a worker under an explicit kind" do
     worker = Object.new
     registry = described_class.new.add("email", worker)

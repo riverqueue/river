@@ -116,6 +116,31 @@ for nested expressions and `{ ... }` blocks where they make binding clear.
 
 ## Core features
 
+### Block workers
+
+Pass a kind and a block to `Workers#add` to define a worker inline:
+
+```ruby
+workers = River::Workers.new
+workers.add(:message) do |job|
+  puts "Message: #{job.args.fetch("message")}"
+end
+
+# With client configured to use this registry and the ruby queue:
+client.insert River::JobArgsHash.new(:message, message: "Hello!"), queue: :ruby
+```
+
+Pass this registry as `workers:` in `River::Config`. The kind accepts a string
+or symbol and must match the inserted job's kind. The block receives a
+`River::Job` and uses the client's retry and timeout policies. Returning normally
+completes the job; the block's return value is ignored. Raise exceptions to fail,
+cancel, or snooze work as with a worker class. Optionally use `job.output =` to
+persist a result. Aliases are supported through `aliases:` as for other workers.
+Supply a worker or a block, not both. Existing procs or methods can be passed as
+the block with `&`.
+The same block may run concurrently for multiple jobs, so any captured mutable
+state must be safe to share across threads.
+
 ### [Accessing the client from workers](https://riverqueue.com/docs/context-client)
 
 Every running `River::Job` exposes the client that claimed it. Workers can use

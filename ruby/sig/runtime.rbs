@@ -77,12 +77,19 @@ module River
     @workers: Hash[String, untyped]
     def initialize: () -> void
     def add: (untyped, ?untyped, ?aliases: Array[untyped]) -> self
+           | (String | Symbol, ?aliases: Array[untyped]) { (Job) -> untyped } -> self
     def []: (String | Symbol) -> untyped
     def fetch: (String | Symbol) -> untyped
              | (String | Symbol, untyped) -> untyped
              | (String | Symbol) { (String) -> untyped } -> untyped
     def include?: (String | Symbol) -> bool
     def kinds: () -> Array[String]
+
+    class BlockWorker
+      @work_func: ^(Job) -> untyped
+      def initialize: (^(Job) -> untyped) -> void
+      def work: (Job) -> untyped
+    end
   end
 
   class Job
