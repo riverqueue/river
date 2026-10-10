@@ -28,10 +28,18 @@ module River
       @condition = ConditionVariable.new
       @config = config
       @driver = driver
+      @fetching_queues = {}
+      @leader = false
+      @maintenance_condition = ConditionVariable.new
+      @maintenance_generation = 0
       @mutex = Mutex.new
+      @notifications_disabled = false
       @producer_threads = {}
       @queue_configs = config.queues.dup
+      @queue_generations = Hash.new(0)
+      @queue_paused = {}
       @removed_queues = {}
+      @resign_requested = false
       @running = {}
       @started = false
       @stopped = true
@@ -98,12 +106,21 @@ module River
 
     def publish_queue(kind, queue)
       event = Event.new(kind, nil, queue, nil)
-      @mutex.synchronize { @subscriptions.dup }.each { |subscription| subscription.publish(event) }
+      subscriptions = @mutex.synchronize do
+        paused = kind == EVENT_QUEUE_PAUSED
+        return if @queue_paused[queue.name] == paused
+
+        @queue_paused[queue.name] = paused
+        @subscriptions.dup
+      end
+      subscriptions.each { |subscription| subscription.publish(event) }
     end
 
     def healthy?
       @mutex.synchronize do
-        @stop_requested || (@producer_threads.all? { |name, thread| @removed_queues[name] || thread.alive? } && (!@maintenance_thread || @maintenance_thread.alive?))
+        @stop_requested || (@producer_threads.all? { |name, thread| @removed_queues[name] || thread.alive? } &&
+          (!@maintenance_thread || @maintenance_thread.alive?) &&
+          (!@notification_thread || @notifications_disabled || @notification_thread.alive?))
       end
     end
 
@@ -183,6 +200,7 @@ module River
       end
 
       begin
+        start_notifications
         queues = @mutex.synchronize { @queue_configs.dup }
         queues.each { |name, queue_config| start_producer(name, queue_config) }
         start_maintenance unless @queue_configs.empty? && @periodic_jobs.empty? && @config.maintenance_services.empty?
@@ -207,6 +225,7 @@ module River
 
         @stop_requested = true
         @condition.broadcast
+        @maintenance_condition.broadcast
         @running.values.each { |entry| entry[:thread].raise(Interrupted) if cancel && entry[:working] }
         @threads.dup
       end
@@ -225,6 +244,9 @@ module River
         @threads.clear
         @producer_threads.clear
         @maintenance_thread = nil
+        @notification_thread = nil
+        @leader = false
+        @resign_requested = false
       end
 
       self
@@ -245,21 +267,23 @@ module River
     end
 
     def wake
-      @mutex.synchronize { @condition.broadcast }
+      wake_queue("*")
     end
 
     private def begin_work(id)
-      should_interrupt = @mutex.synchronize do
+      interruption = @mutex.synchronize do
         entry = @running.fetch(id)
         if @stop_requested
-          true
+          Interrupted
+        elsif entry[:cancelled]
+          JobCancelError
         else
           entry[:working] = true
-          false
+          nil
         end
       end
 
-      raise Interrupted if should_interrupt
+      raise interruption if interruption
     end
 
     private def check_remote_cancellations(queue)
@@ -338,6 +362,7 @@ module River
       ensure
         @mutex.synchronize do
           @running.delete(row.id)
+          @queue_generations[row.queue] += 1
           @condition.broadcast
         end
       end
@@ -457,16 +482,39 @@ module River
         end
       end
 
-      @mutex.synchronize { @running[row.id] = {queue: row.queue, thread: thread, working: false} }
+      @mutex.synchronize do
+        @running[row.id] = {cancelled: @fetching_queues.fetch(row.queue).include?(row.id), queue: row.queue, thread: thread, working: false}
+      end
       gate.push(true)
     end
 
     private def maintenance_loop
       leader = false
+      next_election = 0.0
       next_schedule = next_rescue = next_cleanup = Time.at(0)
       until stopping?
+        generation, resign = @mutex.synchronize { [@maintenance_generation, @resign_requested] }
+        if resign && leader
+          @driver.leader_release(@config.id)
+          leader = false
+          @mutex.synchronize do
+            @leader = false
+            @resign_requested = false
+          end
+          # Give followers a chance to acquire the term we just released.
+          next_election = monotonic_now + 5
+        end
+        if !leader && (delay = next_election - monotonic_now).positive?
+          wait_for_maintenance(delay, generation)
+          next
+        end
+
         now = Time.now.utc
         leader = leader ? @driver.leader_renew(@config.id, now: now) : @driver.leader_acquire(@config.id, now: now)
+        @mutex.synchronize do
+          @leader = leader
+          @resign_requested = false unless leader
+        end
         if leader
           if now >= next_schedule
             @driver.job_schedule(now: now)
@@ -496,7 +544,7 @@ module River
           end
         end
 
-        wait(5)
+        wait_for_maintenance(5, generation)
       end
     rescue => error
       @config.logger.error("River maintenance stopped: #{error.full_message}")
@@ -536,6 +584,55 @@ module River
       ((count + 1 + (1 << 63)) % (1 << 64)) - (1 << 63)
     end
 
+    private def notification_loop(ready)
+      listener = nil #: untyped
+      retry_delay = 0.1
+      begin
+        until notifications_stopping?
+          begin
+            unless listener
+              listener = @driver.notification_listener
+              @mutex.synchronize { @notifications_disabled = listener.nil? }
+              ready << true if ready
+              ready = nil
+              return unless listener
+
+              # Poll durable state after reconnecting: Postgres messages sent
+              # while disconnected cannot be replayed.
+              wake
+              wake_maintenance
+            end
+            listener.poll(0.1).each { |topic, payload| receive_notification(topic, payload) }
+            retry_delay = 0.1
+          rescue => error
+            if ready
+              ready << error
+              ready = nil
+              return
+            end
+            @config.logger.error("River notification receiver failed: #{error.full_message}")
+            # SQLite's cursor survives temporary read errors. Reopening it would
+            # skip requests committed while the database was unavailable.
+            unless listener.is_a?(Driver::NotificationListener::SQLite)
+              listener&.close
+              listener = nil
+            end
+            sleep(retry_delay) unless notifications_stopping?
+            retry_delay = [retry_delay * 2, 1.0].min
+          end
+        end
+      ensure
+        ready << true if ready
+        listener&.close
+      end
+    end
+
+    private def notifications_stopping?
+      @mutex.synchronize do
+        @stop_requested && @running.empty? && @producer_threads.values.none?(&:alive?)
+      end
+    end
+
     private def perform_work(worker, job)
       timeout = worker_timeout(worker, job)
       result = timeout ? Timeout.timeout(timeout) { worker.work(job) } : worker.work(job)
@@ -545,7 +642,7 @@ module River
 
     private def periodic_jobs_changed
       start_maintenance
-      wake
+      wake_maintenance
     end
 
     private def producer_loop(queue, queue_config)
@@ -556,6 +653,7 @@ module River
       last_fetch = 0.0
       poll_interval = queue_config.resolved_fetch_poll_interval(@config)
       loop do
+        generation = @mutex.synchronize { @queue_generations[queue] }
         draining = queue_stopping?(queue)
         break if draining && running_count(queue).zero?
 
@@ -573,18 +671,25 @@ module River
             wait(sleep_for)
           end
           next if queue_stopping?(queue)
+        end
 
-          # A pause may arrive during cooldown; only read the queue immediately
-          # before fetching, and avoid the read entirely when all slots are busy.
-          unless @driver.queue_get(queue)&.paused_at
+        # Refresh controls even when every worker slot is occupied. A pause
+        # can also arrive during cooldown, so read immediately before fetching.
+        queue_state = @driver.queue_get(queue)
+        publish_queue(queue_state.paused_at ? EVENT_QUEUE_PAUSED : EVENT_QUEUE_RESUMED, queue_state) if queue_state
+        if capacity.positive? && !queue_state&.paused_at
+          @mutex.synchronize { @fetching_queues[queue] = [] }
+          begin
             jobs = @driver.job_get_available(attempted_by: @config.id, max: capacity, queue: queue, **fetch_options)
             last_fetch = monotonic_now
             jobs.each { |job| launch(job) }
             next unless jobs.empty?
+          ensure
+            @mutex.synchronize { @fetching_queues.delete(queue) }
           end
         end
 
-        wait(poll_interval)
+        wait_for_queue(queue, poll_interval, generation)
       end
     rescue => error
       @config.logger.error("River producer for #{queue.inspect} stopped: #{error.full_message}")
@@ -613,6 +718,52 @@ module River
 
     private def queue_stopping?(queue)
       @mutex.synchronize { @stop_requested || @removed_queues[queue] }
+    end
+
+    private def receive_notification(topic, payload)
+      message = JSON.parse(payload)
+      return unless message.is_a?(Hash)
+
+      case topic
+      when "river_insert"
+        wake_queue(message["queue"]) if message["queue"].is_a?(String)
+      when "river_control"
+        queue = message["queue"]
+        return unless queue.is_a?(String)
+
+        case message["action"]
+        when "cancel"
+          return unless message["job_id"].is_a?(Integer)
+
+          @mutex.synchronize do
+            entry = @running[message["job_id"]]
+            if entry && entry[:queue] == queue
+              entry[:cancelled] = true
+              entry[:thread].raise(JobCancelError) if entry[:working]
+            elsif (pending = @fetching_queues[queue])
+              # A claim may have committed before its workers are registered.
+              pending << message["job_id"]
+            end
+          end
+        when "metadata_changed", "pause", "resume"
+          wake_queue(queue)
+        end
+      when "river_leadership"
+        case message["action"]
+        when "request_resign"
+          @mutex.synchronize do
+            if @leader
+              @resign_requested = true
+              @maintenance_generation += 1
+              @maintenance_condition.broadcast
+            end
+          end
+        when "resigned"
+          wake_maintenance if message["leader_id"].is_a?(String) && message["leader_id"] != @config.id
+        end
+      end
+    rescue JSON::ParserError, TypeError => error
+      @config.logger.warn("River ignored invalid notification: #{error.message}")
     end
 
     private def remove_subscription(subscription)
@@ -680,10 +831,27 @@ module River
       end
     end
 
+    private def start_notifications
+      return if @config.poll_only || !@driver.respond_to?(:notification_listener)
+
+      ready = ::Queue.new
+      @mutex.synchronize do
+        return if @stop_requested
+
+        thread = Thread.new { notification_loop(ready) }
+        @notification_thread = thread
+        @threads << thread
+      end
+      result = ready.pop
+      raise result if result.is_a?(Exception)
+    end
+
     private def start_producer(name, queue_config)
-      @driver.queue_upsert(name)
+      queue = @driver.queue_upsert(name)
       @mutex.synchronize do
         return if @stop_requested || @removed_queues[name] || @producer_threads.key?(name)
+
+        @queue_paused[name] = !queue.paused_at.nil? if queue
 
         # Shutdown must see every launched thread, including a producer whose
         # database setup overlapped a stop or queue removal.
@@ -701,11 +869,40 @@ module River
       @mutex.synchronize { @condition.wait(@mutex, duration) unless @stop_requested }
     end
 
+    private def wait_for_maintenance(duration, generation)
+      @mutex.synchronize do
+        @maintenance_condition.wait(@mutex, duration) if !@stop_requested && @maintenance_generation == generation
+      end
+    end
+
+    private def wait_for_queue(queue, duration, generation)
+      deadline = monotonic_now + duration
+      @mutex.synchronize do
+        while !@stop_requested && !@removed_queues[queue] && @queue_generations[queue] == generation && (remaining = deadline - monotonic_now).positive?
+          @condition.wait(@mutex, remaining)
+        end
+      end
+    end
+
     private def wait_for_running_jobs(queue, duration)
       @mutex.synchronize do
         # Draining still needs a poll interval after stop is requested. Check
         # under the same mutex as completion so the last job's wake isn't lost.
         @condition.wait(@mutex, duration) if @running.any? { |_id, entry| entry[:queue] == queue }
+      end
+    end
+
+    private def wake_maintenance
+      @mutex.synchronize do
+        @maintenance_generation += 1
+        @maintenance_condition.broadcast
+      end
+    end
+
+    private def wake_queue(queue)
+      @mutex.synchronize do
+        @queue_configs.each_key { |name| @queue_generations[name] += 1 if queue == "*" || queue == name }
+        @condition.broadcast
       end
     end
 

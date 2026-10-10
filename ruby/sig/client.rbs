@@ -46,6 +46,7 @@ module River
     def queue_remove: (String | Symbol) -> self
     def queue_resume: (String | Symbol) -> bool
     def queue_update: (String | Symbol, metadata: Hash[untyped, untyped]) -> Queue
+    def request_resign: () -> nil
     def start: () -> self
     def started?: () -> bool
     def stop: (?wait: bool) -> self

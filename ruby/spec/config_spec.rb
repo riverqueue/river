@@ -91,6 +91,7 @@ RSpec.describe River::Config do
       job_timeout: River::JOB_TIMEOUT_DEFAULT,
       leader_election_disabled: false,
       plugins: [],
+      poll_only: false,
       queues: {},
       workers: be_a(River::Workers)
     )
@@ -124,13 +125,13 @@ RSpec.describe River::Config do
     plugin = Object.new
     original = described_class.new(
       id: "client-one", job_timeout: nil, plugins: [plugin],
-      fetch_only_known_kinds: true, leader_election_disabled: true,
+      fetch_only_known_kinds: true, leader_election_disabled: true, poll_only: true,
       queues: {default: 2}, workers: workers
     )
     copy = original.with(id: "client-two", fetch_poll_interval: 2)
 
     expect(copy).to have_attributes(id: "client-two", fetch_poll_interval: 2.0, job_timeout: nil, workers: workers)
-    expect(copy).to have_attributes(fetch_only_known_kinds: true, leader_election_disabled: true)
+    expect(copy).to have_attributes(fetch_only_known_kinds: true, leader_election_disabled: true, poll_only: true)
     expect(copy.queues.keys).to eq(["default"])
     expect(copy.plugins).to eq([plugin])
     expect(original.id).to eq("client-one")

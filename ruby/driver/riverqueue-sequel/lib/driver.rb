@@ -209,6 +209,15 @@ module River::Driver
       end
     end
 
+    private def runtime_notification_connection
+      params, schema = @db.synchronize do |connection|
+        [connection.conninfo_hash, connection.exec("SELECT current_schema()").getvalue(0, 0)]
+      end
+      params.compact!
+      params[:connect_timeout] = "5" unless params[:connect_timeout].to_i.positive?
+      [::PG.connect(params), schema]
+    end
+
     private def runtime_postgres?
       !@is_sqlite
     end
