@@ -23,7 +23,7 @@ pub use require::{
 #[derive(Debug)]
 pub struct TestJobBuilder<A: JobArgs> {
     args: A,
-    attempt: i16,
+    attempt: i32,
     id: i64,
     metadata: Map<String, serde_json::Value>,
     state: JobState,
@@ -44,7 +44,7 @@ impl<A: JobArgs> TestJobBuilder<A> {
 
     /// Sets the current attempt.
     #[must_use]
-    pub const fn attempt(mut self, attempt: i16) -> Self {
+    pub const fn attempt(mut self, attempt: i32) -> Self {
         self.attempt = attempt;
         self
     }

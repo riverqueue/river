@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- Like River for Go, `insertMany` rejects an empty batch with a `ValidationError` instead of returning an empty result. [PR #1435](https://github.com/riverqueue/river/pull/1435).
+- Like River for Go, the client no longer caps `maxAttempts` at 32767: SQLite stores wider attempt counts, and the Postgres and Prisma drivers clamp `maxAttempts` to their 16-bit column on insert instead of failing. [PR #1435](https://github.com/riverqueue/river/pull/1435).
+- Like River for Go's `ResumableStep`, a failed resumable step records the step's own error as the attempt's error instead of wrapping it in a `LifecycleError`. [PR #1435](https://github.com/riverqueue/river/pull/1435).
+
+### Fixed
+
+- Like River for Go, a leader whose renewal finds its term gone, because it expired or another process replaced it, gives up leadership at once instead of running maintenance until its local deadline passes. [PR #1435](https://github.com/riverqueue/river/pull/1435).
+- `updateQueue` raising a full queue's `maxWorkers` starts jobs at once instead of waiting for a running job to finish. [PR #1435](https://github.com/riverqueue/river/pull/1435).
+
 ## [0.2.0] - 2026-10-07
 
 ### Added

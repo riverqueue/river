@@ -233,6 +233,15 @@ jobs:
 
       - uses: ./.github/actions/setup-js
 
+      # An integration test reads fixtures generated from River's Go
+      # implementation.
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.work
+
+      - run: make generate/fixtures
+        working-directory: .
+
       - run: pnpm run build:all
 
       - run: node cli/dist/bin.js migrate-up --database-url "$TEST_DATABASE_URL"

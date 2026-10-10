@@ -283,6 +283,53 @@ async fn rescuer_rescues_past_full_batch_of_jobs_with_no_timeout() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn rescuer_discards_unregistered_kind_past_default_full_batch_of_jobs_with_no_timeout() {
+    let database = TestDatabase::new("rmt_rescue_full_default_batch").await;
+    let client = database.client().build().unwrap();
+
+    // The same paging at production scale: a full default batch of stuck
+    // jobs whose timeout is disabled, followed by a stuck job of a kind no
+    // worker handles, which Go's rescuer discards.
+    sqlx::query(AssertSqlSafe(format!(
+        "INSERT INTO {} (args, attempt, attempted_at, kind, max_attempts, state) \
+         SELECT '{{}}', 1, now() - interval '3 hours', $1, 25, 'running' \
+         FROM generate_series(1, $2)",
+        database.table("river_job")
+    )))
+    .bind(NoTimeoutArgs::KIND)
+    .bind(super::BATCH_SIZE_DEFAULT)
+    .execute(&database.pool)
+    .await
+    .unwrap();
+    let unregistered = database
+        .insert_job(stuck("maintenance_unregistered_kind"))
+        .await;
+
+    tokio::time::timeout(
+        Duration::from_secs(60),
+        rescuer::run_once(&context(&client, super::BATCH_SIZE_DEFAULT)),
+    )
+    .await
+    .expect("rescuer must not livelock on a full batch of ignored jobs")
+    .unwrap();
+
+    let (state, errors, _) = database.job(unregistered).await.unwrap();
+    assert_eq!((state.as_str(), errors), ("discarded", 1));
+    let untouched: i64 = sqlx::query_scalar(AssertSqlSafe(format!(
+        "SELECT count(*) FROM {} WHERE kind = $1 AND state = 'running' \
+            AND coalesce(array_length(errors, 1), 0) = 0 \
+            AND NOT metadata ? 'river:rescue_count'",
+        database.table("river_job")
+    )))
+    .bind(NoTimeoutArgs::KIND)
+    .fetch_one(&database.pool)
+    .await
+    .unwrap();
+    assert_eq!(untouched, super::BATCH_SIZE_DEFAULT);
+    database.cleanup().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn rescuer_rescues_undecodable_stuck_jobs() {
     let database = TestDatabase::new("rmt_rescue_undecodable").await;
     let client = database.client().build().unwrap();
@@ -587,12 +634,18 @@ async fn job_cleaner_retention_exclusions_and_batches() {
 #[tokio::test(flavor = "multi_thread")]
 async fn queue_cleaner_keeps_active_queues() {
     let database = TestDatabase::new("rmt_queue_cleaner").await;
-    let client = database.client().build().unwrap();
+    let client = database
+        .client()
+        .queue("worked", QueueConfig::new(1))
+        .build()
+        .unwrap();
     for (name, age_hours) in [
         ("stale_a", 25),
         ("stale_b", 30),
         ("stale_c", 48),
         ("active", 0),
+        ("recent", 23),
+        ("worked", 48),
     ] {
         sqlx::query(AssertSqlSafe(format!(
             "INSERT INTO {} (name, created_at, metadata, updated_at) \
@@ -605,6 +658,11 @@ async fn queue_cleaner_keeps_active_queues() {
         .await
         .unwrap();
     }
+    // A queue that's actively worked is kept even though its row looked
+    // stale: the producer working it refreshes `updated_at` when it starts
+    // and on every heartbeat.
+    let mut handle = client.start().unwrap();
+    handle.wait_ready().await.unwrap();
 
     cleaner::clean_queues(&context(&client, 2)).await.unwrap();
 
@@ -615,7 +673,8 @@ async fn queue_cleaner_keeps_active_queues() {
     .fetch_all(&database.pool)
     .await
     .unwrap();
-    assert_eq!(remaining, ["active"]);
+    assert_eq!(remaining, ["active", "recent", "worked"]);
+    handle.stop().await.unwrap();
     database.cleanup().await;
 }
 
@@ -682,6 +741,28 @@ async fn elector_loses_leadership_when_same_id_term_is_replaced() {
         .unwrap();
     assert_eq!(elected_at, replaced_elected_at);
     assert!(expires_in_minutes > 50.0);
+
+    // Once the other instance's term expires, this client wins a fresh term
+    // of its own instead of adopting the replacement.
+    sqlx::query(AssertSqlSafe(format!(
+        "UPDATE {table} SET expires_at = now() - interval '1 second'"
+    )))
+    .execute(&database.pool)
+    .await
+    .unwrap();
+    let fresh = tokio::time::timeout(Duration::from_secs(10), terms.recv())
+        .await
+        .expect("the client should win a fresh term")
+        .unwrap();
+    assert_ne!(fresh.elected_at, term.elected_at);
+    assert_ne!(fresh.elected_at, replaced_elected_at);
+    let elected_at: DateTime<Utc> = sqlx::query_scalar(AssertSqlSafe(format!(
+        "SELECT elected_at FROM {table} WHERE leader_id = 'shared-leader-id'"
+    )))
+    .fetch_one(&database.pool)
+    .await
+    .unwrap();
+    assert_eq!(elected_at, fresh.elected_at);
 
     cancel.cancel();
     run.await.unwrap();
@@ -940,6 +1021,132 @@ async fn reindexer_skips_artifacts_and_drops_artifacts_when_cancelled() {
     database.cleanup().await;
 }
 
+/// Records each event's level and fields, so a test can tell an index the
+/// reindexer skipped from one whose rebuild failed and was logged.
+#[derive(Clone, Default)]
+struct EventLines(Arc<std::sync::Mutex<Vec<String>>>);
+
+impl<S: tracing::Subscriber> tracing_subscriber::Layer<S> for EventLines {
+    fn on_event(
+        &self,
+        event: &tracing::Event<'_>,
+        _context: tracing_subscriber::layer::Context<'_, S>,
+    ) {
+        struct Fields(String);
+
+        impl tracing::field::Visit for Fields {
+            fn record_debug(&mut self, field: &tracing::field::Field, value: &dyn std::fmt::Debug) {
+                use std::fmt::Write as _;
+                write!(self.0, " {}={value:?}", field.name()).unwrap();
+            }
+        }
+
+        let mut fields = Fields(event.metadata().level().to_string());
+        event.record(&mut fields);
+        self.0.lock().unwrap().push(fields.0);
+    }
+}
+
+// Current-thread runtime: the subscriber set for this thread sees the
+// spawned reindexer.
+#[tokio::test]
+async fn reindexer_run_skips_missing_and_artifact_indexes_and_rebuilds_others() {
+    use tracing_subscriber::layer::SubscriberExt as _;
+
+    use crate::database::PostgresReindexSchedule;
+
+    let lines = EventLines::default();
+    let _subscriber =
+        tracing::subscriber::set_default(tracing_subscriber::registry().with(lines.clone()));
+    let database = TestDatabase::new("rmt_reindexer_run").await;
+    let table = database.table("river_job");
+    for index in [
+        "maint_reindex_artifact_idx",
+        "maint_reindex_artifact_idx_ccnew",
+        "maint_reindex_rebuilt_idx",
+    ] {
+        sqlx::raw_sql(AssertSqlSafe(format!(
+            "CREATE INDEX \"{index}\" ON {table} (kind)"
+        )))
+        .execute(&database.pool)
+        .await
+        .unwrap();
+    }
+    let filenode = |index: &'static str| {
+        let pool = database.pool.clone();
+        let schema = database.name.clone();
+        async move {
+            sqlx::query_scalar::<_, i64>(
+                "SELECT c.relfilenode::bigint FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace \
+                 WHERE n.nspname = $1 AND c.relname = $2",
+            )
+            .bind(schema)
+            .bind(index)
+            .fetch_one(&pool)
+            .await
+            .unwrap()
+        }
+    };
+    let artifact_before = filenode("maint_reindex_artifact_idx").await;
+    let rebuilt_before = filenode("maint_reindex_rebuilt_idx").await;
+
+    // The missing index and the one with a leftover artifact come first, so
+    // a rebuild of the last proves the run skipped past both (Go
+    // `ReindexableIndexNamesSkipsMissingIndexes` and
+    // `ReindexSkippedWithReindexArtifact`).
+    let client = Client::builder(
+        PostgresDatabase::new(database.pool.clone())
+            .with_schema(database.schema.clone())
+            .with_reindex(
+                PostgresReindexConfig::default()
+                    .with_index_names([
+                        "maint_reindex_missing_idx",
+                        "maint_reindex_artifact_idx",
+                        "maint_reindex_rebuilt_idx",
+                    ])
+                    .with_schedule(PostgresReindexSchedule::Interval(Duration::from_millis(
+                        200,
+                    ))),
+            ),
+    )
+    .workers(workers())
+    .build()
+    .unwrap();
+    let context = Arc::new(context(&client, 100));
+    let run = tokio::spawn(super::reindexer::run(
+        Arc::clone(&context),
+        database.pool.clone(),
+    ));
+    tokio::time::timeout(Duration::from_secs(10), async {
+        while filenode("maint_reindex_rebuilt_idx").await == rebuilt_before {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("the existing index without artifacts should be rebuilt");
+    context.cancel.cancel();
+    run.await.unwrap();
+
+    assert_eq!(
+        filenode("maint_reindex_artifact_idx").await,
+        artifact_before
+    );
+    // The missing index is filtered out with a warning rather than attempted
+    // and logged as a failure.
+    let lines = lines.0.lock().unwrap().clone();
+    assert!(
+        lines.iter().any(|line| line.starts_with("WARN")
+            && line.contains("indexes do not exist")
+            && line.contains("maint_reindex_missing_idx")),
+        "{lines:#?}"
+    );
+    assert!(
+        !lines.iter().any(|line| line.starts_with("ERROR")),
+        "{lines:#?}"
+    );
+    database.cleanup().await;
+}
+
 #[tokio::test(flavor = "multi_thread")]
 async fn periodic_start_hooks_and_run_on_start_follow_each_leadership_gain() {
     use crate::{Hook, IntervalSchedule, PeriodicJob, PeriodicJobOpts, PeriodicJobs};
@@ -1006,8 +1213,100 @@ async fn periodic_start_hooks_and_run_on_start_follow_each_leadership_gain() {
     wait_for(1).await;
     client.request_resign().await.unwrap();
     wait_for(2).await;
+    // Each term's run-on-start job is worked to completion.
+    let completed_count = || {
+        let pool = database.pool.clone();
+        let table = database.table("river_job");
+        async move {
+            sqlx::query_scalar::<_, i64>(AssertSqlSafe(format!(
+                "SELECT count(*) FROM {table} \
+                 WHERE metadata ->> 'river:periodic_job_id' = 'gain' AND state = 'completed'"
+            )))
+            .fetch_one(&pool)
+            .await
+            .unwrap()
+        }
+    };
+    tokio::time::timeout(Duration::from_secs(10), async {
+        while completed_count().await < 2 {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("both run-on-start jobs should complete");
     handle.stop().await.unwrap();
     assert_eq!(starts.load(Ordering::SeqCst), 2);
+    assert_eq!(periodic_count().await, 2);
+    database.cleanup().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn run_on_start_follows_each_term_across_same_id_term_replacement() {
+    use crate::{IntervalSchedule, PeriodicJob, PeriodicJobOpts};
+
+    let database = TestDatabase::new("rmt_periodic_same_id").await;
+    let client = database
+        .client()
+        .id("shared-leader-id")
+        .maintenance(MaintenanceConfig::default().with_elect_interval(Duration::from_millis(25)))
+        .periodic_job(PeriodicJob::with_options(
+            IntervalSchedule::new(Duration::from_hours(1)).unwrap(),
+            || NoTimeoutArgs {},
+            PeriodicJobOpts::new()
+                .with_id("same_id")
+                .with_run_on_start(true),
+        ))
+        .queue("default", QueueConfig::new(1))
+        .build()
+        .unwrap();
+    let table = database.table("river_leader");
+    let periodic_count = || {
+        let pool = database.pool.clone();
+        let table = database.table("river_job");
+        async move {
+            sqlx::query_scalar::<_, i64>(AssertSqlSafe(format!(
+                "SELECT count(*) FROM {table} WHERE metadata ->> 'river:periodic_job_id' = 'same_id'"
+            )))
+            .fetch_one(&pool)
+            .await
+            .unwrap()
+        }
+    };
+    let wait_for_count = |expected: i64| async move {
+        tokio::time::timeout(Duration::from_secs(10), async {
+            while periodic_count().await < expected {
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .unwrap_or_else(|_| panic!("expected {expected} run-on-start jobs"));
+    };
+    let mut handle = client.start().unwrap();
+    wait_for_count(1).await;
+
+    // Another process with the same client ID replaces the term with a newer
+    // one that expires shortly, as if it then stopped.
+    let replaced_elected_at: DateTime<Utc> = sqlx::query_scalar(AssertSqlSafe(format!(
+        "WITH removed AS (DELETE FROM {table} RETURNING leader_id, elected_at) \
+         INSERT INTO {table} (leader_id, elected_at, expires_at) \
+         SELECT leader_id, elected_at + interval '1 second', now() + interval '1 second' \
+         FROM removed RETURNING elected_at"
+    )))
+    .fetch_one(&database.pool)
+    .await
+    .unwrap();
+
+    // The client gives up the replaced term and later wins a fresh one, and
+    // the run-on-start job is inserted once for each of its terms.
+    wait_for_count(2).await;
+    let elected_at: DateTime<Utc> = sqlx::query_scalar(AssertSqlSafe(format!(
+        "SELECT elected_at FROM {table} WHERE leader_id = 'shared-leader-id'"
+    )))
+    .fetch_one(&database.pool)
+    .await
+    .unwrap();
+    assert_ne!(elected_at, replaced_elected_at);
+    handle.stop().await.unwrap();
     assert_eq!(periodic_count().await, 2);
     database.cleanup().await;
 }

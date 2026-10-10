@@ -278,7 +278,7 @@ async fn claimed_rows_decode_individually_and_accept_go_integer_ranges() {
         .unwrap();
 
     // River Go stores native integers on SQLite, so `max_attempts` can exceed
-    // Rust's `i16`. Such a job must still be worked.
+    // Postgres's 16-bit columns. Such a job must still be worked.
     let wide = client.insert(ResilienceArgs {}).await.unwrap();
     sqlx::query("UPDATE river_job SET max_attempts = 40000 WHERE id = ?")
         .bind(wide.job.row.id)
@@ -348,7 +348,7 @@ async fn claimed_rows_decode_individually_and_accept_go_integer_ranges() {
     );
     assert!(errors.is_none());
     let wide = client.jobs().get(wide.job.row.id).await.unwrap();
-    assert_eq!(wide.max_attempts, i16::MAX);
+    assert_eq!(wide.max_attempts, 40_000);
 
     let odd_errors = client.jobs().get(odd_errors.job.row.id).await.unwrap();
     let zero_time = "0001-01-01T00:00:00Z".parse().unwrap();

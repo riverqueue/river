@@ -1799,7 +1799,12 @@ export class SqliteRuntime implements RuntimeDriver<
 
     const errors = (params.errors ?? []).map((error) => ({
       at: error.at.toString(),
-      attempt: validateSmallInteger(error.attempt, "error.attempt", 0, 32_767),
+      attempt: validateSmallInteger(
+        error.attempt,
+        "error.attempt",
+        0,
+        Number.MAX_SAFE_INTEGER
+      ),
       error: error.error,
       trace: error.trace,
     }));
@@ -1809,7 +1814,14 @@ export class SqliteRuntime implements RuntimeDriver<
         params.encodedArgs === undefined
           ? encodeJson(params.args, "args")
           : encodeEncodedJson(params.encodedArgs, "encodedArgs"),
-      attempt: validateSmallInteger(params.attempt ?? 0, "attempt", 0, 32_767),
+      // Like River for Go, store attempt counts SQLite's 64-bit integers
+      // hold, wider than Postgres's 16-bit columns.
+      attempt: validateSmallInteger(
+        params.attempt ?? 0,
+        "attempt",
+        0,
+        Number.MAX_SAFE_INTEGER
+      ),
       attemptedAt: sqliteTimestampOrNull(params.attemptedAt),
       // Go writes NULL for absent client IDs and errors, not an empty array.
       attemptedBy:
@@ -1825,7 +1837,7 @@ export class SqliteRuntime implements RuntimeDriver<
         params.maxAttempts ?? 25,
         "maxAttempts",
         1,
-        32_767
+        Number.MAX_SAFE_INTEGER
       ),
       metadata: encodeJson(metadata, "metadata"),
       priority: validateSmallInteger(params.priority ?? 1, "priority", 1, 4),

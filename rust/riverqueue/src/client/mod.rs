@@ -38,7 +38,7 @@ pub use self::queues::{
 };
 #[cfg(feature = "sqlite")]
 pub(crate) use self::record::FieldErrors;
-pub(crate) use self::record::{DecodedJob, UndecodableJob, saturating_i16, tolerant_row};
+pub(crate) use self::record::{DecodedJob, UndecodableJob, tolerant_row};
 #[cfg(feature = "postgres")]
 pub(crate) use self::record::{JobRecord, decode_job_row, job_projection};
 pub use self::resign::ResignRequest;
@@ -105,7 +105,7 @@ pub(crate) struct ClientInner {
     allow_unregistered_job_kinds: bool,
     completion_sender: Mutex<Option<mpsc::WeakSender<CompletionUpdate>>>,
     pub(crate) database: Database,
-    default_max_attempts: i16,
+    default_max_attempts: i32,
     error_handler: Option<Arc<dyn crate::extension::DynErrorHandler>>,
     pub(crate) events: broadcast::Sender<Event>,
     /// Minimum delay between fetches for queues without their own, and the
@@ -429,7 +429,7 @@ impl Client {
 }
 
 impl Client {
-    pub(crate) fn default_max_attempts(&self) -> i16 {
+    pub(crate) fn default_max_attempts(&self) -> i32 {
         self.inner.default_max_attempts
     }
 

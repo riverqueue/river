@@ -63,8 +63,8 @@ pub use event::{
 };
 pub use extension::{
     DefaultRetryPolicy, ErrorHandler, ErrorHandlerDecision, Extensions, Hook, InsertContext,
-    InsertMiddleware, InsertNext, InsertedJob, Metric, MetricName, PanicError, Plugin, RetryPolicy,
-    WorkCancelled, WorkError, WorkMiddleware, WorkNext, WorkResult,
+    InsertMiddleware, InsertNext, InsertedJob, JobCancelError, Metric, MetricName, PanicError,
+    Plugin, RetryPolicy, WorkCancelled, WorkError, WorkMiddleware, WorkNext, WorkResult,
 };
 pub use job::{
     AttemptError, InsertBatch, InsertBatchResult, InsertOpts, InsertParams, InsertResult, Job,
@@ -107,7 +107,7 @@ pub use tokio_util;
 pub use worker::{WorkContext, WorkOutcome, Worker, WorkerTimeout, Workers};
 
 /// Default maximum number of attempts for a job.
-pub const MAX_ATTEMPTS_DEFAULT: i16 = 25;
+pub const MAX_ATTEMPTS_DEFAULT: i32 = 25;
 
 /// Default minimum delay between queue fetches.
 pub const FETCH_COOLDOWN_DEFAULT: std::time::Duration = std::time::Duration::from_millis(100);

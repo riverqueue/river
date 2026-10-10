@@ -1,7 +1,9 @@
 import { mkdtempSync, rmSync } from "node:fs";
+import { readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
+import { fileURLToPath } from "node:url";
 
 import { describe, expect, onTestFinished, test } from "vitest";
 import {
@@ -27,6 +29,23 @@ import type {
   SqliteJobRow,
   SqliteRiverScope,
 } from "./types.js";
+
+/** River Go's protocol goldens, including its notification payloads. */
+const PROTOCOL_GOLDENS = new URL(
+  "../../../../conformance/testdata/protocol_values.json",
+  import.meta.url
+);
+
+/**
+ * A notification from River Go's protocol goldens: its topic, its payload
+ * struct's JSON fields, and a payload Go sends.
+ */
+interface NotificationGolden {
+  readonly fields: readonly { name: string; omitempty: boolean }[];
+  readonly name: string;
+  readonly payload: Record<string, unknown>;
+  readonly topic: string;
+}
 
 /** River's own tests fail any lock window that crosses the event loop. */
 const STRICT = {
@@ -120,6 +139,25 @@ describe("SqliteDriver", () => {
     expect(
       database.prepare("SELECT count(*) AS count FROM river_job").get()
     ).toEqual({ count: 0 });
+  });
+
+  test("stores attempt counts wider than 16 bits, like Go", async () => {
+    const { driver } = await setup();
+    const job = defineJob()({ kind: "wide_attempts" });
+
+    const [{ job: inserted }] = await new Client(driver).insertMany([
+      { args: {}, job, options: { maxAttempts: 40_000 } },
+    ]);
+    expect(inserted.maxAttempts).toBe(40_000);
+    expect((await driver.jobGet(inserted.id))?.maxAttempts).toBe(40_000);
+
+    const { job: full } = await driver.jobInsert({
+      args: {},
+      attempt: 40_000,
+      kind: "wide_attempts",
+      maxAttempts: 40_001,
+    });
+    expect([full.attempt, full.maxAttempts]).toEqual([40_000, 40_001]);
   });
 
   test("round-trips exact JSON numbers from JavaScript and other engines", async () => {
@@ -1348,6 +1386,89 @@ describe("SqliteDriver", () => {
     expect(notificationRows(database)).toHaveLength(2);
   });
 
+  test("writes River Go's notification topics and payload fields", async () => {
+    const golden = JSON.parse(await readFixture(PROTOCOL_GOLDENS)) as {
+      readonly notifications: readonly NotificationGolden[];
+    };
+    expect(golden.notifications.length).toBeGreaterThan(0);
+
+    for (const notification of golden.notifications) {
+      const { database, driver } = await setup();
+      const queue = notification.payload.queue as string;
+      switch (notification.name) {
+        case "cancel":
+          await driver.jobInsert({
+            args: {},
+            id: BigInt(notification.payload.job_id as number),
+            kind: "notification_golden",
+            queue,
+          });
+          await driver.jobCancel(BigInt(notification.payload.job_id as number));
+          break;
+        case "insert":
+          await driver.notifyInsert([queue]);
+          break;
+        case "metadata_changed":
+          await driver.queueUpsert(queue);
+          await driver.queueUpdate(queue, {
+            metadata: notification.payload.metadata as Record<string, string>,
+          });
+          break;
+        case "pause":
+          await driver.queueUpsert(queue);
+          await driver.queuePause(queue);
+          break;
+        case "request_resign":
+          await driver.runtimeRequestLeadershipResignation();
+          break;
+        case "resigned": {
+          // Like River for Go's SQLite driver, other clients learn of a
+          // resignation at their next election attempt, without a
+          // notification.
+          const leader = (await driver.maintenanceLeaderAcquire(
+            notification.payload.leader_id as string,
+            Temporal.Now.instant(),
+            60_000,
+            null
+          ))!;
+          expect(await driver.maintenanceLeaderResign(leader)).toBe(true);
+          expect(notificationRows(database)).toEqual([]);
+          continue;
+        }
+        case "resume":
+          await driver.queueUpsert(queue, {
+            pausedAt: Temporal.Now.instant(),
+          });
+          await driver.queueResume(queue);
+          break;
+        default:
+          throw new Error(`unhandled notification golden ${notification.name}`);
+      }
+
+      const rows = notificationRows(database);
+      expect(
+        rows.map(({ topic }) => topic),
+        notification.name
+      ).toEqual([notification.topic]);
+      const payload = JSON.parse(rows[0]!.payload) as Record<string, unknown>;
+      expect(payload, notification.name).toEqual(notification.payload);
+      const fields = new Map(
+        notification.fields.map(({ name, omitempty }) => [name, omitempty])
+      );
+      for (const key of Object.keys(payload)) {
+        expect(fields.has(key), `${notification.name}.${key}`).toBe(true);
+      }
+      for (const [name, omitempty] of fields) {
+        if (!omitempty) {
+          expect(
+            Object.hasOwn(payload, name),
+            `${notification.name}.${name}`
+          ).toBe(true);
+        }
+      }
+    }
+  });
+
   test("fences leadership renewals and supports expiry failover", async () => {
     const { driver } = await setup();
     const firstAt = Temporal.Instant.from("2026-08-30T18:40:00Z");
@@ -1792,6 +1913,24 @@ function jobListParams(overrides: Partial<JobListParams> = {}): JobListParams {
     tagsAny: [],
     ...overrides,
   };
+}
+
+/**
+ * Reads a fixture that `make generate/fixtures` writes from River's Go
+ * implementation. A missing fixture fails the test rather than skipping it.
+ */
+async function readFixture(url: URL): Promise<string> {
+  try {
+    return await readFile(url, "utf8");
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+      throw new Error(
+        `missing conformance fixture ${fileURLToPath(url)}; run \`make generate/fixtures\` from the repository root`,
+        { cause: error }
+      );
+    }
+    throw error;
+  }
 }
 
 function notificationRows(

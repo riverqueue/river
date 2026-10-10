@@ -48,7 +48,7 @@ describe("Resumable", () => {
     });
   });
 
-  it("retains progress and the original cause when a step error is caught", async () => {
+  it("retains progress and the step's own error when it is caught", async () => {
     const resumable = new Resumable(client(), job({}));
     const cause = new Error("service unavailable");
     await resumable.step("first", () => undefined);
@@ -58,7 +58,7 @@ describe("Resumable", () => {
       })
       .catch(() => undefined);
     const finished = resumable.finish(false);
-    expect(finished.error?.cause).toBe(cause);
+    expect(finished.error).toBe(cause);
     expect(finished.metadata).toEqual({ "river:resumable_step": "first" });
   });
 
@@ -100,7 +100,7 @@ describe("Resumable", () => {
       resumable.step("after", () => {
         throw new Error("retry");
       })
-    ).rejects.toThrow('resumable step "after" failed');
+    ).rejects.toThrow(new Error("retry"));
 
     expect(visited).toEqual(["process"]);
     expect(resumable.finish(true).metadata).toEqual({

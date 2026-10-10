@@ -57,6 +57,48 @@ fn read_fixture(name: &str) -> String {
     })
 }
 
+/// The retry policy a client uses unless configured otherwise, rather than a
+/// seeded one, delays the first and second retries within Go's bounds.
+#[cfg(feature = "postgres")]
+#[tokio::test]
+async fn default_client_retry_policy_matches_go_bounds() {
+    let fixture: Fixture = serde_json::from_str(&read_fixture("protocol_values.json")).unwrap();
+    let pool = sqlx::postgres::PgPoolOptions::new()
+        .connect_lazy("postgres://localhost/unused")
+        .unwrap();
+    let client = riverqueue::Client::builder(pool).build().unwrap();
+    let client = riverqueue::__private::ExtensionClient::new(&client);
+
+    let test_cases = fixture
+        .retry_cases
+        .iter()
+        .filter(|test_case| test_case.error_count <= 2)
+        .collect::<Vec<_>>();
+    assert_eq!(
+        test_cases
+            .iter()
+            .map(|test_case| test_case.error_count)
+            .collect::<Vec<_>>(),
+        [1, 2]
+    );
+    for test_case in test_cases {
+        // Varying the job sweeps the policy's jitter.
+        for job_id in 1..=100 {
+            let now = Utc::now();
+            let row = retry_row(job_id, now, test_case.error_count - 1);
+            let delay = client
+                .retry_delay(&row, &riverqueue::WorkError::new("failure"), now)
+                .as_nanos();
+            assert!(
+                (u128::from(test_case.min_delay_ns)..=u128::from(test_case.max_delay_ns))
+                    .contains(&delay),
+                "error count {} delay {delay}ns outside Go's bounds",
+                test_case.error_count
+            );
+        }
+    }
+}
+
 #[test]
 fn go_protocol_values_match_rust() {
     let fixture: Fixture = serde_json::from_str(&read_fixture("protocol_values.json")).unwrap();
@@ -104,7 +146,7 @@ fn retry_row(id: i64, now: DateTime<Utc>, previous_errors: usize) -> JobRow {
         riverqueue::encoding::encode_args(&serde_json::json!({})).unwrap(),
         now,
     );
-    row.attempt = i16::try_from(previous_errors + 1).unwrap();
+    row.attempt = i32::try_from(previous_errors + 1).unwrap();
     row.attempted_at = Some(now);
     row.attempted_by = vec!["fixture".to_owned()];
     row.errors = vec![AttemptError::new(now, 1, "previous failure"); previous_errors];

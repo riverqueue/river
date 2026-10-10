@@ -17,7 +17,6 @@ use serde::{
 use serde_json::value::RawValue;
 
 use super::AttemptError;
-use crate::client::saturating_i16;
 
 impl<'de> Deserialize<'de> for AttemptError {
     /// Decodes an attempt error like Go's `encoding/json`: fields match
@@ -206,15 +205,20 @@ fn strict_time(raw: &str) -> Result<DateTime<Utc>, String> {
         .ok_or_else(|| format!("attempt error time {raw} isn't an RFC 3339 timestamp"))
 }
 
+/// Converts a JSON attempt number to `i32`, saturating at its bounds.
+fn saturating_i32(value: i64) -> i32 {
+    i32::try_from(value).unwrap_or(if value < 0 { i32::MIN } else { i32::MAX })
+}
+
 /// Decodes `attempt` like Go's `encoding/json` decodes an `int`: an integer
-/// literal or `null`. `attempt` is narrower than Go's `int`, so values beyond
-/// `i16` saturate like other persisted attempt counts.
-fn strict_attempt(raw: &str) -> Result<i16, String> {
+/// literal or `null`. `attempt` is narrower than Go's 64-bit `int`, so values
+/// beyond `i32` saturate.
+fn strict_attempt(raw: &str) -> Result<i32, String> {
     if raw == "null" {
         return Ok(0);
     }
     raw.parse::<i64>()
-        .map(saturating_i16)
+        .map(saturating_i32)
         .map_err(|_| format!("attempt error attempt {raw} isn't an integer"))
 }
 
@@ -236,14 +240,13 @@ const MAX_EXACT_FLOAT_INTEGER: f64 = 9_007_199_254_740_992.0;
 
 /// Decodes `attempt` like Go: integers, and numbers or numeric strings with an
 /// integral value no larger in magnitude than 2^53. `attempt` is narrower
-/// than Go's `int`, so values beyond `i16` saturate like other persisted
-/// attempt counts. Unlike Go, a string in hexadecimal floating point notation
+/// than Go's 64-bit `int`, so values beyond `i32` saturate. Unlike Go, a string in hexadecimal floating point notation
 /// (such as `"0x1p4"`) isn't recognized and decodes as zero.
 #[allow(
     clippy::float_cmp,
     reason = "an exact comparison checks for an integral value"
 )]
-fn lenient_attempt(raw: &str) -> i16 {
+fn lenient_attempt(raw: &str) -> i32 {
     let number: Cow<'_, str> = if raw.starts_with('"') {
         match serde_json::from_str::<String>(raw) {
             Ok(text) => Cow::Owned(text.trim().to_owned()),
@@ -256,7 +259,7 @@ fn lenient_attempt(raw: &str) -> i16 {
     };
 
     if let Ok(integer) = number.parse::<i64>() {
-        return saturating_i16(integer);
+        return saturating_i32(integer);
     }
     match number.parse::<f64>() {
         Ok(float) if float == float.trunc() && float.abs() <= MAX_EXACT_FLOAT_INTEGER =>
@@ -265,7 +268,7 @@ fn lenient_attempt(raw: &str) -> i16 {
                 clippy::cast_possible_truncation,
                 reason = "the float is integral and within the exact integer range"
             )]
-            saturating_i16(float as i64)
+            saturating_i32(float as i64)
         }
         _ => 0,
     }
@@ -422,7 +425,7 @@ mod tests {
             .and_utc()
     }
 
-    fn attempt_error(at: DateTime<Utc>, attempt: i16, error: &str, trace: &str) -> AttemptError {
+    fn attempt_error(at: DateTime<Utc>, attempt: i32, error: &str, trace: &str) -> AttemptError {
         AttemptError::new(at, attempt, error).with_trace(trace)
     }
 
@@ -584,8 +587,8 @@ mod tests {
             ),
             (
                 "AttemptSaturates",
-                r#"{"attempt":40000}"#,
-                attempt_error(zero, i16::MAX, "", ""),
+                r#"{"attempt":4000000000}"#,
+                attempt_error(zero, i32::MAX, "", ""),
             ),
             (
                 "AttemptBool",
@@ -763,8 +766,8 @@ mod tests {
             ("Null", "null", attempt_error(zero, 0, "", "")),
             (
                 "AttemptSaturates",
-                r#"{"attempt":-40000}"#,
-                attempt_error(zero, i16::MIN, "", ""),
+                r#"{"attempt":-4000000000}"#,
+                attempt_error(zero, i32::MIN, "", ""),
             ),
         ] {
             assert_eq!(

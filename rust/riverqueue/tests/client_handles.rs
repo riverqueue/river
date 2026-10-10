@@ -546,6 +546,20 @@ macro_rules! scenarios {
             .unwrap();
             let retried = jobs.retry(cancelled).tx(&mut tx).await.unwrap();
             assert_eq!(retried.state, JobState::Available);
+            jobs.update(
+                updated,
+                JobUpdateParams::default().output(serde_json::json!("committed")),
+            )
+            .tx(&mut tx)
+            .await
+            .unwrap();
+            let output = async |id| {
+                let row = jobs.get(id).await.unwrap();
+                row.metadata.get::<String>("output").unwrap()
+            };
+            // Others don't see the deletion or update until the commit.
+            assert!(jobs.get(deleted).await.is_ok());
+            assert_eq!(output(updated).await, None);
             tx.commit().await.unwrap();
 
             assert_eq!(
@@ -553,6 +567,7 @@ macro_rules! scenarios {
                 JobState::Available
             );
             assert!(matches!(jobs.get(deleted).await, Err(Error::NotFound(_))));
+            assert_eq!(output(updated).await.as_deref(), Some("committed"));
 
             fixture.cleanup().await;
         }
@@ -676,6 +691,46 @@ macro_rules! scenarios {
             fixture.cleanup().await;
         }
 
+        // Like Go, get and list return the queue a client records as it
+        // starts, and both reflect a metadata update.
+        #[tokio::test(flavor = "multi_thread")]
+        async fn queue_get_and_list_reflect_updates() {
+            let fixture = Fixture::new().await;
+            let client = fixture
+                .builder()
+                .workers(workers())
+                .queue("default", fast_queue())
+                .build()
+                .unwrap();
+            let mut run = client.start().unwrap();
+            run.wait_ready().await.unwrap();
+            run.stop().await.unwrap();
+            let queues = client.queues();
+
+            let queue = queues.get("default").await.unwrap();
+            assert_eq!(queue.name, "default");
+            assert!(queue.paused_at.is_none());
+            assert!(queue.metadata.is_empty());
+            assert_eq!(
+                queues.list(QueueListParams::default()).await.unwrap(),
+                [queue]
+            );
+
+            let owner = serde_json::Map::from_iter([("owner".to_owned(), "rust".into())]);
+            let updated = queues
+                .update("default", QueueUpdateParams::new().metadata(owner.clone()))
+                .await
+                .unwrap();
+            assert_eq!(updated.metadata, owner);
+            assert_eq!(queues.get("default").await.unwrap(), updated);
+            assert_eq!(
+                queues.list(QueueListParams::default()).await.unwrap(),
+                [updated]
+            );
+
+            fixture.cleanup().await;
+        }
+
         #[tokio::test(flavor = "multi_thread")]
         async fn queue_requests_take_effect_only_when_the_transaction_commits() {
             let fixture = Fixture::new().await;
@@ -758,6 +813,32 @@ macro_rules! scenarios {
                 queues.update("missing", QueueUpdateParams::new()).await,
                 Err(Error::NotFound(_))
             ));
+            // Like Go, names that no queue could have are simply not found.
+            for name in ["no such queue".to_owned(), "q".repeat(129)] {
+                assert!(
+                    matches!(queues.pause(name.as_str()).await, Err(Error::NotFound(_))),
+                    "pause {name:?}"
+                );
+                assert!(
+                    matches!(queues.resume(name.as_str()).await, Err(Error::NotFound(_))),
+                    "resume {name:?}"
+                );
+                assert!(
+                    matches!(
+                        queues.update(name.as_str(), QueueUpdateParams::new()).await,
+                        Err(Error::NotFound(_))
+                    ),
+                    "update {name:?}"
+                );
+            }
+            // Like Go, a queue name may separate its parts with `|`.
+            let piped = fixture
+                .client
+                .insert(args("piped"))
+                .opts(InsertOpts::default().with_queue("tenant|emails"))
+                .await
+                .unwrap();
+            assert_eq!(piped.job.row.queue, "tenant|emails");
 
             // Updating without metadata keeps it while refreshing the record.
             let owner = serde_json::Map::from_iter([("owner".to_owned(), "rust".into())]);
@@ -837,6 +918,79 @@ macro_rules! scenarios {
             fixture.cleanup().await;
         }
 
+        // Like Go, a producer added while the client runs observes a pause
+        // of its queue and works the queue's jobs again once it's resumed.
+        #[tokio::test(flavor = "multi_thread")]
+        async fn local_queues_pause_and_resume_a_dynamic_queue() {
+            let fixture = Fixture::new().await;
+            let client = fixture
+                .builder()
+                .workers(workers())
+                .queue("default", fast_queue())
+                .build()
+                .unwrap();
+            let mut events = client
+                .subscribe(&[EventKind::QueuePaused, EventKind::QueueResumed])
+                .unwrap();
+            let mut run = client.start().unwrap();
+            run.wait_ready().await.unwrap();
+
+            client.local_queues().add("dynamic", fast_queue()).unwrap();
+            // The new producer records its queue as it starts.
+            let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+            while client.queues().get("dynamic").await.is_err() {
+                assert!(
+                    tokio::time::Instant::now() < deadline,
+                    "the dynamic queue was not recorded"
+                );
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+            client.queues().pause("dynamic").await.unwrap();
+            let next_event = async |events: &mut riverqueue::EventReceiver| {
+                tokio::time::timeout(Duration::from_secs(10), events.recv())
+                    .await
+                    .expect("a queue event")
+                    .unwrap()
+            };
+            let paused = next_event(&mut events).await;
+            assert_eq!(paused.kind(), EventKind::QueuePaused);
+            assert_eq!(paused.as_queue().unwrap().queue.name, "dynamic");
+
+            let held = client
+                .insert(args("held"))
+                .opts(InsertOpts::default().with_queue("dynamic"))
+                .await
+                .unwrap();
+            let marker = client.insert(args("marker")).await.unwrap();
+            wait_for_completion(&client, marker.id()).await;
+            assert_eq!(
+                client.jobs().get(held.id()).await.unwrap().state,
+                JobState::Available
+            );
+
+            client.queues().resume("dynamic").await.unwrap();
+            let resumed_at = client.queues().get("dynamic").await.unwrap().updated_at;
+            let resumed = next_event(&mut events).await;
+            assert_eq!(resumed.kind(), EventKind::QueueResumed);
+            assert_eq!(resumed.as_queue().unwrap().queue.name, "dynamic");
+            wait_for_completion(&client, held.id()).await;
+            let held = client.jobs().get(held.id()).await.unwrap();
+            assert!(
+                held.attempted_at.unwrap() >= resumed_at,
+                "attempted at {:?} before the resume at {resumed_at}",
+                held.attempted_at
+            );
+
+            assert_eq!(
+                client.local_queues().remove("dynamic").await.unwrap(),
+                fast_queue()
+            );
+            assert!(!client.local_queues().configs().contains_key("dynamic"));
+
+            run.stop().await.unwrap();
+            fixture.cleanup().await;
+        }
+
         #[tokio::test(flavor = "multi_thread")]
         async fn local_queues_start_producers_while_running() {
             let fixture = Fixture::new().await;
@@ -860,6 +1014,20 @@ macro_rules! scenarios {
                 fast_queue()
             );
             assert!(!client.local_queues().configs().contains_key("dynamic"));
+
+            // Like Go's `QueueBundle.Remove`, the client stops working the
+            // removed queue while its other queues keep running.
+            let stranded = client
+                .insert(args("stranded"))
+                .opts(InsertOpts::default().with_queue("dynamic"))
+                .await
+                .unwrap();
+            let marker = client.insert(args("marker")).await.unwrap();
+            wait_for_completion(&client, marker.id()).await;
+            assert_eq!(
+                client.jobs().get(stranded.id()).await.unwrap().state,
+                JobState::Available
+            );
 
             run.stop().await.unwrap();
             fixture.cleanup().await;

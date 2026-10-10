@@ -10,6 +10,14 @@ Changes to River for Go are recorded in the [repository changelog](../CHANGELOG.
 
 ## [Unreleased]
 
+### Added
+
+- A worker cancels its job with a reason by returning `JobCancelError`, like River for Go's `JobCancel(err)`. Anywhere in the worker error's source chain, it cancels the job whatever attempts it has left, skips the error handler, and records `JobCancelError: <reason>` on the attempt as Go does. `WorkOutcome::Cancel` still cancels without a reason. [PR #1435](https://github.com/riverqueue/river/pull/1435).
+
+### Changed
+
+- **Breaking:** Attempt counts are now `i32` instead of `i16`, like River for Go's `int`: `JobRow::attempt` and `max_attempts`, `AttemptError::attempt` and `AttemptError::new`, `InsertOpts::max_attempts` and `with_max_attempts`, `InsertParams::max_attempts`, `ClientBuilder::default_max_attempts`, `MAX_ATTEMPTS_DEFAULT`, and `riverqueue-test`'s builders. On SQLite, which stores native integers, a job with more than 32,767 maximum attempts inserts and reads back unchanged, as in Go. On Postgres, whose columns are 16-bit, an insert clamps `max_attempts` to 32,767 like Go's drivers instead of failing. [PR #1435](https://github.com/riverqueue/river/pull/1435).
+
 ## [0.3.0] - 2026-10-07
 
 ### Changed

@@ -223,7 +223,8 @@ export interface InsertClient<Transaction = unknown> {
 
   /**
    * Insert a heterogeneous batch atomically, preserving input order in the
-   * result tuple. An empty batch resolves to `[]` without a database call.
+   * result tuple. Like River for Go, an empty batch is rejected with a
+   * {@link ValidationError}.
    */
   insertMany<const Items extends readonly InsertManyItem[]>(
     items: Items & CheckedInsertManyItems<Items>,
@@ -657,7 +658,7 @@ export class RiverClient<Transaction = unknown> implements Client<Transaction> {
     items: Items & CheckedInsertManyItems<Items>,
     options: TransactionOptions<Transaction> = {}
   ): Promise<InsertManyResults<Items>> {
-    if (items.length === 0) return [] as unknown as InsertManyResults<Items>;
+    if (items.length === 0) throw new ValidationError("no jobs to insert");
     return this.#operationScope(options.tx, async (tx) => {
       const allParams: JobInsertParams[] = [];
       for (const item of items) {

@@ -1233,6 +1233,65 @@ async fn sqlite_runs_jobs_and_persists_output() {
     run.stop().await.unwrap();
 }
 
+// Like Go's `JobCompleteTx`, a worker completes its own job in its own
+// transaction, along with the metadata it set while working.
+#[tokio::test]
+async fn sqlite_worker_completes_its_job_transactionally() {
+    let pool = setup().await;
+    let worked = Arc::new(Semaphore::new(0));
+    let worked_for_worker = Arc::clone(&worked);
+    let worker_pool = pool.clone();
+    let mut workers = Workers::new();
+    workers
+        .add_fn(move |context: WorkContext, _job: Job<RuntimeArgs>| {
+            let pool = worker_pool.clone();
+            let worked = Arc::clone(&worked_for_worker);
+            async move {
+                context.metadata_set("set_during_work", true)?;
+                let mut tx = pool.begin().await?;
+                let completed = context.job_complete_tx(&mut tx).await?;
+                tx.commit().await?;
+                assert_eq!(completed.state, JobState::Completed);
+                worked.add_permits(1);
+                Ok::<_, riverqueue::Error>(WorkOutcome::Complete)
+            }
+        })
+        .unwrap();
+    let client = Client::builder(pool.clone())
+        .workers(workers)
+        .queue(
+            "default",
+            QueueConfig::new(1)
+                .with_fetch_cooldown(Duration::from_millis(1))
+                .with_fetch_poll_interval(Duration::from_millis(10)),
+        )
+        .build()
+        .unwrap();
+    let mut run = client.start().unwrap();
+    run.wait_ready().await.unwrap();
+
+    let inserted = client.insert(RuntimeArgs { value: 1 }).await.unwrap();
+    tokio::time::timeout(Duration::from_secs(5), worked.acquire())
+        .await
+        .unwrap()
+        .unwrap()
+        .forget();
+
+    // Read the row before shutting down: shutdown can close the pool's one
+    // connection mid-query, and its replacement opens an empty in-memory
+    // database.
+    let row = client.jobs().get(inserted.job.row.id).await.unwrap();
+    assert_eq!(row.state, JobState::Completed);
+    assert!(row.finalized_at.is_some());
+    assert!(row.errors.is_empty(), "{:?}", row.errors);
+    assert_eq!(
+        row.metadata.get::<bool>("set_during_work").unwrap(),
+        Some(true)
+    );
+
+    run.stop().await.unwrap();
+}
+
 #[tokio::test]
 async fn sqlite_worker_cancelling_its_own_token_fails_the_attempt_normally() {
     #[derive(Debug, thiserror::Error)]

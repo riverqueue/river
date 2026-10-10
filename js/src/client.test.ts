@@ -279,7 +279,7 @@ describe("Client", () => {
 
     await expect(
       clientWithDefaults.insert(definition, { strings: [] }, { maxAttempts: 0 })
-    ).rejects.toThrow("maxAttempts must be a safe integer between 1 and 32767");
+    ).rejects.toThrow("maxAttempts must be a safe integer at least 1");
     await expect(
       clientWithDefaults.insert(definition, { strings: [] }, { queue: "" })
     ).rejects.toThrow("queue name must not be empty");
@@ -405,6 +405,12 @@ describe("Client", () => {
       new ValidationError("unique key appears more than once in batch")
     );
     expect(driver.insertedParams).toHaveLength(0);
+  });
+
+  it("rejects an empty batch, like Go", async () => {
+    await expect(client.insertMany([])).rejects.toThrow(
+      new ValidationError("no jobs to insert")
+    );
   });
 
   it("preserves each definition input across heterogeneous batches", async () => {

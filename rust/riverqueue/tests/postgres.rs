@@ -582,6 +582,31 @@ async fn client_discards_a_failing_job_after_max_attempts() {
     database.cleanup().await;
 }
 
+// Postgres's `max_attempts` column is 16 bits, so like River Go's drivers a
+// larger value is clamped to 32,767 on insert, while SQLite stores it.
+#[tokio::test]
+async fn max_attempts_beyond_the_column_are_clamped() {
+    let database = support::PostgresSchema::current("rs_wide_max_attempts").await;
+    let client = Client::builder(database.pool.clone()).build().unwrap();
+
+    let inserted = client
+        .insert(EchoArgs {
+            message: "wide".to_owned(),
+        })
+        .opts(InsertOpts::default().with_max_attempts(40_000))
+        .await
+        .unwrap();
+    assert_eq!(inserted.job.row.max_attempts, i32::from(i16::MAX));
+    let listed = client
+        .jobs()
+        .list(JobListParams::default().ids([inserted.job.row.id]))
+        .await
+        .unwrap();
+    assert_eq!(listed.jobs[0].max_attempts, i32::from(i16::MAX));
+
+    database.cleanup().await;
+}
+
 #[tokio::test]
 async fn client_discards_a_job_of_an_unregistered_kind() {
     let database = support::PostgresSchema::current("rs_unknown_kind").await;
@@ -1386,6 +1411,7 @@ async fn maintenance_client_runs_pilot_periodic_scheduled_and_transactional_jobs
             .unwrap(),
         Some(true)
     );
+    assert_eq!(transactional.errors, []);
     assert_eq!(
         transactional
             .metadata
