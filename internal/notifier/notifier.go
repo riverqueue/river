@@ -141,9 +141,11 @@ func (n *Notifier) Start(ctx context.Context) error {
 			n.deliverNotifications(ctx)
 		})
 
-		for attempt := 0; ; attempt++ {
+		for attempt := 0; ctx.Err() == nil; attempt++ {
 			if err := n.listenAndWait(ctx); err != nil {
-				if errors.Is(err, context.Canceled) {
+				// Only the service context ending should stop retries. A listener
+				// operation may time out while the service context is still live.
+				if ctx.Err() != nil {
 					break
 				}
 
