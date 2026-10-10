@@ -72,7 +72,7 @@ module River
       :discarded_job_retention_period, :error_handler, :fetch_cooldown,
       :fetch_only_known_kinds, :fetch_poll_interval, :job_timeout,
       :leader_election_disabled, :logger, :maintenance_services,
-      :periodic_jobs, :plugins, :queues, :retry_policy, :workers
+      :periodic_jobs, :plugins, :poll_only, :queues, :retry_policy, :workers
 
     # Creates a client configuration.
     #
@@ -84,6 +84,8 @@ module River
     # untouched in shared queues. +leader_election_disabled+ prevents this
     # client's maintenance; another eligible client must run scheduling,
     # rescue, and cleanup.
+    # +poll_only+ disables notification receiving, including leadership
+    # resignation requests. Job and queue state are still polled.
     def initialize(
       queues: {},
       workers: Workers.new,
@@ -98,6 +100,7 @@ module River
       plugins: [],
       maintenance_services: [],
       periodic_jobs: [],
+      poll_only: false,
       cancelled_job_retention_period: 86_400,
       completed_job_retention_period: 86_400,
       discarded_job_retention_period: 604_800,
@@ -118,6 +121,7 @@ module River
       @maintenance_services = maintenance_services.dup.freeze
       @periodic_jobs = periodic_jobs.dup.freeze
       @plugins = plugins.dup.freeze
+      @poll_only = poll_only
       @queues = normalize_queues(queues).freeze
       @retry_policy = retry_policy
       @workers = workers
@@ -154,6 +158,7 @@ module River
         maintenance_services: maintenance_services,
         periodic_jobs: periodic_jobs,
         plugins: plugins,
+        poll_only: poll_only,
         queues: queues,
         retry_policy: retry_policy,
         workers: workers, **overrides)

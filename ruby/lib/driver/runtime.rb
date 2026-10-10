@@ -244,7 +244,9 @@ module River::Driver
             AND attempt < #{River::MAX_ATTEMPTS_LIMIT}
           RETURNING id
         SQL
-        [updated_id, job_get_by_id(updated_id || id)]
+        job = job_get_by_id(updated_id || id)
+        runtime_notify("river_insert", queue: job.queue) if updated_id && job
+        [updated_id, job]
       end
       if !updated_id && job && job.state != "running" && (job.state != "available" || job.scheduled_at > now) && job.attempt >= River::MAX_ATTEMPTS_LIMIT
         raise ArgumentError, "cannot retry a job with #{River::MAX_ATTEMPTS_LIMIT} or more attempts"
@@ -254,18 +256,21 @@ module River::Driver
 
     def job_schedule(now: Time.now.utc, max: 1_000)
       transaction do
+        queues = [] #: Array[String]
         # Hold each selected row until its transition (including uniqueness
         # conflict handling) finishes. A concurrent retry may change its due time.
         lock = runtime_postgres? ? "FOR UPDATE SKIP LOCKED" : ""
-        ids = runtime_query_rows(<<~SQL).map { |row| runtime_value(row, :id).to_i }
-          SELECT id FROM river_job
+        rows = runtime_query_rows(<<~SQL)
+          SELECT id, queue FROM river_job
           WHERE state IN ('retryable', 'scheduled') AND scheduled_at <= #{runtime_time(now)}
           ORDER BY priority, scheduled_at, id
           LIMIT #{Integer(max)} #{lock}
         SQL
-        ids.each do |id|
+        rows.each do |row|
+          id = runtime_value(row, :id).to_i
           transaction do
             runtime_execute("UPDATE river_job SET state = 'available' WHERE id = #{id} AND state IN ('retryable', 'scheduled')")
+            queues << runtime_value(row, :queue)
           end
         rescue runtime_unique_violation_class
           runtime_execute(<<~SQL)
@@ -276,7 +281,8 @@ module River::Driver
           SQL
         end
 
-        ids.length
+        queues.uniq.each { |queue| runtime_notify("river_insert", queue: queue) }
+        rows.length
       end
     end
 
@@ -365,6 +371,16 @@ module River::Driver
       SQL
     end
 
+    # Opens a receiver independent of application transactions. Postgres uses
+    # one dedicated connection; SQLite keeps a cursor in its shared outbox.
+    def notification_listener
+      return NotificationListener::SQLite.new(method(:notification_query)) unless runtime_postgres?
+      return unless postgres_capabilities.supports_listen_notify
+
+      connection, schema = runtime_notification_connection
+      NotificationListener::Postgres.new(connection, schema)
+    end
+
     def queue_get(name)
       row = runtime_query_rows("SELECT #{runtime_queue_columns} FROM river_queue WHERE name = #{runtime_quote(name)}").first
       runtime_queue_from_row(row)
@@ -429,6 +445,16 @@ module River::Driver
         ON CONFLICT (name) DO UPDATE SET updated_at = excluded.updated_at
       SQL
       queue_get(name)
+    end
+
+    # Delivery follows the caller's transaction, just like job insertion.
+    def request_resign
+      transaction { runtime_notify("river_leadership", action: "request_resign", leader_id: "") }
+      nil
+    end
+
+    private def notification_query(sql)
+      runtime_query_rows(sql)
     end
 
     private def runtime_append_error(error)
