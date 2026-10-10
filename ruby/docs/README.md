@@ -751,6 +751,11 @@ Load River and worker definitions in the main Ractor before spawning others. Eac
 
 Database drivers, Active Record, Sequel, and optional dependencies such as Fugit still need their own Ractor compatibility. Job timeouts also depend on Ruby and the `timeout` gem: the test suite exercises them on Ruby 4 with `timeout` 0.6.1; tests on older Rubies disable job timeouts. `WorkerRunner` handles process-wide signals and must run on the main thread of the main Ractor.
 
+Ruby 3.3 and 3.4 can deadlock while scheduling threads inside Ractors, even
+without River ([Ruby bug #20905](https://bugs.ruby-lang.org/issues/20905), fixed
+in Ruby 4). The test suite skips the producer/maintenance lifecycle test on
+those versions; insertion and synchronous worker checks still run.
+
 Ruby 4.0.2 with `timeout` 0.6.1 can intermittently deadlock during VM shutdown
 while terminating Ractors and their timeout helper threads, even after work
 finishes successfully. This reproduces without River. Tests bypass that shutdown
