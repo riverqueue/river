@@ -589,7 +589,7 @@ module River
       end
     rescue => error
       @config.logger.error("River maintenance stopped: #{error.full_message}")
-      wait(5)
+      wait(5, @maintenance_condition)
       retry unless stopping?
     end
 
@@ -906,8 +906,8 @@ module River
       @mutex.synchronize { @stop_requested }
     end
 
-    private def wait(duration)
-      @mutex.synchronize { @condition.wait(@mutex, duration) unless @stop_requested }
+    private def wait(duration, condition = @condition)
+      @mutex.synchronize { condition.wait(@mutex, duration) unless @stop_requested }
     end
 
     private def wait_for_maintenance(duration, generation)
