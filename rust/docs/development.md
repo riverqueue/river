@@ -1,5 +1,59 @@
 # River Rust development
 
+Run commands from the repository root. See the [Rust README](../README.md) for application usage.
+
+## Setup
+
+Install Rust 1.95 or newer and the Go version specified by [`go.work`](../../go.work). Go generates the shared conformance fixtures used by the tests. Postgres integration tests also need a disposable database.
+
+## Tests and checks
+
+```sh
+make lint/rust
+make test/rust
+make doc/rust
+make check/rust/package
+```
+
+Postgres integration tests require a disposable database. They build only
+with `--cfg river_postgres_tests`, which the Makefile targets pass to rustc
+and rustdoc, building into `target/postgres-tests`:
+
+```sh
+RIVER_RUST_DATABASE_URL=postgres://localhost/river_rust_test \
+  make test/rust/postgres
+```
+
+CI runs unit, doc, and SQLite tests on each supported Rust version, and
+Postgres tests against versions 14 through 18. Rust tests check unique
+keys, retry bounds, cron schedules, and snooze counts against fixtures that
+River's Go implementation generates into `conformance/testdata`, which isn't
+committed. The `make test/rust` targets generate them first, so Go is needed
+to run the tests; when running `cargo test` directly, run `make
+generate/fixtures` beforehand. A missing fixture fails its test.
+
+`make check/rust/package` builds the five publishable crate archives and
+verifies that each one builds from its packaged sources, resolving the
+exact-version workspace dependencies from the other archives. It does not
+publish anything. Release tags use `rust/vX.Y.Z`, independently of Go
+module tags.
+
+## Benchmarking
+
+For basic end-to-end performance figures, the `riverqueue` binary from
+`riverqueue-cli` has the Rust equivalent of `river bench`. It truncates the selected River job table,
+so use a disposable database:
+
+```sh
+make bench/rust DATABASE_URL=postgres://localhost/river_bench \
+  RUST_BENCH_ARGS='--duration 30s'
+```
+
+The command supports continuous burn, fixed `--num-total-jobs` burn-down,
+custom schemas, tunable worker/pool/batch sizes, periodic jobs/sec output, and a
+final jobs/sec plus p95 end-to-end latency summary. Use `riverqueue bench
+--help` for all options.
+
 ## Releasing a new version
 
 Run these commands from the repository root. All five Rust crates are versioned and released together. `VERSION` has no leading `v`; Git tags use `rust/vX.Y.Z`, independently of Go module tags.

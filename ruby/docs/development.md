@@ -2,6 +2,17 @@
 
 All commands on this page run from `ruby/`, unless specified otherwise.
 
+From the repository root, the equivalent setup and checks are:
+
+```sh
+make -C ruby install
+createdb river_test
+RIVER_REQUIRE_DATABASES=1 make test/ruby
+make lint/ruby typecheck/ruby
+```
+
+`make test/ruby/conformance` runs only the Go-generated fixture checks and needs no Postgres server.
+
 ## Install dependencies
 
 ```shell

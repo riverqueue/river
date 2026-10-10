@@ -1,4 +1,4 @@
-# River TypeScript development
+# River JavaScript and TypeScript development
 
 ## Setup
 
@@ -37,6 +37,7 @@ pnpm run test:coverage     # Run unit tests with line/branch coverage
 pnpm run test:integration  # Run integration tests (requires database)
 pnpm run verify:migrations # Verify generated migration files and hashes
 pnpm run migration:legacy  # Verify and compile the pinned 0.1.0 fixture
+pnpm run docs:api          # Generate the API reference with TypeDoc
 pnpm run docs:snippets     # Typecheck package README examples
 pnpm run api:report        # Regenerate the etc/*.api.md declaration reports
 pnpm run package:check     # Validate tarballs, consumers, and examples

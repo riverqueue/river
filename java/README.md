@@ -4,6 +4,25 @@ Prerelease Java 21 client and worker runtime for River's Postgres and SQLite
 schemas. Jobs are ordinary River jobs: another language can insert, cancel,
 retry, or work them using the same database.
 
+## Installation
+
+Java 21 or newer is required. Add `com.riverqueue:river:0.48.0-alpha.1` and a JDBC driver to your application's dependencies. Jackson 3 is included transitively. Applications do not need Go.
+
+```xml
+<dependency>
+  <groupId>com.riverqueue</groupId>
+  <artifactId>river</artifactId>
+  <version>0.48.0-alpha.1</version>
+</dependency>
+<dependency>
+  <groupId>org.postgresql</groupId>
+  <artifactId>postgresql</artifactId>
+  <version>42.7.12</version>
+</dependency>
+```
+
+For SQLite, replace the Postgres JDBC dependency with `org.xerial:sqlite-jdbc:3.53.4.0`. To install a local copy of River from source, see the [development guide](docs/development.md#building-from-source).
+
 ## Quick start
 
 Define job arguments as a record, give the job a stable kind, and register a
@@ -47,23 +66,6 @@ service, keep `Workers` open until the application stops. Each active job runs
 on a virtual thread; queue limits bound concurrent jobs. In production, run
 migrations as a deployment step using the CLI below.
 
-## Installation
-
-The Maven artifact is `com.riverqueue:river:0.48.0-alpha.1`. To build from source,
-run `make generate/fixtures` from the repository root, then `mvn install` from
-`java/`, with `JAVA_HOME` pointing to JDK 21 or 25. Source tests need Go to generate
-their reference fixtures; applications do not need Go. The pinned formatter does
-not run on JDK 27. Add the JDBC driver for your database to your application.
-Jackson 3 is included transitively.
-
-```xml
-<dependency>
-  <groupId>com.riverqueue</groupId>
-  <artifactId>river</artifactId>
-  <version>0.48.0-alpha.1</version>
-</dependency>
-```
-
 Job kinds are explicit, stable wire names independent of Java class names.
 Record properties use snake_case in JSON by default, so `accountId` becomes
 `account_id`. Match kinds and JSON fields across languages sharing a job.
@@ -78,10 +80,10 @@ for each operation. River never closes an application-owned data source. An
 
 The `river-cli` executable JAR includes Postgres and SQLite JDBC drivers and
 runs with Java 21 or newer. It needs no Go installation or application classpath.
-Build it as described under [Installation](#installation), then run:
+For a local build, see the [development guide](docs/development.md#building-from-source). Set `RIVER_CLI` to the executable JAR, then run:
 
 ```sh
-RIVER_CLI=cli/target/river-cli-0.48.0-alpha.1-all.jar
+RIVER_CLI=/path/to/river-cli-0.48.0-alpha.1-all.jar
 export DATABASE_URL=postgres://localhost/myapp
 # For SQLite: export DATABASE_URL=jdbc:sqlite:/absolute/path/myapp.db
 
@@ -684,105 +686,4 @@ their queue's peers when due.
 
 ## Development
 
-From the repository root, with Go (the version in `go.work`), JDK 21 or 25,
-and Maven installed:
-
-```sh
-make test/java/conformance
-make test/java/sqlite
-RIVER_TEST_DATABASE_URL=postgres://localhost/river_test make test/java/postgres
-make lint/java
-make check/java/package
-make verify/java-migrations
-make check/modzip
-```
-
-`test/java` runs library and executable CLI tests and checks formatting. Client
-and worker tests use Postgres when `RIVER_TEST_DATABASE_URL` is set, with a
-fresh schema for each test that is removed afterward. Otherwise they use SQLite.
-`test/java/postgres` requires that URL; `test/java/sqlite` explicitly uses SQLite
-and excludes Postgres-only tests, even if a URL is set in your environment.
-`test/java/conformance` needs no external database: it runs the JUnit tests tagged
-`conformance`, using temporary SQLite databases for storage checks even if a
-Postgres URL is set. The full SQLite and Postgres targets run these checks
-against their selected backend. These targets first generate fresh fixtures
-directly from this checkout's Go implementation, just like
-`test/js/conformance` and `test/rust/conformance`.
-
-Java reads all four files in `conformance/testdata`: uniqueness hashes, cron
-schedules, snooze counters, and protocol values (states, metadata keys,
-notification payloads, attempt errors, and retry bounds). These files are ignored
-by Git and read at test time. Missing fixtures fail with instructions to run
-`make generate/fixtures`; there are no bundled fallback goldens. To use Maven or
-an IDE directly, generate the fixtures first. `make test` from `java/` delegates
-to the root target; `mvn spotless:apply` formats Java sources.
-
-Notification tests check both encoding and dispatch: targeted cancellation, queue
-wakeups, leadership signals, and ignoring a client's own resignation.
-Database-backed tests also verify topic routing, recovery after malformed
-payloads, and immediate leadership wakeup after a peer resigns.
-
-Uniqueness tests include the raw JSON fixtures for duplicate keys and integer-like
-map keys. Protocol tests exercise both retry jitter boundaries, decode stored
-states and uniqueness bits, and verify periodic IDs, insert nonces, resumable
-checkpoints, output, and rescue counters using Go's metadata keys.
-
-`make generate/java-migrations` syncs SQL and the migration catalog from the
-canonical Go drivers. `verify/java-migrations` detects changed, missing, or extra
-migrations. `check/java/package` checks the library and CLI archives, including
-source JARs, for development content and verifies bundled runtime resources.
-The Go maintenance tools live in `java/bin/`. `make test/java` and `make lint/java`
-include their tests and lint checks; `make test/java/tools` and
-`make lint/java/tools` run only the tool checks. From `java/`, use `make test/tools`
-and `make lint/tools`. These checks run in Java CI, separately from the root
-Go-only `make test` and `make lint` targets.
-The legacy adapter is not installed or deployed as a Maven artifact.
-`java/go.mod` excludes this directory from Go module archives and package
-discovery. The Make targets invoke the Go tools by file from the root workspace;
-the module is not part of `go.work` and must not be tagged as a Go module.
-
-The Java CI workflow follows the Rust and JavaScript layout: a quality/package
-job, a JDK 21/25 matrix running unit and SQLite tests, and a Postgres 14–18
-matrix running client, worker, and migration tests on JDK 25. All jobs use the
-shared Java setup action and Maven dependency caching. The whole workflow is
-filtered to changes in Java, its build configuration, fixtures, and canonical
-migrations. Go changes run the smaller fixture suite in the shared Conformance
-workflow alongside Rust and JavaScript.
-
-### Legacy cross-process harness
-
-The original interoperability adapter remains available for broader storage,
-runtime, and multi-engine scenarios. It uses the historical harness pinned in
-`java/conformance/reference-revision`, which is separate from the current
-Go-generated fixtures and is not part of `master`'s conformance module.
-
-From `java/`, using only disposable databases (the harness resets job tables):
-
-```sh
-RIVER_CONFORMANCE_DATABASE_URL=postgres://localhost/river_java_conformance \
-  python3 conformance/bin/run.py postgres
-python3 conformance/bin/run.py sqlite
-```
-
-The runner extracts that revision into ignored build storage and registers the
-Java candidate there. `--reference /path/to/checkout` uses an existing harness.
-`--refresh` opts into the old reference branch's current head; review its
-contract and profiles before updating the pin.
-
-See [intentional differences](DIFFERENCES.md) for the Java API and lifecycle
-choices. Passing a conformance profile demonstrates the scenarios in that
-profile; it is not a claim about untested behavior or performance.
-
-The full peer matrix uses `multi` with `RIVER_CONFORMANCE_PEER_FILE` set to a
-colon-separated list of Rust and JS candidate descriptors, and
-`RIVERQUEUE_JS_ROOT` pointing to the JS checkout. `multi-soak` also requires
-`RIVER_CONFORMANCE_MULTI_ENGINE_SOAK_DURATION=5m` (or longer). The upstream
-harness currently has a Postgres soak; SQLite endurance validation repeats
-`TestMultiEngineSQLiteConformance` with `-count=5`.
-
-`python3 bin/import-reference.py --check /path/to/reference` verifies the legacy
-adapter contract. Omit `--check` to import it and record its hash. This command
-does not overwrite the current migrations or generated fixtures.
-
-See [validation results](VALIDATION.md) for the tested revisions and remaining
-limitations.
+See [developing River for Java](docs/development.md).
