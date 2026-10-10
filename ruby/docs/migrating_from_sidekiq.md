@@ -138,12 +138,9 @@ class FulfillOrderArgs
     @order_id = order_id
   end
 
+  def insert_opts = River::InsertOpts.new(max_attempts: 6, queue: :orders)
   def kind = "fulfill_order"
   def to_json = JSON.generate(order_id: @order_id)
-
-  def insert_opts
-    River::InsertOpts.new(max_attempts: 6, queue: :orders)
-  end
 end
 
 class FulfillOrderWorker
