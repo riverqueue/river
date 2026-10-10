@@ -305,7 +305,7 @@ RSpec.shared_examples "driver job state machine" do
     row = insert_job(1, scheduled_at: now - 1)
     driver.job_claim(id: row.id, attempted_by: "test", now: now)
     cancel_before_write = true
-    driver.define_singleton_method(:runtime_returning_ids) do |sql|
+    driver.define_singleton_method(:runtime_returning_jobs) do |sql|
       if cancel_before_write
         cancel_before_write = false
         job_cancel(row.id)

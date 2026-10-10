@@ -86,14 +86,29 @@ RSpec.describe "River shared driver runtime edge cases", database: :sqlite do
     driver = Object.new.extend(River::Driver::Runtime)
     driver.define_singleton_method(:runtime_postgres?) { true }
     driver.define_singleton_method(:runtime_quote) { |value| "'#{value}'" }
-    driver.define_singleton_method(:transaction) { |&block| block.call }
-    driver.define_singleton_method(:runtime_returning_ids) do |statement|
+    driver.define_singleton_method(:runtime_returning_jobs) do |statement|
       sql = statement
       []
     end
 
     expect(driver.job_get_available(attempted_by: "client", max: 2, queue: "work")).to eq([])
     expect(sql).to include("array_append", "FOR UPDATE SKIP LOCKED")
+  end
+
+  it "locks a running Postgres job by primary key before completing it" do
+    sql = nil
+    driver = Object.new.extend(River::Driver::Runtime)
+    driver.define_singleton_method(:runtime_postgres?) { true }
+    driver.define_singleton_method(:runtime_quote) { |value| "'#{value}'" }
+    driver.define_singleton_method(:runtime_returning_jobs) do |statement|
+      sql = statement
+      [:completed]
+    end
+
+    expect(driver.job_complete(id: 1, finalized_at: Time.now.utc)).to eq(:completed)
+    expect(sql).to include("FROM river_job WHERE id = 1 FOR UPDATE", "FROM running_job",
+      "running_job.locked_state = 'running'", "NOT running_job.cancel_attempted")
+    expect(sql).not_to match(/WHERE[^()]*\bstate = 'running'/)
   end
 
   it "rejects nil runtime timestamps" do

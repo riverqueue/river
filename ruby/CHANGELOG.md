@@ -43,6 +43,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - The Active Record driver borrows a connection for each call instead of leasing one to the calling thread. Each job left a leased connection on its finished thread, and Active Record reset every one when it reclaimed it.
 - The maintenance loop waits on its own condition. Every job completion and insert used to wake it, and each wake ran a leader election or renewal.
+- Claims and job finishes return rows from their own UPDATE instead of reading each job again by id. Finishing a job locks it by primary key first, so Postgres no longer plans the update on the fetching index, which slowed down as a drain went on.
 
 ## [0.13.0] - 2026-10-08
 
