@@ -567,10 +567,12 @@ RSpec.describe River::ClientRuntime do
       checks >= 3
     end
 
-    value.define_singleton_method(:wait) { |_duration| }
+    waits = []
+    value.define_singleton_method(:wait) { |duration, condition| waits << [duration, condition] }
 
     expect { value.send(:maintenance_loop) }.not_to raise_error
     expect(checks).to eq(3)
+    expect(waits).to eq([[5, value.instance_variable_get(:@maintenance_condition)]])
   end
 
   it "does not retry failed maintenance after stop begins" do
@@ -583,10 +585,12 @@ RSpec.describe River::ClientRuntime do
       checks >= 2
     end
 
-    value.define_singleton_method(:wait) { |_duration| }
+    waits = []
+    value.define_singleton_method(:wait) { |duration, condition| waits << [duration, condition] }
 
     expect { value.send(:maintenance_loop) }.not_to raise_error
     expect(checks).to eq(2)
+    expect(waits).to eq([[5, value.instance_variable_get(:@maintenance_condition)]])
   end
 
   it "isolates a failing service while continuing maintenance and renewing leadership" do
