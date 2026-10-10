@@ -4,6 +4,7 @@ require "timeout"
 require "riverqueue/testing"
 require_relative "runtime_draining_shared_examples"
 require_relative "runtime_finishing_shared_examples"
+require_relative "transactional_completion_shared_examples"
 
 RSpec.shared_examples "Postgres state update races" do
   it "skips a concurrent retry when selecting jobs for bulk deletion" do
@@ -239,6 +240,7 @@ end
 RSpec.shared_examples "client driver end to end" do
   it_behaves_like "cancellation while draining"
   it_behaves_like "externally claimed job finalization"
+  it_behaves_like "transactional job completion"
   [false, true].product([false, true]).each do |with_cursor, rollback|
     it "resumes after a #{rollback ? "rolled-back" : "committed"} #{with_cursor ? "cursor" : "step"} checkpoint" do
       received = []

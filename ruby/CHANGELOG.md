@@ -10,6 +10,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 
 - Allow `River::Workers#add` to register a kind and a work block, using the client's default retry and timeout policies. [PR #1486](https://github.com/riverqueue/river/pull/1486).
+- Added `Client#job_complete_tx(job)` to complete a running job in the caller's Active Record or Sequel transaction, including pending metadata and output. An active transaction on the driver's connection is required. Completion rolls back with the transaction; once committed, it takes precedence over subsequent worker errors and emits a completion event when the worker finishes. [PR #1490](https://github.com/riverqueue/river/pull/1490).
 
 ## [0.13.0] - 2026-10-08
 

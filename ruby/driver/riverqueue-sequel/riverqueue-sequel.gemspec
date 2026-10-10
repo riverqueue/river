@@ -12,6 +12,6 @@ Gem::Specification.new do |s|
   s.license = "MPL-2.0"
   s.required_ruby_version = ">= 3.2"
   # The stupid version bounds are used to silence Ruby's extremely obnoxious warnings.
-  s.add_dependency "sequel", "> 0", "< 1000"
+  s.add_dependency "sequel", ">= 5.20", "< 1000" # transaction callbacks that respect savepoints
   s.add_dependency "riverqueue", "= #{s.version}"
 end

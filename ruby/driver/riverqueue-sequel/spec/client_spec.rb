@@ -35,6 +35,21 @@ RSpec.describe "Sequel client integration" do
       it_behaves_like "Postgres finalized job list plans" if adapter == :postgres
       it_behaves_like "Postgres rescue concurrency" if adapter == :postgres
       it_behaves_like "dedicated worker process"
+
+      it "rejects job completion in an unrelated database's transaction" do
+        other_database = Sequel.sqlite
+        client = River::Client.new(@driver)
+        row = client.insert(River::JobArgsHash.new(:transactional, {})).job
+        job = River::Job.new(client, @driver.job_claim(id: row.id, attempted_by: "test"))
+
+        other_database.transaction do
+          expect { client.job_complete_tx(job) }.to raise_error(River::Error, /requires an active transaction/)
+        end
+
+        expect(client.job_get(row.id)).to have_attributes(finalized_at: nil, state: "running")
+      ensure
+        other_database&.disconnect
+      end
     end
   end
 end

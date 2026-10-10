@@ -2,7 +2,7 @@ PATH
   remote: ../../driver/riverqueue-activerecord
   specs:
     riverqueue-activerecord (0.13.0)
-      activerecord (> 0, < 1000)
+      activerecord (>= 7.2, < 1000)
       activesupport (> 0, < 1000)
       riverqueue (= 0.13.0)
 
