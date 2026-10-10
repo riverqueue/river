@@ -162,32 +162,26 @@ func NewWorkers() *Workers {
 }
 
 func (w Workers) add(jobArgs JobArgs, workUnitFactory workunit.WorkUnitFactory) error {
-	checkRegistered := func(kind string) error {
-		if _, ok := w.workersMap[kind]; ok {
-			return fmt.Errorf("worker for kind %q is already registered", kind)
-		}
-		return nil
+	kinds := []string{jobArgs.Kind()}
+	if args, ok := jobArgs.(JobArgsWithKindAliases); ok {
+		kinds = append(kinds, args.KindAliases()...)
 	}
 
-	workerInfo := workerInfo{
+	// Validate all kinds before changing the registry.
+	seen := make(map[string]bool, len(kinds))
+	for _, kind := range kinds {
+		if _, ok := w.workersMap[kind]; ok || seen[kind] {
+			return fmt.Errorf("worker for kind %q is already registered", kind)
+		}
+		seen[kind] = true
+	}
+
+	info := workerInfo{
 		jobArgs:         jobArgs,
 		workUnitFactory: workUnitFactory,
 	}
-
-	kind := jobArgs.Kind()
-	if err := checkRegistered(kind); err != nil {
-		return err
-	}
-	w.workersMap[kind] = workerInfo
-
-	// Jobs can register an alternate kind to make renaming easier.
-	if jobArgsWithKindAliases, ok := jobArgs.(JobArgsWithKindAliases); ok {
-		for _, kind := range jobArgsWithKindAliases.KindAliases() {
-			if err := checkRegistered(kind); err != nil {
-				return err
-			}
-			w.workersMap[kind] = workerInfo
-		}
+	for _, kind := range kinds {
+		w.workersMap[kind] = info
 	}
 
 	return nil
