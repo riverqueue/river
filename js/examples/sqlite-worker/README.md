@@ -2,7 +2,7 @@
 
 This example applies River's SQLite migrations to an in-memory database,
 inserts a typed job, works it in-process, observes its committed completion,
-and shuts down cleanly. It needs only Node.js 26 and the workspace packages.
+and shuts down cleanly. It needs only Node.js 24 and the workspace packages.
 
 From the repository root:
 

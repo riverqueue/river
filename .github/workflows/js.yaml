@@ -30,9 +30,8 @@ concurrency:
 permissions:
   contents: read
 
-# The full runtime deliberately requires native Temporal from Node 26. Every
-# job installs the official build selected by js/.node-version (or the matrix)
-# and asserts `typeof Temporal` before doing anything else.
+# Node 24 exercises the Temporal polyfill; Node 26 exercises native Temporal.
+# Jobs use js/.node-version unless a matrix selects a different release.
 
 defaults:
   run:
@@ -90,9 +89,14 @@ jobs:
       - run: pnpm run license:check
 
   packages:
-    name: Package archives
+    name: Package archives (Node ${{ matrix.node-version || 'from .node-version' }})
     runs-on: ubuntu-latest
     timeout-minutes: 20
+
+    strategy:
+      fail-fast: false
+      matrix:
+        node-version: ["24", ""]
 
     # The packed `node:test` suite runs its Postgres tests against this
     # database, and RIVER_REQUIRE_POSTGRES makes them fail instead of skip
@@ -121,6 +125,8 @@ jobs:
           persist-credentials: false
 
       - uses: ./.github/actions/setup-js
+        with:
+          node-version: ${{ matrix.node-version }}
 
       - run: pnpm run build:all
 
@@ -172,8 +178,8 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # The minimum supported release and the current Node 26 release.
-        node-version: ["26.0.0", ""]
+        # Current releases for both supported Node lines.
+        node-version: ["24", ""]
 
     steps:
       - uses: actions/checkout@v7
@@ -200,7 +206,7 @@ jobs:
       - run: pnpm run test
 
   test_integration:
-    name: Test (integration, Postgres ${{ matrix.postgres-version }})
+    name: Test (integration, Node ${{ matrix.node-version || 'from .node-version' }}, Postgres ${{ matrix.postgres-version }})
     runs-on: ubuntu-latest
     timeout-minutes: 20
 
@@ -208,6 +214,10 @@ jobs:
       fail-fast: false
       matrix:
         postgres-version: [14, 15, 16, 17, 18]
+        node-version: [""]
+        include:
+          - node-version: "24"
+            postgres-version: 18
 
     services:
       postgres:
@@ -232,6 +242,8 @@ jobs:
           persist-credentials: false
 
       - uses: ./.github/actions/setup-js
+        with:
+          node-version: ${{ matrix.node-version }}
 
       - run: pnpm run build:all
 

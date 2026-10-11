@@ -13,6 +13,10 @@ import {
 import fc from "fast-check";
 import { afterAll, afterEach, beforeAll } from "vitest";
 
+// Tests also import internal modules directly, bypassing the public entries
+// that initialize Temporal for applications.
+import "../src/internal/temporal.ts";
+
 // Property tests are deterministic by default. Set FAST_CHECK_SEED to an
 // integer to replay a reported failure or explore another region of the
 // input space; FAST_CHECK_SEED=random picks a fresh seed per run. fast-check

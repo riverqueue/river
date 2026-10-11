@@ -98,6 +98,9 @@ async function run(message: RunMessage, signal: AbortSignal): Promise<void> {
   try {
     const context = workContext(message, signal);
     const module = (await import(message.moduleUrl)) as Record<string, unknown>;
+    // Cancellation can arrive while the handler module is still loading.
+    // Do not invoke a handler after its signal has already been aborted.
+    signal.throwIfAborted();
     const handler = module[message.exportName];
     if (typeof handler !== "function") {
       throw new TypeError(

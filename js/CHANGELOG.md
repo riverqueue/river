@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Support Node.js 24 across all packages. River automatically installs a `Temporal` polyfill when the runtime has no native implementation, preserving native `Temporal` on Node.js 26.
+
+### Fixed
+
+- Worker threads respect cancellation received while loading a handler module, before invoking its handler.
+
 ## [0.2.0] - 2026-10-07
 
 ### Added

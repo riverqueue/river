@@ -16,7 +16,7 @@
     }
   },
   "engines": {
-    "node": ">=26"
+    "node": ">=24"
   },
   "files": [
     "dist",
@@ -47,7 +47,7 @@
     "provenance": true
   },
   "peerDependencies": {
-    "@types/node": ">=26",
+    "@types/node": ">=24",
     "riverqueue": "workspace:0.2.0"
   },
   "peerDependenciesMeta": {

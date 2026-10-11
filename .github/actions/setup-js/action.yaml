@@ -1,7 +1,7 @@
 name: Set up JavaScript workspace
 description: >-
-  Install pnpm and an official Node.js 26 build, prove that it has native
-  Temporal, and install the locked dependencies of the workspace in `js/`.
+  Install pnpm and an official Node.js build, then install the locked
+  dependencies of the workspace in `js/`.
 
 inputs:
   node-version:
@@ -23,13 +23,9 @@ runs:
         node-version: ${{ inputs.node-version }}
         node-version-file: ${{ inputs.node-version == '' && 'js/.node-version' || '' }}
 
-    # Official Node.js 26 binaries enable Temporal; some builds from source do
-    # not, and River refuses to run without it.
-    - name: Require native Temporal
+    - name: Report Node.js version
       shell: bash
-      run: |
-        node --version
-        test "$(node -p 'typeof Temporal')" = object
+      run: node --version
 
     - run: pnpm install --frozen-lockfile
       shell: bash

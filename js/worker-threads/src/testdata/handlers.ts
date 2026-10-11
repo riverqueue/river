@@ -27,9 +27,9 @@ export const allocateForever: TestHandler = ({ logger }) => {
 export const complete: TestHandler = ({ job }) =>
   completeOutcome({ output: { value: job.args.value ?? null } });
 
-export const confirmNativeTemporal: TestHandler = ({ execution }) => {
+export const confirmTemporal: TestHandler = ({ execution }) => {
   if (!(execution.startedAt instanceof Temporal.Instant)) {
-    throw new TypeError("startedAt is not a native Temporal.Instant");
+    throw new TypeError("startedAt is not a Temporal.Instant from this realm");
   }
   return completeOutcome({
     output: { startedAt: execution.startedAt.toString() },

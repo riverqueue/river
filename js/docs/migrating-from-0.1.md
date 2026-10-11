@@ -7,9 +7,9 @@ that still needs attention.
 
 ## Runtime requirements
 
-The package needs Node.js 26 with native `Temporal` and ships as ESM; see
-[requirements](../README.md#requirements). There is no second CommonJS build
-and no `Temporal` polyfill.
+The package needs Node.js 24 or newer and ships as ESM; see
+[requirements](../README.md#requirements). River automatically installs a
+global `Temporal` polyfill when the runtime has no native implementation.
 
 ## Codemod
 

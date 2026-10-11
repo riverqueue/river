@@ -1,6 +1,6 @@
 # `@riverqueue/driver-sqlite`
 
-This package is River's preview SQLite backend for Node 26 and newer. It uses
+This package is River's preview SQLite backend for Node 24 and newer. It uses
 the built-in synchronous `node:sqlite` API.
 
 Apply River's generated canonical migrations explicitly before constructing a
@@ -241,9 +241,9 @@ listeners once per job.
 
 ## Requirements
 
-Node.js 26 or newer with native `Temporal`: `node -p "typeof Temporal"` must
-print `object`. Official Node.js binaries include it; some builds compiled from
-source, including some distribution and Homebrew packages, do not.
+Node.js 24 or newer. River automatically installs a global `Temporal`
+polyfill when the runtime has no native implementation; Node.js 26 uses
+native `Temporal`.
 
 Install `riverqueue` at exactly this package's version. It is a peer dependency,
 so npm rejects a mismatched pair instead of loading two copies.

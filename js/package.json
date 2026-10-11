@@ -3,7 +3,14 @@
   "version": "0.2.0",
   "description": "TypeScript implementation of River, a fast and reliable background job system.",
   "type": "module",
-  "sideEffects": false,
+  "sideEffects": [
+    "./dist/index.js",
+    "./dist/unstable-driver.js",
+    "./dist/internal/temporal.js",
+    "./src/index.ts",
+    "./src/unstable-driver.ts",
+    "./src/internal/temporal.ts"
+  ],
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
   "exports": {
@@ -19,7 +26,7 @@
     }
   },
   "engines": {
-    "node": ">=26"
+    "node": ">=24"
   },
   "files": [
     "dist",
@@ -72,8 +79,11 @@
     "access": "public",
     "provenance": true
   },
+  "dependencies": {
+    "@js-temporal/polyfill": "^0.5.1"
+  },
   "peerDependencies": {
-    "@types/node": ">=26"
+    "@types/node": ">=24"
   },
   "peerDependenciesMeta": {
     "@types/node": {
