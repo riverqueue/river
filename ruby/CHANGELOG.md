@@ -11,6 +11,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Allow `River::Workers#add` to register a kind and a work block, using the client's default retry and timeout policies. [PR #1486](https://github.com/riverqueue/river/pull/1486).
 
+### Fixed
+
+- A `River::Config` without an explicit `id:` generates its default client ID on first use in each process, so clients built before a fork (as with preloading Puma, Unicorn, or Pitchfork servers) no longer share one ID across forked workers. Explicit IDs are unchanged, and `Config#with` copies share the original's ID. [PR #1498](https://github.com/riverqueue/river/pull/1498).
+
 ## [0.13.0] - 2026-10-08
 
 ### Added

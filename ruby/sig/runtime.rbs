@@ -159,15 +159,28 @@ module River
     def resolved_fetch_poll_interval: (Config) -> Float
   end
 
+  class DefaultClientID
+    HOSTNAME_MAX_LENGTH: Integer
+    @mutex: Mutex
+    @state: Hash[Integer, String]?
+    def initialize: () -> void
+    def value: () -> String
+
+    private
+
+    def generate: (Integer) -> String
+  end
+
   class Config
     @cancelled_job_retention_period: Float?
     @completed_job_retention_period: Float?
+    @default_id: DefaultClientID
     @discarded_job_retention_period: Float?
     @error_handler: untyped
     @fetch_cooldown: Float
     @fetch_only_known_kinds: bool
     @fetch_poll_interval: Float
-    @id: String
+    @id: String?
     @job_timeout: Float?
     @leader_election_disabled: bool
     @logger: untyped
@@ -185,7 +198,6 @@ module River
     attr_reader fetch_cooldown: Float
     attr_reader fetch_only_known_kinds: bool
     attr_reader fetch_poll_interval: Float
-    attr_reader id: String
     attr_reader job_timeout: Float?
     attr_reader leader_election_disabled: bool
     attr_reader logger: untyped
@@ -203,7 +215,10 @@ module River
       ?maintenance_services: untyped, ?periodic_jobs: untyped,
       ?cancelled_job_retention_period: untyped, ?completed_job_retention_period: untyped,
       ?discarded_job_retention_period: untyped, ?logger: untyped) -> void
+    def id: () -> String
     def with: (**untyped) -> Config
+
+    def adopt_default_id: (DefaultClientID) -> void
 
     private
 

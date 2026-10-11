@@ -150,6 +150,121 @@ RSpec.describe River::Config do
       .to raise_error(ArgumentError, /periodic_jobs must be empty/)
   end
 
+  describe "#id" do
+    # Runs the block in a forked child and returns its result, marshaled back
+    # through a pipe. The child exits with exit! to skip RSpec and coverage
+    # at_exit hooks.
+    def in_fork
+      reader, writer = IO.pipe
+      pid = Process.fork do
+        reader.close
+        writer.binmode.write(Marshal.dump(yield))
+        writer.close
+        exit!(0)
+      end
+      writer.close
+      result = Marshal.load(reader.binmode.read) # rubocop:disable Security/MarshalLoad
+      _, status = Process.wait2(pid)
+      raise "forked child failed: #{status.inspect}" unless status.success?
+
+      result
+    ensure
+      reader&.close
+    end
+
+    def skip_unless_fork_supported
+      skip "Process.fork is unsupported on this platform" unless Process.respond_to?(:fork)
+    end
+
+    it "generates a distinct default ID for each config" do
+      expect(described_class.new.id).not_to eq(described_class.new.id)
+    end
+
+    it "generates a default ID including the host name and process ID" do
+      hostname = Socket.gethostname[0, 80]
+
+      expect(described_class.new.id)
+        .to match(/\A#{Regexp.escape(hostname)}-#{Process.pid}-\h{12}\z/)
+    end
+
+    it "truncates long host names to keep the default ID valid" do
+      gethostname = Socket.method(:gethostname)
+      Socket.define_singleton_method(:gethostname) { "h" * 200 }
+
+      expect(described_class.new.id).to match(/\Ah{80}-#{Process.pid}-\h{12}\z/)
+    ensure
+      Socket.define_singleton_method(:gethostname, gethostname)
+    end
+
+    it "generates a new default ID in each forked process" do
+      skip_unless_fork_supported
+
+      config = described_class.new
+      parent_id = config.id
+      children = Array.new(2) do
+        in_fork do
+          client = River::Client.new(Object.new, config: config)
+          {client_id: client.id, config_id: config.id, copy_id: config.with(job_timeout: 5).id, pid: Process.pid}
+        end
+      end
+
+      children.each do |child|
+        expect(child.fetch(:client_id)).to eq(child.fetch(:config_id))
+        expect(child.fetch(:copy_id)).to eq(child.fetch(:config_id))
+        expect(child.fetch(:config_id)).to include("-#{child.fetch(:pid)}-")
+      end
+      expect(children.map { |child| child.fetch(:config_id) }.push(parent_id).uniq.length).to eq(3)
+      expect(config.id).to eq(parent_id)
+    end
+
+    it "generates a forked process's ID even when the parent never read one" do
+      skip_unless_fork_supported
+
+      config = described_class.new
+      child_id = in_fork { config.id }
+
+      expect(config.id).not_to eq(child_id)
+    end
+
+    it "keeps a default ID stable within a process" do
+      config = described_class.new
+      client = River::Client.new(Object.new, config: config)
+      ids = Array.new(8) { Thread.new { Array.new(50) { config.id } } }.flat_map(&:value)
+
+      expect(ids.uniq).to eq([client.id])
+      expect(config.id).to be_frozen
+    end
+
+    it "regenerates a default ID left over from another process" do
+      config = described_class.new
+      config.instance_variable_get(:@default_id).instance_variable_set(:@state, {Process.pid + 1 => "inherited"}.freeze)
+
+      expect(config.id).not_to eq("inherited")
+      expect(config.id).to equal(config.id)
+    end
+
+    it "preserves an explicit ID across forks" do
+      skip_unless_fork_supported
+
+      config = described_class.new(id: "explicit-client")
+      child = in_fork { [config.id, River::Client.new(Object.new, config: config).id] }
+
+      expect(child).to eq(%w[explicit-client explicit-client])
+      expect(config.id).to eq("explicit-client")
+    end
+
+    it "shares a default ID with copies unless overridden" do
+      config = described_class.new
+      copy = config.with(job_timeout: 5)
+      reset = config.with(id: nil)
+
+      expect(copy.id).to eq(config.id)
+      expect(config.with(id: "explicit").id).to eq("explicit")
+      expect(reset.id).not_to eq(config.id)
+      expect(reset.with(job_timeout: 5).id).to eq(reset.id)
+    end
+  end
+
   ["", "a" * 128].each do |id|
     it "rejects an ID with length #{id.length}" do
       expect { described_class.new(id: id) }
