@@ -126,6 +126,13 @@ RSpec.describe "Ractor compatibility" do
   end
 
   it "starts producer/maintenance threads and stops within a non-main Ractor" do
+    # Ruby's M:N scheduler can lose a runnable Ractor when a thread exits,
+    # especially with few CPUs. This reproduces without River and is fixed in
+    # Ruby 4: https://bugs.ruby-lang.org/issues/20905.
+    if RUBY_VERSION.start_with?("3.3.", "3.4.")
+      skip "Ruby 3.3/3.4's threaded Ractor scheduler can deadlock (ruby-lang #20905)"
+    end
+
     in_ractor <<~'RUBY'
       config = River::Config.new(
         workers: River::Workers.new.add(RactorTestWorker), queues: {default: 1},
