@@ -109,6 +109,24 @@ RSpec.describe "River worker runtime", database: :sqlite do
     client&.stop_and_cancel
   end
 
+  it "uses one generated client ID for claims, leadership, and accessors" do
+    client = build_client(Class.new {
+      def work(_job)
+      end
+    })
+    inserted = client.insert(RuntimeArgs.new, insert_opts: River::InsertOpts.new(queue: "runtime")).job
+    client.start
+
+    completed = wait_until { (row = client.job_get(inserted.id)).state == River::JOB_STATE_COMPLETED && row }
+    leader_ids = wait_until { (ids = RUNTIME_DB[:river_leader].select_map(:leader_id)).any? && ids }
+
+    expect(client.id).to eq(client.config.id)
+    expect(completed.attempted_by).to eq([client.id])
+    expect(leader_ids).to eq([client.id])
+  ensure
+    client&.stop_and_cancel
+  end
+
   it "records failures and discards jobs at max attempts" do
     worker = Class.new do
       def work(_job) = raise("nope")

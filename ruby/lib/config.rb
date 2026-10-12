@@ -40,12 +40,37 @@ module River
     end
   end
 
+  # Lazily generates a client ID once per process. The process ID check
+  # regenerates it in forked children without needing a fork hook.
+  class DefaultClientID # :nodoc:
+    HOSTNAME_MAX_LENGTH = 80
+
+    def initialize
+      @mutex = Mutex.new
+      @state = nil
+    end
+
+    def value
+      pid = Process.pid
+      @state&.[](pid) || @mutex.synchronize { @state&.[](pid) || generate(pid) }
+    end
+
+    # The PID and ID are swapped in as one frozen hash so a lock-free reader
+    # never pairs one process's PID with another's ID.
+    private def generate(pid)
+      id = "#{Socket.gethostname[0, HOSTNAME_MAX_LENGTH]}-#{pid}-#{SecureRandom.hex(6)}".freeze
+      @state = {pid => id}.freeze
+      id
+    end
+  end
+  private_constant :DefaultClientID
+
   # Complete configuration for a River client and its worker runtime.
   class Config
     # Configured values used by Client and its runtime.
     attr_reader :cancelled_job_retention_period, :completed_job_retention_period,
       :discarded_job_retention_period, :error_handler, :fetch_cooldown,
-      :fetch_only_known_kinds, :fetch_poll_interval, :id, :job_timeout,
+      :fetch_only_known_kinds, :fetch_poll_interval, :job_timeout,
       :leader_election_disabled, :logger, :maintenance_services,
       :periodic_jobs, :plugins, :queues, :retry_policy, :workers
 
@@ -53,9 +78,12 @@ module River
     #
     # Configure queues and workers here to enable job processing; a client with
     # neither may still be used for insertion and administrative operations.
-    # +fetch_only_known_kinds+ leaves unregistered kinds untouched in shared
-    # queues. +leader_election_disabled+ prevents this client's maintenance;
-    # another eligible client must run scheduling, rescue, and cleanup.
+    # An explicit +id+ is used exactly as given and must be unique among all
+    # running clients. Without one, each process using this config generates
+    # its own ID; see #id. +fetch_only_known_kinds+ leaves unregistered kinds
+    # untouched in shared queues. +leader_election_disabled+ prevents this
+    # client's maintenance; another eligible client must run scheduling,
+    # rescue, and cleanup.
     def initialize(
       queues: {},
       workers: Workers.new,
@@ -82,7 +110,8 @@ module River
       @fetch_cooldown = Float(fetch_cooldown)
       @fetch_only_known_kinds = fetch_only_known_kinds
       @fetch_poll_interval = Float(fetch_poll_interval)
-      @id = id || "#{Socket.gethostname}-#{Process.pid}-#{SecureRandom.hex(6)}"
+      @default_id = DefaultClientID.new
+      @id = id
       @job_timeout = job_timeout.nil? ? nil : Float(job_timeout)
       @leader_election_disabled = leader_election_disabled
       @logger = logger || Logger.new($stdout, level: Logger::WARN)
@@ -96,10 +125,22 @@ module River
       validate
     end
 
+    # Returns the client ID recorded in +attempted_by+ and used for leadership.
+    #
+    # An explicitly configured ID is returned unchanged. Otherwise, the ID is
+    # generated on first use in each process and stays stable for the life of
+    # that process, so clients built from a config before a fork (for example,
+    # by a preloading Puma, Unicorn, or Pitchfork server) get distinct IDs in
+    # each forked child instead of sharing the parent's.
+    def id
+      @id || @default_id.value
+    end
+
     # Returns a new Config with the supplied values replacing this config's
-    # corresponding settings.
+    # corresponding settings. Without an +id+ override, the copy shares this
+    # config's ID, including its per-process generated default.
     def with(**overrides)
-      Config.new(id: id,
+      copy = Config.new(id: @id,
         cancelled_job_retention_period: cancelled_job_retention_period,
         completed_job_retention_period: completed_job_retention_period,
         discarded_job_retention_period: discarded_job_retention_period,
@@ -116,6 +157,12 @@ module River
         queues: queues,
         retry_policy: retry_policy,
         workers: workers, **overrides)
+      copy.adopt_default_id(@default_id) unless overrides.key?(:id)
+      copy
+    end
+
+    protected def adopt_default_id(default_id)
+      @default_id = default_id
     end
 
     private def normalize_queues(queues)
@@ -136,7 +183,7 @@ module River
 
     private def validate
       raise ArgumentError, "fetch intervals and job_timeout must be finite" unless [fetch_cooldown, fetch_poll_interval, job_timeout].compact.all?(&:finite?)
-      raise ArgumentError, "id must be between 1 and 127 characters" unless (1...128).cover?(id.length)
+      raise ArgumentError, "id must be between 1 and 127 characters" if (explicit_id = @id) && !(1...128).cover?(explicit_id.length)
       raise ArgumentError, "fetch_cooldown must be at least 0.001 seconds" if fetch_cooldown < 0.001
       raise ArgumentError, "fetch_poll_interval cannot be less than fetch_cooldown" if fetch_poll_interval < fetch_cooldown
       raise ArgumentError, "job_timeout must be greater than zero or nil" if job_timeout && job_timeout <= 0
