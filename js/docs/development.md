@@ -7,15 +7,12 @@ Go and Rust implementations. Run the `pnpm` commands below from `js/`, or use
 River's top-level `make` targets (`make lint/js`, `make test/js`, and so on),
 which delegate to `pnpm -C js`.
 
-Use an official Node.js 26 build, which includes native Temporal. The
-workspace's `.node-version` selects Node 26 for version managers such as fnm,
-nvm (`nvm use $(cat .node-version)`), and `actions/setup-node`. Some Node.js
-builds compiled from source, including some distribution and Homebrew
-packages, lack Temporal, and most unit tests then fail with
-`ReferenceError: Temporal is not defined`. Check before installing, then use
-the pnpm version pinned by `packageManager` in `package.json`:
+Use Node.js 24 or newer. The workspace's `.node-version` selects Node 26 for
+version managers such as fnm, nvm (`nvm use $(cat .node-version)`), and
+`actions/setup-node`. River installs a global Temporal polyfill when the
+runtime has no native implementation; the tests use the same initialization.
+Use the pnpm version pinned by `packageManager` in `package.json`:
 
-    node -p "typeof Temporal"   # must print "object"
     pnpm install
 
 TypeScript 6.0 is the minimum compiler for the published declarations, which
@@ -190,13 +187,13 @@ to benchmark against a disposable database:
 
 River's `.github/workflows/js.yaml` runs on pull requests and pushes to
 `master` that change `js/`, River's migrations or SQL, or the workflow itself,
-and on `js/v*` release tags. Each job installs the official Node.js build from
-`js/.node-version` and fails unless `typeof Temporal` is `object`. The jobs
+and on `js/v*` release tags. Each job installs an official Node.js build from
+`js/.node-version` or its version matrix. The jobs
 cover build, both type-check lanes, generated migrations (compared with
 River's sources), API reports, TypeDoc, README snippets, the 0.1 fixture, lint,
-formatting, licenses, packed archives and examples, unit tests on Node 26.0.0
-and the current Node 26 release, and integration tests on Postgres 14
-through 18.
+formatting, licenses, packed archives and examples. Unit tests and packed
+packages run on supported Node.js versions. Package tests include CommonJS
+and TypeScript consumers. Integration tests cover supported Postgres versions.
 
 Unit tests compare unique keys, protocol values, notification dispatch,
 retry timing, cron schedules, and snooze counting with fixtures that

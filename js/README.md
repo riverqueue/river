@@ -7,21 +7,17 @@ the same jobs in the same database.
 
 ## Requirements
 
-- **Node.js 26 with native `Temporal`.** River uses `Temporal.Instant` for
+- **Node.js 24 or newer.** River uses `Temporal.Instant` for
   timestamps and `bigint` for IDs, so no value read from the database is lost.
-  Official Node.js 26 builds (nodejs.org, `actions/setup-node`, the official
-  Docker images) enable Temporal. Some distribution and Homebrew builds do
-  not; check with:
-
-  ```sh
-  node -p "typeof Temporal" # must print "object"
-  ```
-
+  Importing River automatically installs
+  [`@js-temporal/polyfill`](https://github.com/js-temporal/temporal-polyfill)
+  globally when `Temporal` is absent, including in worker threads. Node.js 26
+  uses its native implementation. No extra imports or runtime flags are needed.
 - **TypeScript 6.0 or newer**, if you use TypeScript. Install `@types/node`
-  26 or newer (and `@types/pg` with `@riverqueue/driver-pg`) and list `"node"`
+  24 or newer (and `@types/pg` with `@riverqueue/driver-pg`) and list `"node"`
   in `compilerOptions.types`. JavaScript users need neither.
 - **ESM.** The packages ship one ES module build. CommonJS code can
-  `require()` them on Node 26, which returns the same module instance as
+  `require()` them on Node 24 or newer, which returns the same module instance as
   `import`; TypeScript CommonJS projects need `module: "node20"` or
   `"nodenext"`.
 

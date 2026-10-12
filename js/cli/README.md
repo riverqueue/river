@@ -2,7 +2,7 @@
 
 The `riverqueue` command runs River's database migrations and a throughput
 benchmark, and upgrades code written for `riverqueue@0.1`. It requires
-Node.js 26 or newer and mirrors the commands of River's Go CLI.
+Node.js 24 or newer and mirrors the commands of River's Go CLI.
 
 ```sh
 npm install --save-dev @riverqueue/cli
@@ -142,9 +142,9 @@ process.exitCode = await run(process.argv.slice(2), {
 
 ## Requirements
 
-Node.js 26 or newer with native `Temporal`: `node -p "typeof Temporal"` must
-print `object`. Official Node.js binaries include it; some builds compiled from
-source, including some distribution and Homebrew packages, do not.
+Node.js 24 or newer. River automatically installs a global `Temporal`
+polyfill when the runtime has no native implementation; Node.js 26 uses
+native `Temporal`.
 
 The CLI installs its own matching `riverqueue` and database packages.
 

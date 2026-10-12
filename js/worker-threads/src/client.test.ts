@@ -4,6 +4,7 @@ import { SqliteDriver } from "@riverqueue/driver-sqlite";
 import { createMigrator } from "@riverqueue/migrate";
 import {
   Client,
+  consoleLogger,
   exactJsonNumber,
   isExactJsonNumber,
   LifecycleError,
@@ -38,6 +39,7 @@ describe("WorkerThreads with River clients", () => {
   interface TestClient {
     readonly client: Client;
     readonly driver: SqliteDriver;
+    readonly started: Promise<void>;
   }
 
   const setup = async (
@@ -56,8 +58,15 @@ describe("WorkerThreads with River clients", () => {
       testJob,
       executor.handler(testJob, { exportName, module: handlers })
     );
+    const started = Promise.withResolvers<undefined>();
     const client = new Client(driver, {
       ...(jobStuckThreshold === undefined ? {} : { jobStuckThreshold }),
+      logger: {
+        ...consoleLogger,
+        info: (_attributes, message) => {
+          if (message === "started") started.resolve(undefined);
+        },
+      },
       queues: {
         default: {
           fetchCooldown: { milliseconds: 1 },
@@ -67,7 +76,7 @@ describe("WorkerThreads with River clients", () => {
       },
       workers,
     });
-    return { client, driver };
+    return { client, driver, started: started.promise };
   };
 
   it("closes an executor at the end of an await using scope", async () => {
@@ -97,11 +106,11 @@ describe("WorkerThreads with River clients", () => {
 
   it("cancels a cooperative handler and reuses its thread", async () => {
     await using executor = new WorkerThreads({ maxThreads: 1 });
-    const { client, driver } = await setup(executor, "cooperate");
+    const { client, driver, started } = await setup(executor, "cooperate");
     const run = await client.start();
 
     const inserted = await client.insert(testJob, {});
-    await waitFor(() => executor.diagnostics().activeThreads === 1);
+    await started;
     await client.jobs.cancel(inserted.job.id);
 
     await expect(
@@ -118,13 +127,13 @@ describe("WorkerThreads with River clients", () => {
 
   it("persists an ignored cancellation only after terminating its thread", async () => {
     await using executor = new WorkerThreads({ maxThreads: 1 });
-    const { client, driver } = await setup(executor, "spin", {
+    const { client, driver, started } = await setup(executor, "spin", {
       milliseconds: 10,
     });
     const run = await client.start();
 
     const inserted = await client.insert(testJob, {});
-    await waitFor(() => executor.diagnostics().activeThreads === 1);
+    await started;
     await client.jobs.cancel(inserted.job.id);
 
     await expect(
@@ -141,13 +150,13 @@ describe("WorkerThreads with River clients", () => {
 
   it("fails an attempt whose thread ignored a stop's abort, after the stuck threshold", async () => {
     await using executor = new WorkerThreads({ maxThreads: 1 });
-    const { client, driver } = await setup(executor, "spin", {
+    const { client, driver, started } = await setup(executor, "spin", {
       milliseconds: 200,
     });
     const run = await client.start();
 
     const spinning = await client.insert(testJob, {});
-    await waitFor(() => executor.diagnostics().activeThreads === 1);
+    await started;
     // The client works two jobs, so this one waits for the busy thread.
     const waiting = await client.insert(testJob, {});
     await waitFor(() => executor.diagnostics().pendingTasks === 1);
@@ -176,11 +185,11 @@ describe("WorkerThreads with River clients", () => {
 
   it("interrupts a handler that stops because of a stop's abort without using its attempt", async () => {
     await using executor = new WorkerThreads({ maxThreads: 1 });
-    const { client, driver } = await setup(executor, "cooperate");
+    const { client, driver, started } = await setup(executor, "cooperate");
     const run = await client.start();
 
     const inserted = await client.insert(testJob, {});
-    await waitFor(() => executor.diagnostics().activeThreads === 1);
+    await started;
     await run.stop({ mode: "cancel" });
 
     await expect(client.jobs.get(inserted.job.id)).resolves.toMatchObject({

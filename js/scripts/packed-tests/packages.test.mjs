@@ -29,6 +29,32 @@ const SATELLITES = [
 ];
 
 describe("packed package graph", () => {
+  it("initializes Temporal from every entry point and preserves native constructors", async () => {
+    for (const name of [
+      "riverqueue",
+      "riverqueue/unstable-driver",
+      ...SATELLITES,
+    ]) {
+      await execFileAsync(
+        process.execPath,
+        [
+          "--input-type=module",
+          "-e",
+          `import assert from "node:assert/strict";
+const original = globalThis.Temporal;
+await import(${JSON.stringify(name)});
+assert.equal(typeof Temporal, "object");
+if (original) assert.equal(Temporal, original);
+const instant = Temporal.Instant.from("2026-10-11T12:34:56.123456789Z");
+assert.equal(instant.toString(), "2026-10-11T12:34:56.123456789Z");
+assert.equal(Temporal.Duration.from({ seconds: 2 }).total("milliseconds"), 2000);
+`,
+        ],
+        { cwd: consumerDirectory }
+      );
+    }
+  });
+
   it("resolves exactly one riverqueue from every satellite package", () => {
     const root = require.resolve("riverqueue");
     for (const name of SATELLITES) {

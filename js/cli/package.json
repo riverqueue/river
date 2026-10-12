@@ -7,7 +7,7 @@
     "./dist/bin.js"
   ],
   "engines": {
-    "node": ">=26"
+    "node": ">=24"
   },
   "bin": {
     "riverqueue": "./dist/bin.js"
@@ -55,7 +55,7 @@
     "riverqueue": "workspace:0.2.0"
   },
   "peerDependencies": {
-    "@types/node": ">=26",
+    "@types/node": ">=24",
     "@types/pg": ">=8",
     "typescript": "^5.0.0 || ^6.0.0"
   },

@@ -1,3 +1,5 @@
+import "./internal/temporal.js";
+
 import { ConfigurationError } from "./errors.js";
 
 const REQUIREMENTS_URL =
@@ -6,15 +8,15 @@ const REQUIREMENTS_URL =
 /**
  * Verify the runtime features River relies on before database work begins.
  *
- * Official Node.js 26 builds expose Temporal by default. This explicit check
- * gives custom builds and unsupported runtimes a useful failure instead of a
- * later `ReferenceError` or a lossy timestamp fallback.
+ * River provides a Temporal polyfill when the runtime has no native
+ * implementation. This check gives unsupported runtimes a useful failure
+ * instead of a later `ReferenceError` or a lossy timestamp fallback.
  */
 export function assertRuntimeSupport(): void {
   const major = Number.parseInt(process.versions.node.split(".")[0] ?? "", 10);
-  if (!Number.isSafeInteger(major) || major < 26) {
+  if (!Number.isSafeInteger(major) || major < 24) {
     throw new ConfigurationError(
-      `River requires Node.js 26 or newer; found ${process.versions.node} ` +
+      `River requires Node.js 24 or newer; found ${process.versions.node} ` +
         `(see ${REQUIREMENTS_URL})`
     );
   }
@@ -35,9 +37,8 @@ export function assertRuntimeSupport(): void {
     typeof temporal.Now?.instant !== "function"
   ) {
     throw new ConfigurationError(
-      "River requires a Node.js build with the native Temporal API enabled; " +
-        "official Node.js 26 binaries include it, but some builds compiled " +
-        'from source do not. `node -p "typeof Temporal"` must print "object" ' +
+      "River requires the Temporal API; keep the native implementation " +
+        "or the polyfill installed by River available on globalThis " +
         `(see ${REQUIREMENTS_URL})`
     );
   }

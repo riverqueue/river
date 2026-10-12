@@ -12,9 +12,9 @@ declarations, and file layout are omitted.
 /**
  * Verify the runtime features River relies on before database work begins.
  *
- * Official Node.js 26 builds expose Temporal by default. This explicit check
- * gives custom builds and unsupported runtimes a useful failure instead of a
- * later `ReferenceError` or a lossy timestamp fallback.
+ * River provides a Temporal polyfill when the runtime has no native
+ * implementation. This check gives unsupported runtimes a useful failure
+ * instead of a later `ReferenceError` or a lossy timestamp fallback.
  */
 export declare function assertRuntimeSupport(): void;
 ```

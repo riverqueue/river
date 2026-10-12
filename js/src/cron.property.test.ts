@@ -108,7 +108,8 @@ const instant = fc
   .bigInt({ max: 2_208_988_800_000_000_000n, min: 946_684_800_000_000_000n })
   .map((nanoseconds) => Temporal.Instant.fromEpochNanoseconds(nanoseconds));
 
-describe("cron properties", () => {
+// The Temporal polyfill on Node 24 needs more time for 300 cases on CI runners.
+describe("cron properties", { timeout: 30_000 }, () => {
   it("returns strictly increasing whole-second occurrences", () => {
     fc.assert(
       fc.property(

@@ -17,6 +17,8 @@ import process from "node:process";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 
+import { build as buildWithVite } from "vite";
+
 import {
   assertNoDeniedContent,
   assertPortableArchivePath,
@@ -165,7 +167,7 @@ async function inspectArchive(packageSpec, archivePath) {
     `${packageSpec.name} packages the canonical MPL-2.0 text`
   );
   assert.equal(packageJson.license, "MPL-2.0");
-  assert.equal(packageJson.engines?.node, ">=26");
+  assert.equal(packageJson.engines?.node, ">=24");
   assert.equal(packageJson.publishConfig?.access, "public");
   assert.equal(packageJson.publishConfig?.provenance, true);
   assert.equal(packageJson.authors, undefined, "`authors` is not an npm field");
@@ -414,6 +416,32 @@ if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed) ||
 `
   );
   await run(process.execPath, [join(consumerDirectory, "import.mjs")]);
+
+  // A bundler must retain Temporal initialization even when most exports
+  // are unused. Exercise the published sideEffects metadata on Node 24 too.
+  await writeFile(
+    join(consumerDirectory, "bundle-entry.mjs"),
+    `import { cron } from "riverqueue";
+const start = Temporal.Instant.from("2026-10-11T12:34:56Z");
+if (cron("@every 1s").next(start).toString() !== "2026-10-11T12:34:57Z") {
+  throw new Error("bundled River did not initialize Temporal");
+}
+`
+  );
+  await buildWithVite({
+    build: {
+      outDir: "bundled",
+      ssr: join(consumerDirectory, "bundle-entry.mjs"),
+      target: "node24",
+    },
+    configFile: false,
+    logLevel: "error",
+    root: consumerDirectory,
+    ssr: { noExternal: ["riverqueue", "@js-temporal/polyfill", "jsbi"] },
+  });
+  await run(process.execPath, [
+    join(consumerDirectory, "bundled", "bundle-entry.js"),
+  ]);
 
   await writeFile(
     join(consumerDirectory, "require.cjs"),
@@ -703,7 +731,8 @@ void [workers, exactNumber, uniqueStates, insertion, pgInsertion, sqliteInsertio
   await npmInstall(consumerDirectory, [
     "--save-dev",
     ...["@types/node", "@types/pg"].map(
-      (name) => `${name}@${rootPackageJson.devDependencies[name]}`
+      (name) =>
+        `${name}@${name === "@types/node" ? "^24" : rootPackageJson.devDependencies[name]}`
     ),
   ]);
   for (const compilerPackage of ["typescript", "typescript-next"]) {
@@ -721,7 +750,7 @@ void [workers, exactNumber, uniqueStates, insertion, pgInsertion, sqliteInsertio
   await verifyCommonJsTypeScriptConsumer(consumerDirectory);
 }
 
-// The packages are ESM-only. Node 26 loads them from CommonJS through
+// The packages are ESM-only. Node 24 and newer load them from CommonJS through
 // `require(esm)`, and TypeScript models that only for `module: node20` and
 // `nodenext`; `node16` and `node18` report TS1479, which is what Are The Types
 // Wrong's `cjs-resolves-to-esm` rule flags. Compile a CommonJS consumer in the

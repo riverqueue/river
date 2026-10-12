@@ -67,6 +67,27 @@ describe("WorkerThreads", () => {
     expect(executor.diagnostics()).toMatchObject({ totalThreads: 0 });
   });
 
+  it("does not invoke a handler aborted while its module loads", async () => {
+    await using executor = new WorkerThreads({ maxThreads: 1 });
+    const loading = signals();
+    const target = executor.handler(testJob, {
+      exportName: "complete",
+      module: new URL("./testdata/loading.js", import.meta.url),
+    });
+    const handle = executor.start(context({}, loading), target.handler);
+    const rejected = expect(handle.result).rejects.toMatchObject({
+      message: "cancelled while loading",
+    });
+
+    await loading.next();
+    await expect(
+      handle.abort(new Error("cancelled while loading"), {
+        gracePeriod: gracePeriod(1_000),
+      })
+    ).resolves.toEqual({ terminated: false });
+    await rejected;
+  });
+
   it("reports an attempt as started only once a thread takes it", async () => {
     const executor = new WorkerThreads({ maxThreads: 1 });
     const started = signals();
@@ -867,10 +888,10 @@ describe("WorkerThreads", () => {
     });
   });
 
-  it("revives execution timestamps with the worker realm's native Temporal", async () => {
+  it("revives execution timestamps with the worker realm's Temporal", async () => {
     const executor = new WorkerThreads({ maxThreads: 1 });
     const target = executor.handler(testJob, {
-      exportName: "confirmNativeTemporal",
+      exportName: "confirmTemporal",
       module: handlers,
     });
 

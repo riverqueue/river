@@ -132,7 +132,7 @@ lint/java/tools: ## Lint Java's Go maintenance tools
 	golangci-lint run --fix ./java/bin/sync-migrations/*.go
 
 # JavaScript targets, like the Rust ones, are separate from `lint` and `test`
-# and need Node.js 26 and pnpm; they delegate to the workspace's own scripts.
+# and need Node.js 24 or newer and pnpm; they delegate to the workspace's own scripts.
 # Run `pnpm -C js install` first.
 .PHONY: build/js
 build/js: ## Build every JavaScript package
