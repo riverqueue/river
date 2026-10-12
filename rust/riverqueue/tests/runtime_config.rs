@@ -20,7 +20,7 @@ use riverqueue::{
 };
 use serde::{Deserialize, Serialize};
 use sqlx::AssertSqlSafe;
-use tokio::sync::Semaphore;
+use tokio::sync::{Notify, Semaphore};
 
 #[derive(Clone, Debug, Deserialize, JobArgs, Serialize)]
 #[river(kind = "rust_runtime_config")]
@@ -131,6 +131,7 @@ struct RuntimeCounts {
     insert_after: AtomicUsize,
     insert_before: AtomicUsize,
     metrics: AtomicUsize,
+    periodic_started: Notify,
     periodic_starts: AtomicUsize,
     work_after: AtomicUsize,
     work_before: AtomicUsize,
@@ -153,6 +154,7 @@ impl Hook for RuntimeHook {
 
     async fn periodic_jobs_start(&self, _jobs: &PeriodicJobs) -> Result<(), BoxError> {
         self.counts.periodic_starts.fetch_add(1, Ordering::SeqCst);
+        self.counts.periodic_started.notify_one();
         Ok(())
     }
 
@@ -709,6 +711,10 @@ async fn poll_only_and_subscription_configuration() {
     assert!(statistics.run_duration >= Duration::from_millis(5));
     assert!(statistics.complete_duration > Duration::ZERO);
     assert!(counts.metrics.load(Ordering::SeqCst) >= 2);
+    // Readiness and job completion don't wait for leader-owned maintenance.
+    tokio::time::timeout(Duration::from_secs(10), counts.periodic_started.notified())
+        .await
+        .expect("periodic job start hook runs after leader election");
     assert_eq!(counts.periodic_starts.load(Ordering::SeqCst), 1);
     assert_eq!(counts.insert_before.load(Ordering::SeqCst), 3);
     assert_eq!(counts.insert_after.load(Ordering::SeqCst), 3);
