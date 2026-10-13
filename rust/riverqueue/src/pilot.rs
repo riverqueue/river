@@ -366,8 +366,9 @@ pub struct ProducerClaimContext<'a> {
 
 /// River's standard claim, handed to [`PilotProducer::claim`].
 ///
-/// [`claim`](Self::claim) consumes it, so a session runs River's claim at most
-/// once per call, on the transaction of its choosing.
+/// [`claim`](Self::claim) and [`claim_at_most`](Self::claim_at_most) consume
+/// it, so a session runs River's claim at most once per call, on the
+/// transaction of its choosing.
 pub struct ProducerClaimNext<'a> {
     inner: &'a ClientInner,
     limit: usize,
@@ -391,8 +392,28 @@ impl<'a> ProducerClaimNext<'a> {
     ///
     /// Returns the database error when the claim fails.
     pub async fn claim(self, connection: DatabaseConnection<'_>) -> Result<Vec<ClaimedJob>, Error> {
+        let limit = self.limit;
+        self.claim_at_most(connection, limit).await
+    }
+
+    /// Claims up to `maximum` jobs, capped by River's original claim limit,
+    /// on `connection`. A zero maximum performs no query. This consumes the
+    /// continuation just as [`claim`](Self::claim) does.
+    ///
+    /// # Errors
+    ///
+    /// Returns the database error when the claim fails.
+    pub async fn claim_at_most(
+        self,
+        connection: DatabaseConnection<'_>,
+        maximum: usize,
+    ) -> Result<Vec<ClaimedJob>, Error> {
+        let limit = self.limit.min(maximum);
+        if limit == 0 {
+            return Ok(Vec::new());
+        }
         Ok(
-            crate::client::standard_claim(self.inner, connection, self.queue, self.limit)
+            crate::client::standard_claim(self.inner, connection, self.queue, limit)
                 .await?
                 .into_iter()
                 .map(ClaimedJob::from_decoded)

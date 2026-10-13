@@ -722,12 +722,17 @@ impl Client {
             .filter(|job| job.state == JobState::Available)
             .map(|job| job.opts.queue.clone())
             .collect::<std::collections::BTreeSet<_>>();
+        let input_metadata = intercepts.then(|| {
+            jobs.iter()
+                .map(|job| job.opts.metadata.clone())
+                .collect::<Vec<_>>()
+        });
         let mut rows = Vec::with_capacity(jobs.len());
         for job in jobs {
             rows.push(self.insert_row(connection.reborrow(), job).await?);
         }
-        if intercepts {
-            self.after_jobs_inserted(connection.reborrow(), &rows)
+        if let Some(input_metadata) = input_metadata {
+            self.after_jobs_inserted(connection.reborrow(), &rows, &input_metadata)
                 .await?;
         }
         self.notify_insert(
@@ -743,22 +748,22 @@ impl Client {
         &self,
         mut connection: PilotDatabaseConnection<'_>,
         rows: &[InsertedJob],
+        input_metadata: &[crate::JobMetadata],
     ) -> Result<(), Error> {
-        let inserted = rows
+        let returned = rows.iter().map(|row| row.job.clone()).collect::<Vec<_>>();
+        let unique_skipped_as_duplicate = rows
             .iter()
-            .filter(|row| !row.unique_skipped_as_duplicate)
-            .map(|row| row.job.clone())
+            .map(|row| row.unique_skipped_as_duplicate)
             .collect::<Vec<_>>();
-        if inserted.is_empty() {
-            return Ok(());
-        }
         self.inner
             .pilot
             .after_jobs_inserted(
                 connection.reborrow(),
                 &crate::__private::JobsInsertedParams {
                     database: self.inner.pilot_database_config(),
-                    jobs: &inserted,
+                    input_metadata,
+                    jobs: &returned,
+                    unique_skipped_as_duplicate: &unique_skipped_as_duplicate,
                 },
             )
             .await

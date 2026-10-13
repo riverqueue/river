@@ -22,8 +22,9 @@ use riverqueue::__private::{
     PeerClaimContext, PeerOutcome, Pilot, PilotError, PilotProducer, ProducerStartContext,
 };
 use riverqueue::{
-    BoxError, Client, ErrorHandler, ErrorHandlerDecision, Event, EventKind, InsertOpts, Job,
-    JobArgs, JobRow, JobState, QueueConfig, WorkContext, WorkOutcome, WorkResult, Workers,
+    BoxError, Client, ErrorHandler, ErrorHandlerDecision, Event, EventKind, Hook, InsertOpts, Job,
+    JobArgs, JobRow, JobState, QueueConfig, WorkContext, WorkError, WorkOutcome, WorkResult,
+    Workers,
 };
 use serde::{Deserialize, Serialize};
 use tokio::sync::{Notify, mpsc};
@@ -1366,6 +1367,188 @@ async fn assert_abandoned_peers_reclaimed(mut run: Run, unblock: std::sync::mpsc
     run.stop().await;
 }
 
+/// A peer worker's own error, which work-end hooks recognize by type.
+#[derive(Debug)]
+struct PeerFailure;
+
+impl std::fmt::Display for PeerFailure {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str("peer failed on purpose")
+    }
+}
+
+impl std::error::Error for PeerFailure {}
+
+/// Records work hooks for peer jobs. The hook named `first` fails peers
+/// whose `value` is 1 and multiplies the others' by ten, like a hook that
+/// decodes arguments. The one named `second` turns a [`PeerFailure`] into a
+/// discard.
+struct PeerHook {
+    name: &'static str,
+    trace: Arc<Mutex<Vec<String>>>,
+}
+
+#[allow(
+    clippy::unused_async_trait_impl,
+    reason = "the hook only records state synchronously"
+)]
+impl Hook for PeerHook {
+    async fn work_begin(&self, _context: &WorkContext, job: &mut JobRow) -> Result<(), BoxError> {
+        if job.kind != PeerArgs::KIND {
+            return Ok(());
+        }
+        let mut args: PeerArgs = job.decode_args()?;
+        self.trace
+            .lock()
+            .unwrap()
+            .push(format!("{} begin {}", self.name, args.value));
+        if self.name == "first" {
+            if args.value == 1 {
+                return Err(Box::new(std::io::Error::other("begin failed on purpose")));
+            }
+            args.value *= 10;
+            job.encoded_args = serde_json::value::to_raw_value(&args)?;
+        }
+        Ok(())
+    }
+
+    async fn work_end(
+        &self,
+        _context: &WorkContext,
+        job: &JobRow,
+        result: Result<WorkOutcome, WorkError>,
+    ) -> Result<WorkOutcome, WorkError> {
+        if job.kind != PeerArgs::KIND {
+            return result;
+        }
+        let args: PeerArgs = job.decode_args().unwrap();
+        self.trace
+            .lock()
+            .unwrap()
+            .push(format!("{} end {}", self.name, args.value));
+        match result {
+            Err(error)
+                if self.name == "second" && error.downcast_ref::<PeerFailure>().is_some() =>
+            {
+                Ok(WorkOutcome::Discard)
+            }
+            result => result,
+        }
+    }
+}
+
+/// Whether a peer operation failed because no attempt is running.
+fn requires_running_attempt<T>(result: Result<T, BoxError>) -> bool {
+    result.is_err_and(|error| {
+        error
+            .downcast_ref::<riverqueue::Error>()
+            .is_some_and(|error| peer_error(error, "require a running attempt"))
+    })
+}
+
+/// A coordinator runs the client's work hooks for its peers as River does
+/// for a job it works itself: begin hooks in order, each seeing earlier
+/// changes and the first failure stopping the rest, and end hooks in order
+/// on the changed row, each replacing the result. A begin failure fails
+/// only its own peer.
+async fn assert_work_hooks_run_for_peers(builder: riverqueue::ClientBuilder, db: Db) {
+    let trace = Arc::new(Mutex::new(Vec::new()));
+    let builder = builder
+        .hook(PeerHook {
+            name: "first",
+            trace: Arc::clone(&trace),
+        })
+        .hook(PeerHook {
+            name: "second",
+            trace: Arc::clone(&trace),
+        });
+    let script: Script = Arc::new(|context, row, env| {
+        Box::pin(async move {
+            let mut checks = Checks::new();
+            let detached_context = riverqueue::__private::work_context_for_job(&row);
+            let detached = PeerAttempts::new(&detached_context);
+            let mut detached_row = row.clone();
+            check(
+                &mut checks,
+                "work-begin hooks require a running attempt",
+                requires_running_attempt(detached.work_begin(&mut detached_row).await),
+            );
+            check(
+                &mut checks,
+                "work-end hooks require a running attempt",
+                requires_running_attempt(detached.work_end(&row, Ok(WorkOutcome::Complete)).await),
+            );
+
+            let mut rows = env.claim(&context, Take::Claim, &env.peers).await.unwrap();
+            rows.sort_by_key(|row| row.id);
+            let peers = PeerAttempts::new(&context);
+            let mut outcomes = Vec::new();
+            for row in rows {
+                let mut job = row.clone();
+                let result = match peers.work_begin(&mut job).await {
+                    Ok(()) => {
+                        let args: PeerArgs = job.decode_args().unwrap();
+                        let result = if args.value == 20 {
+                            Err(Box::new(PeerFailure) as BoxError)
+                        } else {
+                            Ok(WorkOutcome::Complete)
+                        };
+                        peers.work_end(&job, result).await
+                    }
+                    Err(error) => {
+                        check(
+                            &mut checks,
+                            "begin returns the hook's error",
+                            error.downcast_ref::<std::io::Error>().is_some(),
+                        );
+                        Err(error)
+                    }
+                };
+                outcomes.push(PeerOutcome::new(row, result));
+            }
+            check(
+                &mut checks,
+                "complete succeeds",
+                peers.complete(outcomes).await.is_ok(),
+            );
+            let _ = env.checks.send(checks);
+            WorkOutcome::Complete
+        })
+    });
+    let mut run = Run::start(builder, db, 3, script).await;
+    run.assert_checks().await;
+    let [p1, p2, p3] = [run.env.peers[0], run.env.peers[1], run.env.peers[2]];
+    assert_eq!(
+        *trace.lock().unwrap(),
+        [
+            "first begin 1",
+            "first begin 2",
+            "second begin 20",
+            "first end 20",
+            "second end 20",
+            "first begin 3",
+            "second begin 30",
+            "first end 30",
+            "second end 30",
+        ]
+    );
+    // The begin failure failed only its own peer's attempt.
+    let failed = run.settled(p1).await;
+    assert_eq!(
+        failed.errors.last().unwrap().error,
+        "begin failed on purpose"
+    );
+    // River completes peers from their claimed rows, so hook changes to
+    // arguments aren't persisted.
+    assert_eq!(failed.decode_args::<PeerArgs>().unwrap().value, 1);
+    assert_eq!(run.settled(p2).await.state, JobState::Discarded);
+    assert_eq!(run.settled(p3).await.state, JobState::Completed);
+    // The end hook replaced the second peer's failure before the error
+    // handler would have seen it.
+    assert_eq!(*run.handler.0.lock().unwrap(), [p1]);
+    run.stop().await;
+}
+
 #[cfg(all(feature = "postgres", river_postgres_tests))]
 mod postgres {
     use riverqueue::database::PostgresDatabase;
@@ -1585,6 +1768,13 @@ mod postgres {
         assert_stops_interrupt_and_cancellations_fail(|| builder(&schema), db(&schema)).await;
         schema.cleanup().await;
     }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn work_hooks_run_for_peers() {
+        let schema = PostgresSchema::new("peer_work_hooks").await;
+        assert_work_hooks_run_for_peers(builder(&schema), db(&schema)).await;
+        schema.cleanup().await;
+    }
 }
 
 #[cfg(feature = "sqlite")]
@@ -1687,6 +1877,14 @@ mod sqlite {
             Db::Sqlite(pool.clone()),
         )
         .await;
+        sqlite_cleanup(pool, path).await;
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn work_hooks_run_for_peers() {
+        let (pool, path) = sqlite_file_pool(4).await;
+        assert_work_hooks_run_for_peers(Client::builder(pool.clone()), Db::Sqlite(pool.clone()))
+            .await;
         sqlite_cleanup(pool, path).await;
     }
 }
