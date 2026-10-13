@@ -60,6 +60,17 @@ impl InsertOptsExt for crate::InsertOpts {
     }
 }
 
+impl InsertOptsExt for crate::InsertParams {
+    fn extension_options(&self) -> &Map<String, Value> {
+        &self.extension_options
+    }
+
+    fn with_extension_option(mut self, key: impl Into<String>, value: Value) -> Self {
+        self.extension_options.insert(key.into(), value);
+        self
+    }
+}
+
 /// Queue configuration reserved for River's own companion crates.
 ///
 /// Extension settings travel with a queue's configuration, through
@@ -682,8 +693,11 @@ pub struct JobSetStateParams<'a> {
 pub struct JobsInsertedParams<'a> {
     /// Selected database backend configuration.
     pub database: DatabaseConfig,
-    /// Jobs the insertion wrote, excluding unique insertions skipped as
-    /// duplicates, in input order.
+    /// Metadata of every requested job after insert hooks and interception,
+    /// in input order. A unique duplicate keeps its requested metadata here.
+    pub input_metadata: &'a [crate::JobMetadata],
+    /// Every returned job, including existing unique duplicates, in input
+    /// order. A duplicate keeps the stored row's metadata here.
     pub jobs: &'a [JobRow],
 }
 
@@ -1075,8 +1089,9 @@ pub trait Pilot: std::any::Any + Send + Sync + 'static {
     ///
     /// Called only when [`Pilot::intercepts_insert`] returns `true`, on every
     /// insertion path, including batches, caller-managed transactions, and
-    /// periodic jobs. Unique insertions skipped as duplicates aren't
-    /// included. Returning an error rolls back the insertion. As in
+    /// periodic jobs. Existing unique duplicates are included, alongside
+    /// the original input metadata. Returning an error rolls back the
+    /// insertion. As in
     /// [`Pilot::before_jobs_insert`], `connection` is the insertion's
     /// transaction, which the extension must not end.
     async fn after_jobs_inserted(
@@ -1355,6 +1370,10 @@ impl PeerOutcome {
 /// being owned when its outcome persists, before its event, so it can be
 /// claimed again at once.
 ///
+/// River doesn't run work hooks for peers on its own, because it doesn't
+/// work them. A coordinator that works a peer runs them with
+/// [`PeerAttempts::work_begin`] and [`PeerAttempts::work_end`].
+///
 /// A soft stop doesn't end peer operations. A coordinator keeps claiming and
 /// completing peers after its producer stops fetching new jobs, until its
 /// attempt ends, and the client's stop waits for the attempt and so for
@@ -1447,6 +1466,60 @@ impl<'a> PeerAttempts<'a> {
     pub async fn complete(self, outcomes: Vec<PeerOutcome>) -> Result<(), crate::Error> {
         let (client, peers) = self.attempt()?;
         peers.complete(&client.inner, self.context, outcomes).await
+    }
+
+    /// Runs the client's [`Hook::work_begin`](crate::Hook::work_begin) hooks
+    /// for `job` as River does before working a job itself: in registration
+    /// order, with the coordinator's work context, each seeing the changes
+    /// earlier hooks made to `job`. The first failing hook stops the rest.
+    ///
+    /// Call it on a copy of a claimed row before decoding its arguments, and
+    /// give the changed row to [`PeerAttempts::work_end`]. River completes a
+    /// peer from the row its claim returned, so changes made here aren't
+    /// persisted. A panicking hook panics the caller.
+    ///
+    /// # Errors
+    ///
+    /// Returns the failing hook's error unchanged, for the caller to fail
+    /// that job alone with a [`PeerOutcome`], and an
+    /// [`Error::Extension`](crate::Error::Extension) error, boxed, when
+    /// there's no running attempt.
+    pub async fn work_begin(self, job: &mut JobRow) -> Result<(), crate::BoxError> {
+        let (client, _) = self.attempt()?;
+        for hook in &client.inner.hooks {
+            hook.work_begin(self.context, job).await?;
+        }
+        Ok(())
+    }
+
+    /// Runs the client's [`Hook::work_end`](crate::Hook::work_end) hooks for
+    /// `job` and its result as River does after working a job itself: in
+    /// registration order, with the coordinator's work context, each
+    /// receiving the previous hook's result. Returns the final result, which
+    /// replaces `result` in the job's [`PeerOutcome`].
+    ///
+    /// `job` should be the row [`PeerAttempts::work_begin`] changed, as
+    /// River passes the same row to both hooks. An error keeps its type
+    /// through the hooks and the outcome, so hooks and the error handler can
+    /// downcast it as they would a worker's error. A panicking hook panics
+    /// the caller.
+    ///
+    /// # Errors
+    ///
+    /// Returns the hooks' final error, and an
+    /// [`Error::Extension`](crate::Error::Extension) error, boxed, in place
+    /// of `result` when there's no running attempt.
+    pub async fn work_end(
+        self,
+        job: &JobRow,
+        result: Result<crate::WorkOutcome, crate::BoxError>,
+    ) -> Result<crate::WorkOutcome, crate::BoxError> {
+        let (client, _) = self.attempt()?;
+        let mut result = result.map_err(crate::WorkError::from_boxed);
+        for hook in &client.inner.hooks {
+            result = hook.work_end(self.context, job, result).await;
+        }
+        result.map_err(|error| Box::new(error) as crate::BoxError)
     }
 }
 

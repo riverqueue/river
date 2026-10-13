@@ -27,6 +27,16 @@ impl WorkError {
         }
     }
 
+    /// Wraps a boxed error, reusing it when it's already a `WorkError` so a
+    /// result passed through a box keeps its original error for
+    /// [`WorkError::downcast_ref`].
+    pub(crate) fn from_boxed(error: BoxError) -> Self {
+        match error.downcast::<Self>() {
+            Ok(error) => *error,
+            Err(error) => Self::new(error),
+        }
+    }
+
     /// Returns the wrapped worker error for inspection.
     #[must_use]
     pub fn get_ref(&self) -> &(dyn std::error::Error + Send + Sync + 'static) {
