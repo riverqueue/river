@@ -101,6 +101,30 @@ func (p *PilotInitParams) Validate() *PilotInitParams {
 	return p
 }
 
+// PilotJobDeleter contains Pilot functionality related to deleting jobs. Each
+// function performs the deletion itself so that implementations can make
+// related writes atomically with it. Pilots that don't implement it fall back
+// to the standard executor-backed behavior.
+//
+// The executor may or may not be a transaction. An implementation that issues
+// more than one statement should use dbutil.WithTxV to run them in a
+// transaction, reusing the caller's if there is one.
+//
+// This is temporarily separate from Pilot so implementations built against
+// older River versions remain compatible. It's not meant to stay optional:
+// once all supported River Pro releases implement PilotJobDeleter, embed this
+// interface into Pilot, replace capability assertions in the client and
+// JobCleaner with direct Pilot calls, and remove their executor fallbacks.
+type PilotJobDeleter interface {
+	JobDelete(ctx context.Context, exec riverdriver.Executor, params *riverdriver.JobDeleteParams) (*rivertype.JobRow, error)
+
+	// JobDeleteBefore deletes finalized jobs on behalf of the job cleaner,
+	// returning the number of jobs deleted.
+	JobDeleteBefore(ctx context.Context, exec riverdriver.Executor, params *riverdriver.JobDeleteBeforeParams) (int, error)
+
+	JobDeleteMany(ctx context.Context, exec riverdriver.Executor, params *riverdriver.JobDeleteManyParams) ([]*rivertype.JobRow, error)
+}
+
 // PilotJobRescuer contains optional Pilot functionality related to rescuing
 // stuck jobs. Pilots that don't implement it fall back to the standard
 // executor-backed behavior.

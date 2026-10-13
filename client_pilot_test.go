@@ -26,6 +26,8 @@ type pilotSpy struct {
 
 	jobCancelCalls                atomic.Int64
 	jobCleanerQueuesExcludedCalls atomic.Int64
+	jobDeleteCalls                atomic.Int64
+	jobDeleteManyCalls            atomic.Int64
 	jobInsertManyCalls            atomic.Int64
 	jobRetryCalls                 atomic.Int64
 	pilotInitCalls                atomic.Int64
@@ -67,6 +69,16 @@ func (p *pilotSpy) JobCancel(ctx context.Context, exec riverdriver.Executor, par
 func (p *pilotSpy) JobCleanerQueuesExcluded() []string {
 	p.jobCleanerQueuesExcludedCalls.Add(1)
 	return p.StandardPilot.JobCleanerQueuesExcluded()
+}
+
+func (p *pilotSpy) JobDelete(ctx context.Context, exec riverdriver.Executor, params *riverdriver.JobDeleteParams) (*rivertype.JobRow, error) {
+	p.jobDeleteCalls.Add(1)
+	return p.StandardPilot.JobDelete(ctx, exec, params)
+}
+
+func (p *pilotSpy) JobDeleteMany(ctx context.Context, exec riverdriver.Executor, params *riverdriver.JobDeleteManyParams) ([]*rivertype.JobRow, error) {
+	p.jobDeleteManyCalls.Add(1)
+	return p.StandardPilot.JobDeleteMany(ctx, exec, params)
 }
 
 func (p *pilotSpy) JobGetAvailable(ctx context.Context, exec riverdriver.Executor, state riverpilot.ProducerState, params *riverdriver.JobGetAvailableParams) (*riverdriver.JobGetAvailableResult, error) {
@@ -128,6 +140,12 @@ func (p *pilotSpy) ProducerShutdown(ctx context.Context, exec riverdriver.Execut
 func (p *pilotSpy) QueueMetadataChanged(ctx context.Context, exec riverdriver.Executor, params *riverpilot.QueueMetadataChangedParams) error {
 	p.testSignals.QueueMetadataChanged.Signal(struct{}{})
 	return p.StandardPilot.QueueMetadataChanged(ctx, exec, params)
+}
+
+// pilotWithoutJobDeleter hides PilotJobDeleter to simulate a pilot built
+// against a River version from before it existed.
+type pilotWithoutJobDeleter struct {
+	riverpilot.Pilot
 }
 
 func Test_Client_PilotUsage(t *testing.T) {
@@ -222,6 +240,100 @@ func Test_Client_PilotUsage(t *testing.T) {
 			require.NoError(t, err)
 			require.Equal(t, int64(1), pilot.jobCancelCalls.Load())
 		})
+	})
+
+	t.Run("JobDeleteManyTxUsesPilot", func(t *testing.T) {
+		t.Parallel()
+
+		client, pilot := setup(t, nil)
+
+		insertRes, err := client.Insert(ctx, noOpArgs{}, nil)
+		require.NoError(t, err)
+
+		withClientTx(t, client, func(tx pgx.Tx) {
+			deleteRes, err := client.JobDeleteManyTx(ctx, tx, NewJobDeleteManyParams().IDs(insertRes.Job.ID))
+			require.NoError(t, err)
+			require.Len(t, deleteRes.Jobs, 1)
+			require.Equal(t, int64(1), pilot.jobDeleteManyCalls.Load())
+		})
+	})
+
+	t.Run("JobDeleteManyUsesPilot", func(t *testing.T) {
+		t.Parallel()
+
+		client, pilot := setup(t, nil)
+
+		insertRes, err := client.Insert(ctx, noOpArgs{}, nil)
+		require.NoError(t, err)
+
+		deleteRes, err := client.JobDeleteMany(ctx, NewJobDeleteManyParams().IDs(insertRes.Job.ID))
+		require.NoError(t, err)
+		require.Len(t, deleteRes.Jobs, 1)
+		require.Equal(t, int64(1), pilot.jobDeleteManyCalls.Load())
+	})
+
+	t.Run("JobDeleteTxUsesPilot", func(t *testing.T) {
+		t.Parallel()
+
+		client, pilot := setup(t, nil)
+
+		insertRes, err := client.Insert(ctx, noOpArgs{}, nil)
+		require.NoError(t, err)
+
+		withClientTx(t, client, func(tx pgx.Tx) {
+			_, err = client.JobDeleteTx(ctx, tx, insertRes.Job.ID)
+			require.NoError(t, err)
+			require.Equal(t, int64(1), pilot.jobDeleteCalls.Load())
+		})
+	})
+
+	t.Run("JobDeleteUsesExecutorFallbackForPilotWithoutJobDeleter", func(t *testing.T) {
+		t.Parallel()
+
+		var (
+			dbPool       = riversharedtest.DBPool(ctx, t)
+			driver       = riverpgxv5.New(dbPool)
+			schema       = riverdbtest.TestSchema(ctx, t, driver, nil)
+			pilot        = &pilotWithoutJobDeleter{Pilot: &pilotSpy{}}
+			pluginDriver = newDriverWithPlugin(t, dbPool)
+		)
+		pluginDriver.pilot = pilot
+
+		_, implementsJobDeleter := riverpilot.Pilot(pilot).(riverpilot.PilotJobDeleter)
+		require.False(t, implementsJobDeleter)
+
+		client, err := NewClient(pluginDriver, newTestConfig(t, schema))
+		require.NoError(t, err)
+
+		insertRes1, err := client.Insert(ctx, noOpArgs{}, nil)
+		require.NoError(t, err)
+		insertRes2, err := client.Insert(ctx, noOpArgs{}, nil)
+		require.NoError(t, err)
+
+		_, err = client.JobDelete(ctx, insertRes1.Job.ID)
+		require.NoError(t, err)
+
+		deleteRes, err := client.JobDeleteMany(ctx, NewJobDeleteManyParams().IDs(insertRes2.Job.ID))
+		require.NoError(t, err)
+		require.Len(t, deleteRes.Jobs, 1)
+
+		_, err = client.JobGet(ctx, insertRes1.Job.ID)
+		require.ErrorIs(t, err, ErrNotFound)
+		_, err = client.JobGet(ctx, insertRes2.Job.ID)
+		require.ErrorIs(t, err, ErrNotFound)
+	})
+
+	t.Run("JobDeleteUsesPilot", func(t *testing.T) {
+		t.Parallel()
+
+		client, pilot := setup(t, nil)
+
+		insertRes, err := client.Insert(ctx, noOpArgs{}, nil)
+		require.NoError(t, err)
+
+		_, err = client.JobDelete(ctx, insertRes.Job.ID)
+		require.NoError(t, err)
+		require.Equal(t, int64(1), pilot.jobDeleteCalls.Load())
 	})
 
 	t.Run("JobInsertManyUsesPilot", func(t *testing.T) {

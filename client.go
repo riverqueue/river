@@ -1003,6 +1003,7 @@ func NewClient[TTx any](driver riverdriver.Driver[TTx], config *Config) (*Client
 				CancelledJobRetentionPeriod: config.CancelledJobRetentionPeriod,
 				CompletedJobRetentionPeriod: config.CompletedJobRetentionPeriod,
 				DiscardedJobRetentionPeriod: config.DiscardedJobRetentionPeriod,
+				Pilot:                       client.pilot,
 				QueuesExcluded:              client.pilot.JobCleanerQueuesExcluded(),
 				Schema:                      config.Schema,
 				Timeout:                     config.JobCleanerTimeout,
@@ -1601,10 +1602,7 @@ func (c *Client[TTx]) jobCancel(ctx context.Context, exec riverdriver.Executor, 
 // deleted row if it was deleted. Jobs in the running state are not deleted,
 // instead returning rivertype.ErrJobRunning.
 func (c *Client[TTx]) JobDelete(ctx context.Context, id int64) (*rivertype.JobRow, error) {
-	return c.driver.GetExecutor().JobDelete(ctx, &riverdriver.JobDeleteParams{
-		ID:     id,
-		Schema: c.config.Schema,
-	})
+	return c.jobDelete(ctx, c.driver.GetExecutor(), id)
 }
 
 // JobDeleteTx deletes the job with the given ID from the database, returning the
@@ -1614,10 +1612,23 @@ func (c *Client[TTx]) JobDelete(ctx context.Context, id int64) (*rivertype.JobRo
 // until the transaction commits, and if the transaction rolls back, so too is
 // the deleted job.
 func (c *Client[TTx]) JobDeleteTx(ctx context.Context, tx TTx, id int64) (*rivertype.JobRow, error) {
-	return c.driver.UnwrapExecutor(tx).JobDelete(ctx, &riverdriver.JobDeleteParams{
+	return c.jobDelete(ctx, c.driver.UnwrapExecutor(tx), id)
+}
+
+func (c *Client[TTx]) jobDelete(ctx context.Context, exec riverdriver.Executor, id int64) (*rivertype.JobRow, error) {
+	params := &riverdriver.JobDeleteParams{
 		ID:     id,
 		Schema: c.config.Schema,
-	})
+	}
+
+	if pilot, ok := c.pilot.(riverpilot.PilotJobDeleter); ok {
+		return pilot.JobDelete(ctx, exec, params)
+	}
+
+	// Temporary compatibility fallback for Pilot implementations from before
+	// PilotJobDeleter. Once Pilot embeds PilotJobDeleter, replace the assertion
+	// above and this fallback with a direct call to c.pilot.JobDelete.
+	return exec.JobDelete(ctx, params)
 }
 
 // JobGet fetches a single job by its ID. Returns the up-to-date JobRow for the
@@ -2484,7 +2495,18 @@ func (c *Client[TTx]) jobDeleteMany(ctx context.Context, exec riverdriver.Execut
 		return nil, err
 	}
 
-	jobs, err := exec.JobDeleteMany(ctx, (*riverdriver.JobDeleteManyParams)(listParams))
+	driverParams := (*riverdriver.JobDeleteManyParams)(listParams)
+
+	var jobs []*rivertype.JobRow
+	if pilot, ok := c.pilot.(riverpilot.PilotJobDeleter); ok {
+		jobs, err = pilot.JobDeleteMany(ctx, exec, driverParams)
+	} else {
+		// Temporary compatibility fallback for Pilot implementations from before
+		// PilotJobDeleter. Once Pilot embeds PilotJobDeleter, replace the
+		// assertion above and this fallback with a direct call to
+		// c.pilot.JobDeleteMany.
+		jobs, err = exec.JobDeleteMany(ctx, driverParams)
+	}
 	if err != nil {
 		return nil, err
 	}

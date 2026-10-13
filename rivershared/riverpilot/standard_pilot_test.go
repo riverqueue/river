@@ -8,12 +8,28 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/riverqueue/river/riverdriver"
+	"github.com/riverqueue/river/rivertype"
 )
 
 type standardPilotExecutorMock struct {
 	riverdriver.Executor
 
+	jobDeleteBeforeFunc func(ctx context.Context, params *riverdriver.JobDeleteBeforeParams) (int, error)
+	jobDeleteFunc       func(ctx context.Context, params *riverdriver.JobDeleteParams) (*rivertype.JobRow, error)
+	jobDeleteManyFunc   func(ctx context.Context, params *riverdriver.JobDeleteManyParams) ([]*rivertype.JobRow, error)
 	jobGetAvailableFunc func(ctx context.Context, params *riverdriver.JobGetAvailableParams) (*riverdriver.JobGetAvailableResult, error)
+}
+
+func (m *standardPilotExecutorMock) JobDelete(ctx context.Context, params *riverdriver.JobDeleteParams) (*rivertype.JobRow, error) {
+	return m.jobDeleteFunc(ctx, params)
+}
+
+func (m *standardPilotExecutorMock) JobDeleteBefore(ctx context.Context, params *riverdriver.JobDeleteBeforeParams) (int, error) {
+	return m.jobDeleteBeforeFunc(ctx, params)
+}
+
+func (m *standardPilotExecutorMock) JobDeleteMany(ctx context.Context, params *riverdriver.JobDeleteManyParams) ([]*rivertype.JobRow, error) {
+	return m.jobDeleteManyFunc(ctx, params)
 }
 
 func (m *standardPilotExecutorMock) JobGetAvailable(ctx context.Context, params *riverdriver.JobGetAvailableParams) (*riverdriver.JobGetAvailableResult, error) {
@@ -46,6 +62,62 @@ func (m *standardPilotExecutorTxMock) JobInsertFastMany(ctx context.Context, par
 func (m *standardPilotExecutorTxMock) Rollback(context.Context) error {
 	m.rollbackCalls++
 	return nil
+}
+
+func TestStandardPilot_JobDelete(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+
+	t.Run("JobDelete", func(t *testing.T) {
+		t.Parallel()
+
+		params := &riverdriver.JobDeleteParams{ID: 123}
+		job := &rivertype.JobRow{ID: 123}
+		exec := &standardPilotExecutorMock{
+			jobDeleteFunc: func(ctx context.Context, innerParams *riverdriver.JobDeleteParams) (*rivertype.JobRow, error) {
+				require.Same(t, params, innerParams)
+				return job, nil
+			},
+		}
+
+		deletedJob, err := (&StandardPilot{}).JobDelete(ctx, exec, params)
+		require.NoError(t, err)
+		require.Same(t, job, deletedJob)
+	})
+
+	t.Run("JobDeleteBefore", func(t *testing.T) {
+		t.Parallel()
+
+		params := &riverdriver.JobDeleteBeforeParams{Max: 10}
+		exec := &standardPilotExecutorMock{
+			jobDeleteBeforeFunc: func(ctx context.Context, innerParams *riverdriver.JobDeleteBeforeParams) (int, error) {
+				require.Same(t, params, innerParams)
+				return 7, nil
+			},
+		}
+
+		numDeleted, err := (&StandardPilot{}).JobDeleteBefore(ctx, exec, params)
+		require.NoError(t, err)
+		require.Equal(t, 7, numDeleted)
+	})
+
+	t.Run("JobDeleteMany", func(t *testing.T) {
+		t.Parallel()
+
+		params := &riverdriver.JobDeleteManyParams{Max: 10}
+		jobs := []*rivertype.JobRow{{ID: 123}}
+		exec := &standardPilotExecutorMock{
+			jobDeleteManyFunc: func(ctx context.Context, innerParams *riverdriver.JobDeleteManyParams) ([]*rivertype.JobRow, error) {
+				require.Same(t, params, innerParams)
+				return jobs, nil
+			},
+		}
+
+		deletedJobs, err := (&StandardPilot{}).JobDeleteMany(ctx, exec, params)
+		require.NoError(t, err)
+		require.Equal(t, jobs, deletedJobs)
+	})
 }
 
 func TestStandardPilot_JobGetAvailable(t *testing.T) {

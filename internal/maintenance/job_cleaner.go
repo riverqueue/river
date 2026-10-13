@@ -11,6 +11,7 @@ import (
 	"github.com/riverqueue/river/riverdriver"
 	"github.com/riverqueue/river/rivershared/baseservice"
 	"github.com/riverqueue/river/rivershared/circuitbreaker"
+	"github.com/riverqueue/river/rivershared/riverpilot"
 	"github.com/riverqueue/river/rivershared/riversharedmaintenance"
 	"github.com/riverqueue/river/rivershared/startstop"
 	"github.com/riverqueue/river/rivershared/testsignal"
@@ -54,6 +55,9 @@ type JobCleanerConfig struct {
 	// Interval is the amount of time to wait between runs of the cleaner.
 	Interval time.Duration
 
+	// Pilot controls driver-level behavior that can be customized by plugins.
+	Pilot riverpilot.Pilot
+
 	// QueuesExcluded are queues that'll be excluded from cleaning.
 	QueuesExcluded []string
 
@@ -79,6 +83,9 @@ func (c *JobCleanerConfig) mustValidate() *JobCleanerConfig {
 	}
 	if c.Interval <= 0 {
 		panic("JobCleanerConfig.Interval must be above zero")
+	}
+	if c.Pilot == nil {
+		panic("JobCleanerConfig.Pilot must be set")
 	}
 	if c.Timeout <= 0 {
 		panic("JobCleanerConfig.Timeout must be above zero")
@@ -110,6 +117,10 @@ type JobCleaner struct {
 
 func NewJobCleaner(archetype *baseservice.Archetype, config *JobCleanerConfig, exec riverdriver.Executor) *JobCleaner {
 	batchSizes := config.WithDefaults()
+	pilot := config.Pilot
+	if pilot == nil {
+		pilot = &riverpilot.StandardPilot{}
+	}
 
 	return baseservice.Init(archetype, &JobCleaner{
 		Config: (&JobCleanerConfig{
@@ -119,6 +130,7 @@ func NewJobCleaner(archetype *baseservice.Archetype, config *JobCleanerConfig, e
 			DiscardedJobRetentionPeriod: cmp.Or(config.DiscardedJobRetentionPeriod, riversharedmaintenance.DiscardedJobRetentionPeriodDefault),
 			QueuesExcluded:              config.QueuesExcluded,
 			Interval:                    cmp.Or(config.Interval, riversharedmaintenance.JobCleanerIntervalDefault),
+			Pilot:                       pilot,
 			Schema:                      config.Schema,
 			Timeout:                     cmp.Or(config.Timeout, riversharedmaintenance.JobCleanerTimeoutDefault),
 		}).mustValidate(),
@@ -176,6 +188,17 @@ func (s *JobCleaner) batchSize() int {
 	return s.Config.Default
 }
 
+func (s *JobCleaner) deleteBefore(ctx context.Context, params *riverdriver.JobDeleteBeforeParams) (int, error) {
+	if pilot, ok := s.Config.Pilot.(riverpilot.PilotJobDeleter); ok {
+		return pilot.JobDeleteBefore(ctx, s.exec, params)
+	}
+
+	// Temporary compatibility fallback for Pilot implementations from before
+	// PilotJobDeleter. Once Pilot embeds PilotJobDeleter, replace the assertion
+	// above and this fallback with a direct call to s.Config.Pilot.JobDeleteBefore.
+	return s.exec.JobDeleteBefore(ctx, params)
+}
+
 type jobCleanerRunOnceResult struct {
 	NumJobsDeleted int
 }
@@ -193,7 +216,7 @@ func (s *JobCleaner) runOnce(ctx context.Context) (*jobCleanerRunOnceResult, err
 				return 0, nil
 			}
 
-			numDeleted, err := s.exec.JobDeleteBefore(ctx, &riverdriver.JobDeleteBeforeParams{
+			numDeleted, err := s.deleteBefore(ctx, &riverdriver.JobDeleteBeforeParams{
 				CancelledDoDelete:           s.Config.CancelledJobRetentionPeriod != -1,
 				CancelledFinalizedAtHorizon: time.Now().Add(-s.Config.CancelledJobRetentionPeriod),
 				CompletedDoDelete:           s.Config.CompletedJobRetentionPeriod != -1,

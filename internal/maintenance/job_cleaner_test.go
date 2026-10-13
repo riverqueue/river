@@ -2,6 +2,7 @@ package maintenance
 
 import (
 	"context"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -10,12 +11,30 @@ import (
 	"github.com/riverqueue/river/riverdbtest"
 	"github.com/riverqueue/river/riverdriver"
 	"github.com/riverqueue/river/riverdriver/riverpgxv5"
+	"github.com/riverqueue/river/rivershared/riverpilot"
 	"github.com/riverqueue/river/rivershared/riversharedmaintenance"
 	"github.com/riverqueue/river/rivershared/riversharedtest"
 	"github.com/riverqueue/river/rivershared/startstoptest"
 	"github.com/riverqueue/river/rivershared/testfactory"
 	"github.com/riverqueue/river/rivertype"
 )
+
+type jobCleanerPilotSpy struct {
+	riverpilot.StandardPilot
+
+	jobDeleteBeforeCalls  atomic.Int64
+	jobDeleteBeforeParams *riverdriver.JobDeleteBeforeParams
+}
+
+func (p *jobCleanerPilotSpy) JobDeleteBefore(ctx context.Context, exec riverdriver.Executor, params *riverdriver.JobDeleteBeforeParams) (int, error) {
+	p.jobDeleteBeforeCalls.Add(1)
+	p.jobDeleteBeforeParams = params
+	return p.StandardPilot.JobDeleteBefore(ctx, exec, params)
+}
+
+type jobCleanerPilotWithoutJobDeleter struct {
+	riverpilot.Pilot
+}
 
 func TestJobCleaner(t *testing.T) {
 	t.Parallel()
@@ -435,5 +454,45 @@ func TestJobCleaner(t *testing.T) {
 				require.Equal(t, riversharedmaintenance.BatchSizeDefault, cleaner.batchSize())
 			}
 		}
+	})
+
+	t.Run("UsesPilot", func(t *testing.T) {
+		t.Parallel()
+
+		cleaner, bundle := setup(t)
+		pilot := &jobCleanerPilotSpy{}
+		cleaner.Config.Pilot = pilot
+
+		job := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{State: new(rivertype.JobStateCancelled), FinalizedAt: new(bundle.cancelledDeleteHorizon.Add(-1 * time.Hour))})
+
+		res, err := cleaner.runOnce(ctx)
+		require.NoError(t, err)
+		require.Equal(t, 1, res.NumJobsDeleted)
+
+		require.Equal(t, int64(1), pilot.jobDeleteBeforeCalls.Load())
+		require.Equal(t, cleaner.Config.Default, pilot.jobDeleteBeforeParams.Max)
+		require.True(t, pilot.jobDeleteBeforeParams.CancelledDoDelete)
+
+		_, err = bundle.exec.JobGetByID(ctx, &riverdriver.JobGetByIDParams{ID: job.ID, Schema: cleaner.Config.Schema})
+		require.ErrorIs(t, err, rivertype.ErrNotFound)
+	})
+
+	t.Run("UsesExecutorFallbackForPilotWithoutJobDeleter", func(t *testing.T) {
+		t.Parallel()
+
+		cleaner, bundle := setup(t)
+		cleaner.Config.Pilot = &jobCleanerPilotWithoutJobDeleter{Pilot: cleaner.Config.Pilot}
+
+		_, implementsJobDeleter := cleaner.Config.Pilot.(riverpilot.PilotJobDeleter)
+		require.False(t, implementsJobDeleter)
+
+		job := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{State: new(rivertype.JobStateCancelled), FinalizedAt: new(bundle.cancelledDeleteHorizon.Add(-1 * time.Hour))})
+
+		res, err := cleaner.runOnce(ctx)
+		require.NoError(t, err)
+		require.Equal(t, 1, res.NumJobsDeleted)
+
+		_, err = bundle.exec.JobGetByID(ctx, &riverdriver.JobGetByIDParams{ID: job.ID, Schema: cleaner.Config.Schema})
+		require.ErrorIs(t, err, rivertype.ErrNotFound)
 	})
 }
