@@ -773,6 +773,53 @@ describe("SQLite pilot interception", () => {
     expect(notes()).toEqual(before);
   });
 
+  test("runs the job cleaner's deletions through the pilot", async () => {
+    const calls: string[] = [];
+    const { client, count, database, notes } = await setup(
+      () => ({
+        intercept: {
+          async deleteBefore(context, next) {
+            const deleted = await next();
+            note(context.tx, `deleted ${deleted}`);
+            calls.push(
+              `deleteBefore ${deleted} of ${context.params.limit} within ${context.timeoutMs} ms`
+            );
+            return deleted;
+          },
+        },
+      }),
+      {
+        maintenance: {
+          electionInterval: { milliseconds: 50 },
+          jobCleanerInterval: { milliseconds: 20 },
+        },
+        pollOnly: true,
+        queues: { other: { maxWorkers: 1 } },
+        workers: new Workers().add(job, () => undefined),
+      }
+    );
+    for (let index = 0; index < 2; index++) {
+      const { job: row } = await client.insert(job, {});
+      database
+        .prepare(
+          "UPDATE river_job SET state = 'completed', finalized_at = '2000-01-01 00:00:00.000' WHERE id = ?"
+        )
+        .run(row.id);
+    }
+
+    const run = await client.start();
+    try {
+      await waitFor(() => calls.length > 0);
+    } finally {
+      await run.stop();
+    }
+
+    // The cleaner's batch size and timeout, River's defaults.
+    expect(calls[0]).toBe("deleteBefore 2 of 10000 within 30000 ms");
+    expect(notes()[0]).toBe("deleted 2");
+    expect(count("river_job")).toBe(0);
+  });
+
   test("runs cancel and retry interceptors in the operation's transaction", async () => {
     const { client, notes } = await setup(() => recordingPilot());
     const inserted = await client.insert(job, {});

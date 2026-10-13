@@ -1364,6 +1364,25 @@ export class SqliteRuntime implements RuntimeDriver<
     return count;
   }
 
+  /**
+   * Run `callback` in a pilot transaction fenced by `leader`. SQLite has no
+   * statement timeout, and its statements run synchronously under the
+   * write lock, so like River's own batches the batch's signal is checked
+   * before the transaction begins and before it commits.
+   * @internal
+   */
+  async maintenanceTransaction<Result>(
+    leader: RuntimeLeader,
+    batch: RuntimeMaintenanceBatch,
+    callback: (tx: DatabaseSync) => Promise<Result>
+  ): Promise<Result | null> {
+    return this.#pilotTransaction(
+      (database) =>
+        holdsLeaderTerm(database, leader) ? callback(database) : null,
+      { signal: batch.signal }
+    );
+  }
+
   /** @internal */
   async maintenanceCleanQueues(
     leader: RuntimeLeader,
@@ -2312,15 +2331,7 @@ export class SqliteRuntime implements RuntimeDriver<
     batch?.signal.throwIfAborted();
     return this.#write(operation, options, (database) => {
       batch?.signal.throwIfAborted();
-      const current = leaderGet(database);
-      if (
-        current === null ||
-        current.leaderId !== leader.leaderId ||
-        !current.electedAt.equals(leader.electedAt) ||
-        Temporal.Instant.compare(current.expiresAt, Temporal.Now.instant()) < 0
-      ) {
-        return null;
-      }
+      if (!holdsLeaderTerm(database, leader)) return null;
       return callback(database);
     });
   }
@@ -2365,6 +2376,17 @@ export class SqliteRuntime implements RuntimeDriver<
       })
     );
   }
+}
+
+/** Whether `leader`'s exact term still holds an unexpired lease. */
+function holdsLeaderTerm(database: DatabaseSync, leader: RuntimeLeader) {
+  const current = leaderGet(database);
+  return (
+    current !== null &&
+    current.leaderId === leader.leaderId &&
+    current.electedAt.equals(leader.electedAt) &&
+    Temporal.Instant.compare(current.expiresAt, Temporal.Now.instant()) >= 0
+  );
 }
 
 /** A pilot's notification topic, checked for untyped callers. */

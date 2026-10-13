@@ -33,6 +33,7 @@ mod tests;
 pub(crate) use cleaner::postgres_delete_finalized_jobs;
 #[cfg(feature = "sqlite")]
 pub(crate) use cleaner::sqlite_delete_finalized_jobs;
+pub(crate) use cleaner::standard_job_delete_before;
 
 use std::{
     hash::{BuildHasher, Hasher},

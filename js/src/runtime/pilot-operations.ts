@@ -9,13 +9,15 @@ import type {
   DriverInsertResult,
   JobCompletionCommand,
   JobCompletionResult,
+  JobDeleteManyParams,
   JobInsertParams,
   RuntimeDriver,
+  RuntimeJobCleanupParams,
   RuntimeJobRescue,
   RuntimeLeader,
   RuntimeMaintenanceBatch,
 } from "../driver.js";
-import { ExtensionError, ValidationError } from "../errors.js";
+import { ExtensionError, JobRunningError, ValidationError } from "../errors.js";
 import { withHandle } from "../internal/handle-gate.js";
 import { JOB_STATE, type JobRow, type JobState } from "../job.js";
 import { parseJson } from "../json.js";
@@ -121,6 +123,163 @@ export class PilotOperations<Transaction = unknown> {
             protectArray(await driver.jobCompleteMany(commands, { tx })),
         }),
       transactionOptions(options.signal, options.tx)
+    );
+  }
+
+  /** Delete one non-running job, as `client.jobs.delete` does. */
+  delete(
+    driver: RuntimeDriver<Transaction>,
+    id: bigint,
+    tx: Transaction | undefined
+  ): Promise<JobRow | null> {
+    const standard = async (
+      scopeTx: Transaction | undefined
+    ): Promise<JobRow | null> => {
+      const result = await driver.jobDelete(id, driverOptions(scopeTx));
+      if (result.status === "not_found") return null;
+      if (result.status === "running") throw new JobRunningError(result.job.id);
+      return result.job;
+    };
+    const interceptor = this.#intercept.delete?.bind(this.#intercept);
+    // Temporary compatibility fallback for a pilot without a delete
+    // interceptor. Once deletion interceptors are required, only a client
+    // without a pilot runs River's deletion directly.
+    if (interceptor === undefined) return standard(tx);
+    const database = this.#requireDatabase();
+    return database.transaction(
+      (scopeTx) =>
+        runInterceptor<JobRow | null>({
+          invoke: (next) =>
+            interceptor(
+              Object.freeze({
+                database,
+                id,
+                signal: NEVER_ABORTED,
+                tx: scopeTx,
+              }),
+              next
+            ),
+          mode: "optional",
+          operation: "delete",
+          replacement: (result) => validateDeletedRow(result, id),
+          snapshot: rowFields,
+          standard: () => standard(scopeTx),
+        }),
+      transactionOptions(undefined, tx)
+    );
+  }
+
+  /**
+   * Delete one batch of finalized jobs for the job cleaner, fenced by
+   * `leader`.
+   */
+  deleteBefore(
+    driver: RuntimeDriver<Transaction>,
+    leader: RuntimeLeader,
+    params: RuntimeJobCleanupParams,
+    batch: RuntimeMaintenanceBatch
+  ): Promise<number> {
+    const interceptor = this.#intercept.deleteBefore?.bind(this.#intercept);
+    // Temporary compatibility fallback for a pilot without a deleteBefore
+    // interceptor. Once deletion interceptors are required, only a client
+    // without a pilot runs the cleaner's deletion directly.
+    if (interceptor === undefined) {
+      return Promise.resolve(
+        driver.maintenanceCleanJobs?.(
+          leader,
+          params,
+          batch.timeoutMs,
+          batch.signal
+        ) ?? 0
+      );
+    }
+    const database = this.#requireDatabase();
+    if (driver.maintenanceTransaction === undefined) {
+      return Promise.reject(
+        new ExtensionError(
+          "the client's driver can't run the job cleaner's deletion in a pilot transaction"
+        )
+      );
+    }
+    const frozenParams = Object.freeze({ ...params });
+    // The whole interceptor runs in the driver's maintenance transaction, so
+    // it gets the same bounds as River's own deletion: the leader fence and
+    // the batch's statement timeout from the transaction's start, and an
+    // abort that abandons the transaction at once.
+    const deleted = driver.maintenanceTransaction(leader, batch, (tx) =>
+      runInterceptor<number>({
+        invoke: (next) =>
+          interceptor(
+            Object.freeze({
+              database,
+              leader,
+              params: frozenParams,
+              signal: batch.signal,
+              timeoutMs: batch.timeoutMs,
+              tx,
+            }),
+            next
+          ),
+        mode: "optional",
+        operation: "deleteBefore",
+        replacement: (result) => {
+          if (
+            typeof result !== "number" ||
+            !Number.isSafeInteger(result) ||
+            result < 0 ||
+            result > params.limit
+          ) {
+            throw violation(
+              `deleteBefore interceptor resolved with ${String(result)}, not a count of at most ${params.limit} deleted jobs`
+            );
+          }
+          return result;
+        },
+        snapshot: (count) => count,
+        standard: () => {
+          batch.signal.throwIfAborted();
+          return database.deleteFinalizedJobs(frozenParams, { tx });
+        },
+      })
+    );
+    return Promise.resolve(deleted).then((count) => count ?? 0);
+  }
+
+  /** Delete matching non-running jobs, as `client.jobs.deleteMany` does. */
+  deleteMany(
+    driver: RuntimeDriver<Transaction>,
+    params: JobDeleteManyParams,
+    tx: Transaction | undefined
+  ): Promise<readonly JobRow[]> {
+    const interceptor = this.#intercept.deleteMany?.bind(this.#intercept);
+    // Temporary compatibility fallback for a pilot without a deleteMany
+    // interceptor. Once deletion interceptors are required, only a client
+    // without a pilot runs River's deletion directly.
+    if (interceptor === undefined) {
+      return Promise.resolve(driver.jobDeleteMany(params, driverOptions(tx)));
+    }
+    const database = this.#requireDatabase();
+    return database.transaction(
+      (scopeTx) =>
+        runInterceptor<readonly JobRow[]>({
+          invoke: (next) =>
+            interceptor(
+              Object.freeze({
+                database,
+                params,
+                signal: NEVER_ABORTED,
+                tx: scopeTx,
+              }),
+              next
+            ),
+          mode: "optional",
+          operation: "deleteMany",
+          replacement: (result) => validateDeletedRows(result, params.limit),
+          snapshot: listFields,
+          standard: async () =>
+            protectArray(await driver.jobDeleteMany(params, { tx: scopeTx })),
+        }),
+      transactionOptions(undefined, tx)
     );
   }
 
@@ -606,6 +765,55 @@ function transactionOptions<Transaction>(
     ...(signal === undefined ? {} : { signal }),
     ...(tx === undefined ? {} : { tx }),
   };
+}
+
+/**
+ * Check the row a `delete` interceptor deleted instead of River: the
+ * requested job, no longer running, or `null` when there was none.
+ */
+function validateDeletedRow(result: unknown, id: bigint): JobRow | null {
+  if (result === null) return null;
+  if (
+    typeof result !== "object" ||
+    (result as JobRow).id !== id ||
+    (result as JobRow).state === JOB_STATE.running
+  ) {
+    throw violation(
+      `delete interceptor must resolve with job ${id}'s deleted row or null`
+    );
+  }
+  return result as JobRow;
+}
+
+/**
+ * Check rows a `deleteMany` interceptor deleted instead of River: at most
+ * `limit` distinct jobs, none of them running.
+ */
+function validateDeletedRows(
+  result: unknown,
+  limit: number
+): readonly JobRow[] {
+  if (!Array.isArray(result) || result.length > limit) {
+    throw violation(
+      `deleteMany interceptor must resolve with at most ${limit} deleted jobs`
+    );
+  }
+  const ids = new Set<bigint>();
+  for (const row of result as unknown[]) {
+    if (
+      typeof row !== "object" ||
+      row === null ||
+      typeof (row as JobRow).id !== "bigint" ||
+      ids.has((row as JobRow).id) ||
+      (row as JobRow).state === JOB_STATE.running
+    ) {
+      throw violation(
+        "deleteMany interceptor must resolve with distinct, non-running jobs"
+      );
+    }
+    ids.add((row as JobRow).id);
+  }
+  return protectArray(result as readonly JobRow[]);
 }
 
 /**

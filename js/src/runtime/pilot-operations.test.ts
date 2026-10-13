@@ -7,6 +7,7 @@ import type {
   JobInsertParams,
   RuntimeDriver,
   RuntimeLeader,
+  RuntimeMaintenanceBatch,
 } from "../driver.js";
 import { ExtensionError, ValidationError } from "../errors.js";
 import type { JobRow } from "../job.js";
@@ -16,6 +17,7 @@ import type {
   PilotInterceptors,
   PreparedInsertParams,
 } from "../pilot.js";
+import { normalizeJobDeleteManyOptions } from "../query.js";
 import { PilotOperations, validatePreparedParams } from "./pilot-operations.js";
 
 describe("PilotOperations", () => {
@@ -81,6 +83,11 @@ describe("PilotOperations", () => {
         standard(`retry in ${options?.tx}`, jobRow(id, "available")),
       maintenanceGetStuck: () =>
         standard("getStuck", [jobRow(5n, "running"), jobRow(6n, "running")]),
+      maintenanceTransaction: <Result>(
+        _leader: RuntimeLeader,
+        batch: RuntimeMaintenanceBatch,
+        callback: (tx: Transaction) => Promise<Result>
+      ) => database.transaction(callback, { signal: batch.signal }),
       maintenanceRescue: (
         _leader: RuntimeLeader,
         _before: Temporal.Instant,
@@ -517,6 +524,69 @@ describe("PilotOperations", () => {
     ]);
   });
 
+  it("requires a driver maintenance transaction for a deleteBefore interceptor", async () => {
+    const bundle = setup();
+    const ops = operations(bundle, {
+      deleteBefore: (_context, next) => next(),
+    });
+    const driver = {
+      ...bundle.driver,
+      maintenanceTransaction: undefined,
+    } as unknown as RuntimeDriver<Transaction>;
+
+    await expect(
+      ops.deleteBefore(driver, leader(), cleanupParams(), batch())
+    ).rejects.toBeInstanceOf(ExtensionError);
+    expect(bundle.log).toEqual([]);
+  });
+
+  it("validates deletions that replace River's", async () => {
+    for (const row of [jobRow(2n, "completed"), jobRow(1n, "running"), 1]) {
+      const bundle = setup();
+      const ops = operations(bundle, {
+        delete: () => Promise.resolve(row as JobRow),
+      });
+      await expect(
+        ops.delete(bundle.driver, 1n, undefined)
+      ).rejects.toBeInstanceOf(ExtensionError);
+      expect(bundle.log).toEqual(["begin tx1", "rollback tx1"]);
+    }
+    for (const rows of [
+      [jobRow(2n, "completed"), jobRow(3n, "completed")],
+      [jobRow(2n, "running")],
+      null,
+    ]) {
+      const bundle = setup();
+      const ops = operations(bundle, {
+        deleteMany: () => Promise.resolve(rows as unknown as JobRow[]),
+      });
+      await expect(
+        ops.deleteMany(bundle.driver, deleteManyParams([2n], 1), undefined)
+      ).rejects.toBeInstanceOf(ExtensionError);
+      expect(bundle.log).toEqual(["begin tx1", "rollback tx1"]);
+    }
+    {
+      const bundle = setup();
+      const ops = operations(bundle, {
+        deleteMany: () =>
+          Promise.resolve([jobRow(2n, "completed"), jobRow(2n, "completed")]),
+      });
+      await expect(
+        ops.deleteMany(bundle.driver, deleteManyParams([2n]), undefined)
+      ).rejects.toBeInstanceOf(ExtensionError);
+    }
+    for (const count of [-1, 11, 1.5, Number.NaN]) {
+      const bundle = setup();
+      const ops = operations(bundle, {
+        deleteBefore: () => Promise.resolve(count),
+      });
+      await expect(
+        ops.deleteBefore(bundle.driver, leader(), cleanupParams(), batch())
+      ).rejects.toBeInstanceOf(ExtensionError);
+      expect(bundle.log).toEqual(["begin tx1", "rollback tx1"]);
+    }
+  });
+
   it("calls interceptors with intercept as this", async () => {
     const bundle = setup();
     const intercept: PilotInterceptors<Transaction> & { seen?: unknown } = {
@@ -628,6 +698,19 @@ function jobRow(id: bigint, state: JobRow["state"]): JobRow {
     uniqueKey: null,
     uniqueStates: null,
   };
+}
+
+function cleanupParams() {
+  return {
+    cancelledBefore: null,
+    completedBefore: Temporal.Now.instant(),
+    discardedBefore: null,
+    limit: 10,
+  };
+}
+
+function deleteManyParams(ids: readonly bigint[], limit = 10) {
+  return normalizeJobDeleteManyOptions({ ids, limit });
 }
 
 function leader(): RuntimeLeader {

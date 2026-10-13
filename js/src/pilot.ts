@@ -11,6 +11,7 @@ import type {
   JobClaimResult,
   JobCompletionCommand,
   JobCompletionResult,
+  JobDeleteManyParams,
   JobInsertParams,
   LeaderTerm,
   QueueRow,
@@ -193,7 +194,31 @@ export interface PilotCompleteContext<
   readonly commands: readonly JobCompletionCommand[];
 }
 
-/** An intercepted cancellation or retry of one job. */
+/**
+ * The job cleaner's deletion of one batch of finalized jobs. It runs in a
+ * transaction fenced by `leader`'s term and bounded like River's own
+ * batches: on Postgres the batch's timeout is the statement timeout from
+ * the transaction's start, and when `signal` aborts, at the timeout or when
+ * the term ends, River abandons the transaction at once.
+ */
+export interface PilotDeleteBeforeContext<
+  Transaction,
+> extends PilotTransactionContext<Transaction> {
+  readonly leader: LeaderTerm;
+  /** The batch's filters, which River's standard deletion applies. */
+  readonly params: FinalizedJobDeleteParams;
+  /** The batch's timeout in milliseconds, or `null` for none. */
+  readonly timeoutMs: number | null;
+}
+
+/** An intercepted bulk deletion, with its validated filters. */
+export interface PilotDeleteManyContext<
+  Transaction,
+> extends PilotTransactionContext<Transaction> {
+  readonly params: JobDeleteManyParams;
+}
+
+/** An intercepted cancellation, retry, or deletion of one job. */
 export interface PilotJobContext<
   Transaction,
 > extends PilotTransactionContext<Transaction> {
@@ -236,9 +261,17 @@ export interface PilotRescueContext<
  * `insert`, `complete`, `cancel`, and `retry` must call `next` exactly once
  * and resolve with exactly what it resolved with; they add effects in the
  * same transaction. `insert` alone may pass replacement rows to `next`, one
- * for each prepared row, in order. `getStuck` and `rescue` may instead
- * replace River's operation: they call `next` at most once, and resolve with
- * its result when they do.
+ * for each prepared row, in order. `getStuck`, `rescue`, `delete`,
+ * `deleteMany`, and `deleteBefore` may instead replace River's operation:
+ * they call `next` at most once, and resolve with its result when they do.
+ *
+ * `delete`, `deleteMany`, and `deleteBefore` let a pilot replace job
+ * deletion in `client.jobs.delete`, `client.jobs.deleteMany`, and the job
+ * cleaner, within the deletion's transaction, like River for Go's
+ * `PilotJobDeleter`. They're temporarily optional: a pilot without one gets
+ * River's standard deletion, run directly, as a compatibility fallback.
+ * They aren't meant to stay optional, and the fallback will be removed once
+ * supported pilots implement them.
  *
  * River awaits `next` before settling the operation, even when the
  * interceptor doesn't. A second call, or one after the interceptor settled,
@@ -256,6 +289,36 @@ export interface PilotInterceptors<Transaction> {
     context: PilotCompleteContext<Transaction>,
     next: () => Promise<readonly JobCompletionResult[]>
   ): Promise<readonly JobCompletionResult[]>;
+  /**
+   * Delete one job for `client.jobs.delete`. `next` resolves with the
+   * deleted row, or `null` when the job doesn't exist, and rejects with a
+   * `JobRunningError` for a running job. A replacement must resolve with the
+   * job's deleted row or `null`. Temporarily optional; see above.
+   */
+  delete?(
+    context: PilotJobContext<Transaction>,
+    next: () => Promise<JobRow | null>
+  ): Promise<JobRow | null>;
+  /**
+   * Delete one batch of finalized jobs for the job cleaner, resolving with
+   * how many were deleted. A count below `params.limit` ends the cleaner's
+   * pass. A replacement must resolve with an integer from zero to
+   * `params.limit`. Temporarily optional; see above.
+   */
+  deleteBefore?(
+    context: PilotDeleteBeforeContext<Transaction>,
+    next: () => Promise<number>
+  ): Promise<number>;
+  /**
+   * Delete jobs for `client.jobs.deleteMany`, resolving with the deleted
+   * rows in list order. A replacement must resolve with at most
+   * `params.limit` distinct, non-running rows. Temporarily optional; see
+   * above.
+   */
+  deleteMany?(
+    context: PilotDeleteManyContext<Transaction>,
+    next: () => Promise<readonly JobRow[]>
+  ): Promise<readonly JobRow[]>;
   getStuck?(
     context: PilotStuckContext<Transaction>,
     next: () => Promise<readonly JobRow[]>

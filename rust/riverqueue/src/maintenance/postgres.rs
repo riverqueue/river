@@ -86,13 +86,16 @@ fn timeout_setting(timeout: Duration) -> String {
 /// `pg_cancel_backend` and awaited briefly so the connection is idle again.
 /// A server that never answers is abandoned after the statement timeout plus a
 /// grace period.
-pub(super) async fn cancellable<T>(
+pub(super) async fn cancellable<T, E>(
     pool: &PgPool,
     backend_pid: i32,
     cancel: &CancellationToken,
     timeout: Duration,
-    operation: impl Future<Output = Result<T, sqlx::Error>>,
-) -> Result<T, MaintenanceError> {
+    operation: impl Future<Output = Result<T, E>>,
+) -> Result<T, MaintenanceError>
+where
+    MaintenanceError: From<E>,
+{
     cancellable_within(
         pool,
         backend_pid,
@@ -106,13 +109,16 @@ pub(super) async fn cancellable<T>(
 /// Like [`cancellable`], but for a statement without a server-side
 /// `statement_timeout`: the statement is cancelled server-side once
 /// `deadline` passes, or never when it's `None`.
-pub(super) async fn cancellable_within<T>(
+pub(super) async fn cancellable_within<T, E>(
     pool: &PgPool,
     backend_pid: i32,
     cancel: &CancellationToken,
     deadline: Option<Duration>,
-    operation: impl Future<Output = Result<T, sqlx::Error>>,
-) -> Result<T, MaintenanceError> {
+    operation: impl Future<Output = Result<T, E>>,
+) -> Result<T, MaintenanceError>
+where
+    MaintenanceError: From<E>,
+{
     tokio::pin!(operation);
     let deadline = async {
         match deadline {

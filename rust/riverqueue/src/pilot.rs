@@ -15,10 +15,13 @@ use sqlx::Sqlite;
 use sqlx::Transaction;
 use tokio_util::sync::CancellationToken;
 
-use crate::__private::{ClaimedJob, DatabaseConfig, DatabaseConnection, DatabasePool, PilotError};
+use crate::__private::{
+    ClaimedJob, DatabaseConfig, DatabaseConnection, DatabasePool, FinalizedJobDeleteParams,
+    PilotError,
+};
 use crate::client::ClientInner;
 use crate::database::DatabaseKind;
-use crate::{Error, JobRow, Queue};
+use crate::{Error, JobDeleteManyParams, JobRow, Queue};
 
 /// The client's database as seen by an extension: its caller-owned pool and
 /// backend configuration.
@@ -137,6 +140,151 @@ impl fmt::Debug for PilotTransaction {
             .debug_struct("PilotTransaction")
             .field("kind", &kind)
             .finish_non_exhaustive()
+    }
+}
+
+/// Inputs to [`Pilot::job_delete`](crate::__private::Pilot::job_delete).
+#[derive(Clone, Debug)]
+#[non_exhaustive]
+pub struct JobDeleteContext {
+    /// The client's backend configuration.
+    pub database: DatabaseConfig,
+    /// The job to delete.
+    pub id: i64,
+}
+
+/// River's standard single-job deletion, handed to
+/// [`Pilot::job_delete`](crate::__private::Pilot::job_delete).
+pub struct JobDeleteNext<'a> {
+    id: i64,
+    inner: &'a ClientInner,
+}
+
+impl<'a> JobDeleteNext<'a> {
+    pub(crate) const fn new(inner: &'a ClientInner, id: i64) -> Self {
+        Self { id, inner }
+    }
+
+    /// Deletes the job on `connection` exactly as River deletes it without
+    /// an extension, returning its former row.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::NotFound`] when the job doesn't exist,
+    /// [`Error::JobRunning`] when it's running, and a database error when the
+    /// statement fails.
+    pub async fn delete(self, connection: DatabaseConnection<'_>) -> Result<JobRow, Error> {
+        crate::storage::standard_job_delete(self.inner, connection, self.id).await
+    }
+}
+
+impl fmt::Debug for JobDeleteNext<'_> {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("JobDeleteNext")
+            .field("id", &self.id)
+            .finish_non_exhaustive()
+    }
+}
+
+/// Inputs to
+/// [`Pilot::job_delete_before`](crate::__private::Pilot::job_delete_before).
+#[derive(Clone, Debug)]
+#[non_exhaustive]
+pub struct JobDeleteBeforeContext<'a> {
+    /// The client's backend configuration.
+    pub database: DatabaseConfig,
+    /// The job cleaner's filters for this batch.
+    pub params: &'a FinalizedJobDeleteParams,
+}
+
+/// The job cleaner's standard deletion of one batch of finalized jobs,
+/// handed to
+/// [`Pilot::job_delete_before`](crate::__private::Pilot::job_delete_before).
+pub struct JobDeleteBeforeNext<'a> {
+    inner: &'a ClientInner,
+    params: &'a FinalizedJobDeleteParams,
+}
+
+impl<'a> JobDeleteBeforeNext<'a> {
+    pub(crate) const fn new(inner: &'a ClientInner, params: &'a FinalizedJobDeleteParams) -> Self {
+        Self { inner, params }
+    }
+
+    /// Deletes the batch on `connection` exactly as the job cleaner deletes
+    /// it without an extension, returning how many jobs were deleted.
+    ///
+    /// # Errors
+    ///
+    /// Returns a database error when the statement fails.
+    pub async fn delete(self, connection: DatabaseConnection<'_>) -> Result<u64, Error> {
+        crate::maintenance::standard_job_delete_before(self.inner, connection, self.params).await
+    }
+}
+
+impl fmt::Debug for JobDeleteBeforeNext<'_> {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("JobDeleteBeforeNext")
+            .field("params", &self.params)
+            .finish_non_exhaustive()
+    }
+}
+
+/// Inputs to
+/// [`Pilot::job_delete_many`](crate::__private::Pilot::job_delete_many).
+#[derive(Clone, Debug)]
+#[non_exhaustive]
+pub struct JobDeleteManyContext<'a> {
+    /// The client's backend configuration.
+    pub database: DatabaseConfig,
+    /// The deletion's validated parameters.
+    pub params: &'a JobDeleteManyParams,
+}
+
+/// River's standard bulk job deletion, handed to
+/// [`Pilot::job_delete_many`](crate::__private::Pilot::job_delete_many).
+pub struct JobDeleteManyNext<'a> {
+    inner: &'a ClientInner,
+    params: &'a JobDeleteManyParams,
+}
+
+impl<'a> JobDeleteManyNext<'a> {
+    pub(crate) const fn new(inner: &'a ClientInner, params: &'a JobDeleteManyParams) -> Self {
+        Self { inner, params }
+    }
+
+    /// Deletes the matching jobs on `connection` exactly as River deletes
+    /// them without an extension, returning their former rows in list
+    /// order.
+    ///
+    /// # Errors
+    ///
+    /// Returns a database error when the statement fails.
+    pub async fn delete(self, connection: DatabaseConnection<'_>) -> Result<Vec<JobRow>, Error> {
+        crate::storage::standard_job_delete_many(self.inner, connection, self.params.filter()).await
+    }
+}
+
+impl fmt::Debug for JobDeleteManyNext<'_> {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("JobDeleteManyNext")
+            .field("params", &self.params)
+            .finish_non_exhaustive()
+    }
+}
+
+/// Converts an error from an extension's job deletion step. A River error,
+/// such as one [`JobDeleteNext::delete`] returned, passes through unchanged
+/// so callers see the same errors with or without an extension.
+pub(crate) fn job_delete_error(operation: &'static str, error: PilotError) -> Error {
+    match error.downcast::<Error>() {
+        Ok(error) => *error,
+        Err(source) => Error::Extension {
+            phase: crate::ExtensionPhase::AddOn { operation },
+            source,
+        },
     }
 }
 
