@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- Job deletion through `Client.JobDelete`, `Client.JobDeleteMany`, their `Tx` variants, and the job cleaner now goes through optional pilot hooks, so a pilot can take part in deletes as it already can in cancels and retries. Behavior with the standard pilot is unchanged. [PR #1500](https://github.com/riverqueue/river/pull/1500).
+
 ### Fixed
 
 - Fixed `AddWorkerSafely` leaving a worker's primary kind and earlier aliases registered when a later kind alias conflicts with an existing registration. Failed registrations now leave the worker registry unchanged. [PR #1440](https://github.com/riverqueue/river/pull/1440).

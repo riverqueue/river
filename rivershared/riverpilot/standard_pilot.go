@@ -17,6 +17,18 @@ type StandardPilot struct {
 
 func (p *StandardPilot) JobCleanerQueuesExcluded() []string { return nil }
 
+func (p *StandardPilot) JobDelete(ctx context.Context, exec riverdriver.Executor, params *riverdriver.JobDeleteParams) (*rivertype.JobRow, error) {
+	return exec.JobDelete(ctx, params)
+}
+
+func (p *StandardPilot) JobDeleteBefore(ctx context.Context, exec riverdriver.Executor, params *riverdriver.JobDeleteBeforeParams) (int, error) {
+	return exec.JobDeleteBefore(ctx, params)
+}
+
+func (p *StandardPilot) JobDeleteMany(ctx context.Context, exec riverdriver.Executor, params *riverdriver.JobDeleteManyParams) ([]*rivertype.JobRow, error) {
+	return exec.JobDeleteMany(ctx, params)
+}
+
 func (p *StandardPilot) JobGetAvailable(ctx context.Context, exec riverdriver.Executor, state ProducerState, params *riverdriver.JobGetAvailableParams) (*riverdriver.JobGetAvailableResult, error) {
 	if params.MaxToLock <= 0 {
 		return &riverdriver.JobGetAvailableResult{}, nil
