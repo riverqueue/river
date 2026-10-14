@@ -458,7 +458,7 @@ export class QueueProducer {
         // Like River for Go's producer after a full fetch, claim again as
         // soon as any worker slot frees, subject to the fetch cooldown.
         if (databaseLikelyHasMore && capacity <= 0 && active.size > 0) {
-          await Promise.race(active);
+          await this.#waitForSlot(runtime, active);
           continue;
         }
         if (!runtime.paused && capacity > 0) {
@@ -587,7 +587,7 @@ export class QueueProducer {
 
         databaseLikelyHasMore = false;
         if (active.size >= runtime.config.maxWorkers) {
-          await Promise.race(active);
+          await this.#waitForSlot(runtime, active);
         } else {
           await this.#waitForQueue(runtime, signal);
         }
@@ -791,6 +791,26 @@ export class QueueProducer {
       runtime.wake = done;
       signal.addEventListener("abort", onAbort, { once: true });
     });
+  }
+
+  /**
+   * Wait for a worker slot to free, or for an explicit wake-up, such as a
+   * reconfiguration that raised the queue's capacity or a stop.
+   */
+  async #waitForSlot(
+    runtime: QueueRuntime,
+    active: ReadonlySet<Promise<unknown>>
+  ): Promise<void> {
+    const woken = Promise.withResolvers<undefined>();
+    const wake = () => {
+      woken.resolve(undefined);
+    };
+    runtime.wake = wake;
+    try {
+      await Promise.race([...active, woken.promise]);
+    } finally {
+      if (runtime.wake === wake) runtime.wake = null;
+    }
   }
 
   /** Wait for the queue control poll interval or an explicit wake-up. */

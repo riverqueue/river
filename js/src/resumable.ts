@@ -79,7 +79,7 @@ export class Resumable {
       this.#completedStep = name;
     } catch (cause: unknown) {
       this.#failure = stepError(name, cause);
-      throw this.#failure;
+      throw cause;
     } finally {
       this.#stepName = previousStepName;
     }
@@ -98,7 +98,7 @@ export class Resumable {
       this.#cursors.delete(name);
     } catch (cause: unknown) {
       this.#failure = stepError(name, cause);
-      throw this.#failure;
+      throw cause;
     } finally {
       this.#stepName = previousStepName;
     }
@@ -204,7 +204,12 @@ export function finishResumable(
   return resumable.finish(workerFailed);
 }
 
+/**
+ * A failed step's error, which fails the attempt. Like River for Go, it's the
+ * step's own error, so the job records the step's message.
+ */
 function stepError(name: string, cause: unknown): Error {
+  if (cause instanceof Error) return cause;
   return new LifecycleError(`resumable step ${JSON.stringify(name)} failed`, {
     cause,
   });

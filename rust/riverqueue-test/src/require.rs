@@ -24,7 +24,7 @@ const LIST_LIMIT: u32 = 10_000;
 #[derive(Clone, Debug, Default)]
 #[non_exhaustive]
 pub struct RequireInsertedOpts {
-    max_attempts: Option<i16>,
+    max_attempts: Option<i32>,
     priority: Option<i16>,
     queue: Option<String>,
     scheduled_at: Option<DateTime<Utc>>,
@@ -41,7 +41,7 @@ impl RequireInsertedOpts {
 
     /// Returns the expected maximum number of attempts.
     #[must_use]
-    pub const fn max_attempts(&self) -> Option<i16> {
+    pub const fn max_attempts(&self) -> Option<i32> {
         self.max_attempts
     }
 
@@ -77,7 +77,7 @@ impl RequireInsertedOpts {
 
     /// Expects this maximum number of attempts.
     #[must_use]
-    pub const fn with_max_attempts(mut self, max_attempts: i16) -> Self {
+    pub const fn with_max_attempts(mut self, max_attempts: i32) -> Self {
         self.max_attempts = Some(max_attempts);
         self
     }

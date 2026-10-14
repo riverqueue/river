@@ -1288,7 +1288,7 @@ pub struct PreparedInsertParams {
     /// Stable job kind.
     pub kind: String,
     /// Maximum attempts, including the first.
-    pub max_attempts: i16,
+    pub max_attempts: i32,
     /// Arbitrary job metadata.
     pub metadata: crate::JobMetadata,
     /// Priority from one through four.
@@ -1465,7 +1465,7 @@ impl RawInsertResult {
 #[derive(Debug)]
 pub struct JobRowParts {
     pub id: i64,
-    pub attempt: i16,
+    pub attempt: i32,
     pub attempted_at: Option<DateTime<Utc>>,
     pub attempted_by: Vec<String>,
     pub created_at: DateTime<Utc>,
@@ -1473,7 +1473,7 @@ pub struct JobRowParts {
     pub errors: Vec<AttemptError>,
     pub finalized_at: Option<DateTime<Utc>>,
     pub kind: String,
-    pub max_attempts: i16,
+    pub max_attempts: i32,
     pub metadata: crate::JobMetadata,
     pub priority: i16,
     pub queue: String,

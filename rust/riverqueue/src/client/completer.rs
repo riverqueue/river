@@ -60,7 +60,7 @@ pub(super) const HOT_OPERATION_TIMEOUT: Duration = Duration::from_secs(10);
 pub(super) struct CompletionUpdate {
     /// Replacement attempt, sent only for snoozes and shutdown interrupts,
     /// which return an attempt that should not count.
-    pub(super) attempt: Option<i16>,
+    pub(super) attempt: Option<i32>,
     pub(super) cancellation: CancellationToken,
     pub(super) error: Option<AttemptError>,
     pub(super) event_kind: JobEventKind,

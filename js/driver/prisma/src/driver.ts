@@ -317,7 +317,7 @@ export class PrismaInserter implements InsertDriver<PrismaClientLike> {
       sql,
       params.map(({ encodedArgs }) => encodedArgs),
       params.map(({ kind }) => kind),
-      params.map(({ maxAttempts }) => maxAttempts),
+      params.map(({ maxAttempts }) => clampSmallint(maxAttempts)),
       params.map(({ metadata }, index) =>
         JSON.stringify(
           nonces === null
@@ -325,7 +325,7 @@ export class PrismaInserter implements InsertDriver<PrismaClientLike> {
             : { ...metadata, [UNIQUE_INSERT_NONCE_KEY]: nonces[index] }
         )
       ),
-      params.map(({ priority }) => priority),
+      params.map(({ priority }) => clampSmallint(priority)),
       params.map(({ queue }) => queue),
       params.map(({ scheduledAt }) =>
         scheduledAt === undefined ? null : postgresTimestamp(scheduledAt)
@@ -542,4 +542,13 @@ function validateSchema(value: string): void {
       `Postgres schema must not exceed ${RIVER_SCHEMA_MAX_BYTES} bytes so River notification topics remain valid`
     );
   }
+}
+
+/**
+ * Clamps an integer to Postgres's 16-bit `smallint` columns. Like River
+ * for Go's Postgres drivers, an insert stores a wider `max_attempts` or
+ * `priority` as 32767 instead of failing; SQLite stores the full value.
+ */
+function clampSmallint(value: number): number {
+  return Math.min(value, 32_767);
 }

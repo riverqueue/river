@@ -869,7 +869,7 @@ export interface InsertClient<Transaction = unknown> {
   ): Promise<InsertResult<JobDefinitionInput<Definition>>>;
   /**
    * Insert a heterogeneous batch atomically, preserving input order in the
-   * result tuple. An empty batch resolves to `[]` without a database call.
+   * result tuple. An empty batch is rejected with a {@link ValidationError}.
    */
   insertMany<const Items extends readonly InsertManyItem[]>(
     items: Items & CheckedInsertManyItems<Items>,

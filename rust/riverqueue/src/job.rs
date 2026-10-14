@@ -116,7 +116,7 @@ pub struct AttemptError {
     #[serde(serialize_with = "crate::encoding::go_time::serialize")]
     pub at: DateTime<Utc>,
     /// Attempt number on which the error occurred.
-    pub attempt: i16,
+    pub attempt: i32,
     /// Stringified worker error or panic value.
     pub error: String,
     /// Backtrace for a panic, otherwise empty.
@@ -126,7 +126,7 @@ pub struct AttemptError {
 impl AttemptError {
     /// Creates a persisted attempt error without a panic trace.
     #[must_use]
-    pub fn new(at: DateTime<Utc>, attempt: i16, error: impl Into<String>) -> Self {
+    pub fn new(at: DateTime<Utc>, attempt: i32, error: impl Into<String>) -> Self {
         Self {
             at,
             attempt,
@@ -154,7 +154,7 @@ pub struct InsertOpts {
     /// Options for an exact-version extension, which River carries to the
     /// extension's insert hook without persisting them.
     pub(crate) extension_options: Map<String, Value>,
-    max_attempts: Option<i16>,
+    max_attempts: Option<i32>,
     metadata: Option<JobMetadata>,
     pending: Option<bool>,
     priority: Option<i16>,
@@ -181,7 +181,7 @@ pub enum ScheduleOverride {
 impl InsertOpts {
     /// Returns the configured maximum attempts override.
     #[must_use]
-    pub const fn max_attempts(&self) -> Option<i16> {
+    pub const fn max_attempts(&self) -> Option<i32> {
         self.max_attempts
     }
 
@@ -229,7 +229,7 @@ impl InsertOpts {
 
     /// Overrides the maximum number of attempts, including the first.
     #[must_use]
-    pub const fn with_max_attempts(mut self, maximum: i16) -> Self {
+    pub const fn with_max_attempts(mut self, maximum: i32) -> Self {
         self.max_attempts = Some(maximum);
         self
     }
@@ -334,7 +334,7 @@ impl InsertOpts {
     }
 
     pub(crate) fn resolve(
-        client_max_attempts: i16,
+        client_max_attempts: i32,
         job_defaults: Self,
         call_overrides: Self,
     ) -> InsertParams {
@@ -367,7 +367,7 @@ pub struct InsertParams {
     /// Options for an exact-version extension; see [`InsertOpts`].
     pub(crate) extension_options: Map<String, Value>,
     /// Maximum number of attempts, including the first.
-    pub max_attempts: i16,
+    pub max_attempts: i32,
     /// Arbitrary JSON object metadata.
     pub metadata: JobMetadata,
     /// Insert in the pending state.
@@ -495,7 +495,7 @@ pub struct JobRow {
     /// Database-generated ID.
     pub id: i64,
     /// Current attempt number.
-    pub attempt: i16,
+    pub attempt: i32,
     /// Last attempt time.
     pub attempted_at: Option<DateTime<Utc>>,
     /// IDs of clients that attempted the job.
@@ -511,7 +511,7 @@ pub struct JobRow {
     /// Stable job kind.
     pub kind: String,
     /// Maximum attempts.
-    pub max_attempts: i16,
+    pub max_attempts: i32,
     /// Arbitrary and River-reserved metadata.
     pub metadata: JobMetadata,
     /// Priority from one through four.

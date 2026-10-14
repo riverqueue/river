@@ -343,7 +343,7 @@ pub struct ClientBuilder {
     pub(super) allow_legacy_job_kinds: bool,
     pub(super) allow_unregistered_job_kinds: bool,
     pub(super) database: Database,
-    pub(super) default_max_attempts: i16,
+    pub(super) default_max_attempts: i32,
     pub(super) error_handler: Option<Arc<dyn crate::extension::DynErrorHandler>>,
     pub(super) fetch_cooldown: Duration,
     pub(super) fetch_only_known_kinds: bool,
@@ -403,7 +403,7 @@ impl ClientBuilder {
     /// [`MAX_ATTEMPTS_DEFAULT`](crate::MAX_ATTEMPTS_DEFAULT) (25), and must be
     /// at least one.
     #[must_use]
-    pub fn default_max_attempts(mut self, maximum: i16) -> Self {
+    pub fn default_max_attempts(mut self, maximum: i32) -> Self {
         self.default_max_attempts = maximum;
         self
     }

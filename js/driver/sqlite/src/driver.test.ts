@@ -122,6 +122,25 @@ describe("SqliteDriver", () => {
     ).toEqual({ count: 0 });
   });
 
+  test("stores attempt counts wider than 16 bits, like Go", async () => {
+    const { driver } = await setup();
+    const job = defineJob()({ kind: "wide_attempts" });
+
+    const [{ job: inserted }] = await new Client(driver).insertMany([
+      { args: {}, job, options: { maxAttempts: 40_000 } },
+    ]);
+    expect(inserted.maxAttempts).toBe(40_000);
+    expect((await driver.jobGet(inserted.id))?.maxAttempts).toBe(40_000);
+
+    const { job: full } = await driver.jobInsert({
+      args: {},
+      attempt: 40_000,
+      kind: "wide_attempts",
+      maxAttempts: 40_001,
+    });
+    expect([full.attempt, full.maxAttempts]).toEqual([40_000, 40_001]);
+  });
+
   test("round-trips exact JSON numbers from JavaScript and other engines", async () => {
     const { database, driver } = await setup();
     const inserted = await driver.jobInsert({

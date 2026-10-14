@@ -12,7 +12,7 @@ use super::completer::{persisted_completion_event_kind, with_completion_retries}
 use super::executor::scheduled_after;
 use super::notifier::dispatch_notification;
 use super::*;
-use crate::{AttemptError, JobEventKind, JobRow, JobState, WorkError, WorkResult};
+use crate::{AttemptError, JobCancelError, JobEventKind, JobRow, JobState, WorkError, WorkResult};
 #[cfg(feature = "sqlite")]
 use crate::{InsertOpts, InsertParams, WorkContext, WorkOutcome};
 #[cfg(feature = "sqlite")]
@@ -284,7 +284,7 @@ fn retry_row(error_count: usize) -> JobRow {
         .unwrap()
         .with_timezone(&Utc);
     JobRow {
-        attempt: i16::try_from(error_count).unwrap_or(i16::MAX),
+        attempt: i32::try_from(error_count).unwrap_or(i32::MAX),
         attempted_at: Some(now),
         attempted_by: vec!["test".to_owned()],
         created_at: now,
@@ -356,6 +356,41 @@ async fn worker_failures_record_the_error_chain_and_panic_value() {
     };
     assert_eq!(panic.message(), "boom");
     assert_eq!(panic.to_string(), "worker panicked: boom");
+}
+
+#[test]
+fn worker_job_cancel_errors_cancel_with_their_reason_like_go() {
+    // Like Go's `JobCancel(err)`, the attempt records the reason, and the
+    // failure cancels the job instead of being retried.
+    let failure = super::executor::worker_join_result(Ok(Err(WorkError::new(
+        JobCancelError::new("card expired"),
+    ))))
+    .unwrap_err();
+    assert_eq!(failure.error, "JobCancelError: card expired");
+    assert!(matches!(
+        failure.kind,
+        super::executor::WorkerFailureKind::Cancelled
+    ));
+
+    // It's recognized anywhere in the error's source chain, including
+    // inside an `io::Error`.
+    let failure = super::executor::worker_join_result(Ok(Err(WorkError::new(
+        std::io::Error::other(JobCancelError::new("card expired")),
+    ))))
+    .unwrap_err();
+    assert!(matches!(
+        failure.kind,
+        super::executor::WorkerFailureKind::Cancelled
+    ));
+
+    let failure = super::executor::worker_join_result(Ok(Err(WorkError::new(
+        std::io::Error::other("card declined"),
+    ))))
+    .unwrap_err();
+    assert!(matches!(
+        failure.kind,
+        super::executor::WorkerFailureKind::Error
+    ));
 }
 
 #[cfg(feature = "sqlite")]
