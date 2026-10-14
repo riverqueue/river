@@ -14,6 +14,18 @@ class SimpleArgs
   def to_json = JSON.dump({job_num: job_num})
 end
 
+# Returns preencoded JSON as given, like args encoded by a plugin or a custom
+# `#to_json` implementation.
+class EncodedJSONArgs
+  def initialize(encoded)
+    @encoded = encoded
+  end
+
+  def kind = "encoded_json"
+
+  def to_json = @encoded
+end
+
 # Lets us test job-specific insertion opts by making `#insert_opts` an accessor.
 # Real args that make use of this functionality will probably want to make
 # `#insert_opts` a non-accessor method instead.
@@ -540,6 +552,28 @@ shared_examples "driver shared examples" do
       # Not present because the jobs were rolled back.
       expect(driver.job_get_by_id(jobs[0].id)).to be nil
       expect(driver.job_get_by_id(jobs[1].id)).to be nil
+    end
+
+    # Decoding and re-encoding args in Ruby would rewrite `1.10` as `1.1` and
+    # `1e3` as `1000.0`, round digits beyond Float precision, and decode
+    # unicode escapes. Postgres instead stores its jsonb normalization of the
+    # encoded bytes, and SQLite keeps them as given, matching Go's drivers.
+    it "stores encoded args as given instead of re-encoding them" do
+      encoded = '{"decimal":1.10,"exponent":1e3,"high_precision":1234567890.1234567890,"unicode":"caf\\u00e9"}'
+
+      postgres = driver.send(:runtime_postgres?)
+
+      inserted = client.insert_many([EncodedJSONArgs.new(encoded), EncodedJSONArgs.new(encoded)])
+
+      stored = inserted.map do |result|
+        driver.send(:runtime_query_rows, <<~SQL).first.values.first
+          SELECT #{postgres ? "args::text" : "json(args)"} AS args FROM river_job WHERE id = #{result.job.id}
+        SQL
+      end
+      expect(stored).to all(eq(postgres ?
+        '{"decimal": 1.10, "unicode": "café", "exponent": 1000, "high_precision": 1234567890.1234567890}' :
+        encoded))
+      expect(inserted.map { |result| result.job.args }).to all(eq(JSON.parse(encoded)))
     end
   end
 

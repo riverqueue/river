@@ -161,7 +161,10 @@ module River::Driver
       metadata = insert_params.metadata || {}
       metadata = metadata.merge(UNIQUE_INSERT_METADATA_KEY => nonce) if nonce
       {
-        args: JSON.parse(insert_params.encoded_args),
+        # Bypass the jsonb attribute type, which would decode and re-encode
+        # the args, losing number spellings like `1.10` and digits beyond
+        # Float precision. Postgres parses the encoded bytes itself instead.
+        args: Arel.sql("CAST(#{runtime_quote(insert_params.encoded_args)} AS jsonb)"),
         kind: insert_params.kind,
         max_attempts: insert_params.max_attempts,
         metadata: metadata,
@@ -262,7 +265,10 @@ module River::Driver
 
     private def sqlite_insert_params_to_hash(insert_params, nonce)
       {
-        args: JSON.parse(insert_params.encoded_args),
+        # Embed the encoded args as a JSON string so they reach SQLite
+        # byte-for-byte. `json_extract` unwraps the string back to the
+        # encoded JSON text before `jsonb` parses it.
+        args: insert_params.encoded_args,
         kind: insert_params.kind,
         max_attempts: insert_params.max_attempts,
         metadata: {UNIQUE_INSERT_METADATA_KEY => nonce},
