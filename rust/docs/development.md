@@ -41,7 +41,7 @@ module tags.
 ## Benchmarking
 
 For basic end-to-end performance figures, the `riverqueue` binary from
-`riverqueue-cli` has the Rust equivalent of `river bench`. It truncates the selected River job table,
+`riverqueue-cli` has a `bench` command. It truncates the selected River job table,
 so use a disposable database:
 
 ```sh

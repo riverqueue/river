@@ -134,9 +134,9 @@ if (results[0].status === "duplicate") {
 
 `result.uniqueSkippedAsDuplicated` becomes `result.status === "duplicate"`.
 
-A batch may name a unique key only once. Like River for Go, `insertMany`
-rejects a batch that repeats one with a `ValidationError` and writes none of
-it, where 0.1 inserted the first job and reported the others as duplicates.
+A batch may name a unique key only once. `insertMany` rejects a batch that
+repeats one with a `ValidationError` and writes none of it, where 0.1 inserted
+the first job and reported the others as duplicates.
 
 ## Insert options
 
@@ -188,9 +188,9 @@ and JavaScript cannot represent exactly arrive as `ExactJsonNumber`; see
 
 ## Inserting without a transaction
 
-Like River for Go, an insertion without `{ tx }` now runs in a transaction
-River begins itself, so its insert middleware and hooks commit or roll back
-with the jobs. River needs a connection of its own for that:
+An insertion without `{ tx }` now runs in a transaction River begins itself, so
+its insert middleware and hooks commit or roll back with the jobs. River needs a
+connection of its own for that:
 
 - A `PgDriver` constructed from a single `pg.Client` or a checked-out
   `PoolClient`, rather than a `Pool`, now rejects insertions without `{ tx }`
@@ -205,12 +205,11 @@ On Postgres, the transaction adds a `BEGIN` and a `COMMIT` round trip to
 each call that 0.1 ran as a single statement. To insert many jobs, pass them
 to one `insertMany` call.
 
-River for Go's fast batch insertion (`InsertManyFast`) has no JavaScript
-equivalent: it is held back until River for Go decides how it relates to
-extensions that act on every insertion. Code written against a development
-build's `insertManyFast` should insert large batches with one `insertMany`
-call instead, which differs in three ways: it resolves with one result per
-row rather than a count; a unique conflict is reported as that row's
+Fast batch insertion is not part of this release: it is held back until River
+decides how it relates to extensions that act on every insertion. Code written
+against a development build's `insertManyFast` should insert large batches with
+one `insertMany` call instead, which differs in three ways: it resolves with one
+result per row rather than a count; a unique conflict is reported as that row's
 `status: "duplicate"` instead of being skipped (SQLite) or failing the whole
 batch (Postgres); and insert middleware and hooks run for every row.
 

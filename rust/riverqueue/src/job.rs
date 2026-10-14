@@ -25,7 +25,7 @@ pub trait JobArgs: DeserializeOwned + Send + Serialize + Sync + 'static {
 
     /// Job-type insertion defaults. Options set for a single insertion
     /// replace these. Per-call metadata replaces the defaults' metadata
-    /// entirely, as in River Go, so it doesn't keep any of their keys.
+    /// entirely, so it doesn't keep any of their keys.
     fn default_insert_opts() -> InsertOpts {
         InsertOpts::default()
     }
@@ -103,8 +103,10 @@ pub(crate) struct InsertBatchItem {
 
 /// A failed job attempt persisted in `river_job.errors`.
 ///
-/// Attempt errors deserialize from JSON like River Go's `encoding/json`
-/// decodes them, which requires a JSON deserializer such as `serde_json`'s.
+/// Attempt errors deserialize from JSON strictly, which requires a JSON
+/// deserializer such as `serde_json`'s: field names match ignoring ASCII
+/// case, and each field must be `null` or a value of its own type, with `at`
+/// an RFC 3339 timestamp.
 /// Job rows read from the database decode their attempt errors leniently
 /// instead: an element written by another tool or edited by hand decodes on a
 /// best effort basis rather than making its row unreadable.

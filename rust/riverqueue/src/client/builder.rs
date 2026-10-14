@@ -429,9 +429,8 @@ impl ClientBuilder {
     /// back. A job whose notification was skipped is found by the next fetch
     /// of its queue, which may wait for the queue's fetch poll interval.
     ///
-    /// Like River Go's `Config.FetchCooldown`, it defaults to
-    /// [`FETCH_COOLDOWN_DEFAULT`](crate::FETCH_COOLDOWN_DEFAULT) (100
-    /// milliseconds) and must be at least
+    /// It defaults to [`FETCH_COOLDOWN_DEFAULT`](crate::FETCH_COOLDOWN_DEFAULT)
+    /// (100 milliseconds) and must be at least
     /// [`FETCH_COOLDOWN_MIN`](crate::FETCH_COOLDOWN_MIN) (one millisecond).
     /// A queue's fetch poll interval can't be shorter than the cooldown it
     /// uses.
@@ -442,9 +441,8 @@ impl ClientBuilder {
     }
 
     /// Restricts claims to the kinds of registered workers, including their
-    /// aliases, like River Go's `Config.FetchOnlyKnownKinds`. Jobs of other
-    /// kinds stay available without using attempts, so clients with
-    /// different workers can share a queue.
+    /// aliases. Jobs of other kinds stay available without using attempts, so
+    /// clients with different workers can share a queue.
     ///
     /// It only affects claiming. A leader's rescuer still handles stuck jobs
     /// in every queue and discards those whose kinds it doesn't know, so a

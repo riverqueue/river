@@ -8,11 +8,12 @@ JSON payload schemas as service contracts.
 ## Unique arguments and resumable work
 
 Uniqueness hashes depend on the selected argument paths and serialized JSON.
-River sorts top-level keys but preserves nested object order, matching Go.
-When selecting a whole nested object, match its key order to the Go producer's
-struct or map serialization. Select scalar leaf paths (for example,
-`byArgs: ["account.id", "account.region"]`) when nested object order should not
-be part of identity. Missing selected fields and explicit `null` are distinct.
+River sorts top-level keys but preserves nested object order, matching other
+River clients. When selecting a whole nested object, match its key order to how
+producers in other languages serialize it, such as struct field declaration
+order or sorted map keys. Select scalar leaf paths (for example, `byArgs:
+["account.id", "account.region"]`) when nested object order should not be part
+of identity. Missing selected fields and explicit `null` are distinct.
 
 Resumable step names and cursor shapes must also match between implementations.
 Keep names stable and await steps sequentially; nested steps are supported,
@@ -51,11 +52,11 @@ identity and state transitions rather than direct ad hoc table updates.
 
 ## Maintenance in mixed fleets
 
-Leadership is shared across languages: whichever client is elected, Go, Rust,
-or JavaScript, runs the rescuer, cleaners, and scheduler for the whole
-database, and the rescuer handles every stuck job regardless of which language
-was working it. As in Go, a stuck job whose kind the leading client has no
-worker for is discarded instead of retried.
+Leadership is shared across languages: whichever client is elected, Go, Rust, or
+JavaScript, runs the rescuer, cleaners, and scheduler for the whole database,
+and the rescuer handles every stuck job regardless of which language was working
+it. A stuck job whose kind the leading client has no worker for is discarded
+instead of retried.
 
 When job kinds are specific to one language, keep each language's kinds in
 queues that only that language's clients work, and register the other

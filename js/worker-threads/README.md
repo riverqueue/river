@@ -97,11 +97,12 @@ inserted by another language with invalid args fails before it reaches a
 thread.
 
 Decoded args that are River JSON cross the boundary as text, which preserves
-exact JSON numbers such as a Go-produced int64 ID. Other decoded args must
-arrive unchanged through structured clone: `bigint`, `Date`, `Map`, `Set`,
-`Uint8Array`, and plain objects and arrays of those. An attempt whose decoded
-args contain anything else, such as a class instance or a function, fails with
-a `ConfigurationError` instead of reaching the handler with the wrong type.
+exact JSON numbers such as a 64-bit integer ID from another language. Other
+decoded args must arrive unchanged through structured clone: `bigint`, `Date`,
+`Map`, `Set`, `Uint8Array`, and plain objects and arrays of those. An attempt
+whose decoded args contain anything else, such as a class instance or a
+function, fails with a `ConfigurationError` instead of reaching the handler with
+the wrong type.
 
 The handler's context has the job, execution metadata, logger, `signal`,
 `recordOutput`, and `setMetadata`. It has no `client`, `completeTx`, or

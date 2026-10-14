@@ -2,7 +2,7 @@
   <modelVersion>4.0.0</modelVersion>
   <parent><groupId>com.riverqueue</groupId><artifactId>river-java</artifactId><version>0.48.0-alpha.1</version></parent>
   <artifactId>river</artifactId>
-  <description>Transactional jobs interoperable with River Go</description>
+  <description>Transactional jobs interoperable with River clients in other languages</description>
   <licenses><license><name>Mozilla Public License 2.0</name><url>https://mozilla.org/MPL/2.0/</url><distribution>repo</distribution></license></licenses>
   <dependencies>
     <dependency><groupId>tools.jackson.core</groupId><artifactId>jackson-databind</artifactId></dependency>

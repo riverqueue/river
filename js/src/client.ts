@@ -192,11 +192,11 @@ export type InsertManyResults<Items extends readonly InsertManyItem[]> = {
 export interface TransactionOptions<Transaction = unknown> {
   /**
    * Run the operation in this caller-owned transaction, such as a
-   * node-postgres client after `BEGIN`. Like River for Go, River runs its
-   * statements directly in it, opening no savepoint, and never commits or
-   * rolls it back. When the operation fails, writes it already made, such
-   * as a job inserted before insert middleware or a hook threw, stay in the
-   * transaction, so roll it back. To recover from a failure and continue
+   * node-postgres client after `BEGIN`. River runs its statements directly
+   * in it, opening no savepoint, and never commits or rolls it back. When the
+   * operation fails, writes it already made, such as a job inserted before
+   * insert middleware or a hook threw, stay in the transaction, so roll it
+   * back. To recover from a failure and continue
    * the transaction, wrap the call in a savepoint of your own.
    */
   tx?: Transaction;
@@ -271,8 +271,8 @@ export interface JobOperations<Transaction = unknown> {
     options?: TransactionOptions<Transaction>
   ): Promise<JobRow | null>;
   /**
-   * Merge metadata into a job and set its output, like River for Go's
-   * `JobUpdate`. Returns null when the job does not exist.
+   * Merge metadata into a job and set its output. Returns null when the job
+   * does not exist.
    */
   update(
     id: bigint,
@@ -282,10 +282,9 @@ export interface JobOperations<Transaction = unknown> {
 }
 
 /**
- * Queue queries and controls, available as {@link Client.queues}. Like River
- * for Go, these look queues up by
- * name without checking it against the queue-name grammar, so a name no
- * queue can have is simply not found (null).
+ * Queue queries and controls, available as {@link Client.queues}. These look
+ * queues up by name without checking it against the queue-name grammar, so a
+ * name no queue can have is simply not found (null).
  */
 export interface QueueOperations<Transaction = unknown> {
   /** Get one queue, returning null when it does not exist. */
@@ -301,8 +300,8 @@ export interface QueueOperations<Transaction = unknown> {
    * Pause a queue across the fleet. Returns null when the queue does not
    * exist.
    *
-   * `"*"` pauses every queue, like River for Go, and always resolves null
-   * because no single queue row describes the result.
+   * `"*"` pauses every queue and always resolves null because no single
+   * queue row describes the result.
    */
   pause(
     name: string,
@@ -312,8 +311,8 @@ export interface QueueOperations<Transaction = unknown> {
    * Resume a paused queue across the fleet. Returns null when the queue does
    * not exist.
    *
-   * `"*"` resumes every queue, like River for Go, and always resolves null
-   * because no single queue row describes the result.
+   * `"*"` resumes every queue and always resolves null because no single
+   * queue row describes the result.
    */
   resume(
     name: string,

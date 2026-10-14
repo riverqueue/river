@@ -54,9 +54,9 @@ export interface JobListOptions {
 
 /**
  * One page of jobs. Pass `nextCursor` as `after` for the next page; it is
- * `null` on the last page. The cursor is River for Go's `JobListCursor`
- * text, so River for Go and Rust can continue a listing from it and vice
- * versa.
+ * `null` on the last page. The cursor's text format is shared by every River
+ * client, so River clients in other languages can continue a listing from it
+ * and vice versa.
  */
 export interface JobListResult {
   readonly jobs: readonly JobRow[];
@@ -76,9 +76,8 @@ export interface JobDeleteManyOptions {
 }
 
 /**
- * Changes accepted by {@link JobOperations.update | `client.jobs.update`},
- * like River for Go's `JobUpdateParams`. Omitted fields leave the job
- * unchanged.
+ * Changes accepted by {@link JobOperations.update | `client.jobs.update`}.
+ * Omitted fields leave the job unchanged.
  */
 export interface JobUpdateOptions {
   /** Merge these top-level keys into the job's metadata. */

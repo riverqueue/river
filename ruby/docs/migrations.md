@@ -1,8 +1,8 @@
 # Schema migrations
 
-River Ruby includes a migration API and the `river` command. Neither needs
-Go installed. The gems bundle byte-for-byte copies of the Postgres and SQLite
-SQL from Go's River drivers, pinned to release v0.48.0 through migration 008;
+River Ruby includes a migration API and the `river` command. The gems bundle
+byte-for-byte copies of River's canonical Postgres and SQLite migration SQL,
+pinned to release v0.48.0 through migration 008;
 only the upstream schema template placeholders are substituted when executing
 them.
 
@@ -63,11 +63,11 @@ before the next version can run.
 An up migration targeting an already-applied version does nothing, even when
 newer migrations are pending.
 
-## Go compatibility and Pro
+## Compatibility and Pro
 
-The migrator reads and writes Go's `river_migration` history, including the
-legacy pre-version-5 format. Either language can continue from the other's
-applied versions. Unknown newer versions and gaps in history cause an error
+The migrator reads and writes the `river_migration` history shared by all River
+clients, including the legacy pre-version-5 format. Any River client can
+continue from versions applied by another. Unknown newer versions and gaps in history cause an error
 rather than guessing what SQL to run. It does not baseline an existing schema
 that has no River migration history.
 
@@ -94,12 +94,12 @@ River::Pro::Migrator.new(driver).migrate
 Remove other migration lines before downgrading main. Run only one migration
 process at a time across languages. Ruby migrators take a Postgres advisory
 lock per schema; SQLite takes a write lock per version and checks for concurrent
-history changes. These are not shared locks with Go's migration runner.
+history changes. These locks are not shared with other River clients' migration runners.
 
 ## Updating the bundled SQL
 
 `migration/manifest.json` records each canonical file's SHA-256. From `ruby/`,
-synchronize or verify against the Go migrations in this same checkout:
+synchronize or verify against the canonical migrations in this same checkout:
 
 ```sh
 ruby scripts/sync_migrations.rb
@@ -111,8 +111,8 @@ CI uses the same working-tree comparison; no separate checkout is needed.
 
 Pro migrations have their own manifest and sync script in the private
 `riverqueue-ruby-pro` repository. Run that repository's `make verify` against
-the Go Pro checkout; the public sync script handles only the main migrations.
+the River Pro checkout; the public sync script handles only the main migrations.
 
 Review the upstream changes and run the complete test matrix before publishing.
 Do not edit the copied SQL independently. Upstream changes are bundled in gem
-releases; users do not need the Go repositories or network access at runtime.
+releases; users do not need the upstream repositories or network access at runtime.

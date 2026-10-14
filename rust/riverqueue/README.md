@@ -2,10 +2,11 @@
 
 `riverqueue` is the Rust and Tokio client for [River](https://riverqueue.com),
 a fast and reliable background job system backed by Postgres or SQLite. It
-shares River's database schema and job protocol with River for Go, so Rust
-and Go services can insert and work jobs in the same database.
+shares River's database schema and job protocol with River clients in other
+languages, so services written in different languages can insert and work
+jobs in the same database.
 
-The [mixed deployment guide](https://docs.rs/riverqueue/latest/riverqueue/guide/mixed_deployments/index.html) covers running both against one database.
+The [mixed deployment guide](https://docs.rs/riverqueue/latest/riverqueue/guide/mixed_deployments/index.html) covers running Rust alongside other River clients against one database.
 
 ## Installation
 
@@ -229,12 +230,12 @@ completes the job. After the configured stuck threshold, River can abort a
 Tokio task that yields, which fails its attempt, but it can't stop CPU-bound
 work or a blocking call already in progress.
 
-Collect workers in [`Workers`], the equivalent of Go's `Workers` bundle.
-Use [`Workers::add`] to add a [`Worker`] implementation, like Go's `AddWorker`.
-Implement [`Worker`] when a kind needs a custom timeout or next-retry decision.
-Use [`Workers::add_fn`] for an async function or capturing closure; it combines
-Go's `WorkFunc` adapter and registration in one call. Both methods return
-`Result` so registration errors can be propagated with `?`.
+Collect workers in a [`Workers`] bundle, keyed by job kind. Use
+[`Workers::add`] to add a [`Worker`] implementation. Implement [`Worker`] when
+a kind needs a custom timeout or next-retry decision. Use [`Workers::add_fn`]
+to register an async function or capturing closure as a worker in one call.
+Both methods return `Result` so registration errors can be propagated with
+`?`.
 
 ## Events
 
@@ -325,7 +326,7 @@ async fn sqlite_client() -> Result<Client, Box<dyn std::error::Error>> {
 - [`job`]: arguments, insertion options, persisted rows, outcomes, and unique
   job configuration.
 - [`encoding`]: the JSON encoding River uses for job arguments, which keeps
-  unique keys identical across Rust and Go.
+  unique keys identical across River clients in every language.
 - [`worker`]: typed workers, function registration, cancellation, outputs,
   and resumable work.
 - [`event`]: event payloads and bounded subscriptions.

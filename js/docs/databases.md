@@ -44,24 +44,23 @@ migrator, and CLI.
 
 ### YugabyteDB
 
-River's Postgres drivers detect YugabyteDB from the server's `version()`
-the first time they need to, and cache what they find for the driver's
-lifetime, like River for Go. YugabyteDB has no `xmax`, so a unique insertion
-marks each row with a `river:unique_nonce` metadata value instead, as on
-SQLite. Without `LISTEN`/`NOTIFY`, which needs YugabyteDB 2025.2.3 or later
-with `ysql_yb_enable_listen_notify=true` on both masters and tservers, River
-sends no notifications and a client polls even without `pollOnly: true`: it
-claims new jobs every queue's `pollInterval`, rereads queue pauses, resumes,
-and metadata, and checks its running jobs for cancellations every
-`queueControlPollInterval` (two seconds by default), including while a stop
-drains them. After enabling notifications, construct a new driver, for
-example by restarting, so River detects them. On Postgres 18 and later,
-unique insertions read the conflicting row through `RETURNING OLD`.
+River's Postgres drivers detect YugabyteDB from the server's `version()` the
+first time they need to, and cache what they find for the driver's lifetime.
+YugabyteDB has no `xmax`, so a unique insertion marks each row with a
+`river:unique_nonce` metadata value instead, as on SQLite. Without
+`LISTEN`/`NOTIFY`, which needs YugabyteDB 2025.2.3 or later with
+`ysql_yb_enable_listen_notify=true` on both masters and tservers, River sends no
+notifications and a client polls even without `pollOnly: true`: it claims new
+jobs every queue's `pollInterval`, rereads queue pauses, resumes, and metadata,
+and checks its running jobs for cancellations every `queueControlPollInterval`
+(two seconds by default), including while a stop drains them. After enabling
+notifications, construct a new driver, for example by restarting, so River
+detects them. On Postgres 18 and later, unique insertions read the conflicting
+row through `RETURNING OLD`.
 
 On Postgres, `@riverqueue/migrate` serializes concurrent migrators with a
 transaction-scoped advisory lock. YugabyteDB has advisory locks only behind a
-preview flag, so there, like River for Go's migrator everywhere, it takes no
-lock; run one migrator at a time.
+preview flag, so there it takes no lock; run one migrator at a time.
 
 `@riverqueue/driver-prisma` is deliberately producer-only. It lets application
 writes and job insertion share a Prisma transaction, but it does not claim or
@@ -73,25 +72,24 @@ work jobs. Use the Postgres runtime in worker services.
 statement briefly blocks the event loop, so run heavily loaded SQLite workers
 in a process separate from latency-sensitive HTTP handling.
 
-Like River for Go, River runs on a private connection to the application's
-database file, in WAL mode, so application statements never join River's
-transactions. Pass an application handle with an open transaction as `{ tx }`
-to insert jobs with application rows; the driver's `transaction` helper begins
-one with `BEGIN IMMEDIATE`. When another connection or process (for example a
-Go River client, or an application transaction) holds SQLite's write lock,
-River waits with an asynchronous backoff instead of blocking the event loop,
-and fails with a retryable error after `busyTimeout`. For in-memory databases,
-use `SqliteDriver.memory()`.
+River runs on a private connection to the application's database file, in WAL
+mode, so application statements never join River's transactions. Pass an
+application handle with an open transaction as `{ tx }` to insert jobs with
+application rows; the driver's `transaction` helper begins one with `BEGIN
+IMMEDIATE`. When another connection or process (for example another River
+client, or an application transaction) holds SQLite's write lock, River waits
+with an asynchronous backoff instead of blocking the event loop, and fails with
+a retryable error after `busyTimeout`. For in-memory databases, use
+`SqliteDriver.memory()`.
 
 An insertion without `{ tx }` holds SQLite's write lock from its first
 statement until it commits, and its insert middleware and hooks run inside
 that transaction. On SQLite they must not await I/O after `next()`. See the
 [driver's README](../driver/sqlite/README.md) for the transaction model.
 
-River's SQLite tables live in the database's main schema. On SQLite, River
-for Go's `Config.Schema` can place them in an attached database instead, but
-`SqliteDriver` has no schema option, so Go clients sharing queues with
-JavaScript on SQLite must leave `Schema` unset, as with River for Rust.
+River's SQLite tables live in the database's main schema. `SqliteDriver` has no
+schema option, so other River clients sharing queues with JavaScript on SQLite
+must keep their tables in the main schema too, not in an attached database.
 
 SQLite timestamps have millisecond precision. IDs remain `bigint`, and public
 instants remain `Temporal.Instant`. Backend-specific capability differences are

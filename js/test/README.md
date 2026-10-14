@@ -8,8 +8,7 @@ API.
 
 `createTestClient` returns an insert-only client with deterministic IDs and a
 log of every insertion. Type producer code against `InsertClient` so the same
-function accepts the real client and the test client, then assert on the log
-like Go's `rivertest`:
+function accepts the real client and the test client, then assert on the log:
 
 ```ts
 import { defineJob, type InsertClient } from "riverqueue";

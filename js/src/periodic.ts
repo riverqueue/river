@@ -15,8 +15,8 @@ import {
  * When a periodic job runs: `next(after)` returns the first occurrence
  * strictly after `after`, or null to stop scheduling it.
  *
- * `cron()` builds one from a River Go-compatible cron expression; implement
- * it directly for other calendar rules.
+ * `cron()` builds one from a standard cron expression; implement it directly
+ * for other calendar rules.
  */
 export interface PeriodicSchedule {
   next(after: Temporal.Instant): Temporal.Instant | null;
@@ -100,11 +100,10 @@ export interface PeriodicJob<Definition extends JobDefinition = JobDefinition> {
 /**
  * Define a job that the elected leader inserts on a schedule.
  *
- * Periodic jobs run only on the client that currently holds River
- * leadership. In a fleet mixing River implementations (Go, Rust, and
- * JavaScript), register the same periodic jobs in every implementation, or
- * leadership moving between languages silently changes which periodic jobs
- * run.
+ * Periodic jobs run only on the client that currently holds River leadership.
+ * In a fleet mixing River clients in several languages, register the same
+ * periodic jobs in every implementation, or leadership moving between languages
+ * silently changes which periodic jobs run.
  *
  * @example
  * ```ts

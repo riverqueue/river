@@ -89,9 +89,8 @@ export interface MaintenanceOptions {
   readonly discardedJobRetention?: DurationInput | null;
   /**
    * How often a leader renews its term and a follower bids for leadership.
-   * Defaults to 5 seconds. Like River for Go, a follower's interval is
-   * jittered by up to a fifth, and a follower bids within 50 ms of another
-   * client's resignation.
+   * Defaults to 5 seconds. A follower's interval is jittered by up to a fifth,
+   * and a follower bids within 50 ms of another client's resignation.
    */
   readonly electionInterval?: DurationInput;
   /** How often the job cleaner runs. Defaults to 30 seconds. */
@@ -145,8 +144,8 @@ export interface ClientOptions<Transaction = RegisteredTransaction> {
   readonly eventLoopDelay?: false | EventLoopDelayOptions;
   /**
    * Minimum time between claim queries for queues that don't set their own
-   * `fetchCooldown`, like River for Go's `Config.FetchCooldown`. Defaults to
-   * 100 milliseconds and must be at least 1 millisecond.
+   * `fetchCooldown`. Defaults to 100 milliseconds and must be at least 1
+   * millisecond.
    *
    * It also limits insert notifications: after this client notifies
    * producers of a queue's new jobs, it sends no other notification for that
@@ -155,12 +154,11 @@ export interface ClientOptions<Transaction = RegisteredTransaction> {
    */
   readonly fetchCooldown?: DurationInput;
   /**
-   * Claim only jobs whose kinds have workers in `workers`, like River for
-   * Go's `Config.FetchOnlyKnownKinds`. Defaults to false. Jobs of other kinds
-   * stay available without using an attempt, so clients with different
-   * workers can share a queue, such as while moving job kinds from one
-   * language to another. The kinds are those registered when the client
-   * starts.
+   * Claim only jobs whose kinds have workers in `workers`. Defaults to false.
+   * Jobs of other kinds stay available without using an attempt, so clients
+   * with different workers can share a queue, such as while moving job kinds
+   * from one language to another. The kinds are those registered when the
+   * client starts.
    *
    * This affects only claiming. A leader's rescuer still handles stuck jobs
    * of every queue and discards those whose kinds it doesn't know, so a
@@ -175,10 +173,9 @@ export interface ClientOptions<Transaction = RegisteredTransaction> {
   /** Client-wide insert middleware, run after plugin middleware. */
   readonly insertMiddleware?: readonly InsertMiddleware[];
   /**
-   * How long River waits after an attempt's timeout, or after it asks a
-   * running handler to stop, before treating the attempt as stuck, like
-   * River for Go's `Config.JobStuckThreshold`. Defaults to 10 seconds and
-   * must not be negative.
+   * How long River waits after an attempt's timeout, or after it asks a running
+   * handler to stop, before treating the attempt as stuck. Defaults to 10
+   * seconds and must not be negative.
    *
    * A handler still running this long after its timeout is reported stuck
    * and passed to `stuckHandler`. An executor that can end a handler by
@@ -192,10 +189,10 @@ export interface ClientOptions<Transaction = RegisteredTransaction> {
    */
   readonly jobTimeout?: DurationInput | null;
   /**
-   * Keep this client out of leader election, like River for Go's
-   * `Config.LeaderElectionDisabled`. Defaults to false. The client never runs
-   * leader-owned maintenance or inserts periodic jobs, but still works jobs
-   * from its configured queues, including periodic jobs other clients insert.
+   * Keep this client out of leader election. Defaults to false. The client
+   * never runs leader-owned maintenance or inserts periodic jobs, but still
+   * works jobs from its configured queues, including periodic jobs other
+   * clients insert.
    *
    * At least one other started client on the same database and schema must
    * remain eligible to lead for scheduled jobs, retries, periodic jobs,

@@ -28,10 +28,10 @@ export const sendEmail = defineJob({
 ```
 
 River runs the schema when a job is inserted and again before it is worked,
-because another producer (an older deploy, a Go or Rust service, or a SQL
-script) may have inserted it. Producers pass the schema's input type; workers
-receive its output type, so schema defaults and transforms apply to what the
-worker sees. River persists the producer's input exactly as given, so
+because another producer (an older deploy, a service in another language, or a
+SQL script) may have inserted it. Producers pass the schema's input type;
+workers receive its output type, so schema defaults and transforms apply to what
+the worker sees. River persists the producer's input exactly as given, so
 uniqueness hashes and other languages see the same JSON.
 
 The schema's input must be JSON. A schema with a `Date` or `bigint` input is
@@ -91,11 +91,11 @@ Kinds are persisted and shared with other languages, so treat them as part of
 your data model. A kind starts with a letter, digit, or underscore, and kinds
 starting with `river_internal_` are reserved.
 
-To rename a kind without orphaning jobs already stored under the old name,
-make the new name the `kind` and list the old one in `kindAliases`, like River
-for Go's `JobArgsWithKindAliases`. New jobs are inserted under the new kind,
-and the definition's worker also works jobs stored under the alias. Remove the
-alias once those jobs have finished, including their retries:
+To rename a kind without orphaning jobs already stored under the old name, make
+the new name the `kind` and list the old one in `kindAliases`. New jobs are
+inserted under the new kind, and the definition's worker also works jobs stored
+under the alias. Remove the alias once those jobs have finished, including their
+retries:
 
 ```ts
 import { defineJob } from "riverqueue";
@@ -173,33 +173,32 @@ if (result.status === "duplicate") {
 }
 ```
 
-Uniqueness is always by kind (unless `excludeKind`), and optionally by all
-args or selected `byArgs` paths (such as `["account.id"]`), by `byQueue`, and
-within fixed `byPeriod` windows. Like River for Go, `excludeKind` requires
-`byArgs`, `byQueue`, or `byPeriod`. `byState` chooses which job states count as
-duplicates; the default is every state except `cancelled` and `discarded`.
-Unique keys are computed exactly as River for Go computes them, so uniqueness
-holds across languages.
+Uniqueness is always by kind (unless `excludeKind`), and optionally by all args
+or selected `byArgs` paths (such as `["account.id"]`), by `byQueue`, and within
+fixed `byPeriod` windows. `excludeKind` requires `byArgs`, `byQueue`, or
+`byPeriod`. `byState` chooses which job states count as duplicates; the default
+is every state except `cancelled` and `discarded`. Unique keys are computed
+exactly as other River clients compute them, so uniqueness holds across
+languages.
 
 By-args uniqueness hashes the JSON River writes. Top-level keys are sorted, but
 nested objects are hashed in their own key order, so jobs from different
-languages deduplicate only when they encode nested objects identically. Go
-writes struct fields in declaration order and map keys sorted; JavaScript writes
-object keys in insertion order, except that keys that look like array indices
-(`"2"`, `"10"`) always come first in ascending numeric order. Keep nested keys
-in the same order in every producer, and avoid integer-like keys in nested
-objects that must deduplicate against another language.
+languages deduplicate only when they encode nested objects identically. Other
+languages may write struct fields in declaration order or map keys sorted;
+JavaScript writes object keys in insertion order, except that keys that look
+like array indices (`"2"`, `"10"`) always come first in ascending numeric order.
+Keep nested keys in the same order in every producer, and avoid integer-like
+keys in nested objects that must deduplicate against another language.
 
 With `byArgs: true`, every top-level key is hashed literally, including empty
-keys and keys containing JSON path punctuation. A selected `byArgs` path uses
-an unescaped dot to reach a nested field: `"account.id"` selects `id` within
-`account`. Escape a dot to select a literal key containing one:
-`"account\\.id"` selects the top-level key `account.id`. Use `"\\\\"` for
-a literal backslash in a key. Empty path segments and a trailing backslash
-are invalid. So is a segment that is an unsigned integer or `-1`, escaped or
-not: River for Go reads it as an array index and builds a JSON array instead
-of an object when assembling the selected fields, so the keys wouldn't
-match.
+keys and keys containing JSON path punctuation. A selected `byArgs` path uses an
+unescaped dot to reach a nested field: `"account.id"` selects `id` within
+`account`. Escape a dot to select a literal key containing one: `"account\\.id"`
+selects the top-level key `account.id`. Use `"\\\\"` for a literal backslash in
+a key. Empty path segments and a trailing backslash are invalid. So is a segment
+that is an unsigned integer or `-1`, escaped or not: other River clients read it
+as an array index and build a JSON array instead of an object when assembling
+the selected fields, so the keys wouldn't match.
 
 ### Batches
 
@@ -255,15 +254,14 @@ try {
 }
 ```
 
-Like River for Go, River runs its statements directly in your transaction and
-opens no savepoint or nested transaction in it, which on Postgres would cost
-a subtransaction for every call. When a call fails after River wrote to the
-database, for example because insert middleware or an `afterInsert` hook threw
-after the job was inserted, the write stays in your transaction, so roll it
-back as above. On Postgres a database error also aborts the transaction. To
-recover from a failed call and continue the transaction, wrap the call in a
-savepoint of your own. Without `{ tx }`, River's own transaction rolls the
-whole call back.
+River runs its statements directly in your transaction and opens no savepoint or
+nested transaction in it, which on Postgres would cost a subtransaction for
+every call. When a call fails after River wrote to the database, for example
+because insert middleware or an `afterInsert` hook threw after the job was
+inserted, the write stays in your transaction, so roll it back as above. On
+Postgres a database error also aborts the transaction. To recover from a failed
+call and continue the transaction, wrap the call in a savepoint of your own.
+Without `{ tx }`, River's own transaction rolls the whole call back.
 
 The job's insert notification is delivered when the transaction commits, so
 workers never see a job whose transaction rolled back. Prisma and SQLite use
@@ -432,18 +430,17 @@ await client.queues.pause("email"); // or "*" for every queue
 await client.queues.resume("email");
 ```
 
-A job list cursor is the same text River for Go's `JobListCursor` and River
-for Rust's `JobListCursor` produce, so a service in one language can hand a
-page token to a service in another to continue the listing. River accepts
-cursors in either base64 alphabet, with or without padding. Queue list
-cursors are specific to JavaScript.
+A job list cursor is the same text other River clients produce, so a service in
+one language can hand a page token to a service in another to continue the
+listing. River accepts cursors in either base64 alphabet, with or without
+padding. Queue list cursors are specific to JavaScript.
 
-Like River for Go, `orderBy: "time"` sorts every listed job by the time
-field of the first listed state (`scheduledAt` for `available`, `pending`,
-`retryable`, and `scheduled`, `attemptedAt` for `running`, `finalizedAt`
-for finalized states), and by `scheduledAt` when `states` is empty. Jobs
-where that field is null, like `finalizedAt` for an unfinished job, sort
-after all others ascending and before all others descending.
+`orderBy: "time"` sorts every listed job by the time field of the first listed
+state (`scheduledAt` for `available`, `pending`, `retryable`, and `scheduled`,
+`attemptedAt` for `running`, `finalizedAt` for finalized states), and by
+`scheduledAt` when `states` is empty. Jobs where that field is null, like
+`finalizedAt` for an unfinished job, sort after all others ascending and before
+all others descending.
 
 ## Exact values and JSON
 
@@ -458,10 +455,10 @@ beyond `Number.MAX_SAFE_INTEGER`, cycles, sparse arrays, accessors, class
 instances, and invalid Unicode instead of silently coercing them. Like
 `JSON.stringify`, it omits object properties whose value is `undefined`.
 
-A number another producer stored that JavaScript cannot represent exactly
-(such as a Go `int64` above 2^53) arrives as an `ExactJsonNumber`, so reading
-and re-inserting it never changes it. Validated args only contain one if your
-schema accepts it. For untyped `JsonObject` args, use `isJsonNumber` and
+A number another producer stored that JavaScript cannot represent exactly (such
+as a 64-bit integer above 2^53) arrives as an `ExactJsonNumber`, so reading and
+re-inserting it never changes it. Validated args only contain one if your schema
+accepts it. For untyped `JsonObject` args, use `isJsonNumber` and
 `jsonNumberToBigInt`:
 
 ```ts
@@ -499,4 +496,4 @@ Runnable examples:
 - [Graceful shutdown](../examples/graceful-shutdown/README.md)
 - [Hooks and metrics](../examples/hooks-metrics/README.md)
 - [CPU work on worker threads](../examples/worker-thread-cpu/README.md)
-- [A payload shared with Go](../examples/mixed-language/README.md)
+- [A payload shared across languages](../examples/mixed-language/README.md)

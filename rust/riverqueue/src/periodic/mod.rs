@@ -28,10 +28,9 @@ pub trait PeriodicSchedule: Send + Sync + 'static {
 pub struct IntervalSchedule(Duration);
 
 impl IntervalSchedule {
-    /// Creates a fixed schedule. Like River Go's `PeriodicInterval`, any
-    /// positive interval is accepted, including sub-second ones, so the same
-    /// periodic jobs can be configured in Rust and Go clients that share a
-    /// database.
+    /// Creates a fixed schedule. Any positive interval is accepted, including
+    /// sub-second ones, so the same periodic jobs can be configured in every
+    /// River client sharing a database.
     ///
     /// # Errors
     ///

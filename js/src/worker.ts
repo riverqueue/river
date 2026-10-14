@@ -87,8 +87,8 @@ export interface WorkerPlugin {
 }
 
 /**
- * Permanent cancellation without another retry, like Go's `river.JobCancel`.
- * The reason is recorded as the attempt error.
+ * Permanent cancellation without another retry. The reason is recorded as
+ * the attempt error.
  */
 export interface CancelOutcome {
   readonly reason?: string;
@@ -158,12 +158,11 @@ export interface WorkerOptions {
   /** Named job-kind-specific extensions. */
   plugins?: readonly WorkerPlugin[];
   /**
-   * When this worker's failed jobs run next, like River for Go's
-   * `Worker.NextRetry`. Consulted before the client's `retryPolicy` once a
-   * job's arguments decode, both after a failed attempt and when the rescuer
-   * retries a stuck job. When it throws or returns something other than a
-   * `Temporal.Instant`, the client's policy decides; a time in the past
-   * uses River's default schedule.
+   * When this worker's failed jobs run next. Consulted before the client's
+   * `retryPolicy` once a job's arguments decode, both after a failed attempt
+   * and when the rescuer retries a stuck job. When it throws or returns
+   * something other than a `Temporal.Instant`, the client's policy decides; a
+   * time in the past uses River's default schedule.
    */
   retryPolicy?: RetryPolicy;
   /**
@@ -484,9 +483,9 @@ function normalizeWorkerOptions(
 }
 
 /**
- * Construct an outcome that cancels the job permanently, like Go's
- * `river.JobCancel`. The job moves to `cancelled` without another retry and
- * `JobCancelError: <reason>` is recorded as the attempt error.
+ * Construct an outcome that cancels the job permanently. The job moves to
+ * `cancelled` without another retry and `JobCancelError: <reason>` is recorded
+ * as the attempt error.
  */
 export function cancel(
   options: { readonly reason?: string } = {}
@@ -521,11 +520,10 @@ export function discard(
 }
 
 /**
- * Snooze the job: run it again after `duration` without using an attempt,
- * for example `return snooze({ minutes: 5 })`. Like River for Go, a snooze
- * no longer than the scheduler interval (including zero) is stored as
- * available with its future scheduled time, so it runs on time without
- * waiting for the scheduler.
+ * Snooze the job: run it again after `duration` without using an attempt, for
+ * example `return snooze({ minutes: 5 })`. A snooze no longer than the
+ * scheduler interval (including zero) is stored as available with its future
+ * scheduled time, so it runs on time without waiting for the scheduler.
  */
 export function snooze(duration: DurationInput): SnoozeOutcome {
   const milliseconds = toMilliseconds("snooze duration", duration, {

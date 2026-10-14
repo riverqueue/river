@@ -18,7 +18,7 @@ bin/jobs start
 ```
 
 The generator installs `config/initializers/river.rb` and `bin/jobs`. Migration
-tasks use the canonical bundled Go SQL through `River::Migrator`; no separate
+tasks use River's canonical bundled SQL through `River::Migrator`; no separate
 Rails schema is created. `bin/rails river:status` shows migration status.
 Migrate explicitly during deployment, not on every application boot.
 
@@ -169,8 +169,8 @@ Handled retries/discards complete the current delivery row. Its metadata records
 `active_job_outcome` (`retried` or `discarded`), and retried deliveries record
 `active_job_retry_id`. A completed delivery need not mean the logical job succeeded.
 Active Job logging and notifications remain available. Rows store a versioned
-Active Job envelope under the reserved `active_job` kind; Go can share the schema,
-but Ruby must execute these jobs. Use native River kinds for cross-language jobs.
+Active Job envelope under the reserved `active_job` kind; River clients in other
+languages can share the schema, but Ruby must execute these jobs. Use native River kinds for cross-language jobs.
 
 Retry enqueueing and predecessor finalization are not atomic. Crashes can cause
 duplicates; jobs must remain idempotent. Rails' executor/reloader wraps each work

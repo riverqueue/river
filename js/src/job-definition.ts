@@ -119,11 +119,10 @@ export interface JobDefinitionOptions<Kind extends string = string> {
   /** Stable persisted job kind shared by every language that works this job. */
   readonly kind: Kind;
   /**
-   * Other kinds this job's worker also works, like River for Go's
-   * `JobArgsWithKindAliases`. To rename a kind safely, make the new name the
-   * `kind` and the old one an alias: jobs are inserted under the new kind,
-   * while jobs already stored under the old one are still worked. Remove the
-   * alias once those have finished, retries included.
+   * Other kinds this job's worker also works. To rename a kind safely, make the
+   * new name the `kind` and the old one an alias: jobs are inserted under the
+   * new kind, while jobs already stored under the old one are still worked.
+   * Remove the alias once those have finished, retries included.
    */
   readonly kindAliases?: readonly string[];
 }

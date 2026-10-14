@@ -41,7 +41,7 @@ end-to-end latency. Use only a disposable development or benchmark database.
 Options:
       --database-url URL       Postgres URL (or set DATABASE_URL)
       --schema NAME            River schema (default: current schema)
-      --duration DURATION      Stop after a Go-style duration such as 30s or 5m
+      --duration DURATION      Stop after a duration such as 30s, 5m, or 1h30m
   -n, --num-total-jobs COUNT   Insert COUNT jobs, then work them all
       --backlog COUNT          Target continuous-mode backlog (default: 75000)
       --batch-size COUNT       Jobs per insertion batch (default: 5000)

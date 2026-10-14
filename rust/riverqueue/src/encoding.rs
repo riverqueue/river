@@ -1,36 +1,35 @@
-//! Go-compatible JSON encoding for job arguments.
+//! River's canonical JSON encoding for job arguments.
 //!
 //! River stores job arguments as the exact JSON bytes produced when they were
-//! inserted, and River Go hashes those bytes to build unique keys. For a Rust
-//! job and an equivalent Go job to share a unique key, they must encode to the
-//! same bytes. [`encode_args`] serializes with [`serde_json`] using the output
-//! rules of Go's `encoding/json`:
+//! inserted, and hashes those bytes to build unique keys. For a job inserted
+//! by this client and an equivalent job inserted by another River client
+//! sharing the database to share a unique key, they must encode to the same
+//! bytes. [`encode_args`] serializes with [`serde_json`] using River's
+//! canonical output rules:
 //!
-//! * Floats use Go's shortest round-trip digits, in plain decimal notation
-//!   when `1e-6 <= |x| < 1e21` and exponent notation otherwise (`1`, `0.1`,
+//! * Floats use the shortest digits that round-trip, breaking exact ties
+//!   toward an even last digit, in plain decimal notation when
+//!   `1e-6 <= |x| < 1e21` and exponent notation otherwise (`1`, `0.1`,
 //!   `100000000000000000000`, `1e+21`, `1e-7`). Negative zero encodes as `-0`.
 //! * Strings escape `<`, `>`, `&`, U+2028, and U+2029 as `\u003c`, `\u003e`,
 //!   `\u0026`, `\u2028`, and `\u2029`. Control characters use `\b`, `\f`,
 //!   `\n`, `\r`, and `\t` where available and lowercase `\u00XX` otherwise.
-//! * Struct fields keep their declaration order, as in Go.
+//! * Struct fields keep their declaration order.
 //!
 //! Some differences come from how types serialize rather than from the JSON
 //! encoder and must be handled in the argument type:
 //!
-//! * Go sorts map keys. Use an ordered map such as
-//!   [`BTreeMap`](std::collections::BTreeMap) with string keys to match; a
-//!   `HashMap` serializes in an unspecified order.
-//! * Go encodes `[]byte` as a base64 string; a Rust `Vec<u8>` encodes as an
-//!   array of numbers.
-//! * Go encodes `time.Time` with RFC 3339 and the shortest fractional
-//!   seconds, while `chrono` pads fractional seconds to 3, 6, or 9 digits. Use
+//! * Map keys must serialize in sorted order. Use an ordered map such as
+//!   [`BTreeMap`](std::collections::BTreeMap) with string keys; a `HashMap`
+//!   serializes in an unspecified order.
+//! * River clients in other languages may encode byte strings as base64
+//!   strings; a Rust `Vec<u8>` encodes as an array of numbers.
+//! * Canonical timestamps use RFC 3339 with the shortest fractional seconds,
+//!   while `chrono` pads fractional seconds to 3, 6, or 9 digits. Use
 //!   [`go_time`] for `DateTime<Utc>` fields that participate in unique keys.
 //!
-//! Like Go, encoding fails for non-finite floats (`NaN` and infinities)
-//! instead of writing them as `null` the way [`serde_json`] does.
-//!
-//! These rules match Go 1.22 and later, which escape backspace and form feed
-//! as `\b` and `\f`.
+//! Encoding fails for non-finite floats (`NaN` and infinities) instead of
+//! writing them as `null` the way [`serde_json`] does.
 
 use std::{fmt, fmt::Write as _, io};
 
@@ -45,8 +44,8 @@ mod finite;
 
 pub(crate) use finite::check as check_finite;
 
-/// Encodes job arguments to JSON bytes identical to those Go's
-/// `encoding/json` produces for an equivalent Go value.
+/// Encodes job arguments to River's canonical JSON bytes, identical to those
+/// other River clients produce for an equivalent value.
 ///
 /// River uses this encoding for every inserted job, so it is only needed
 /// directly when constructing [`JobRow`](crate::JobRow) values by hand, such
@@ -56,24 +55,24 @@ pub(crate) use finite::check as check_finite;
 ///
 /// Returns an error when the value's [`Serialize`] implementation fails, for
 /// example because a map has non-string keys, or when it contains a
-/// non-finite float, which Go's `encoding/json` rejects as an unsupported
-/// value.
+/// non-finite float, which is rejected as an unsupported value.
 pub fn encode_args<T: Serialize + ?Sized>(args: &T) -> Result<Box<RawValue>, serde_json::Error> {
     RawValue::from_string(to_go_string(args)?)
 }
 
-/// Serde helpers that encode a `DateTime<Utc>` the way Go's `encoding/json`
-/// encodes a UTC `time.Time`: RFC 3339 with the shortest fractional seconds
-/// (`2026-01-02T03:04:05.5Z`).
+/// Serde helpers that encode a `DateTime<Utc>` as River's canonical
+/// timestamp: RFC 3339 in UTC with `Z` and the shortest fractional seconds,
+/// with no fractional part when it's zero (`2026-01-02T03:04:05.5Z`).
 ///
 /// Use it with `#[serde(with = "riverqueue::encoding::go_time")]` on argument
-/// fields that participate in Go-compatible unique keys. Deserialization
-/// accepts any RFC 3339 timestamp.
+/// fields that participate in unique keys shared with other River clients.
+/// Deserialization accepts any RFC 3339 timestamp.
 pub mod go_time {
     use chrono::{DateTime, Utc};
     use serde::{Deserialize, Deserializer, Serializer};
 
-    /// Serializes a timestamp in Go's `time.RFC3339Nano` form.
+    /// Serializes a timestamp in RFC 3339 form with the shortest fractional
+    /// seconds.
     ///
     /// # Errors
     ///

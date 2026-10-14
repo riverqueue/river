@@ -4,7 +4,7 @@ Run commands from the repository root unless a section says otherwise. See the [
 
 ## Building from source
 
-Install the Go version specified by [`go.work`](../../go.work), Maven, and JDK 21 or 25. Set `JAVA_HOME` and `PATH` to that JDK; the pinned formatter does not run on JDK 27. Go is needed to generate test fixtures, but applications using River do not need Go.
+Install the Go version specified by [`go.work`](../../go.work), Maven, and JDK 21 or 25. Set `JAVA_HOME` and `PATH` to that JDK; the pinned formatter does not run on JDK 27. Go is needed to generate test fixtures.
 
 Generate the fixtures and install the Java artifacts into your local Maven repository:
 
@@ -58,7 +58,7 @@ payloads, and immediate leadership wakeup after a peer resigns.
 Uniqueness tests include the raw JSON fixtures for duplicate keys and integer-like
 map keys. Protocol tests exercise both retry jitter boundaries, decode stored
 states and uniqueness bits, and verify periodic IDs, insert nonces, resumable
-checkpoints, output, and rescue counters using Go's metadata keys.
+checkpoints, output, and rescue counters using River's reserved metadata keys.
 
 `make generate/java-migrations` syncs SQL and the migration catalog from the
 canonical Go drivers. `verify/java-migrations` detects changed, missing, or extra

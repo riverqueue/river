@@ -117,7 +117,7 @@ Insert jobs in the same transaction as application data by chaining `.tx(&mut tr
 | [`riverqueue-cli`](riverqueue-cli/README.md) | The `riverqueue` command for migrations and benchmarks |
 | [`riverqueue-test`](riverqueue-test/README.md) | Fixtures and worker test helpers |
 
-The Rust crates are versioned together, independently of River for Go.
+The Rust crates share one version number and are released together.
 
 ## Documentation
 

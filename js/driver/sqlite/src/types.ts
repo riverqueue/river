@@ -153,8 +153,7 @@ export interface SqliteDriverOptions {
   /**
    * Total time a River operation keeps retrying while another connection or
    * process holds SQLite's lock, such as `{ seconds: 5 }`. Defaults to 5
-   * seconds, the busy timeout River's Go conformance adapter and Rust
-   * implementation configure.
+   * seconds, the busy timeout other River clients configure.
    *
    * River's private connection has a zero `busy_timeout`, so SQLite never
    * blocks the event loop waiting for a lock. Between attempts River waits

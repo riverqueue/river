@@ -36,12 +36,12 @@ them. Handlers get `ctx.logger`, the same logger with `jobId`, `jobKind`, and
 
 Middleware wraps work like Koa middleware and must call `next()` once. Hooks
 observe lifecycle points: `beforeInsert`/`afterInsert`,
-`beforeWork`/`afterWork`, `onEvent`, `onMetric`, and `onPeriodicJobsStart`.
-Both run in registration order, plugins first, then the client's own. As in
-River for Go, insert and work hooks run inside the innermost middleware, so a
-middleware span covers them. An `afterWork` hook that returns a result
-replaces the attempt's result, and an error thrown by `beforeWork` becomes the
-attempt's error without the worker running:
+`beforeWork`/`afterWork`, `onEvent`, `onMetric`, and `onPeriodicJobsStart`. Both
+run in registration order, plugins first, then the client's own. Insert and work
+hooks run inside the innermost middleware, so a middleware span covers them. An
+`afterWork` hook that returns a result replaces the attempt's result, and an
+error thrown by `beforeWork` becomes the attempt's error without the worker
+running:
 
 <!-- ts-setup
 import { Client, Workers } from "riverqueue";

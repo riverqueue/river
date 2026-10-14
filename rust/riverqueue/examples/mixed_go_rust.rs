@@ -92,7 +92,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
         .workers(workers)
         // Only Rust's queue: Rust never fetches the Go service's jobs.
         .queue("rust_images", QueueConfig::new(4))
-        // Allow inserting kinds only Go works, like Go's SkipUnknownJobCheck.
+        // Allow inserting kinds that only the Go service works.
         .allow_unregistered_job_kinds()
         .build()?;
     let mut completed = client.subscribe(&[EventKind::JobCompleted])?;

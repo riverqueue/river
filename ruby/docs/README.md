@@ -1,6 +1,6 @@
 # River client for Ruby [![Build Status](https://github.com/riverqueue/river/actions/workflows/ruby.yaml/badge.svg)](https://github.com/riverqueue/river/actions/workflows/ruby.yaml) [![Gem Version](https://badge.fury.io/rb/riverqueue.svg)](https://badge.fury.io/rb/riverqueue)
 
-A Ruby client for [River](https://github.com/riverqueue/river), packaged in the [`riverqueue` gem](https://rubygems.org/gems/riverqueue). It inserts and works jobs using River's canonical database schema and state machine, so Ruby and Go clients can safely share a River database. Separate queues are recommended when each language recognizes different job kinds.
+A Ruby client for [River](https://github.com/riverqueue/river), packaged in the [`riverqueue` gem](https://rubygems.org/gems/riverqueue). It inserts and works jobs using River's canonical database schema and state machine, so Ruby and River clients in other languages can safely share a River database. Separate queues are recommended when each language recognizes different job kinds.
 
 ## Installation
 
@@ -26,8 +26,8 @@ its uniqueness and notification capabilities.
 ## Schema and migrations
 
 Run migrations before inserting jobs or starting workers. The bundled `river`
-command uses Go's canonical Postgres and SQLite migrations; no Go installation
-is needed. After installing a River driver and its database adapter, create your
+command uses River's canonical Postgres and SQLite migrations, bundled with the
+gem. After installing a River driver and its database adapter, create your
 application's Postgres database and run:
 
 ```sh
@@ -39,8 +39,8 @@ bundle exec river migrate-up
 ```
 
 `migrate-up` applies all pending migrations and is safe to rerun: already-applied
-versions are skipped, including migrations applied by Go. `--dry-run` previews
-the plan without changing the database. Pass `--database-url URL` to override
+versions are skipped, including migrations applied by other River clients.
+`--dry-run` previews the plan without changing the database. Pass `--database-url URL` to override
 `DATABASE_URL`.
 
 For SQLite, ensure the parent directory exists, then use a SQLite URL:
@@ -110,7 +110,7 @@ Job arguments must respond to `#kind` and `#to_json`. They may also return defau
 Use strings for `#kind` definitions, and symbols for identifiers such as queues,
 states, periodic job IDs, and resumable step names. Both forms are accepted.
 Persisted job attributes and JSON object keys remain strings, preserving
-compatibility with Go clients.
+compatibility with River clients in other languages.
 Examples omit parentheses on simple calls and `do...end` blocks, retaining them
 for nested expressions and `{ ... }` blocks where they make binding clear.
 
@@ -255,7 +255,7 @@ order affect the hash even when the decoded JSON is equivalent.
 
 ### [Reliable execution and stuck jobs](https://riverqueue.com/docs/reliable-workers)
 
-Claims and state transitions are atomic in the database. If a process disappears while working, the elected maintenance client checks for stale running jobs after an hour, retrying or discarding them according to their attempt count. Rescue respects longer client and worker timeouts; disabling a job's timeout also disables automatic timeout-based rescue for it. Cancellation requests still take precedence. Keep worker registrations and timeout configuration consistent across maintenance clients. `attempted_by`, attempt errors, and final state remain in the canonical River row for inspection by Ruby, Go, or River UI.
+Claims and state transitions are atomic in the database. If a process disappears while working, the elected maintenance client checks for stale running jobs after an hour, retrying or discarding them according to their attempt count. Rescue respects longer client and worker timeouts; disabling a job's timeout also disables automatic timeout-based rescue for it. Cancellation requests still take precedence. Keep worker registrations and timeout configuration consistent across maintenance clients. `attempted_by`, attempt errors, and final state remain in the canonical River row for inspection by any River client or River UI.
 
 ### [Job retries](https://riverqueue.com/docs/job-retries)
 
@@ -430,9 +430,9 @@ cleanup = River::PeriodicJob.new(
 a runtime dependency of the River gem. The timezone defaults explicitly to UTC;
 set `timezone:` or use a `CRON_TZ=` / `TZ=` prefix, which takes precedence.
 Five-field cron, optional seconds, and aliases such as `@daily` use Fugit's
-syntax; `?` is also accepted as a wildcard. `@every 1h30m` uses Go duration
-syntax, rounded down to whole seconds with a one-second minimum. Unlike
-`PeriodicInterval`, these intervals align to whole-second boundaries.
+syntax; `?` is also accepted as a wildcard. `@every` accepts durations such
+as `1h30m`, built from `ns`, `us`, `ms`, `s`, `m`, and `h` units, rounded down
+to whole seconds with a one-second minimum. Unlike `PeriodicInterval`, these intervals align to whole-second boundaries.
 Results are UTC `Time` objects. Nonexistent spring-forward times are skipped;
 both occurrences of a repeated fall-back time are scheduled. See
 [conformance differences](conformance.md) before sharing schedules across
@@ -444,7 +444,7 @@ a periodic job. This stores the scheduled job immediately in the database.
 
 ### [Resumable jobs](https://riverqueue.com/docs/resumable-jobs)
 
-Long jobs can checkpoint idempotent steps and cursor progress. On retry, River skips completed steps and resumes a cursor step from its last recorded value using the same metadata format as Go.
+Long jobs can checkpoint idempotent steps and cursor progress. On retry, River skips completed steps and resumes a cursor step from its last recorded value using River's shared metadata format.
 
 ```ruby
 def work(job)
@@ -506,7 +506,7 @@ end
 ### Job-persisted logging
 
 Add `River::JobPersistedLogging::Plugin` to save worker logs with each job attempt,
-using the same `metadata["river:log"]` format as Go's `riverlog` and River UI. This
+using the shared `metadata["river:log"]` format that River UI displays. This
 is a core feature; it does not require Pro or additional migrations.
 
 ```ruby
@@ -713,9 +713,9 @@ Service errors are logged without interrupting other services, stuck-job rescue,
 or cleanup. A failed service is retried on the next scheduled maintenance pass.
 
 On SQLite, the leader also removes notification outbox entries older than five
-minutes in bounded batches. Cancellation requests write Go-compatible control
-notifications in the same transaction as the job update; Ruby workers continue
-to observe cancellation through polling.
+minutes in bounded batches. Cancellation requests write control notifications
+for other River clients in the same transaction as the job update; Ruby
+workers continue to observe cancellation through polling.
 
 ### [Renaming job kinds](https://riverqueue.com/docs/renaming-jobs)
 
@@ -824,18 +824,17 @@ Minitest integrations are optional and explicitly loaded.
 
 River Pro is kept in the separate, privately distributed `riverqueue-pro` gem, so possession of that package is the access boundary. It is not included in the MPL-2.0 core gem. Its implementation and documentation live in the private `riverqueue-ruby-pro` repository; see that repository's README for configuration and feature examples.
 
-## Current differences from the Go client
+## Current limitations
 
-Ruby checks Go-generated fixtures for unique keys, cron, snooze counters, and
-shared protocol values.
+Ruby checks shared fixtures for unique keys, cron, snooze counters, and
+protocol values.
 See [conformance coverage and differences](conformance.md); this is not yet a
 full mixed-language runtime suite.
 
 The Ruby client does not currently provide dedicated OpenTelemetry/metrics
 integrations or
 transactional job completion alongside application writes. Plugins and
-subscriptions provide integration points for telemetry. Job execution uses Ruby
-worker objects rather than Go's work-function API.
+subscriptions provide integration points for telemetry.
 
 ## Development
 

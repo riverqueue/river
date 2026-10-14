@@ -4,7 +4,7 @@ Gem::Specification.new do |s|
   s.name = "riverqueue"
   s.version = "0.13.0"
   s.summary = "A fast, reliable job queue for Ruby backed by Postgres or SQLite."
-  s.description = "Insert and work River jobs in Ruby using the same schema and state machine as River's Go client. Use with riverqueue-activerecord or riverqueue-sequel."
+  s.description = "Insert and work River jobs in Ruby using the same schema and state machine as other River clients. Use with riverqueue-activerecord or riverqueue-sequel."
   s.authors = ["Blake Gentry", "Brandur Leach"]
   s.email = "brandur@brandur.org"
   s.files = Dir.glob("{exe,lib,migration,sig}/**/*") + ["CHANGELOG.md", "LICENSE", "README.md", "docs/README.md", "docs/conformance.md", "docs/migrations.md", "docs/testing.md", "docs/workers.md"]

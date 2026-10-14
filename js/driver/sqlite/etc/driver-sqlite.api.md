@@ -12,13 +12,12 @@ declarations, and file layout are omitted.
 /**
  * Complete SQLite storage backend on Node's built-in `node:sqlite`.
  *
- * Like River for Go, River runs on a connection of its own. The driver
- * opens a private `DatabaseSync` on the application's database file (in WAL
- * mode, with a zero busy timeout) and never hands it out, so application
- * statements can't join River's transactions, and River's can't join the
- * application's. When another connection or process holds SQLite's write
- * lock, River retries with an asynchronous backoff so the event loop keeps
- * running.
+ * River runs on a connection of its own. The driver opens a private
+ * `DatabaseSync` on the application's database file (in WAL mode, with a
+ * zero busy timeout) and never hands it out, so application statements
+ * can't join River's transactions, and River's can't join the application's.
+ * When another connection or process holds SQLite's write lock, River retries
+ * with an asynchronous backoff so the event loop keeps running.
  *
  * Pass `{ tx }` to run a River operation in an application transaction: any
  * `DatabaseSync` on the same database with a transaction open, such as one
@@ -101,8 +100,7 @@ export interface SqliteDriverOptions {
   /**
    * Total time a River operation keeps retrying while another connection or
    * process holds SQLite's lock, such as `{ seconds: 5 }`. Defaults to 5
-   * seconds, the busy timeout River's Go conformance adapter and Rust
-   * implementation configure.
+   * seconds, the busy timeout other River clients configure.
    *
    * River's private connection has a zero `busy_timeout`, so SQLite never
    * blocks the event loop waiting for a lock. Between attempts River waits

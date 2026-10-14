@@ -77,7 +77,8 @@ module River
     #
     #   * `#kind`: A symbol or string identifying the job kind in the database.
     #   * `#to_json`: Encodes the args to JSON for persistence in the database.
-    #     Must match encoding an args struct on the Go side to be workable.
+    #     Must match the JSON expected by whichever River client works the
+    #     job.
     #
     # They may also respond to `#insert_opts` which is expected to return an
     # `InsertOpts` that contains options that will apply to all jobs of this
@@ -134,7 +135,8 @@ module River
     #
     #   * `#kind`: A symbol or string identifying the job kind in the database.
     #   * `#to_json`: Encodes the args to JSON for persistence in the database.
-    #     Must match encoding an args struct on the Go side to be workable.
+    #     Must match the JSON expected by whichever River client works the
+    #     job.
     #
     # For example:
     #

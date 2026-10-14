@@ -17,8 +17,8 @@ declarations, and file layout are omitted.
  * construction. Passing `{ tx }` keeps the entire operation on that exact
  * checked-out client, and River never ends that transaction. An insertion
  * without `{ tx }` runs in a transaction River begins on a connection it
- * leases from the pool, like River for Go, so a driver constructed from a
- * single client requires `{ tx }` for insertions.
+ * leases from the pool, so a driver constructed from a single client
+ * requires `{ tx }` for insertions.
  */
 export declare class PgDriver {
   /**

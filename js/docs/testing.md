@@ -43,17 +43,17 @@ describe("signUp", () => {
 
 `requireInserted` fails unless exactly one recorded job matches, and returns it
 with typed args; `requireNotInserted` and `requireManyInserted` (the full list,
-in order) complete the set, like Go's `rivertest`. Insertions run the
-definition's validation, so an invalid payload fails the test just as it
-would fail in production. `createTestClient<PoolClient>()` records the
-`{ tx }` each insertion received for code that inserts inside transactions.
-Pass `hooks`, `insertMiddleware`, `plugins`, or `defaultInsertOptions` to
-`createTestClient` to record the jobs they produce.
+in order) complete the set. Insertions run the definition's validation, so an
+invalid payload fails the test just as it would fail in production.
+`createTestClient<PoolClient>()` records the `{ tx }` each insertion received
+for code that inserts inside transactions. Pass `hooks`, `insertMiddleware`,
+`plugins`, or `defaultInsertOptions` to `createTestClient` to record the jobs
+they produce.
 
 Against a real database, `requireInsertedInDatabase(client, definition,
-match, { tx })` and `requireNotInsertedInDatabase` make the same assertions
-on the jobs a client persisted, like Go's `rivertest.RequireInsertedTx`;
-pass `tx` to look inside a transaction that hasn't committed.
+match, { tx })` and `requireNotInsertedInDatabase` make the same assertions on
+the jobs a client persisted; pass `tx` to look inside a transaction that hasn't
+committed.
 
 ## Workers
 

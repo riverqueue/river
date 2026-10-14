@@ -6,7 +6,7 @@ retry, or work them using the same database.
 
 ## Installation
 
-Java 21 or newer is required. Add `com.riverqueue:river:0.48.0-alpha.1` and a JDBC driver to your application's dependencies. Jackson 3 is included transitively. Applications do not need Go.
+Java 21 or newer is required. Add `com.riverqueue:river:0.48.0-alpha.1` and a JDBC driver to your application's dependencies. Jackson 3 is included transitively.
 
 ```xml
 <dependency>
@@ -79,7 +79,7 @@ for each operation. River never closes an application-owned data source. An
 ## Migration CLI
 
 The `river-cli` executable JAR includes Postgres and SQLite JDBC drivers and
-runs with Java 21 or newer. It needs no Go installation or application classpath.
+runs with Java 21 or newer. It needs no application classpath.
 For a local build, see the [development guide](docs/development.md#building-from-source). Set `RIVER_CLI` to the executable JAR, then run:
 
 ```sh
@@ -125,8 +125,8 @@ for SQLite, or select the dialect through the URL. Export accepts comma-separate
 setup when exporting for another migration framework. Exit codes are `0` for
 success, `1` for an operation failure, and `2` for invalid arguments.
 
-The [migration history](https://riverqueue.com/docs/migrations) is shared with Go
-and the other ports. Use the CLI version matching your Java library. The Java
+The [migration history](https://riverqueue.com/docs/migrations) is shared with
+River clients in other languages. Use the CLI version matching your Java library. The Java
 API remains available for embedded use:
 
 ```java
@@ -200,9 +200,9 @@ Typed retrieval checks the kind and decodes the arguments.
 Insertion results contain `Job<JsonNode>` because uniqueness can return an
 existing job with another kind or argument schema. The returned arguments are
 the persisted values, including any additional fields written by another language.
-See the [API comparison](API.md) for the Go mapping and prerelease API changes.
+See the [API review](API.md) for the full application surface and prerelease API changes.
 
-Lists default to ascending job ID order, matching Go. Keep the filters and order
+Lists default to ascending job ID order. Keep the filters and order
 unchanged when continuing from a page's cursor:
 
 ```java
@@ -279,7 +279,7 @@ workerConfig.add(email, context -> {
 
 Long-running handlers should check cancellation between operations and use
 interruptible I/O. `context.awaitCancellation()` waits for the signal.
-As in Go, a normal return reports success even if cancellation or a timeout was
+A normal return reports success even if cancellation or a timeout was
 requested. Call `context.checkCancelled()` when abandoning unfinished work.
 
 ### Getting the client within workers
@@ -329,8 +329,8 @@ reporting hooks fast and avoid throwing from them.
 ### Job-persisted logging
 
 [Job logs](https://riverqueue.com/docs/job-logging) live in `river:log` metadata
-as an array of `{attempt, log}` objects. Java has no bundled equivalent of Go's
-`riverlog` middleware yet. You can explicitly write that shared format; this
+as an array of `{attempt, log}` objects. Java has no bundled job-logging
+middleware yet. You can explicitly write that shared format; this
 example appends a fixed message and retains the last ten attempt entries.
 
 ```java
@@ -398,8 +398,8 @@ zone when run by workers, including daylight-saving changes. Use an explicit
 zone when leaders may run in different time zones. Direct `schedule.next(...)`
 calls use the reference time's zone or fixed offset unless the expression
 specifies one; pass a `ZonedDateTime` to retain a named zone's daylight-saving rules.
-Time-zone rules come from the JVM; matching Go and Java schedules requires
-matching time-zone data in both deployments.
+Time-zone rules come from the JVM; schedules computed by River clients in other
+languages match only when they use the same time-zone data.
 
 ```java
 var workerConfig = client.workers()
@@ -452,7 +452,7 @@ workerConfig.add(email, context -> {
 
 For loops, `context.stepWithCursor(name, cursor -> ...)` receives a saved JSON
 cursor, and `context.cursor(value)` updates it. Java buffers step progress until
-the attempt ends; it does not yet expose Go's transactional checkpoint helpers.
+the attempt ends; it does not yet expose transactional checkpoint helpers.
 A process crash can lose buffered progress, so steps must remain idempotent.
 
 ### Scheduled jobs
@@ -535,7 +535,7 @@ void completes(@org.junit.jupiter.api.io.TempDir java.nio.file.Path directory) t
 
 `new Client(database, clock)` accepts an injected `Clock` for deterministic insert
 timestamps. The worker runtime uses wall time. Java does not currently provide
-a separate equivalent of Go's `rivertest.Worker` harness.
+a dedicated worker-test harness.
 
 ### Transactional job completion
 
@@ -559,8 +559,8 @@ workerConfig.add(email, context -> {
 
 [Uniqueness](https://riverqueue.com/docs/unique-jobs) can combine arguments,
 queue, time period, and job states. A duplicate insert returns the existing job
-with `uniqueSkippedAsDuplicate()` set. The key format is shared with Go and the
-other ports.
+with `uniqueSkippedAsDuplicate()` set. The key format is shared with River
+clients in other languages.
 
 ```java
 var options = InsertOptions.builder()
@@ -663,7 +663,7 @@ reindexing configured Postgres indexes. Leadership is enabled by default.
 `rescueAfter` must not be shorter than `jobTimeout`, so another client does not
 rescue an attempt that is still allowed to run. Its default is one hour, plus an
 explicitly configured positive job timeout. Worker durations and snooze delays
-must fit in signed 64-bit nanoseconds, the same range as Go's `time.Duration`.
+must fit in signed 64-bit nanoseconds, up to about 292 years.
 
 ```java
 var workerConfig = client.workers()
@@ -676,8 +676,8 @@ Retention arguments are cancelled, completed, and discarded durations, in that
 order. Negative durations retain that state indefinitely. If a runtime uses
 `leadership(false)`, another eligible client must run maintenance; periodic
 registrations require leadership. `workers.isLeader()` reports the local status.
-Leadership leases last `serviceInterval` plus ten seconds, matching Go's renewal
-margin even when the interval is increased.
+Leadership leases last `serviceInterval` plus ten seconds, keeping the same
+renewal margin even when the interval is increased.
 `serviceInterval` also controls maintenance and queue heartbeats. It must be
 positive and shorter than one day, the retention period for inactive queues.
 Short retries and snoozes, including rescued retries, use timed fetch wake-ups

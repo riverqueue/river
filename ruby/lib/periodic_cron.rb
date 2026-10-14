@@ -5,8 +5,9 @@ module River
   class PeriodicCron
     # Parses a cron expression once. +timezone+ defaults to UTC; use an IANA
     # name or a fixed offset for local schedules. A CRON_TZ= or TZ= prefix takes
-    # precedence. Supports Go's @every durations, rounded down to whole seconds
-    # with a one-second minimum. Fugit is loaded only on construction.
+    # precedence. Supports @every durations such as `1h30m` or `500ms`, rounded
+    # down to whole seconds with a one-second minimum. Fugit is loaded only on
+    # construction.
     def initialize(expression, timezone: "UTC")
       require "fugit"
 
@@ -31,7 +32,7 @@ module River
     end
 
     # Returns a UTC Time strictly after +time+. Interval schedules align to
-    # whole seconds, as Go does. Calendar and daylight-saving rules use Fugit.
+    # whole seconds. Calendar and daylight-saving rules use Fugit.
     def next(time)
       interval = @interval
       return Time.at(time.to_i + interval).utc if interval
@@ -51,7 +52,7 @@ module River
       raise ArgumentError, "invalid @every duration" unless valid
       units = {"ns" => 1, "us" => 1_000, "µs" => 1_000, "μs" => 1_000, "ms" => 1_000_000, "s" => 1_000_000_000, "m" => 60_000_000_000, "h" => 3_600_000_000_000}
       nanos = parts.sum { |number, unit| (number.to_r * units.fetch(unit)).to_i } * sign
-      raise ArgumentError, "@every duration exceeds Go's duration range" unless (-(1 << 63)...(1 << 63)).cover?(nanos)
+      raise ArgumentError, "@every duration must fit in signed 64-bit nanoseconds" unless (-(1 << 63)...(1 << 63)).cover?(nanos)
 
       [nanos.div(1_000_000_000), 1].max
     end
