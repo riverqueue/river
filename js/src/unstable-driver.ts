@@ -58,6 +58,8 @@ export type {
   PilotAttempts,
   PilotCompleteContext,
   PilotDatabase,
+  PilotDeleteBeforeContext,
+  PilotDeleteManyContext,
   PilotFactory,
   PilotHost,
   PilotInsertContext,

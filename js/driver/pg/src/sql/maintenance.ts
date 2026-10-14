@@ -441,6 +441,25 @@ export function maintenanceCleanJobs(
   ).then((count) => count ?? 0);
 }
 
+/**
+ * Run `callback` in a transaction fenced by `leader` and bounded by `batch`,
+ * like the driver's own maintenance batches.
+ */
+export function maintenanceTransaction<T>(
+  db: PgDatabase,
+  leader: RuntimeLeader,
+  batch: RuntimeMaintenanceBatch,
+  callback: (tx: ClientBase) => Promise<T>
+): Promise<T | null> {
+  return withMaintenanceLeader(
+    db,
+    leader,
+    "maintenanceTransaction",
+    batch,
+    callback
+  );
+}
+
 /** Delete expired queues while `leader` still holds its lease. */
 export async function maintenanceCleanQueues(
   db: PgDatabase,

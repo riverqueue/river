@@ -813,6 +813,20 @@ export class PgRuntime implements RuntimeDriver<ClientBase> {
   }
 
   /** @internal */
+  maintenanceTransaction<Result>(
+    leader: RuntimeLeader,
+    batch: RuntimeMaintenanceBatch,
+    callback: (tx: ClientBase) => Promise<Result>
+  ): Promise<Result | null> {
+    return maintenanceSql.maintenanceTransaction(
+      this.#db,
+      leader,
+      batch,
+      callback
+    );
+  }
+
+  /** @internal */
   maintenanceCleanQueues(
     leader: RuntimeLeader,
     updatedBefore: Temporal.Instant,

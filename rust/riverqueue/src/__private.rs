@@ -24,8 +24,10 @@ use tokio_util::sync::CancellationToken;
 pub use crate::client::{ExtensionClient, PreparedInsertRequest, RawInsertRequest, WeakClient};
 pub use crate::database::erased::{Database, ErasedExecutor, ErasedTransaction};
 pub use crate::pilot::{
-    PilotDatabase, PilotProducer, PilotTransaction, ProducerClaimContext, ProducerClaimNext,
-    ProducerConfiguration, ProducerKeepAliveContext, ProducerShutdownContext, ProducerStartContext,
+    JobDeleteBeforeContext, JobDeleteBeforeNext, JobDeleteContext, JobDeleteManyContext,
+    JobDeleteManyNext, JobDeleteNext, PilotDatabase, PilotProducer, PilotTransaction,
+    ProducerClaimContext, ProducerClaimNext, ProducerConfiguration, ProducerKeepAliveContext,
+    ProducerShutdownContext, ProducerStartContext,
 };
 
 /// Insertion options reserved for River's own companion crates.
@@ -486,8 +488,9 @@ impl<'connection> DatabaseConnection<'connection> {
     }
 
     /// Reborrows the connection for one operation, leaving this value
-    /// usable afterwards.
-    pub(crate) fn reborrow(&mut self) -> DatabaseConnection<'_> {
+    /// usable afterwards, such as to run a `next` step and then make related
+    /// writes on the same connection.
+    pub fn reborrow(&mut self) -> DatabaseConnection<'_> {
         match self {
             #[cfg(feature = "postgres")]
             Self::Postgres(connection) => DatabaseConnection::Postgres(connection),
@@ -965,6 +968,85 @@ pub trait Pilot: std::any::Any + Send + Sync + 'static {
         _job: &JobUpdatedParams,
     ) -> Result<(), PilotError> {
         Ok(())
+    }
+
+    /// Deletes a job for [`Jobs::delete`](crate::Jobs::delete), like River
+    /// Go's `PilotJobDeleter.JobDelete`, in the deletion's transaction:
+    /// River's own, or the caller's. The extension performs the deletion
+    /// itself, usually by running `next` on `connection`, so it can replace
+    /// River's statement or make related writes atomically with it. It must
+    /// not end the transaction.
+    ///
+    /// The default runs River's standard deletion. It's a temporary
+    /// compatibility default, like Go's executor fallback for pilots without
+    /// `PilotJobDeleter`: this hook isn't meant to stay optional, and once
+    /// supported extensions implement it, the default will be removed.
+    ///
+    /// # Errors
+    ///
+    /// A River error, such as the not-found or running-job error `next`
+    /// returns, reaches the caller unchanged. Any other error is reported as
+    /// an extension error. Either rolls back River's own transaction.
+    async fn job_delete(
+        &self,
+        connection: DatabaseConnection<'_>,
+        _context: &JobDeleteContext,
+        next: JobDeleteNext<'_>,
+    ) -> Result<JobRow, PilotError> {
+        Ok(next.delete(connection).await?)
+    }
+
+    /// Deletes a batch of finalized jobs for River's job cleaner, like River
+    /// Go's `PilotJobDeleter.JobDeleteBefore`, returning how many were
+    /// deleted. It runs in the cleaner's transaction, under the cleaner's
+    /// timeout and cancellation, and must not end the transaction.
+    ///
+    /// The extension performs the deletion itself, usually by running `next`
+    /// on `connection`. A result smaller than the batch's limit ends the
+    /// cleaner's pass.
+    ///
+    /// The default runs the job cleaner's standard deletion. It's a temporary
+    /// compatibility default, like Go's executor fallback for pilots without
+    /// `PilotJobDeleter`: this hook isn't meant to stay optional, and once
+    /// supported extensions implement it, the default will be removed.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the batch failed. River rolls the batch back and
+    /// handles the error like any other failed cleaner batch.
+    async fn job_delete_before(
+        &self,
+        connection: DatabaseConnection<'_>,
+        _context: &JobDeleteBeforeContext<'_>,
+        next: JobDeleteBeforeNext<'_>,
+    ) -> Result<u64, PilotError> {
+        Ok(next.delete(connection).await?)
+    }
+
+    /// Deletes jobs for [`Jobs::delete_many`](crate::Jobs::delete_many), like
+    /// River Go's `PilotJobDeleter.JobDeleteMany`, in the deletion's
+    /// transaction: River's own, or the caller's. River validates the
+    /// parameters first. The extension performs the deletion itself, usually
+    /// by running `next` on `connection`, and returns the deleted rows in
+    /// list order. It must not end the transaction.
+    ///
+    /// The default runs River's standard deletion. It's a temporary
+    /// compatibility default, like Go's executor fallback for pilots without
+    /// `PilotJobDeleter`: this hook isn't meant to stay optional, and once
+    /// supported extensions implement it, the default will be removed.
+    ///
+    /// # Errors
+    ///
+    /// A River error from `next` reaches the caller unchanged. Any other
+    /// error is reported as an extension error. Either rolls back River's own
+    /// transaction.
+    async fn job_delete_many(
+        &self,
+        connection: DatabaseConnection<'_>,
+        _context: &JobDeleteManyContext<'_>,
+        next: JobDeleteManyNext<'_>,
+    ) -> Result<Vec<JobRow>, PilotError> {
+        Ok(next.delete(connection).await?)
     }
 
     /// Observes a batch of job state transitions inside River's transaction.

@@ -628,6 +628,19 @@ export interface RuntimeDriver<Transaction = unknown> extends InsertDriver<
     timeoutMs: number | null,
     signal: AbortSignal
   ): BackendResult<number>;
+  /**
+   * Run `callback` in a transaction fenced by `leader`'s exact term and
+   * bounded by `batch` like the backend's own maintenance batches, or
+   * resolve `null` without running it once the term has moved on. Where the
+   * backend has a statement timeout, the batch's timeout bounds every
+   * statement from the transaction's start, and when the batch's signal
+   * aborts the transaction is abandoned and the call rejects at once.
+   */
+  maintenanceTransaction?<Result>(
+    leader: RuntimeLeader,
+    batch: RuntimeMaintenanceBatch,
+    callback: (tx: Transaction) => Promise<Result>
+  ): BackendResult<Result | null>;
   /** Delete one bounded page of inactive queue records. */
   maintenanceCleanQueues?(
     leader: RuntimeLeader,

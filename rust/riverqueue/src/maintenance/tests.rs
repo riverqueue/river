@@ -20,7 +20,8 @@ use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 
 use crate::__private::{
-    DatabaseConnection, JobUpdatedParams, Pilot, PilotError, RescueAction, RescueManyParams,
+    DatabaseConnection, JobDeleteBeforeContext, JobDeleteBeforeNext, JobUpdatedParams, Pilot,
+    PilotError, RescueAction, RescueManyParams,
 };
 use riverqueue_migrate::PostgresMigrator;
 
@@ -582,6 +583,89 @@ async fn job_cleaner_retention_exclusions_and_batches() {
         assert!(database.state(running).await.is_some());
         database.cleanup().await;
     }
+}
+
+/// Sleeps on the cleaner's connection before running its standard
+/// deletion.
+struct SlowCleanerPilot;
+
+#[async_trait]
+impl Pilot for SlowCleanerPilot {
+    async fn job_delete_before(
+        &self,
+        mut connection: DatabaseConnection<'_>,
+        _context: &JobDeleteBeforeContext<'_>,
+        next: JobDeleteBeforeNext<'_>,
+    ) -> Result<u64, PilotError> {
+        sqlx::query("SELECT pg_sleep(30)")
+            .execute(connection.reborrow().into_postgres().unwrap())
+            .await?;
+        Ok(next.delete(connection).await?)
+    }
+}
+
+// The cleaner's timeout and cancellation cover the whole hook, including
+// its own statements before `next`, and cancellation stops them
+// server-side.
+#[tokio::test(flavor = "multi_thread")]
+async fn job_cleaner_bounds_pilot_statements_before_next() {
+    let database = TestDatabase::new("rmt_cleaner_slow").await;
+    let sleepers = || async {
+        sqlx::query_scalar::<_, i64>(
+            "SELECT count(*) FROM pg_stat_activity \
+             WHERE datname = current_database() AND state = 'active' \
+               AND query = 'SELECT pg_sleep(30)'",
+        )
+        .fetch_one(&database.pool)
+        .await
+        .unwrap()
+    };
+
+    let client = database
+        .client()
+        .with_pilot(SlowCleanerPilot)
+        .maintenance(
+            MaintenanceConfig::default().with_job_cleaner_timeout(Duration::from_millis(200)),
+        )
+        .build()
+        .unwrap();
+    let started = std::time::Instant::now();
+    let error = cleaner::clean_jobs(&context(&client, 10))
+        .await
+        .unwrap_err();
+    assert!(
+        matches!(error, super::MaintenanceError::TimedOut),
+        "{error}"
+    );
+    assert!(started.elapsed() < Duration::from_secs(5));
+
+    let client = database
+        .client()
+        .with_pilot(SlowCleanerPilot)
+        .build()
+        .unwrap();
+    let context = context(&client, 10);
+    let cancel = context.cancel.clone();
+    tokio::spawn(async move {
+        tokio::time::sleep(Duration::from_millis(200)).await;
+        cancel.cancel();
+    });
+    let started = std::time::Instant::now();
+    let error = cleaner::clean_jobs(&context).await.unwrap_err();
+    assert!(
+        matches!(error, super::MaintenanceError::Cancelled),
+        "{error}"
+    );
+    assert!(started.elapsed() < Duration::from_secs(5));
+    let deadline = std::time::Instant::now() + Duration::from_secs(2);
+    while sleepers().await > 0 {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "hook statement still running"
+        );
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    database.cleanup().await;
 }
 
 #[tokio::test(flavor = "multi_thread")]

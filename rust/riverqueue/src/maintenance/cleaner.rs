@@ -8,10 +8,16 @@ use chrono::{DateTime, Utc};
 #[cfg(feature = "postgres")]
 use sqlx::AssertSqlSafe;
 
+use crate::__private::{
+    DatabaseConnection, FinalizedJobDeleteParams, JobDeleteBeforeContext, JobDeleteBeforeNext,
+    PilotError,
+};
+use crate::Error;
+use crate::client::ClientInner;
 use crate::database::DatabasePool;
 #[cfg(feature = "sqlite")]
 use crate::database::sqlite;
-use crate::{__private::FinalizedJobDeleteParams, Error};
+use crate::pilot::job_delete_error;
 
 use super::{
     MaintenanceError, TIMEOUT_DEFAULT, batch_backoff, batch_size, maintainer::ServiceContext,
@@ -79,7 +85,12 @@ async fn clean_jobs_batch(
         DatabasePool::Sqlite(pool) => {
             let operation = async {
                 let mut transaction = crate::database::begin_sqlite_write(pool).await?;
-                let count = sqlite_delete_finalized_jobs(&mut transaction, params).await?;
+                let count = job_delete_before(
+                    &context.inner,
+                    DatabaseConnection::Sqlite(&mut transaction),
+                    params,
+                )
+                .await?;
                 transaction.commit().await?;
                 Ok::<_, MaintenanceError>(count)
             };
@@ -97,9 +108,9 @@ async fn clean_jobs_batch(
                 backend_pid,
                 &context.cancel,
                 timeout,
-                postgres_delete_finalized_jobs(
-                    &mut transaction.transaction,
-                    &context.inner.schema,
+                job_delete_before(
+                    &context.inner,
+                    DatabaseConnection::Postgres(&mut transaction.transaction),
                     params,
                 ),
             )
@@ -107,6 +118,60 @@ async fn clean_jobs_batch(
             transaction.commit(pool, &context.cancel).await?;
             Ok(count)
         }
+    }
+}
+
+/// Deletes one batch through the extension's deletion step.
+async fn job_delete_before(
+    inner: &ClientInner,
+    connection: DatabaseConnection<'_>,
+    params: &FinalizedJobDeleteParams,
+) -> Result<u64, MaintenanceError> {
+    let context = JobDeleteBeforeContext {
+        database: inner.pilot_database_config(),
+        params,
+    };
+    inner
+        .pilot
+        .job_delete_before(
+            connection,
+            &context,
+            JobDeleteBeforeNext::new(inner, params),
+        )
+        .await
+        .map_err(job_delete_before_error)
+}
+
+/// Converts an error from the extension's deletion step, keeping a database
+/// error's meaning so a statement timeout still counts toward the reduced
+/// batch size.
+fn job_delete_before_error(error: PilotError) -> MaintenanceError {
+    let error = match error.downcast::<sqlx::Error>() {
+        Ok(error) => return MaintenanceError::from(*error),
+        Err(error) => error,
+    };
+    match job_delete_error("job cleaner", error) {
+        Error::Database(error) => MaintenanceError::from(error),
+        error => MaintenanceError::Failed(error),
+    }
+}
+
+/// The job cleaner's standard deletion of one batch, which an extension's
+/// deletion step runs through [`JobDeleteBeforeNext`].
+pub(crate) async fn standard_job_delete_before(
+    #[cfg_attr(not(feature = "postgres"), expect(unused_variables))] inner: &ClientInner,
+    connection: DatabaseConnection<'_>,
+    params: &FinalizedJobDeleteParams,
+) -> Result<u64, Error> {
+    match connection {
+        #[cfg(feature = "postgres")]
+        DatabaseConnection::Postgres(connection) => {
+            Ok(postgres_delete_finalized_jobs(connection, &inner.schema, params).await?)
+        }
+        #[cfg(feature = "sqlite")]
+        DatabaseConnection::Sqlite(connection) => sqlite_delete_finalized_jobs(connection, params)
+            .await
+            .map_err(|error| Error::Database(error.into())),
     }
 }
 

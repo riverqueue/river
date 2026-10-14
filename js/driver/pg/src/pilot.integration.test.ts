@@ -6,6 +6,7 @@ import {
   defineJob,
   ExtensionError,
   JobCancelledError,
+  JobRunningError,
   LifecycleError,
   UnsupportedCapabilityError,
   ValidationError,
@@ -894,6 +895,158 @@ describe("Postgres pilot", () => {
     } finally {
       await driver.maintenanceLeaderResign(leader);
     }
+  });
+
+  it("deletes like River with a pilot that intercepts no deletion", async () => {
+    const { client } = setup();
+    const single = await client.insert(job, {});
+    const many = await client.insert(job, {});
+
+    await expect(client.jobs.delete(single.job.id)).resolves.toMatchObject({
+      id: single.job.id,
+    });
+    await expect(
+      client.jobs.deleteMany({ ids: [many.job.id] })
+    ).resolves.toMatchObject([{ id: many.job.id }]);
+    expect(await jobCount()).toBe(0);
+  });
+
+  for (const ending of ["stop", "timeout"] as const) {
+    it(`ends a deleteBefore interceptor's own statement at the cleaner's ${ending}`, async () => {
+      const errors: unknown[] = [];
+      let started = false;
+      const { client } = setup(
+        () => ({
+          intercept: {
+            async deleteBefore(context, next) {
+              started = true;
+              try {
+                await context.tx.query("SELECT pg_sleep(30)");
+              } catch (error: unknown) {
+                errors.push(error);
+                throw error;
+              }
+              return next();
+            },
+          },
+        }),
+        {
+          clientId: `${prefix}_cleaner_${ending}`,
+          maintenance: {
+            electionInterval: { milliseconds: 50 },
+            jobCleanerInterval: { milliseconds: 20 },
+            jobCleanerTimeout:
+              ending === "stop" ? { seconds: 1 } : { milliseconds: 300 },
+          },
+          queues: { [`${prefix}_cleaner`]: { maxWorkers: 1 } },
+          workers: new Workers().add(job, () => undefined),
+        }
+      );
+      await admin.query("DELETE FROM river_leader");
+
+      const run = await client.start();
+      let stoppedAt: number;
+      try {
+        await waitFor(() => started, 10_000);
+        if (ending === "timeout") {
+          await waitFor(() => errors.length > 0, 5_000);
+        }
+      } finally {
+        const stopping = Date.now();
+        await run.stop();
+        stoppedAt = Date.now() - stopping;
+      }
+
+      // The batch's timeout bounds the interceptor's own statement, so it
+      // can't hold the transaction, its locks, or a stop past it.
+      expect(stoppedAt).toBeLessThan(5_000);
+      await waitFor(async () => {
+        const sleeping = await admin.query(
+          `SELECT 1 FROM pg_stat_activity
+           WHERE datname = current_database() AND state = 'active'
+             AND query = 'SELECT pg_sleep(30)'`
+        );
+        return sleeping.rowCount === 0;
+      }, 3_000);
+    });
+  }
+
+  it("runs deletion interceptors in the deletion's transaction", async () => {
+    let fail = false;
+    const driver = testPgDriver(admin);
+    const queue = `${prefix}_deletion`;
+    const { client } = setup(() => ({
+      intercept: {
+        async delete(context, next) {
+          const deleted = await next();
+          await note(context.tx, "delete", deleted?.id ?? null);
+          if (fail) throw new Error("delete companion failed");
+          return deleted;
+        },
+        async deleteMany(context, next) {
+          const deleted = await next();
+          for (const row of deleted) {
+            await note(context.tx, "deleteMany", row.id);
+          }
+          if (fail) throw new Error("deleteMany companion failed");
+          return deleted;
+        },
+      },
+    }));
+    const running = await client.insert(job, {}, { queue });
+    await driver.jobClaim({
+      attemptedBy: "worker",
+      kinds: [],
+      queues: [{ limit: 1, name: queue }],
+    });
+    const single = await client.insert(job, {}, { queue });
+    const many = await client.insert(job, {}, { queue });
+
+    // A failed interceptor rolls River's own transaction back.
+    fail = true;
+    await expect(client.jobs.delete(single.job.id)).rejects.toThrow(
+      "delete companion failed"
+    );
+    await expect(
+      client.jobs.deleteMany({ ids: [many.job.id] })
+    ).rejects.toThrow("deleteMany companion failed");
+    expect(await jobCount()).toBe(3);
+    expect(await notes()).toEqual([]);
+
+    // In a caller's transaction, the deletions and the interceptor's
+    // writes stay until the caller rolls back.
+    fail = false;
+    const tx = await admin.connect();
+    try {
+      await tx.query("BEGIN");
+      await client.jobs.delete(single.job.id, { tx });
+      await client.jobs.deleteMany({ ids: [many.job.id], tx });
+      const inTx = await tx.query<{ note: string }>(
+        `SELECT note FROM ${companionTable} ORDER BY id`
+      );
+      expect(inTx.rows.map((row) => row.note)).toEqual([
+        "delete",
+        "deleteMany",
+      ]);
+      await tx.query("ROLLBACK");
+    } finally {
+      tx.release();
+    }
+    expect(await jobCount()).toBe(3);
+    expect(await notes()).toEqual([]);
+
+    await expect(client.jobs.delete(single.job.id)).resolves.toMatchObject({
+      id: single.job.id,
+    });
+    await expect(client.jobs.delete(single.job.id)).resolves.toBeNull();
+    await expect(client.jobs.delete(running.job.id)).rejects.toBeInstanceOf(
+      JobRunningError
+    );
+    await expect(
+      client.jobs.deleteMany({ ids: [running.job.id, many.job.id] })
+    ).resolves.toMatchObject([{ id: many.job.id }]);
+    expect(await jobCount()).toBe(1);
+    expect(await notes()).toEqual(["delete", "delete", "deleteMany"]);
   });
 
   it("runs producer sessions and services through Postgres transactions", async () => {

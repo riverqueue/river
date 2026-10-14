@@ -23,9 +23,12 @@ use sqlx::Postgres;
 use sqlx::Sqlite;
 use sqlx::{Transaction, pool::PoolConnection};
 
-use crate::__private::DatabaseConnection;
+use crate::__private::{
+    DatabaseConnection, JobDeleteContext, JobDeleteManyContext, JobDeleteManyNext, JobDeleteNext,
+};
 use crate::client::{ClientInner, after_jobs_set_state};
 use crate::database::{Database, DatabasePool};
+use crate::pilot::job_delete_error;
 use crate::{
     Error, JobDeleteManyParams, JobListParams, JobRow, JobUpdateParams, Queue, QueueListParams,
 };
@@ -278,9 +281,23 @@ impl<'c> Storage<'c> {
         Ok(row)
     }
 
-    /// Deletes a non-running job and returns its former row.
+    /// Deletes a non-running job through the extension's deletion step and
+    /// returns its former row.
     pub(crate) async fn job_delete(&mut self, id: i64) -> Result<JobRow, Error> {
-        self.backend.job_delete(id).await
+        let inner = self.inner;
+        let context = JobDeleteContext {
+            database: inner.pilot_database_config(),
+            id,
+        };
+        inner
+            .pilot
+            .job_delete(
+                self.backend.connection(),
+                &context,
+                JobDeleteNext::new(inner, id),
+            )
+            .await
+            .map_err(|error| job_delete_error("job delete", error))
     }
 
     /// Deletes matching non-running jobs with an explicit safety guard.
@@ -295,7 +312,20 @@ impl<'c> Storage<'c> {
             ));
         }
         params.filter.validate().map_err(Error::invalid_job)?;
-        self.backend.job_delete_many(&params.filter).await
+        let inner = self.inner;
+        let context = JobDeleteManyContext {
+            database: inner.pilot_database_config(),
+            params,
+        };
+        inner
+            .pilot
+            .job_delete_many(
+                self.backend.connection(),
+                &context,
+                JobDeleteManyNext::new(inner, params),
+            )
+            .await
+            .map_err(|error| job_delete_error("job delete many", error))
     }
 
     /// Claims one available job for this client, as a fetch would.
@@ -578,6 +608,29 @@ impl<'a> Session<'a> {
         }
         Ok(())
     }
+}
+
+/// River's standard deletion of a non-running job, which an extension's
+/// deletion step runs through [`JobDeleteNext`].
+pub(crate) async fn standard_job_delete(
+    inner: &ClientInner,
+    connection: DatabaseConnection<'_>,
+    id: i64,
+) -> Result<JobRow, Error> {
+    Storage::new(inner, connection).backend.job_delete(id).await
+}
+
+/// River's standard bulk deletion of jobs matching a validated filter, which
+/// an extension's deletion step runs through [`JobDeleteManyNext`].
+pub(crate) async fn standard_job_delete_many(
+    inner: &ClientInner,
+    connection: DatabaseConnection<'_>,
+    filter: &JobListParams,
+) -> Result<Vec<JobRow>, Error> {
+    Storage::new(inner, connection)
+        .backend
+        .job_delete_many(filter)
+        .await
 }
 
 /// Creates the client's queue record or refreshes its `updated_at`.

@@ -12,7 +12,6 @@ import type {
 } from "./driver.js";
 import {
   ConfigurationError,
-  JobRunningError,
   LifecycleError,
   ValidationError,
 } from "./errors.js";
@@ -605,13 +604,11 @@ export class RiverClient<Transaction = unknown> implements Client<Transaction> {
     id: bigint,
     options: TransactionOptions<Transaction> = {}
   ): Promise<JobRow | null> {
-    const result = await this.#runtimeDriver("job deletion").jobDelete(
+    return this.#operations.delete(
+      this.#runtimeDriver("job deletion"),
       validateJobId(id),
-      driverOptions(options.tx)
+      options.tx
     );
-    if (result.status === "not_found") return null;
-    if (result.status === "running") throw new JobRunningError(result.job.id);
-    return result.job;
   }
 
   /** Delete a bounded, explicitly filtered set of non-running jobs. */
@@ -619,9 +616,10 @@ export class RiverClient<Transaction = unknown> implements Client<Transaction> {
     options: JobDeleteManyOptions & TransactionOptions<Transaction>
   ): Promise<readonly JobRow[]> {
     const { tx, ...deleteOptions } = options;
-    return this.#runtimeDriver("bulk job deletion").jobDeleteMany(
+    return this.#operations.deleteMany(
+      this.#runtimeDriver("bulk job deletion"),
       normalizeJobDeleteManyOptions(deleteOptions),
-      driverOptions(tx)
+      tx
     );
   }
 
@@ -1316,7 +1314,17 @@ const attachedPilots = new WeakSet<object>();
 
 const INTERCEPTED_OPERATIONS: ReadonlySet<string> = new Set<
   keyof PilotInterceptors<unknown>
->(["cancel", "complete", "getStuck", "insert", "rescue", "retry"]);
+>([
+  "cancel",
+  "complete",
+  "delete",
+  "deleteBefore",
+  "deleteMany",
+  "getStuck",
+  "insert",
+  "rescue",
+  "retry",
+]);
 
 /** River's own public queue keys, which a pilot can't own. */
 const RIVER_QUEUE_KEYS: ReadonlySet<string> = new Set([

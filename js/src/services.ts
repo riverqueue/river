@@ -1143,15 +1143,8 @@ export class RuntimeServices {
           ? {}
           : { queuesExcluded: this.#jobCleanerQueuesExcluded }),
       };
-      const count = await batcher.run(
-        signal,
-        async (batch) =>
-          (await this.#driver.maintenanceCleanJobs?.(
-            term,
-            params,
-            batch.timeoutMs,
-            batch.signal
-          )) ?? 0
+      const count = await batcher.run(signal, (batch) =>
+        this.#operations.deleteBefore(this.#driver, term, params, batch)
       );
       total += count;
       if (count < params.limit) break;
