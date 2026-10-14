@@ -1,7 +1,11 @@
 package maintenance
 
 import (
+	"bytes"
 	"context"
+	"fmt"
+	"log/slog"
+	"os"
 	"sort"
 	"testing"
 	"time"
@@ -16,9 +20,40 @@ import (
 	"github.com/riverqueue/river/rivershared/riversharedtest"
 	"github.com/riverqueue/river/rivershared/startstoptest"
 	"github.com/riverqueue/river/rivershared/testfactory"
+	"github.com/riverqueue/river/rivershared/testsignal"
 	"github.com/riverqueue/river/rivershared/uniquestates"
 	"github.com/riverqueue/river/rivertype"
 )
+
+type jobSchedulerExecutorMock struct {
+	riverdriver.ExecutorTx
+
+	TestSignals     jobSchedulerExecutorMockTestSignals
+	jobScheduleFunc func(context.Context, *riverdriver.JobScheduleParams) ([]*riverdriver.JobScheduleResult, error)
+}
+
+func (e *jobSchedulerExecutorMock) Begin(ctx context.Context) (riverdriver.ExecutorTx, error) {
+	return e, nil
+}
+
+func (e *jobSchedulerExecutorMock) JobSchedule(ctx context.Context, params *riverdriver.JobScheduleParams) ([]*riverdriver.JobScheduleResult, error) {
+	e.TestSignals.JobScheduleStarted.Signal(struct{}{})
+	return e.jobScheduleFunc(ctx, params)
+}
+
+func (e *jobSchedulerExecutorMock) Rollback(ctx context.Context) error {
+	return nil
+}
+
+type jobSchedulerExecutorMockTestSignals struct {
+	JobScheduleStarted testsignal.TestSignal[struct{}]
+}
+
+func (ts *jobSchedulerExecutorMockTestSignals) Init(t *testing.T) {
+	t.Helper()
+
+	ts.JobScheduleStarted.Init(t)
+}
 
 func TestJobScheduler(t *testing.T) {
 	t.Parallel()
@@ -438,5 +473,90 @@ func TestJobScheduler(t *testing.T) {
 				require.Equal(t, riversharedmaintenance.BatchSizeDefault, scheduler.batchSize())
 			}
 		}
+	})
+}
+
+func TestJobScheduler_ErrorLogging(t *testing.T) {
+	t.Parallel()
+
+	type testBundle struct {
+		exec      *jobSchedulerExecutorMock
+		logOutput bytes.Buffer
+		scheduler *JobScheduler
+	}
+
+	// pgx can return a write timeout instead of context.Canceled when shutdown
+	// interrupts a query write. Preserve that error shape in the regression.
+	writeErr := fmt.Errorf("write failed: %w", os.ErrDeadlineExceeded)
+	require.NotErrorIs(t, writeErr, context.Canceled)
+
+	setup := func(t *testing.T) *testBundle {
+		t.Helper()
+
+		bundle := &testBundle{exec: &jobSchedulerExecutorMock{}}
+		bundle.exec.TestSignals.Init(t)
+		bundle.exec.jobScheduleFunc = func(ctx context.Context, params *riverdriver.JobScheduleParams) ([]*riverdriver.JobScheduleResult, error) {
+			<-ctx.Done()
+			return nil, writeErr
+		}
+
+		archetype := riversharedtest.BaseServiceArchetype(t)
+		archetype.Logger = slog.New(slog.NewTextHandler(&bundle.logOutput, &slog.HandlerOptions{Level: slog.LevelError}))
+		bundle.scheduler = NewJobScheduler(archetype, &JobSchedulerConfig{Interval: time.Millisecond}, bundle.exec)
+		bundle.scheduler.StaggerStartupDisable(true)
+		t.Cleanup(bundle.scheduler.Stop)
+
+		return bundle
+	}
+
+	t.Run("ContextCancellationWithoutLogging", func(t *testing.T) {
+		t.Parallel()
+
+		bundle := setup(t)
+
+		ctx, cancelFunc := context.WithCancel(context.Background())
+		defer cancelFunc()
+		require.NoError(t, bundle.scheduler.Start(ctx))
+		bundle.exec.TestSignals.JobScheduleStarted.WaitOrTimeout()
+
+		cancelFunc()
+		bundle.scheduler.Stop()
+		require.Empty(t, bundle.logOutput.String())
+	})
+
+	t.Run("LogsDatabaseErrors", func(t *testing.T) {
+		t.Parallel()
+
+		bundle := setup(t)
+
+		var numCalls int
+		bundle.exec.jobScheduleFunc = func(ctx context.Context, params *riverdriver.JobScheduleParams) ([]*riverdriver.JobScheduleResult, error) {
+			numCalls++
+			if numCalls > 1 {
+				<-ctx.Done()
+				return nil, ctx.Err()
+			}
+			return nil, writeErr
+		}
+
+		require.NoError(t, bundle.scheduler.Start(context.Background()))
+		bundle.exec.TestSignals.JobScheduleStarted.WaitOrTimeout()
+		// The next query starts only after the first error has been logged.
+		bundle.exec.TestSignals.JobScheduleStarted.WaitOrTimeout()
+		bundle.scheduler.Stop()
+		require.Contains(t, bundle.logOutput.String(), "Error scheduling jobs")
+		require.Contains(t, bundle.logOutput.String(), writeErr.Error())
+	})
+
+	t.Run("StopsWithoutLogging", func(t *testing.T) {
+		t.Parallel()
+
+		bundle := setup(t)
+
+		require.NoError(t, bundle.scheduler.Start(context.Background()))
+		bundle.exec.TestSignals.JobScheduleStarted.WaitOrTimeout()
+
+		bundle.scheduler.Stop()
+		require.Empty(t, bundle.logOutput.String())
 	})
 }
