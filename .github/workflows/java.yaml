@@ -44,7 +44,7 @@ jobs:
 
       - uses: ./.github/actions/setup-java
 
-      - uses: actions/setup-go@v6
+      - uses: actions/setup-go@v7
         with:
           go-version-file: go.work
 
@@ -85,7 +85,7 @@ jobs:
         with:
           java-version: ${{ matrix.java-version }}
 
-      - uses: actions/setup-go@v6
+      - uses: actions/setup-go@v7
         with:
           go-version-file: go.work
 
@@ -124,7 +124,7 @@ jobs:
 
       - uses: ./.github/actions/setup-java
 
-      - uses: actions/setup-go@v6
+      - uses: actions/setup-go@v7
         with:
           go-version-file: go.work
 
