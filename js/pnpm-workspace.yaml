@@ -1,5 +1,6 @@
 packages:
   - "cli"
+  - "conformance"
   - "driver/*"
   - "examples/*"
   - "migrate"

@@ -1,0 +1,399 @@
+name: Conformance nightly
+
+# The pull request jobs run each candidate against River Go on Postgres 18
+# and SQLite. This workflow adds what's too slow or too noisy for them: the
+# nightly tier (process kills, database faults, rolling deploys, connection
+# and batching checks) on every supported Postgres version, three-engine
+# fleets, Rust and JavaScript paired without Go, throughput comparisons, and
+# a soak. Run it by hand with `release_candidate` before a release to soak
+# for longer and fail on performance regressions.
+on:
+  schedule:
+    - cron: "23 7 * * *"
+  workflow_dispatch:
+    inputs:
+      release_candidate:
+        default: false
+        description: Soak for 5.5 hours and fail on throughput or latency regressions
+        type: boolean
+
+permissions:
+  contents: read
+
+env:
+  # Keep the cross-run cache small; Cargo still reuses compiled dependencies.
+  CARGO_INCREMENTAL: "0"
+  RIVER_CONFORMANCE_NIGHTLY: "1"
+  TEST_DATABASE_URL: postgres://postgres:postgres@localhost:5432/river_test?sslmode=disable
+
+jobs:
+  # A scheduled run is skipped when nothing the suite exercises has changed
+  # since the last successful scheduled run: Go code and modules, SQL and
+  # migrations, the conformance module, the Rust and JavaScript ports, the
+  # setup actions, the Makefile, and this workflow. A run started by hand
+  # always runs.
+  changes:
+    name: Check for relevant changes
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    permissions:
+      actions: read
+      contents: read
+
+    outputs:
+      run: ${{ steps.check.outputs.run }}
+
+    steps:
+      - uses: actions/checkout@v7
+        if: github.event_name == 'schedule'
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Compare with the last successful scheduled run
+        id: check
+        env:
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+          EVENT_NAME: ${{ github.event_name }}
+          GH_TOKEN: ${{ github.token }}
+          REPOSITORY: ${{ github.repository }}
+        run: |
+          decide() {
+            echo "run=$1" >> "$GITHUB_OUTPUT"
+            echo "$2" | tee -a "$GITHUB_STEP_SUMMARY"
+          }
+
+          if [ "$EVENT_NAME" != schedule ]; then
+            decide true "Running: started by $EVENT_NAME."
+            exit 0
+          fi
+
+          if ! last_sha=$(gh api "repos/$REPOSITORY/actions/workflows/conformance-nightly.yaml/runs?event=schedule&status=success&branch=$DEFAULT_BRANCH&per_page=1" --jq '.workflow_runs[0].head_sha // empty'); then
+            decide true "Running: couldn't look up the last successful scheduled run."
+            exit 0
+          fi
+          if [ -z "$last_sha" ]; then
+            decide true "Running: no earlier scheduled run has succeeded."
+            exit 0
+          fi
+          if ! git merge-base --is-ancestor "$last_sha" HEAD 2>/dev/null; then
+            decide true "Running: the last successful scheduled run's commit $last_sha isn't in this branch's history."
+            exit 0
+          fi
+
+          paths=(
+            ":(glob)**/*.go"
+            ":(glob)**/go.mod"
+            ":(glob)**/go.sum"
+            "go.work"
+            ":(glob)**/*.sql"
+            "conformance"
+            "rust"
+            "js"
+            ".github/actions"
+            ".github/workflows/conformance-nightly.yaml"
+            "Makefile"
+          )
+          status=0
+          git diff --quiet "$last_sha" HEAD -- "${paths[@]}" || status=$?
+          case $status in
+            0) decide false "Skipping: nothing the suite exercises changed since $last_sha, the last successful scheduled run." ;;
+            1) decide true "Running: relevant files changed since $last_sha, the last successful scheduled run." ;;
+            *) decide true "Running: couldn't compare with $last_sha, the last successful scheduled run." ;;
+          esac
+
+  nightly:
+    name: Nightly tier (${{ matrix.candidate }}, Postgres ${{ matrix.postgres-version }})
+    needs: changes
+    if: needs.changes.outputs.run == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 50
+
+    strategy:
+      fail-fast: false
+      matrix:
+        candidate: [go, js, rust]
+        postgres-version: [14, 15, 16, 17, 18]
+
+    services:
+      postgres:
+        image: postgres:${{ matrix.postgres-version }}
+        env:
+          POSTGRES_DB: river_test
+          POSTGRES_PASSWORD: postgres
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 2s
+          --health-timeout 5s
+          --health-retries 5
+        ports:
+          - 5432:5432
+
+    env:
+      RIVER_CONFORMANCE: ${{ matrix.candidate }}
+      # SQLite doesn't vary with the Postgres version, so only the newest
+      # version's job runs it.
+      RIVER_CONFORMANCE_DRIVERS: ${{ matrix.postgres-version == 18 && 'postgres,sqlite' || 'postgres' }}
+
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-go@v7
+        with:
+          cache-dependency-path: conformance/go.sum
+          go-version-file: go.work
+
+      - uses: dtolnay/rust-toolchain@stable
+        if: matrix.candidate == 'rust'
+        id: rust
+
+      - name: Cache Rust dependencies and build artifacts
+        if: matrix.candidate == 'rust'
+        uses: actions/cache@v6
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+            rust/target
+          key: rust-v1-${{ runner.os }}-${{ runner.arch }}-conformance-${{ steps.rust.outputs.cachekey }}-${{ hashFiles('rust/**/Cargo.toml', 'rust/Cargo.lock') }}
+          restore-keys: rust-v1-${{ runner.os }}-${{ runner.arch }}-conformance-${{ steps.rust.outputs.cachekey }}-
+
+      - uses: ./.github/actions/setup-js
+        if: matrix.candidate == 'js'
+
+      - name: Build the Rust adapter
+        if: matrix.candidate == 'rust'
+        run: make build/rust/conformance
+
+      - name: Build the JavaScript adapter
+        if: matrix.candidate == 'js'
+        run: make build/js/conformance
+
+      # Throughput comparisons run once, in the performance job.
+      - name: Conformance scenarios and the nightly tier
+        run: go test ./harness -count=1 -timeout 40m -skip '^TestPerformance$/^Throughput$'
+        working-directory: conformance
+
+  # Throughput and p95 latency relative to River Go, on Postgres 18. Shared
+  # runners are noisy, so a scheduled run only reports a regression; a
+  # release candidate run fails on one.
+  performance:
+    name: Performance (${{ matrix.candidate }})
+    needs: changes
+    if: needs.changes.outputs.run == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    continue-on-error: ${{ !inputs.release_candidate }}
+
+    strategy:
+      fail-fast: false
+      matrix:
+        candidate: [js, rust]
+
+    services:
+      postgres:
+        image: postgres:18
+        env:
+          POSTGRES_DB: river_test
+          POSTGRES_PASSWORD: postgres
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 2s
+          --health-timeout 5s
+          --health-retries 5
+        ports:
+          - 5432:5432
+
+    env:
+      RIVER_CONFORMANCE: ${{ matrix.candidate }}
+
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-go@v7
+        with:
+          cache-dependency-path: conformance/go.sum
+          go-version-file: go.work
+
+      - uses: dtolnay/rust-toolchain@stable
+        if: matrix.candidate == 'rust'
+        id: rust
+
+      - name: Cache Rust dependencies and build artifacts
+        if: matrix.candidate == 'rust'
+        uses: actions/cache@v6
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+            rust/target
+          key: rust-v1-${{ runner.os }}-${{ runner.arch }}-conformance-${{ steps.rust.outputs.cachekey }}-${{ hashFiles('rust/**/Cargo.toml', 'rust/Cargo.lock') }}
+          restore-keys: rust-v1-${{ runner.os }}-${{ runner.arch }}-conformance-${{ steps.rust.outputs.cachekey }}-
+
+      - uses: ./.github/actions/setup-js
+        if: matrix.candidate == 'js'
+
+      - name: Build the Rust adapter
+        if: matrix.candidate == 'rust'
+        run: make build/rust/conformance
+
+      - name: Build the JavaScript adapter
+        if: matrix.candidate == 'js'
+        run: make build/js/conformance
+
+      - name: Throughput and latency
+        run: go test ./harness -count=1 -timeout 25m -run '^TestPerformance$/^Throughput$'
+        working-directory: conformance
+
+  # Every job above pairs a candidate with River Go. These pair the other
+  # implementations: Rust, JavaScript, and Go in one fleet, and JavaScript
+  # against Rust as the reference, on Postgres 18 and SQLite.
+  multi_engine:
+    name: ${{ matrix.name }}
+    needs: changes
+    if: needs.changes.outputs.run == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 50
+
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: Three-engine fleet (Go, Rust, and JavaScript)
+            candidate: rust
+            peer: js
+            reference: go
+            run: "^TestMultiEngine$"
+          - name: JavaScript against Rust
+            candidate: js
+            peer: ""
+            reference: rust
+            run: ""
+
+    services:
+      postgres:
+        image: postgres:18
+        env:
+          POSTGRES_DB: river_test
+          POSTGRES_PASSWORD: postgres
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 2s
+          --health-timeout 5s
+          --health-retries 5
+        ports:
+          - 5432:5432
+
+    env:
+      RIVER_CONFORMANCE: ${{ matrix.candidate }}
+      RIVER_CONFORMANCE_PEER: ${{ matrix.peer }}
+      RIVER_CONFORMANCE_REFERENCE: ${{ matrix.reference }}
+
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-go@v7
+        with:
+          cache-dependency-path: conformance/go.sum
+          go-version-file: go.work
+
+      - uses: dtolnay/rust-toolchain@stable
+        id: rust
+
+      - name: Cache Rust dependencies and build artifacts
+        uses: actions/cache@v6
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+            rust/target
+          key: rust-v1-${{ runner.os }}-${{ runner.arch }}-conformance-${{ steps.rust.outputs.cachekey }}-${{ hashFiles('rust/**/Cargo.toml', 'rust/Cargo.lock') }}
+          restore-keys: rust-v1-${{ runner.os }}-${{ runner.arch }}-conformance-${{ steps.rust.outputs.cachekey }}-
+
+      - uses: ./.github/actions/setup-js
+
+      - name: Build the Rust and JavaScript adapters
+        run: make build/rust/conformance build/js/conformance
+
+      # Throughput bounds are relative to River Go, so they don't apply with
+      # Rust as the reference.
+      - name: Conformance scenarios and the nightly tier
+        run: go test ./harness -count=1 -timeout 40m -run "$RUN" -skip '^TestPerformance$/^Throughput$'
+        working-directory: conformance
+        env:
+          RUN: ${{ matrix.run }}
+
+  # Mixed traffic through Go, Rust, and JavaScript on Postgres 18, with the
+  # leader restarted regularly: every job completes exactly once and
+  # connections stay bounded. GitHub-hosted jobs stop after six hours, so a
+  # release candidate's soak is 5.5 hours.
+  soak:
+    name: Soak (Go, Rust, and JavaScript)
+    needs: changes
+    if: needs.changes.outputs.run == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: ${{ inputs.release_candidate && 355 || 90 }}
+
+    services:
+      postgres:
+        image: postgres:18
+        env:
+          POSTGRES_DB: river_test
+          POSTGRES_PASSWORD: postgres
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 2s
+          --health-timeout 5s
+          --health-retries 5
+        ports:
+          - 5432:5432
+
+    env:
+      RIVER_CONFORMANCE: rust
+      RIVER_CONFORMANCE_PEER: js
+      RIVER_CONFORMANCE_SOAK: ${{ inputs.release_candidate && '5h30m' || '1h' }}
+
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-go@v7
+        with:
+          cache-dependency-path: conformance/go.sum
+          go-version-file: go.work
+
+      - uses: dtolnay/rust-toolchain@stable
+        id: rust
+
+      - name: Cache Rust dependencies and build artifacts
+        uses: actions/cache@v6
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+            rust/target
+          key: rust-v1-${{ runner.os }}-${{ runner.arch }}-conformance-${{ steps.rust.outputs.cachekey }}-${{ hashFiles('rust/**/Cargo.toml', 'rust/Cargo.lock') }}
+          restore-keys: rust-v1-${{ runner.os }}-${{ runner.arch }}-conformance-${{ steps.rust.outputs.cachekey }}-
+
+      - uses: ./.github/actions/setup-js
+
+      - name: Build the Rust and JavaScript adapters
+        run: make build/rust/conformance build/js/conformance
+
+      - name: Soak
+        run: go test ./harness -count=1 -timeout "$TIMEOUT" -run '^TestSoak$'
+        working-directory: conformance
+        env:
+          TIMEOUT: ${{ inputs.release_candidate && '5h45m' || '70m' }}
