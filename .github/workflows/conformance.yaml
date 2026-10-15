@@ -37,7 +37,7 @@ permissions:
   contents: read
 
 env:
-  # Keep the cross-run cache small; Cargo still reuses compiled dependencies.
+  # Cache reusable dependencies instead of incremental workspace builds.
   CARGO_INCREMENTAL: "0"
 
 jobs:
@@ -56,18 +56,14 @@ jobs:
           go-version-file: go.work
 
       - uses: dtolnay/rust-toolchain@stable
-        id: rust
 
-      - name: Cache Rust dependencies and build artifacts
-        uses: actions/cache@v6
+      # Prune build artifacts and keep shared caches in master's branch scope.
+      - name: Cache Rust dependencies
+        uses: Swatinem/rust-cache@v2
         with:
-          path: |
-            ~/.cargo/registry/index
-            ~/.cargo/registry/cache
-            ~/.cargo/git/db
-            rust/target
-          key: rust-v1-${{ runner.os }}-${{ runner.arch }}-${{ github.job }}-${{ steps.rust.outputs.cachekey }}-${{ hashFiles('rust/**/Cargo.toml', 'rust/Cargo.lock') }}
-          restore-keys: rust-v1-${{ runner.os }}-${{ runner.arch }}-${{ github.job }}-${{ steps.rust.outputs.cachekey }}-
+          cache-bin: false
+          save-if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/master' }}
+          workspaces: rust -> target
 
       - uses: ./.github/actions/setup-js
 

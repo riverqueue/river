@@ -28,7 +28,7 @@ permissions:
   contents: read
 
 env:
-  # Keep the cross-run cache small; Cargo still reuses compiled dependencies.
+  # Cache reusable dependencies instead of incremental workspace builds.
   CARGO_INCREMENTAL: "0"
 
 jobs:
@@ -38,28 +38,20 @@ jobs:
 
     steps:
       - uses: actions/checkout@v7
-        with:
-          fetch-depth: 0
       - uses: dtolnay/rust-toolchain@stable
-        id: rust
         with:
           components: clippy,rustfmt
-      - name: Cache Rust dependencies and build artifacts
-        uses: actions/cache@v6
+      # Prune workspace binaries, docs, and unused dependencies before saving.
+      # PRs restore master caches without saving duplicate branch snapshots.
+      - name: Cache Rust dependencies
+        uses: Swatinem/rust-cache@v2
         with:
-          path: |
-            ~/.cargo/registry/index
-            ~/.cargo/registry/cache
-            ~/.cargo/git/db
-            rust/target
-          key: rust-v1-${{ runner.os }}-${{ runner.arch }}-${{ github.job }}-${{ steps.rust.outputs.cachekey }}-${{ hashFiles('rust/**/Cargo.toml', 'rust/Cargo.lock') }}
-          restore-keys: rust-v1-${{ runner.os }}-${{ runner.arch }}-${{ github.job }}-${{ steps.rust.outputs.cachekey }}-
+          cache-bin: false
+          save-if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/master' }}
+          workspaces: rust -> target
       - uses: taiki-e/install-action@v2
         with:
           tool: cargo-deny@0.20.2
-      - uses: taiki-e/install-action@v2
-        with:
-          tool: cargo-semver-checks@0.51.0
 
       - name: Lint, including Postgres-only and SQLite-only builds
         run: make lint/rust
@@ -70,21 +62,65 @@ jobs:
       - name: Dependency and license policy
         run: make check/rust/dependencies
 
+  docsrs:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@nightly
+      # Key the nightly build cache with the compiler that actually builds it.
+      - name: Cache Rust dependencies
+        uses: Swatinem/rust-cache@v2
+        with:
+          cache-bin: false
+          save-if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/master' }}
+          workspaces: rust -> target/docsrs
+      - name: Documentation as docs.rs builds it
+        run: make doc/rust/docsrs
+
+  package:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+      # Package verification intentionally compiles in a fresh temporary build
+      # directory; only registry downloads can be reused between runs.
+      - name: Cache Rust dependencies
+        uses: Swatinem/rust-cache@v2
+        with:
+          cache-bin: false
+          cache-targets: false
+          save-if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/master' }}
+          workspaces: rust -> target
       - name: Package archives
         run: make check/rust/package
 
+  semver:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Cache Rust dependencies
+        uses: Swatinem/rust-cache@v2
+        with:
+          cache-bin: false
+          save-if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/master' }}
+          workspaces: rust -> target
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-semver-checks@0.51.0
       # Compare with the latest published Rust release tag, which the full
       # checkout above includes. Before the first release there is no
       # baseline and the step reports that instead of failing.
       - name: Public API compatibility
         run: make check/rust/semver
-
-      # docs.rs builds with a nightly toolchain and `--cfg docsrs`, which
-      # enables the crates' `doc_cfg` feature badges. Last, since installing
-      # nightly makes it the default toolchain for later steps.
-      - uses: dtolnay/rust-toolchain@nightly
-      - name: Documentation as docs.rs builds it
-        run: make doc/rust/docsrs
 
   rust_versions:
     runs-on: ubuntu-latest
@@ -97,19 +133,14 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@master
-        id: rust
         with:
           toolchain: ${{ matrix.rust-version }}
-      - name: Cache Rust dependencies and build artifacts
-        uses: actions/cache@v6
+      - name: Cache Rust dependencies
+        uses: Swatinem/rust-cache@v2
         with:
-          path: |
-            ~/.cargo/registry/index
-            ~/.cargo/registry/cache
-            ~/.cargo/git/db
-            rust/target
-          key: rust-v1-${{ runner.os }}-${{ runner.arch }}-${{ github.job }}-${{ steps.rust.outputs.cachekey }}-${{ hashFiles('rust/**/Cargo.toml', 'rust/Cargo.lock') }}
-          restore-keys: rust-v1-${{ runner.os }}-${{ runner.arch }}-${{ github.job }}-${{ steps.rust.outputs.cachekey }}-
+          cache-bin: false
+          save-if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/master' }}
+          workspaces: rust -> target
       # Tests read fixtures generated from River's Go implementation.
       - uses: actions/setup-go@v7
         with:
@@ -145,17 +176,13 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
-        id: rust
-      - name: Cache Rust dependencies and build artifacts
-        uses: actions/cache@v6
+      # The database versions share build artifacts; one matrix job saves them.
+      - name: Cache Rust dependencies
+        uses: Swatinem/rust-cache@v2
         with:
-          path: |
-            ~/.cargo/registry/index
-            ~/.cargo/registry/cache
-            ~/.cargo/git/db
-            rust/target
-          key: rust-v1-${{ runner.os }}-${{ runner.arch }}-${{ github.job }}-${{ steps.rust.outputs.cachekey }}-${{ hashFiles('rust/**/Cargo.toml', 'rust/Cargo.lock') }}
-          restore-keys: rust-v1-${{ runner.os }}-${{ runner.arch }}-${{ github.job }}-${{ steps.rust.outputs.cachekey }}-
+          cache-bin: false
+          save-if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/master' && matrix.postgres-version == 18 }}
+          workspaces: rust -> target
       # Tests read fixtures generated from River's Go implementation.
       - uses: actions/setup-go@v7
         with:
