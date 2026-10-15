@@ -51,13 +51,13 @@ asynchronously for up to the driver's `busyTimeout`, like River's other
 statements. With `{ database }`, migrations run directly on that handle,
 which waits for a busy database for its own `timeout`.
 
-Version 8 rebuilds SQLite's `river_job` table with an `AUTOINCREMENT` key, so
-a deleted job's ID is never handed to a new job; on Postgres it changes
-nothing. Like River for Go's migration, it refuses to run in either direction
-while the database holds a `river_job_sequence`, `river_job_workflow_scheduling`,
-or `river_workflow` object, which extensions install alongside River's tables
-and which the rebuild would drop. Migrate the main line to version 8 before
-installing such an extension.
+Version 8 rebuilds SQLite's `river_job` table with an `AUTOINCREMENT` key, so a
+deleted job's ID is never handed to a new job; on Postgres it changes nothing.
+It refuses to run in either direction while the database holds a
+`river_job_sequence`, `river_job_workflow_scheduling`, or `river_workflow`
+object, which extensions install alongside River's tables and which the rebuild
+would drop. Migrate the main line to version 8 before installing such an
+extension.
 
 ## Migrating up and down
 
@@ -92,10 +92,9 @@ if (!ok) throw new Error(messages.join("; "));
 
 Each version runs in its own transaction along with its row in the
 `river_migration` table. When several processes migrate the same database at
-once, they take turns, and a version another process already applied is
-skipped. Versions in the database that are newer than this package, for
-example after a newer River release migrated it, are ignored, as River's Go
-migrator ignores them.
+once, they take turns, and a version another process already applied is skipped.
+Versions in the database that are newer than this package, for example after a
+newer River release migrated it, are ignored.
 
 Failures throw `MigrationError`, which extends `RiverError` and names the
 `backend` and `operation` that failed.

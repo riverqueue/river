@@ -59,7 +59,7 @@ module River
 
     # The set of worker IDs that have worked this job. A worker ID differs
     # between different programs, but is shared by all executors within any
-    # given one.  (i.e. Different Go processes have different IDs, but IDs are
+    # given one.  (i.e. Different processes have different IDs, but IDs are
     # shared within any given process.) A process generates a new ID based on
     # host and current time when it starts up.
     attr_accessor :attempted_by
@@ -173,7 +173,7 @@ module River
   # that occurred.
   class AttemptError
     # The time at which the error occurred. Unreadable historical timestamps
-    # become Time.utc(1), matching Go's zero time.
+    # become Time.utc(1), the zero time 0001-01-01T00:00:00Z.
     attr_accessor :at
 
     # The attempt number on which the error occurred (maps to #attempt on a job
@@ -184,8 +184,8 @@ module River
     # value in case of a panic.
     attr_accessor :error
 
-    # Contains a stack trace from a job that panicked. The trace is produced by
-    # invoking `debug.Trace()` in Go.
+    # Contains a stack trace from a job that raised or panicked. Ruby records
+    # the exception backtrace; other River clients record their own format.
     attr_accessor :trace
 
     def initialize(

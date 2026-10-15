@@ -62,9 +62,9 @@ export declare class BackendMismatchError extends RiverError<"backend_mismatch">
 
 ```ts
 /**
- * Construct an outcome that cancels the job permanently, like Go's
- * `river.JobCancel`. The job moves to `cancelled` without another retry and
- * `JobCancelError: <reason>` is recorded as the attempt error.
+ * Construct an outcome that cancels the job permanently. The job moves to
+ * `cancelled` without another retry and `JobCancelError: <reason>` is recorded
+ * as the attempt error.
  */
 export declare function cancel(options?: {
   readonly reason?: string;
@@ -75,8 +75,8 @@ export declare function cancel(options?: {
 
 ```ts
 /**
- * Permanent cancellation without another retry, like Go's `river.JobCancel`.
- * The reason is recorded as the attempt error.
+ * Permanent cancellation without another retry. The reason is recorded as
+ * the attempt error.
  */
 export interface CancelOutcome {
   readonly reason?: string;
@@ -243,8 +243,8 @@ export interface ClientOptions<Transaction = RegisteredTransaction> {
   readonly eventLoopDelay?: false | EventLoopDelayOptions;
   /**
    * Minimum time between claim queries for queues that don't set their own
-   * `fetchCooldown`, like River for Go's `Config.FetchCooldown`. Defaults to
-   * 100 milliseconds and must be at least 1 millisecond.
+   * `fetchCooldown`. Defaults to 100 milliseconds and must be at least 1
+   * millisecond.
    *
    * It also limits insert notifications: after this client notifies
    * producers of a queue's new jobs, it sends no other notification for that
@@ -253,12 +253,11 @@ export interface ClientOptions<Transaction = RegisteredTransaction> {
    */
   readonly fetchCooldown?: DurationInput;
   /**
-   * Claim only jobs whose kinds have workers in `workers`, like River for
-   * Go's `Config.FetchOnlyKnownKinds`. Defaults to false. Jobs of other kinds
-   * stay available without using an attempt, so clients with different
-   * workers can share a queue, such as while moving job kinds from one
-   * language to another. The kinds are those registered when the client
-   * starts.
+   * Claim only jobs whose kinds have workers in `workers`. Defaults to false.
+   * Jobs of other kinds stay available without using an attempt, so clients
+   * with different workers can share a queue, such as while moving job kinds
+   * from one language to another. The kinds are those registered when the
+   * client starts.
    *
    * This affects only claiming. A leader's rescuer still handles stuck jobs
    * of every queue and discards those whose kinds it doesn't know, so a
@@ -273,10 +272,9 @@ export interface ClientOptions<Transaction = RegisteredTransaction> {
   /** Client-wide insert middleware, run after plugin middleware. */
   readonly insertMiddleware?: readonly InsertMiddleware[];
   /**
-   * How long River waits after an attempt's timeout, or after it asks a
-   * running handler to stop, before treating the attempt as stuck, like
-   * River for Go's `Config.JobStuckThreshold`. Defaults to 10 seconds and
-   * must not be negative.
+   * How long River waits after an attempt's timeout, or after it asks a running
+   * handler to stop, before treating the attempt as stuck. Defaults to 10
+   * seconds and must not be negative.
    *
    * A handler still running this long after its timeout is reported stuck
    * and passed to `stuckHandler`. An executor that can end a handler by
@@ -290,10 +288,10 @@ export interface ClientOptions<Transaction = RegisteredTransaction> {
    */
   readonly jobTimeout?: DurationInput | null;
   /**
-   * Keep this client out of leader election, like River for Go's
-   * `Config.LeaderElectionDisabled`. Defaults to false. The client never runs
-   * leader-owned maintenance or inserts periodic jobs, but still works jobs
-   * from its configured queues, including periodic jobs other clients insert.
+   * Keep this client out of leader election. Defaults to false. The client
+   * never runs leader-owned maintenance or inserts periodic jobs, but still
+   * works jobs from its configured queues, including periodic jobs other
+   * clients insert.
    *
    * At least one other started client on the same database and schema must
    * remain eligible to lead for scheduled jobs, retries, periodic jobs,
@@ -382,12 +380,11 @@ export declare const consoleLogger: Logger;
 
 ````ts
 /**
- * Parse a standard cron expression into a periodic schedule that fires at
- * exactly the times River Go would.
+ * Parse a standard cron expression into a periodic schedule.
  *
- * River Go documents robfig/cron's `ParseStandard` syntax, and this is a
- * faithful port of that parser and its `Next` algorithm, so one expression
- * string behaves the same whichever language holds leadership:
+ * Every River client parses and schedules the same syntax, firing at exactly
+ * the same times, so one expression string behaves the same whichever
+ * language holds leadership:
  *
  * - five fields: minute (0-59), hour (0-23), day of month (1-31), month
  *   (1-12 or `jan`-`dec`), and day of week (0-6 from Sunday, or
@@ -399,32 +396,33 @@ export declare const consoleLogger: Logger;
  *   with a step greater than one counts as restricted;
  * - the descriptors `@yearly` (or `@annually`), `@monthly`, `@weekly`,
  *   `@daily` (or `@midnight`), and `@hourly`;
- * - `@every <duration>` with Go's duration syntax (`1h30m`, `1.5h`, `90s`),
- *   measured from the previous occurrence, truncated to whole seconds, and
- *   at least one second;
+ * - `@every <duration>` with a duration of decimal numbers, each followed by
+ *   a unit of `ns`, `us` (or `µs`), `ms`, `s`, `m`, or `h` (`1h30m`, `1.5h`,
+ *   `90s`), measured from the previous occurrence, truncated to whole
+ *   seconds, and at least one second;
  * - a leading `CRON_TZ=<zone>` or `TZ=<zone>` naming an IANA time zone.
  *
- * Seconds fields, `L`, `W`, `#`, and `@reboot` are rejected, as in Go.
+ * Seconds fields, `L`, `W`, `#`, and `@reboot` are rejected.
  *
  * Occurrences follow wall-clock time in the schedule's time zone, including
- * robfig's handling of daylight saving time: a time skipped by a transition
- * does not fire that day, and a time repeated by one can fire twice.
+ * across daylight saving time: a time skipped by a transition does not fire
+ * that day, and a time repeated by one can fire twice.
  *
  * The time zone is the expression's `CRON_TZ=` prefix, else
- * `options.timeZone`, else the process's local time zone, matching River Go,
- * which evaluates unprefixed expressions in `time.Local`. Periodic jobs run
+ * `options.timeZone`, else the process's local time zone. Periodic jobs run
  * on whichever client holds leadership, so every process in a fleet,
- * including Go and Rust ones, must resolve the same zone. Pin it explicitly,
- * preferably with a prefix such as `CRON_TZ=UTC` that every language reads
- * from the shared expression, or with `options.timeZone`.
+ * including River clients in other languages, must resolve the same zone.
+ * Pin it explicitly, preferably with a prefix such as `CRON_TZ=UTC` that
+ * every language reads from the shared expression, or with
+ * `options.timeZone`.
  *
  * @param expression - A standard cron expression or descriptor.
  * @param options - Optional default time zone.
  * @returns A schedule for {@link periodicJob}'s `schedule` option.
- * @throws ConfigurationError when the expression is not valid River Go cron
- *   syntax or the time zone is unknown. The schedule's `next()` also throws
- *   it when an occurrence would have to cross a calendar day the zone
- *   skipped, as Samoa skipped 2011-12-30; River Go never returns there.
+ * @throws ConfigurationError when the expression is not valid cron syntax
+ *   or the time zone is unknown. The schedule's `next()` also throws it when
+ *   an occurrence would have to cross a calendar day the zone skipped, as
+ *   Samoa skipped 2011-12-30, since no later occurrence can be computed.
  *
  * @example
  * ```ts
@@ -452,7 +450,7 @@ export interface CronOptions {
    * Time zone the expression is evaluated in when it has no `CRON_TZ=` or
    * `TZ=` prefix: an IANA name such as `"America/Chicago"`, `"UTC"`, or a
    * fixed offset such as `"+05:30"`. Defaults to the process's local time
-   * zone, `Temporal.Now.timeZoneId()`, which is what River Go uses.
+   * zone, `Temporal.Now.timeZoneId()`.
    */
   readonly timeZone?: string;
 }
@@ -922,11 +920,11 @@ export type InsertManyResults<Items extends readonly InsertManyItem[]> = {
  * Wraps every insertion, like Koa middleware: call `next()` once to insert
  * and return (or adjust) its results.
  *
- * As in River for Go, an insertion without `{ tx }` runs in one transaction
- * River owns, from argument validation through every middleware and hook to
- * the write, so an error thrown anywhere, even after `next()` returns, rolls
- * the jobs back. With `{ tx }`, it runs in the caller's transaction, which
- * the caller commits or rolls back.
+ * An insertion without `{ tx }` runs in one transaction River owns, from
+ * argument validation through every middleware and hook to the write, so an
+ * error thrown anywhere, even after `next()` returns, rolls the jobs back. With
+ * `{ tx }`, it runs in the caller's transaction, which the caller commits or
+ * rolls back.
  *
  * On SQLite, River holds the database's write lock from the write until it
  * commits, so middleware must not await I/O after `next()` returns, and
@@ -994,8 +992,8 @@ export interface InsertRequest {
   readonly queue: string;
   /**
    * When the job becomes workable. For a job inserted without a schedule,
-   * when the insertion was requested: like River for Go, the database stores
-   * its own current time for such a job.
+   * when the insertion was requested, though the database stores its own
+   * current time for such a job.
    */
   readonly scheduledAt: Temporal.Instant;
   readonly state: JobState;
@@ -1108,7 +1106,6 @@ export declare class JobAbortedError extends RiverError<"job_aborted"> {
 ```ts
 /**
  * Abort reason delivered to a handler's `signal` once its attempt finished,
- * like River for Go cancelling a job's context when its executor returns,
  * so work the handler left running stops instead of outliving the attempt.
  */
 export declare class JobAttemptFinishedError extends RiverError<"job_attempt_finished"> {
@@ -1206,11 +1203,10 @@ export interface JobDefinitionOptions<Kind extends string = string> {
   /** Stable persisted job kind shared by every language that works this job. */
   readonly kind: Kind;
   /**
-   * Other kinds this job's worker also works, like River for Go's
-   * `JobArgsWithKindAliases`. To rename a kind safely, make the new name the
-   * `kind` and the old one an alias: jobs are inserted under the new kind,
-   * while jobs already stored under the old one are still worked. Remove the
-   * alias once those have finished, retries included.
+   * Other kinds this job's worker also works. To rename a kind safely, make the
+   * new name the `kind` and the old one an alias: jobs are inserted under the
+   * new kind, while jobs already stored under the old one are still worked.
+   * Remove the alias once those have finished, retries included.
    */
   readonly kindAliases?: readonly string[];
 }
@@ -1318,7 +1314,7 @@ export interface JobListOptions {
 ```ts
 /**
  * The field jobs are listed by. `time` is the time field of the first listed
- * state (`scheduled_at` when no state is listed), like River for Go.
+ * state (`scheduled_at` when no state is listed).
  */
 export type JobListOrderBy = "finalizedAt" | "id" | "scheduledAt" | "time";
 ```
@@ -1328,9 +1324,9 @@ export type JobListOrderBy = "finalizedAt" | "id" | "scheduledAt" | "time";
 ```ts
 /**
  * One page of jobs. Pass `nextCursor` as `after` for the next page; it is
- * `null` on the last page. The cursor is River for Go's `JobListCursor`
- * text, so River for Go and Rust can continue a listing from it and vice
- * versa.
+ * `null` on the last page. The cursor's text format is shared by every River
+ * client, so River clients in other languages can continue a listing from it
+ * and vice versa.
  */
 export interface JobListResult {
   readonly jobs: readonly JobRow[];
@@ -1382,8 +1378,8 @@ export interface JobOperations<Transaction = unknown> {
     options?: TransactionOptions<Transaction>
   ): Promise<JobRow | null>;
   /**
-   * Merge metadata into a job and set its output, like River for Go's
-   * `JobUpdate`. Returns null when the job does not exist.
+   * Merge metadata into a job and set its output. Returns null when the job
+   * does not exist.
    */
   update(
     id: bigint,
@@ -1583,9 +1579,8 @@ export declare function jobToJsonValue(job: JobRow): JobRowJson;
 
 ```ts
 /**
- * Changes accepted by {@link JobOperations.update | `client.jobs.update`},
- * like River for Go's `JobUpdateParams`. Omitted fields leave the job
- * unchanged.
+ * Changes accepted by {@link JobOperations.update | `client.jobs.update`}.
+ * Omitted fields leave the job unchanged.
  */
 export interface JobUpdateOptions {
   /** Merge these top-level keys into the job's metadata. */
@@ -1774,9 +1769,8 @@ export interface MaintenanceOptions {
   readonly discardedJobRetention?: DurationInput | null;
   /**
    * How often a leader renews its term and a follower bids for leadership.
-   * Defaults to 5 seconds. Like River for Go, a follower's interval is
-   * jittered by up to a fifth, and a follower bids within 50 ms of another
-   * client's resignation.
+   * Defaults to 5 seconds. A follower's interval is jittered by up to a fifth,
+   * and a follower bids within 50 ms of another client's resignation.
    */
   readonly electionInterval?: DurationInput;
   /** How often the job cleaner runs. Defaults to 30 seconds. */
@@ -1954,11 +1948,10 @@ export type PayloadValidationPhase = "insert" | "work";
 /**
  * Define a job that the elected leader inserts on a schedule.
  *
- * Periodic jobs run only on the client that currently holds River
- * leadership. In a fleet mixing River implementations (Go, Rust, and
- * JavaScript), register the same periodic jobs in every implementation, or
- * leadership moving between languages silently changes which periodic jobs
- * run.
+ * Periodic jobs run only on the client that currently holds River leadership.
+ * In a fleet mixing River clients in several languages, register the same
+ * periodic jobs in every implementation, or leadership moving between languages
+ * silently changes which periodic jobs run.
  *
  * @example
  * ```ts
@@ -2132,8 +2125,8 @@ export type PeriodicJobTiming =
  * When a periodic job runs: `next(after)` returns the first occurrence
  * strictly after `after`, or null to stop scheduling it.
  *
- * `cron()` builds one from a River Go-compatible cron expression; implement
- * it directly for other calendar rules.
+ * `cron()` builds one from a standard cron expression; implement it directly
+ * for other calendar rules.
  */
 export interface PeriodicSchedule {
   next(after: Temporal.Instant): Temporal.Instant | null;
@@ -2222,10 +2215,9 @@ export interface QueueListResult {
 
 ```ts
 /**
- * Queue queries and controls, available as {@link Client.queues}. Like River
- * for Go, these look queues up by
- * name without checking it against the queue-name grammar, so a name no
- * queue can have is simply not found (null).
+ * Queue queries and controls, available as {@link Client.queues}. These look
+ * queues up by name without checking it against the queue-name grammar, so a
+ * name no queue can have is simply not found (null).
  */
 export interface QueueOperations<Transaction = unknown> {
   /** Get one queue, returning null when it does not exist. */
@@ -2241,8 +2233,8 @@ export interface QueueOperations<Transaction = unknown> {
    * Pause a queue across the fleet. Returns null when the queue does not
    * exist.
    *
-   * `"*"` pauses every queue, like River for Go, and always resolves null
-   * because no single queue row describes the result.
+   * `"*"` pauses every queue and always resolves null because no single
+   * queue row describes the result.
    */
   pause(
     name: string,
@@ -2252,8 +2244,8 @@ export interface QueueOperations<Transaction = unknown> {
    * Resume a paused queue across the fleet. Returns null when the queue does
    * not exist.
    *
-   * `"*"` resumes every queue, like River for Go, and always resolves null
-   * because no single queue row describes the result.
+   * `"*"` resumes every queue and always resolves null because no single
+   * queue row describes the result.
    */
   resume(
     name: string,
@@ -2478,11 +2470,10 @@ export type RiverErrorCode =
 /**
  * Nonfatal application policy invoked once for each failed attempt,
  * including an attempt that stopped because its timeout expired (the error
- * is then a `JobTimeoutError`). Like River for Go, it isn't invoked
- * for an attempt interrupted by a client stop, or for one that fails after
- * the job was cancelled remotely (the cancellation decides that attempt's
- * outcome), unless the failure is a JavaScript runtime fault such as a
- * `TypeError`, River's analog of a Go panic.
+ * is then a `JobTimeoutError`). It isn't invoked for an attempt interrupted by
+ * a client stop, or for one that fails after the job was cancelled remotely
+ * (the cancellation decides that attempt's outcome), unless the failure is a
+ * JavaScript runtime fault such as a `TypeError`.
  */
 export type RiverErrorHandler = (
   context: ErrorHandlerContext,
@@ -2551,12 +2542,11 @@ export type RiverEventKind = RiverEvent["kind"];
 
 ```ts
 /**
- * Ordered extension points. As in River for Go, insert and work hooks run
- * inside the innermost middleware: insert middleware wraps `beforeInsert`,
- * the database write, and `afterInsert`, and work middleware wraps
- * `beforeWork`, argument decoding, the worker, and `afterWork`. A job whose
- * kind has no worker, or whose row can't be decoded, fails before any
- * middleware or hook runs.
+ * Ordered extension points. Insert and work hooks run inside the innermost
+ * middleware: insert middleware wraps `beforeInsert`, the database write, and
+ * `afterInsert`, and work middleware wraps `beforeWork`, argument decoding, the
+ * worker, and `afterWork`. A job whose kind has no worker, or whose row can't
+ * be decoded, fails before any middleware or hook runs.
  */
 export interface RiverHooks {
   /** Observe inserted jobs, inside the innermost insert middleware. */
@@ -2570,8 +2560,8 @@ export interface RiverHooks {
   onMetric?(metric: RiverMetric): PromiseLike<void> | void;
   /**
    * Observe, or replace by returning another, an attempt's result. The
-   * returned result becomes the attempt's result, like River for Go's
-   * `HookWorkEnd`; returning nothing keeps it.
+   * returned result becomes the attempt's result; returning nothing keeps
+   * it.
    */
   afterWork?(
     context: WorkContext,
@@ -2588,7 +2578,7 @@ export interface RiverHooks {
    * Runs each time this client becomes leader and starts inserting periodic
    * jobs, with durable records from a periodic job store when one is
    * configured. A rejection is logged and periodic enqueuing retries on the
-   * next loop, like Go River's `HookPeriodicJobsStart`.
+   * next loop.
    */
   onPeriodicJobsStart?(
     params: PeriodicJobsStartParams
@@ -2751,11 +2741,10 @@ export declare function setMetadata(key: string, value: JsonValue): void;
 
 ```ts
 /**
- * Snooze the job: run it again after `duration` without using an attempt,
- * for example `return snooze({ minutes: 5 })`. Like River for Go, a snooze
- * no longer than the scheduler interval (including zero) is stored as
- * available with its future scheduled time, so it runs on time without
- * waiting for the scheduler.
+ * Snooze the job: run it again after `duration` without using an attempt, for
+ * example `return snooze({ minutes: 5 })`. A snooze no longer than the
+ * scheduler interval (including zero) is stored as available with its future
+ * scheduled time, so it runs on time without waiting for the scheduler.
  */
 export declare function snooze(duration: DurationInput): SnoozeOutcome;
 ```
@@ -2968,11 +2957,11 @@ export declare function toJsonValue(value: unknown): JsonValue;
 export interface TransactionOptions<Transaction = unknown> {
   /**
    * Run the operation in this caller-owned transaction, such as a
-   * node-postgres client after `BEGIN`. Like River for Go, River runs its
-   * statements directly in it, opening no savepoint, and never commits or
-   * rolls it back. When the operation fails, writes it already made, such
-   * as a job inserted before insert middleware or a hook threw, stay in the
-   * transaction, so roll it back. To recover from a failure and continue
+   * node-postgres client after `BEGIN`. River runs its statements directly
+   * in it, opening no savepoint, and never commits or rolls it back. When the
+   * operation fails, writes it already made, such as a job inserted before
+   * insert middleware or a hook threw, stay in the transaction, so roll it
+   * back. To recover from a failure and continue
    * the transaction, wrap the call in a savepoint of your own.
    */
   tx?: Transaction;
@@ -3044,8 +3033,9 @@ export interface UniqueOptions {
   byArgs?: true | readonly string[];
   /**
    * Deduplicate within fixed windows of this length, such as `{ hours: 1 }`,
-   * aligned like Go River's by-period uniqueness. At least one second;
-   * calendar units (years, months, weeks) are rejected and a day is 24 hours.
+   * aligned to multiples of the period counted from 0001-01-01T00:00:00Z.
+   * At least one second; calendar units (years, months, weeks) are rejected
+   * and a day is 24 hours.
    */
   byPeriod?: DurationInput;
   /** Include the queue in the unique key. */
@@ -3195,12 +3185,11 @@ export interface WorkerOptions {
   /** Named job-kind-specific extensions. */
   plugins?: readonly WorkerPlugin[];
   /**
-   * When this worker's failed jobs run next, like River for Go's
-   * `Worker.NextRetry`. Consulted before the client's `retryPolicy` once a
-   * job's arguments decode, both after a failed attempt and when the rescuer
-   * retries a stuck job. When it throws or returns something other than a
-   * `Temporal.Instant`, the client's policy decides; a time in the past
-   * uses River's default schedule.
+   * When this worker's failed jobs run next. Consulted before the client's
+   * `retryPolicy` once a job's arguments decode, both after a failed attempt
+   * and when the rescuer retries a stuck job. When it throws or returns
+   * something other than a `Temporal.Instant`, the client's policy decides; a
+   * time in the past uses River's default schedule.
    */
   retryPolicy?: RetryPolicy;
   /**

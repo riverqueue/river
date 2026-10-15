@@ -26,12 +26,12 @@ const syncAccount = defineJob({
 
 ## Connections
 
-Like River for Go, River runs on a connection of its own. `new
-SqliteDriver(database)` opens a private `DatabaseSync` on the same file and
-never uses, hands out, or closes `database`. Application statements therefore
-never run inside River's transactions, and River's never run inside the
-application's. Close River's connection with `driver.close()` (or `using`)
-after stopping every client that uses the driver.
+River runs on a connection of its own. `new SqliteDriver(database)` opens a
+private `DatabaseSync` on the same file and never uses, hands out, or closes
+`database`. Application statements therefore never run inside River's
+transactions, and River's never run inside the application's. Close River's
+connection with `driver.close()` (or `using`) after stopping every client that
+uses the driver.
 
 The driver switches the database to WAL mode, which SQLite records in the
 file. In WAL mode readers never wait for the writer, so application reads keep
@@ -41,12 +41,12 @@ the driver is created, River makes the switch at its first operation instead,
 waiting for the database like any other River statement.
 
 SQLite allows one writer at a time across every connection and process,
-including Go or Rust River clients sharing the file. River's connection has a
-zero `busy_timeout`, so SQLite never blocks the event loop waiting for a lock:
-when another connection holds the write lock, River retries its operation with
-an asynchronous exponential backoff for up to `busyTimeout` (five seconds by
-default), so timers, I/O, and running jobs keep making progress. If the lock is
-still held after `busyTimeout`, the operation fails with a
+including River clients in other languages sharing the file. River's connection
+has a zero `busy_timeout`, so SQLite never blocks the event loop waiting for a
+lock: when another connection holds the write lock, River retries its operation
+with an asynchronous exponential backoff for up to `busyTimeout` (five seconds
+by default), so timers, I/O, and running jobs keep making progress. If the lock
+is still held after `busyTimeout`, the operation fails with a
 `DatabaseOperationError` whose `retryable` is `true`.
 
 ```ts continued
@@ -71,8 +71,8 @@ lock depends on who else writes the database:
   it. Keep `node:sqlite`'s default zero `timeout`, and begin write
   transactions with the `transaction` helper below, which waits
   asynchronously for other application transactions.
-- **Other processes write too**, such as a separate worker process or Go and
-  Rust River clients. Their transactions hold the lock across many
+- **Other processes write too**, such as a separate worker process or River
+  clients in other languages. Their transactions hold the lock across many
   milliseconds, and a zero-`timeout` statement then fails at once with
   `SQLITE_BUSY`. Either run every write through `transaction`, which retries
   asynchronously, or give the handle a nonzero `timeout`. A nonzero timeout
@@ -179,12 +179,12 @@ await transaction(database, async (tx) => {
 ### River's own transactions
 
 Without `{ tx }`, an insertion runs in a transaction River owns on its
-connection, like River for Go. Argument validation, insert middleware,
-`beforeInsert` and `afterInsert` hooks, and the write commit together, and an
-error thrown by any of them, even after middleware's `next()` returns, rolls
-the jobs back. River takes the write lock with `BEGIN IMMEDIATE` only at the
-insertion's first statement, so work a middleware does before calling `next()`
-(such as encrypting arguments with a remote key service) holds no lock.
+connection. Argument validation, insert middleware, `beforeInsert` and
+`afterInsert` hooks, and the write commit together, and an error thrown by any
+of them, even after middleware's `next()` returns, rolls the jobs back. River
+takes the write lock with `BEGIN IMMEDIATE` only at the insertion's first
+statement, so work a middleware does before calling `next()` (such as encrypting
+arguments with a remote key service) holds no lock.
 
 From there until the transaction commits, River holds SQLite's write lock. On
 SQLite, insert middleware and hooks must therefore not await I/O after
@@ -227,17 +227,16 @@ SQLite stores River timestamps at exact millisecond precision.
 
 ## Compatibility notes
 
-The driver reads every row Go's `riversqlite` accepts, including unbounded
-`attempt` and `max_attempts` values and JSON `null` tags or errors. If a
-claimed row still cannot be decoded, River doesn't work it: its attempt fails
-with the error `job row couldn't be decoded: …` through the normal failure
-path (the error handler runs, and the retry policy retries it or discards it
-after its last attempt), while the rest of the batch is worked. The bad value
-is left in place.
+The driver reads every row other River clients accept, including unbounded
+`attempt` and `max_attempts` values and JSON `null` tags or errors. If a claimed
+row still cannot be decoded, River doesn't work it: its attempt fails with the
+error `job row couldn't be decoded: …` through the normal failure path (the
+error handler runs, and the retry policy retries it or discards it after its
+last attempt), while the rest of the batch is worked. The bad value is left in
+place.
 
-Like River for Go's client, a client writes at most one insert notification per
-queue per `fetchCooldown` (100 ms by default), so a large batch does not wake
-listeners once per job.
+A client writes at most one insert notification per queue per `fetchCooldown`
+(100 ms by default), so a large batch does not wake listeners once per job.
 
 ## Requirements
 

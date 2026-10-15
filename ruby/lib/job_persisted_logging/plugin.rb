@@ -5,7 +5,8 @@ require "logger"
 module River
   module JobPersistedLogging
     # Captures job.logger output and persists it with the attempt's state change,
-    # including failed attempts. Uses Go riverlog's metadata format for River UI.
+    # including failed attempts. Uses the shared `river:log` metadata format
+    # that River UI displays.
     # Register through Config#plugins, preferably before other work middleware.
     class Plugin
       # Limits are positive byte counts. History is capped at 64 MiB, dropping

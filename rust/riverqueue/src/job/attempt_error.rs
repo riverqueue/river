@@ -19,10 +19,15 @@ use serde_json::value::RawValue;
 use super::AttemptError;
 
 impl<'de> Deserialize<'de> for AttemptError {
-    /// Decodes an attempt error like Go's `encoding/json`: fields match
-    /// case-insensitively, a repeated field takes its last value, missing,
-    /// `null`, and unknown fields are accepted, and `at` must be an RFC 3339
-    /// timestamp. A field of any other type is an error.
+    /// Decodes an attempt error strictly. Field names match ignoring ASCII
+    /// case, and a repeated field takes its last value, although an invalid
+    /// value it replaces is still an error. Missing, `null`, and unknown
+    /// fields are accepted, with a missing or `null` field left as the zero
+    /// value (`at` as 0001-01-01T00:00:00Z, `attempt` as 0, and `error` and
+    /// `trace` as empty strings). `at` must be an RFC 3339 timestamp,
+    /// `attempt` an integer literal, and `error` and `trace` strings; a field
+    /// of any other type is an error. A top-level `null` decodes as an attempt
+    /// error with every field zero.
     ///
     /// Only a JSON deserializer (such as [`serde_json`]'s) can decode an
     /// attempt error.

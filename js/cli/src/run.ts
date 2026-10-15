@@ -22,7 +22,7 @@ import { formatHelp, parseOptions, UsageError } from "./options.js";
  * Options for {@link run}. Each stream defaults to the process's own.
  *
  * A package that ships its own migration line can embed this command line
- * with its lines added, as River's Go CLI allows:
+ * with its lines added:
  *
  * ```ts
  * import { run } from "@riverqueue/cli";

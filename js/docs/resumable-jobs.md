@@ -71,8 +71,8 @@ transaction.
 ## Across languages
 
 Progress lives in the job's metadata under `river:resumable_step` and
-`river:resumable_cursor`, the same keys River for Go and Rust use, so a job
-can resume in a different language as long as step names and cursor shapes
+`river:resumable_cursor`, the same keys River clients in other languages use, so
+a job can resume in a different language as long as step names and cursor shapes
 match. `@riverqueue/test`'s `workOnce` returns the updated metadata so a test
 can run a second attempt from the first one's checkpoint; see
 [testing](./testing.md).

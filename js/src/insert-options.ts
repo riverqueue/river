@@ -64,8 +64,9 @@ export interface UniqueOptions {
 
   /**
    * Deduplicate within fixed windows of this length, such as `{ hours: 1 }`,
-   * aligned like Go River's by-period uniqueness. At least one second;
-   * calendar units (years, months, weeks) are rejected and a day is 24 hours.
+   * aligned to multiples of the period counted from 0001-01-01T00:00:00Z.
+   * At least one second; calendar units (years, months, weeks) are rejected
+   * and a day is 24 hours.
    */
   byPeriod?: DurationInput;
 
@@ -182,9 +183,9 @@ export function parseUniquePath(path: string): readonly string[] {
           JSON.stringify(path) +
           " has segment " +
           JSON.stringify(segment) +
-          ", which River Go treats as an array index when assembling unique" +
-          " args, so its unique key can't match Go's; select fields whose" +
-          " names aren't unsigned integers or -1"
+          ", which other River clients treat as an array index when" +
+          " assembling unique args, so the unique key wouldn't match theirs;" +
+          " select fields whose names aren't unsigned integers or -1"
       );
     }
     segments.push(segment);

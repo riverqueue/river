@@ -236,7 +236,7 @@ fn validate_unique_states(states: &[Ident], option: &ParseNestedMeta<'_>) -> syn
 /// Parses a Go `time.ParseDuration` string without a sign, such as `1h30m`
 /// or `1.5h`, into nanoseconds.
 fn parse_go_duration(text: &str) -> Result<u128, String> {
-    let invalid = || format!("invalid duration {text:?}; expected a Go duration such as \"1h\"");
+    let invalid = || format!("invalid duration {text:?}; expected a duration such as \"1h\"");
     if text.is_empty() {
         return Err(invalid());
     }

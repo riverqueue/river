@@ -247,7 +247,7 @@ fn lookup_path<'a>(encoded_args: &'a str, path: &[&str]) -> Result<Option<&'a st
 fn validate_path_segment(segment: &str, description: &str) -> Result<(), Error> {
     if segment.is_empty() {
         return Err(unique_args_error(format!(
-            "{description} is empty, which River Go cannot hash"
+            "{description} is empty and can't be part of a unique key"
         )));
     }
     if segment.bytes().all(|byte| byte.is_ascii_digit()) || segment == "-1" {

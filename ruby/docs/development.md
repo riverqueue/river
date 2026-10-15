@@ -73,7 +73,7 @@ against Postgres and SQLite. These cover job state transitions, scheduling,
 rescue, metadata, filtering, deletion, transactions, queues, and leadership.
 Adapter-specific conversion tests remain in each driver's suite.
 
-The driver suites also exercise Go-style Yugabyte capability simulations on
+The driver suites also exercise Yugabyte capability simulations on
 Postgres. For actual YSQL storage/transaction checks, run `make test/yugabyte`
 with `YUGABYTE_DATABASE_URL` pointing to a disposable database. See
 [Yugabyte verification](yugabyte.md#verification).

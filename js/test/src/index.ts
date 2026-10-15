@@ -3,7 +3,7 @@
  *
  * - {@link createTestClient} records insertions instead of writing them, and
  *   {@link requireInserted} / {@link requireNotInserted} /
- *   {@link requireManyInserted} assert on that log like Go's `rivertest`.
+ *   {@link requireManyInserted} assert on that log.
  *   {@link requireInsertedInDatabase} / {@link requireNotInsertedInDatabase}
  *   assert on the jobs a real client persisted, optionally inside a
  *   transaction.
@@ -209,9 +209,9 @@ export interface JobListingClient<Transaction = unknown> {
 
 /**
  * Assert that exactly one job in the database matches `definition` (and
- * `match`, when given) and return it with its producer args typed, like
- * Go's `rivertest.RequireInsertedTx`. Pass `tx` to look inside a transaction
- * that hasn't committed yet. Throws an `AssertionError` otherwise.
+ * `match`, when given) and return it with its producer args typed. Pass
+ * `tx` to look inside a transaction that hasn't committed yet. Throws an
+ * `AssertionError` otherwise.
  */
 export async function requireInsertedInDatabase<
   Definition extends JobDefinition,
@@ -233,7 +233,7 @@ export async function requireInsertedInDatabase<
 
 /**
  * Assert that no job in the database matches `definition` (and `match`,
- * when given), like Go's `rivertest.RequireNotInsertedTx`.
+ * when given).
  */
 export async function requireNotInsertedInDatabase<
   Definition extends JobDefinition,

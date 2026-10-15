@@ -1,8 +1,8 @@
 # `@riverqueue/cli`
 
 The `riverqueue` command runs River's database migrations and a throughput
-benchmark, and upgrades code written for `riverqueue@0.1`. It requires
-Node.js 24 or newer and mirrors the commands of River's Go CLI.
+benchmark, and upgrades code written for `riverqueue@0.1`. It requires Node.js
+24 or newer.
 
 ```sh
 npm install --save-dev @riverqueue/cli
@@ -41,7 +41,7 @@ Other common flags:
 - `--dry-run` and `--show-sql`: print what would run, with its SQL.
 - `--statement-timeout DURATION`: Postgres's `statement_timeout`, such as
   `30s` or `5m`. It defaults to a `statement_timeout` parameter in the URL,
-  and otherwise to 10 seconds, as in River's Go CLI.
+  and otherwise to 10 seconds.
 
 ```sh
 # Check in CI that a database is migrated.
@@ -102,11 +102,11 @@ backlog, so it reflects queue depth as much as per-job latency. The command
 fails if running jobs or pending completions exceed their configured limits,
 or if the pool exceeds `--max-connections`.
 
-The default workload matches River's Go and Rust benchmarks so results are
-comparable: a 75,000-job backlog topped up in batches of 5,000 and 2,000
-concurrent workers. The pool defaults to 50 connections. `--backlog`,
-`--batch-size`, `--max-workers`, `--max-connections`, and `--skip-vacuum`
-change the workload for controlled comparisons.
+The default workload matches the benchmarks of River's other implementations so
+results are comparable: a 75,000-job backlog topped up in batches of 5,000 and
+2,000 concurrent workers. The pool defaults to 50 connections. `--backlog`,
+`--batch-size`, `--max-workers`, `--max-connections`, and `--skip-vacuum` change
+the workload for controlled comparisons.
 
 ## Running from code
 
@@ -122,9 +122,9 @@ process.exitCode = await run([
 ]);
 ```
 
-Extension packages can embed this CLI and add migration lines, as with
-River's Go CLI. The migration commands select an added line with
-`--line NAME`, while River's `main` line stays the default:
+Extension packages can embed this CLI and add migration lines. The migration
+commands select an added line with `--line NAME`, while River's `main` line
+stays the default:
 
 ```ts
 import type { Migration, MigrationBackend } from "@riverqueue/migrate";

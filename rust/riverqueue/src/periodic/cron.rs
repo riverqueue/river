@@ -133,8 +133,9 @@ impl CronSchedule {
     ///
     /// # Errors
     ///
-    /// Returns an error for an expression robfig/cron's `ParseStandard`
-    /// rejects, and for a `CRON_TZ=` zone this build can't resolve.
+    /// Returns an error for an expression that isn't a valid standard cron
+    /// expression or descriptor, and for a `CRON_TZ=` zone this build can't
+    /// resolve.
     pub fn parse(expression: &str) -> Result<Self, CronScheduleParseError> {
         expression.parse()
     }
@@ -153,11 +154,10 @@ impl CronSchedule {
     }
 
     /// Returns the first occurrence strictly after `after`, or `None` when
-    /// the schedule never matches within five years (robfig's zero time).
+    /// the schedule never matches within five years.
     ///
-    /// Without an explicit zone, the occurrence is computed in `after`'s own
-    /// time zone, exactly like robfig's `Next` for a schedule without
-    /// `CRON_TZ`.
+    /// Without an explicit zone or `CRON_TZ=` prefix, the occurrence is
+    /// computed in `after`'s own time zone.
     #[must_use]
     pub fn next_after<Tz: TimeZone>(&self, after: &DateTime<Tz>) -> Option<DateTime<Tz>> {
         let zone = after.timezone();

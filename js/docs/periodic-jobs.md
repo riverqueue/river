@@ -72,9 +72,9 @@ const weekdayPrune = periodicJob({
 
 ## Cron schedules
 
-`cron` parses a standard cron expression with exactly the syntax and timing of
-River for Go (robfig/cron's `ParseStandard`), so a schedule fires at the same
-times whichever language holds leadership:
+`cron` parses a standard cron expression with exactly the syntax and timing
+every River client uses, so a schedule fires at the same times whichever
+language holds leadership:
 
 <!-- ts-setup
 import { defineJob, periodicJob } from "riverqueue";
@@ -93,20 +93,22 @@ const dailyDigest = periodicJob({
 ```
 
 It accepts five fields (minute, hour, day of month, month, and day of week
-numbered 0-6 from Sunday), lists, ranges, steps, `*` and `?`, month and
-weekday names, the descriptors `@yearly`, `@annually`, `@monthly`, `@weekly`,
-`@daily`, `@midnight`, and `@hourly`, and `@every` with a Go duration such as
-`@every 1h30m`. When both day of month and day of week are restricted, a day
-matching either fires. Anything River Go rejects, including a seconds field
-or `7` for Sunday, throws a `ConfigurationError`.
+numbered 0-6 from Sunday), lists, ranges, steps, `*` and `?`, month and weekday
+names, the descriptors `@yearly`, `@annually`, `@monthly`, `@weekly`, `@daily`,
+`@midnight`, and `@hourly`, and `@every` with a duration such as `@every 1h30m`
+or `@every 1.5h`: one or more decimal numbers, each with a unit of `ns`, `us`,
+`ms`, `s`, `m`, or `h`, truncated to whole seconds with a minimum of one second.
+When both day of month and day of week are restricted, a day matching either
+fires. Anything else, including a seconds field or `7` for Sunday, throws a
+`ConfigurationError`.
 
 ### Time zones
 
-An expression is evaluated in the zone of its `CRON_TZ=` (or `TZ=`) prefix,
-else the `timeZone` option, else **the process's local time zone**, which is
-what River for Go and Rust use too. Occurrences follow wall-clock time in that
-zone: a time skipped by a daylight saving transition doesn't fire that day,
-and a repeated one can fire twice.
+An expression is evaluated in the zone of its `CRON_TZ=` (or `TZ=`) prefix, else
+the `timeZone` option, else **the process's local time zone**, which is what
+other River clients use too. Occurrences follow wall-clock time in that zone: a
+time skipped by a daylight saving transition doesn't fire that day, and a
+repeated one can fire twice.
 
 Periodic jobs run on whichever client leads, and different machines often
 have different local zones (containers usually run in UTC). **Pin the zone
@@ -141,11 +143,11 @@ run from the current time and, with `runOnStart`, inserts one occurrence
 immediately. Occurrences due within 100 milliseconds are inserted together
 in one transaction.
 
-As in River for Go, a failed occurrence (a constructor that throws, or an
-insert that fails) is logged and skipped; the schedule moves on to the next
-occurrence rather than retrying, so a persistent failure can't wedge it. Make
-the job itself idempotent, or give it `unique` options, if duplicates after a
-leadership change would matter.
+A failed occurrence (a constructor that throws, or an insert that fails) is
+logged and skipped; the schedule moves on to the next occurrence rather than
+retrying, so a persistent failure can't wedge it. Make the job itself
+idempotent, or give it `unique` options, if duplicates after a leadership change
+would matter.
 
 ## Adding and removing at runtime
 
@@ -177,10 +179,10 @@ client.periodicJobs.removeById("cache");
 
 ## Mixed-language fleets
 
-Leadership is shared across River for Go, Rust, and JavaScript. Periodic jobs
-run in whichever language currently leads, and only the periodic jobs that
-client registered run. If a Go service registers a periodic job that the
-JavaScript services don't (or the reverse), that job silently stops whenever
+Leadership is shared across River clients in every language. Periodic jobs run
+in whichever language currently leads, and only the periodic jobs that client
+registered run. If a service in another language registers a periodic job that
+the JavaScript services don't (or the reverse), that job silently stops whenever
 leadership moves to the other language, which can happen on any deploy.
 
 Either register the same periodic jobs, with the same kinds, schedules, and

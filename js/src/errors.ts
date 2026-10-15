@@ -242,7 +242,6 @@ export class JobAbortedError extends RiverError<"job_aborted"> {
 
 /**
  * Abort reason delivered to a handler's `signal` once its attempt finished,
- * like River for Go cancelling a job's context when its executor returns,
  * so work the handler left running stops instead of outliving the attempt.
  */
 export class JobAttemptFinishedError extends RiverError<"job_attempt_finished"> {

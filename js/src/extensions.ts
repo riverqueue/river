@@ -37,8 +37,8 @@ export interface InsertRequest {
   readonly queue: string;
   /**
    * When the job becomes workable. For a job inserted without a schedule,
-   * when the insertion was requested: like River for Go, the database stores
-   * its own current time for such a job.
+   * when the insertion was requested, though the database stores its own
+   * current time for such a job.
    */
   readonly scheduledAt: Temporal.Instant;
   readonly state: JobState;
@@ -50,11 +50,11 @@ export interface InsertRequest {
  * Wraps every insertion, like Koa middleware: call `next()` once to insert
  * and return (or adjust) its results.
  *
- * As in River for Go, an insertion without `{ tx }` runs in one transaction
- * River owns, from argument validation through every middleware and hook to
- * the write, so an error thrown anywhere, even after `next()` returns, rolls
- * the jobs back. With `{ tx }`, it runs in the caller's transaction, which
- * the caller commits or rolls back.
+ * An insertion without `{ tx }` runs in one transaction River owns, from
+ * argument validation through every middleware and hook to the write, so an
+ * error thrown anywhere, even after `next()` returns, rolls the jobs back. With
+ * `{ tx }`, it runs in the caller's transaction, which the caller commits or
+ * rolls back.
  *
  * On SQLite, River holds the database's write lock from the write until it
  * commits, so middleware must not await I/O after `next()` returns, and
@@ -69,12 +69,11 @@ export type InsertMiddleware = (
 ) => PromiseLike<readonly InsertResult[]>;
 
 /**
- * Ordered extension points. As in River for Go, insert and work hooks run
- * inside the innermost middleware: insert middleware wraps `beforeInsert`,
- * the database write, and `afterInsert`, and work middleware wraps
- * `beforeWork`, argument decoding, the worker, and `afterWork`. A job whose
- * kind has no worker, or whose row can't be decoded, fails before any
- * middleware or hook runs.
+ * Ordered extension points. Insert and work hooks run inside the innermost
+ * middleware: insert middleware wraps `beforeInsert`, the database write, and
+ * `afterInsert`, and work middleware wraps `beforeWork`, argument decoding, the
+ * worker, and `afterWork`. A job whose kind has no worker, or whose row can't
+ * be decoded, fails before any middleware or hook runs.
  */
 export interface RiverHooks {
   /** Observe inserted jobs, inside the innermost insert middleware. */
@@ -88,8 +87,8 @@ export interface RiverHooks {
   onMetric?(metric: RiverMetric): PromiseLike<void> | void;
   /**
    * Observe, or replace by returning another, an attempt's result. The
-   * returned result becomes the attempt's result, like River for Go's
-   * `HookWorkEnd`; returning nothing keeps it.
+   * returned result becomes the attempt's result; returning nothing keeps
+   * it.
    */
   afterWork?(
     context: WorkContext,
@@ -107,7 +106,7 @@ export interface RiverHooks {
    * Runs each time this client becomes leader and starts inserting periodic
    * jobs, with durable records from a periodic job store when one is
    * configured. A rejection is logged and periodic enqueuing retries on the
-   * next loop, like Go River's `HookPeriodicJobsStart`.
+   * next loop.
    */
   onPeriodicJobsStart?(
     params: PeriodicJobsStartParams
@@ -151,11 +150,10 @@ export type ErrorHandlerContext = Omit<WorkAttemptContext, "setMetadata">;
 /**
  * Nonfatal application policy invoked once for each failed attempt,
  * including an attempt that stopped because its timeout expired (the error
- * is then a `JobTimeoutError`). Like River for Go, it isn't invoked
- * for an attempt interrupted by a client stop, or for one that fails after
- * the job was cancelled remotely (the cancellation decides that attempt's
- * outcome), unless the failure is a JavaScript runtime fault such as a
- * `TypeError`, River's analog of a Go panic.
+ * is then a `JobTimeoutError`). It isn't invoked for an attempt interrupted by
+ * a client stop, or for one that fails after the job was cancelled remotely
+ * (the cancellation decides that attempt's outcome), unless the failure is a
+ * JavaScript runtime fault such as a `TypeError`.
  */
 export type RiverErrorHandler = (
   context: ErrorHandlerContext,

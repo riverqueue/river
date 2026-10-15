@@ -1658,7 +1658,7 @@ public final class Workers implements AutoCloseable {
     }
   }
 
-  /** Event names shared with Go and the conformance protocol. */
+  /** Event names shared with other River clients and the conformance protocol. */
   public enum EventKind {
     JOB_CANCELLED,
     JOB_COMPLETED,

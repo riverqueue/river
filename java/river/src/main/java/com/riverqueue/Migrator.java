@@ -7,7 +7,7 @@ import java.util.Collections;
 import java.util.List;
 import java.util.Objects;
 
-/** Applies the exact, versioned River migration line shared with Go. */
+/** Applies the exact, versioned River migration line shared by all River clients. */
 public final class Migrator {
   private static final List<String> NAMES = Sql.resource("migration/index.txt").lines().toList();
   public static final int LATEST = NAMES.size();

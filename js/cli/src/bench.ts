@@ -57,8 +57,8 @@ fixed number of jobs first and stops once all of them are worked.
 
 Every two seconds it prints the jobs worked and inserted and jobs per second.
 The summary adds the overall rate, the 95th percentile time from insert to
-completion, and peak resource use. The workload matches River's Go and Rust
-benchmarks so results are comparable.`,
+completion, and peak resource use. The workload matches the benchmarks of
+River's other implementations so results are comparable.`,
   name: "bench",
   options: {
     backlog: {

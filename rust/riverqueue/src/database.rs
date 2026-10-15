@@ -367,8 +367,7 @@ impl PostgresReindexConfig {
         self
     }
 
-    /// Lets index rebuilds run without a time limit, like River Go's
-    /// `ReindexerTimeout` of `-1`.
+    /// Lets index rebuilds run without a time limit.
     #[must_use]
     pub const fn without_timeout(mut self) -> Self {
         self.timeout = None;

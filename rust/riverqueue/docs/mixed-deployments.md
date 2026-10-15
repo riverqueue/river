@@ -44,8 +44,8 @@ the leader election advice below, since the leader's rescuer still handles
 stuck jobs of every kind.
 
 The elected leader runs maintenance for the whole database, including the job
-rescuer. Like River Go, the rescuer discards stuck jobs whose kind the leader
-has no worker for rather than retrying them. If kinds are split between
+rescuer. The rescuer discards stuck jobs whose kind the leader has no worker
+for rather than retrying them. If kinds are split between
 languages, either register a worker for every kind in every client that can be
 elected leader, or keep clients that don't know every kind out of leader
 election: `ClientBuilder::without_leader_election` in Rust and
@@ -85,7 +85,7 @@ enqueued whenever a client without it is elected. Clients kept out of leader
 election can't configure periodic jobs, but still work those a leader enqueues
 in their queues.
 
-Cron schedules use Go River's standard five-field syntax in both languages.
+Cron schedules use the same standard five-field syntax in both languages.
 A schedule with a `CRON_TZ=` prefix naming an IANA zone parses in Rust only
 with the `chrono-tz` feature enabled; without it, Rust rejects the schedule
 rather than evaluating it in another zone.

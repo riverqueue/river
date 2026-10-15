@@ -16,7 +16,7 @@ client = River::Client.new(River::Driver::ActiveRecord.new)
 
 ## Capability detection
 
-Ruby follows Go's database detection and unique-insert strategies:
+Ruby detects the server type and chooses a unique-insert strategy to match:
 
 | Server | Duplicate detection |
 | --- | --- |
@@ -25,8 +25,7 @@ Ruby follows Go's database detection and unique-insert strategies:
 | Earlier Postgres | `xmax != 0` |
 
 Yugabyte's product identification takes precedence over its Postgres version.
-The nonce is generated per returning insert batch, just as in Go's Postgres
-drivers. Existing jobs without a nonce are still recognized as duplicates;
+The nonce is generated per returning insert batch, as in other River clients. Existing jobs without a nonce are still recognized as duplicates;
 application metadata is preserved, apart from the reserved nonce key.
 
 Detection happens at worker startup or lazily for insert-only clients. A
@@ -44,7 +43,7 @@ markers and inserted jobs become visible to other connections only when the
 application transaction commits; rollback leaves neither behind.
 
 When native notifications are enabled, insertion and cancellation publish the
-same commit-bound notifications as Go. Ruby still consumes changes by polling;
+same commit-bound notifications as other River clients. Ruby still consumes changes by polling;
 it does not yet implement a notification listener.
 
 Native notifications require YugabyteDB 2025.2.3 or later and
@@ -59,7 +58,7 @@ not replay application transactions or hooks automatically.
 
 ## Verification
 
-Normal driver tests mirror Go's Postgres-based Yugabyte simulations, covering
+Normal driver tests use Postgres-based Yugabyte simulations, covering
 an absent, disabled, or enabled notification setting. Disabled simulations make
 `pg_notify` raise to detect accidental broadcasts. These do not emulate
 Yugabyte's storage or transaction semantics.

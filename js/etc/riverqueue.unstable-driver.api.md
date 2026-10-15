@@ -912,7 +912,7 @@ export declare function jobListKeysetSql(
 ```ts
 /**
  * The field jobs are listed by. `time` is the time field of the first listed
- * state (`scheduled_at` when no state is listed), like River for Go.
+ * state (`scheduled_at` when no state is listed).
  */
 export type JobListOrderBy = "finalizedAt" | "id" | "scheduledAt" | "time";
 ```

@@ -18,7 +18,7 @@ public interface Schedule {
     return next(after.toOffsetDateTime()).map(next -> next.atZoneSameInstant(after.getZone()));
   }
 
-  /** Parses River Go's five-field cron syntax, including descriptors and time zones. */
+  /** Parses River's five-field cron syntax, including descriptors and time zones. */
   static Schedule cron(String expression) {
     return new CronSchedule(expression);
   }

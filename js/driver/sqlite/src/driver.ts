@@ -259,13 +259,12 @@ interface InsertValues {
 /**
  * Complete SQLite storage backend on Node's built-in `node:sqlite`.
  *
- * Like River for Go, River runs on a connection of its own. The driver
- * opens a private `DatabaseSync` on the application's database file (in WAL
- * mode, with a zero busy timeout) and never hands it out, so application
- * statements can't join River's transactions, and River's can't join the
- * application's. When another connection or process holds SQLite's write
- * lock, River retries with an asynchronous backoff so the event loop keeps
- * running.
+ * River runs on a connection of its own. The driver opens a private
+ * `DatabaseSync` on the application's database file (in WAL mode, with a
+ * zero busy timeout) and never hands it out, so application statements
+ * can't join River's transactions, and River's can't join the application's.
+ * When another connection or process holds SQLite's write lock, River retries
+ * with an asynchronous backoff so the event loop keeps running.
  *
  * Pass `{ tx }` to run a River operation in an application transaction: any
  * `DatabaseSync` on the same database with a transaction open, such as one

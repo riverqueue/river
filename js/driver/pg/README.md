@@ -49,14 +49,13 @@ try {
 ```
 
 Without `{ tx }`, River begins a transaction of its own on a connection it
-leases from the pool, like River for Go: argument validation, insert
-middleware, hooks, and the write commit together, and an error thrown by any
-of them rolls the jobs back. A driver constructed from a single client, rather
-than a pool, has no connection to lease, so it rejects insertions without
-`{ tx }` with a `ConfigurationError`. The transaction costs two more round
-trips per call, for `BEGIN` and `COMMIT`, as it does in Go. To insert many
-jobs, pass them to one `insertMany` call rather than calling `insert` for
-each.
+leases from the pool: argument validation, insert middleware, hooks, and the
+write commit together, and an error thrown by any of them rolls the jobs back. A
+driver constructed from a single client, rather than a pool, has no connection
+to lease, so it rejects insertions without `{ tx }` with a `ConfigurationError`.
+The transaction costs two more round trips per call, for `BEGIN` and `COMMIT`.
+To insert many jobs, pass them to one `insertMany` call rather than calling
+`insert` for each.
 
 Apply migrations explicitly with `@riverqueue/migrate` or
 `@riverqueue/cli` before starting workers.
@@ -78,11 +77,11 @@ that harmless, because a retried completion then observes the committed row
 and reports it. Leader maintenance passes are abandoned the same way when
 their leadership term ends or the client stops, which rolls them back.
 
-Like River for Go, a claim that has started runs to completion, and so do
-River's queue reports and leader elections, so on a connection whose socket
-went half-open they wait for the operating system to notice. Construct the
-`Pool` with `keepAlive: true`, and consider a `query_timeout`, so such sockets
-fail, and pass a `timeout` to `run.stop()` to bound how long a stop waits.
+A claim that has started runs to completion, and so do River's queue reports and
+leader elections, so on a connection whose socket went half-open they wait for
+the operating system to notice. Construct the `Pool` with `keepAlive: true`, and
+consider a `query_timeout`, so such sockets fail, and pass a `timeout` to
+`run.stop()` to bound how long a stop waits.
 
 ## PgBouncer and schemas
 

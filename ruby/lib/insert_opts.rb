@@ -94,7 +94,7 @@ module River
   # be inserted as a new job.
   class UniqueOpts
     # Empty options don't enable uniqueness. Zero periods and empty state lists
-    # have the same meaning as their unset equivalents in the Go client.
+    # have the same meaning as their unset equivalents.
     def empty?
       !by_args && !by_queue && !exclude_kind && (!by_period || by_period == 0) && (!by_state || by_state.empty?)
     end

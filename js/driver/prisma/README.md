@@ -51,11 +51,11 @@ that receives it. A transaction cannot provide runtime features such as job
 claiming, listening for notifications, leadership, or maintenance.
 
 Without `{ tx }`, River runs the insertion in an interactive transaction it
-begins with the root client's `$transaction`, like River for Go: argument
-validation, insert middleware, hooks, and the write commit together, and an
-error thrown by any of them rolls the jobs back. Construct the driver with
-your root `PrismaClient` for this; a transaction client has no `$transaction`,
-so a driver built from one requires `{ tx }` on every insertion.
+begins with the root client's `$transaction`: argument validation, insert
+middleware, hooks, and the write commit together, and an error thrown by any of
+them rolls the jobs back. Construct the driver with your root `PrismaClient` for
+this; a transaction client has no `$transaction`, so a driver built from one
+requires `{ tx }` on every insertion.
 
 Prisma bounds an interactive transaction with its defaults: a 2 second wait
 for a connection and a 5 second timeout, which also covers any I/O insert

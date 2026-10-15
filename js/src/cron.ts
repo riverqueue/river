@@ -8,7 +8,7 @@ export interface CronOptions {
    * Time zone the expression is evaluated in when it has no `CRON_TZ=` or
    * `TZ=` prefix: an IANA name such as `"America/Chicago"`, `"UTC"`, or a
    * fixed offset such as `"+05:30"`. Defaults to the process's local time
-   * zone, `Temporal.Now.timeZoneId()`, which is what River Go uses.
+   * zone, `Temporal.Now.timeZoneId()`.
    */
   readonly timeZone?: string;
 }
@@ -26,12 +26,11 @@ export interface CronSchedule extends PeriodicSchedule {
 }
 
 /**
- * Parse a standard cron expression into a periodic schedule that fires at
- * exactly the times River Go would.
+ * Parse a standard cron expression into a periodic schedule.
  *
- * River Go documents robfig/cron's `ParseStandard` syntax, and this is a
- * faithful port of that parser and its `Next` algorithm, so one expression
- * string behaves the same whichever language holds leadership:
+ * Every River client parses and schedules the same syntax, firing at exactly
+ * the same times, so one expression string behaves the same whichever
+ * language holds leadership:
  *
  * - five fields: minute (0-59), hour (0-23), day of month (1-31), month
  *   (1-12 or `jan`-`dec`), and day of week (0-6 from Sunday, or
@@ -43,32 +42,33 @@ export interface CronSchedule extends PeriodicSchedule {
  *   with a step greater than one counts as restricted;
  * - the descriptors `@yearly` (or `@annually`), `@monthly`, `@weekly`,
  *   `@daily` (or `@midnight`), and `@hourly`;
- * - `@every <duration>` with Go's duration syntax (`1h30m`, `1.5h`, `90s`),
- *   measured from the previous occurrence, truncated to whole seconds, and
- *   at least one second;
+ * - `@every <duration>` with a duration of decimal numbers, each followed by
+ *   a unit of `ns`, `us` (or `µs`), `ms`, `s`, `m`, or `h` (`1h30m`, `1.5h`,
+ *   `90s`), measured from the previous occurrence, truncated to whole
+ *   seconds, and at least one second;
  * - a leading `CRON_TZ=<zone>` or `TZ=<zone>` naming an IANA time zone.
  *
- * Seconds fields, `L`, `W`, `#`, and `@reboot` are rejected, as in Go.
+ * Seconds fields, `L`, `W`, `#`, and `@reboot` are rejected.
  *
  * Occurrences follow wall-clock time in the schedule's time zone, including
- * robfig's handling of daylight saving time: a time skipped by a transition
- * does not fire that day, and a time repeated by one can fire twice.
+ * across daylight saving time: a time skipped by a transition does not fire
+ * that day, and a time repeated by one can fire twice.
  *
  * The time zone is the expression's `CRON_TZ=` prefix, else
- * `options.timeZone`, else the process's local time zone, matching River Go,
- * which evaluates unprefixed expressions in `time.Local`. Periodic jobs run
+ * `options.timeZone`, else the process's local time zone. Periodic jobs run
  * on whichever client holds leadership, so every process in a fleet,
- * including Go and Rust ones, must resolve the same zone. Pin it explicitly,
- * preferably with a prefix such as `CRON_TZ=UTC` that every language reads
- * from the shared expression, or with `options.timeZone`.
+ * including River clients in other languages, must resolve the same zone.
+ * Pin it explicitly, preferably with a prefix such as `CRON_TZ=UTC` that
+ * every language reads from the shared expression, or with
+ * `options.timeZone`.
  *
  * @param expression - A standard cron expression or descriptor.
  * @param options - Optional default time zone.
  * @returns A schedule for {@link periodicJob}'s `schedule` option.
- * @throws ConfigurationError when the expression is not valid River Go cron
- *   syntax or the time zone is unknown. The schedule's `next()` also throws
- *   it when an occurrence would have to cross a calendar day the zone
- *   skipped, as Samoa skipped 2011-12-30; River Go never returns there.
+ * @throws ConfigurationError when the expression is not valid cron syntax
+ *   or the time zone is unknown. The schedule's `next()` also throws it when
+ *   an occurrence would have to cross a calendar day the zone skipped, as
+ *   Samoa skipped 2011-12-30, since no later occurrence can be computed.
  *
  * @example
  * ```ts
@@ -608,7 +608,7 @@ function skippedDayError(
     year: wall.year,
   }).add({ days: 1 });
   return new ConfigurationError(
-    `cron schedule cannot pass ${day.toString()} in ${timeZone}, a day the time zone skips; River Go never returns from this schedule`,
+    `cron schedule cannot pass ${day.toString()} in ${timeZone}, a day the time zone skips, so no later occurrence can be computed`,
     { details: { day: day.toString(), timeZone } }
   );
 }

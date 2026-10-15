@@ -102,9 +102,9 @@ export declare function requireInserted<Definition extends JobDefinition>(
 ```ts
 /**
  * Assert that exactly one job in the database matches `definition` (and
- * `match`, when given) and return it with its producer args typed, like
- * Go's `rivertest.RequireInsertedTx`. Pass `tx` to look inside a transaction
- * that hasn't committed yet. Throws an `AssertionError` otherwise.
+ * `match`, when given) and return it with its producer args typed. Pass
+ * `tx` to look inside a transaction that hasn't committed yet. Throws an
+ * `AssertionError` otherwise.
  */
 export declare function requireInsertedInDatabase<
   Definition extends JobDefinition,
@@ -151,7 +151,7 @@ export declare function requireNotInserted<Definition extends JobDefinition>(
 ```ts
 /**
  * Assert that no job in the database matches `definition` (and `match`,
- * when given), like Go's `rivertest.RequireNotInsertedTx`.
+ * when given).
  */
 export declare function requireNotInsertedInDatabase<
   Definition extends JobDefinition,

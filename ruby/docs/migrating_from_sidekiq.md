@@ -28,9 +28,9 @@ For applications already using Postgres or SQLite, River offers:
   without consuming attempts, resumable checkpoints, and recorded output reduce
   the need for application glue or extra extensions. See the
   [Ruby feature guide](README.md#core-features).
-- **A path between Ruby and Go:** clients can share River's schema and exchange
-  jobs using compatible kinds and JSON arguments, allowing workers to move
-  between languages incrementally.
+- **A path between languages:** River clients in Ruby and other languages can
+  share River's schema and exchange jobs using compatible kinds and JSON
+  arguments, allowing workers to move between languages incrementally.
 
 This is not a claim of higher throughput or exactly-once execution: jobs still
 need idempotent behavior, and queue traffic adds database load. Check the
@@ -39,8 +39,8 @@ compatibility gaps below before migrating.
 ## Instructions for an automated migration
 
 Work through the numbered sections in order. Use the Ruby source linked below
-as the API authority; Go documentation describes concepts but its method names
-are not Ruby methods. Code examples use application-owned names such as
+as the API authority; general River documentation describes concepts, but its
+method names are not Ruby methods. Code examples use application-owned names such as
 `FulfillOrder` and `AppJobs`; create or adapt them explicitly.
 
 Before editing, produce a migration inventory with one row per job class:
@@ -96,7 +96,7 @@ Each driver depends on `riverqueue` but leaves database gem selection to the
 application. Use the same database as the business records when atomic enqueueing
 is required.
 
-Apply the bundled [canonical River migrations](migrations.md) without installing Go:
+Apply the bundled [canonical River migrations](migrations.md):
 
 ```sh
 bundle exec river migrate-up --database-url postgres://localhost/my_app
