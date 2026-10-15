@@ -107,7 +107,7 @@ func NewJobScheduler(archetype *baseservice.Archetype, config *JobSchedulerConfi
 	})
 }
 
-func (s *JobScheduler) Start(ctx context.Context) error { //nolint:dupl
+func (s *JobScheduler) Start(ctx context.Context) error {
 	ctx, shouldStart, started, stopped := s.StartInit(ctx)
 	if !shouldStart {
 		return nil
@@ -132,6 +132,11 @@ func (s *JobScheduler) Start(ctx context.Context) error { //nolint:dupl
 
 			res, err := s.runOnce(ctx)
 			if err != nil {
+				// Cancellation can surface as a driver-specific error, like a
+				// socket write timeout, instead of wrapping context.Canceled.
+				if ctx.Err() != nil {
+					return
+				}
 				if !errors.Is(err, context.Canceled) {
 					s.Logger.ErrorContext(ctx, s.Name+": Error scheduling jobs", slog.String("error", err.Error()))
 				}
