@@ -310,7 +310,13 @@ module River
       @driver.queue_update(name.to_s, metadata: metadata) || raise(NotFoundError, "queue not found: #{name}")
     end
 
-    # Starts polling configured queues and working jobs in background threads.
+    # Requests that the current leader resign. Delivery waits for the caller's
+    # Active Record or Sequel transaction to commit, if one is open.
+    def request_resign
+      @driver.request_resign
+    end
+
+    # Starts notification receiving, polling, and working configured queues.
     # Returns self.
     def start
       @runtime.start

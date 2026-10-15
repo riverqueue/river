@@ -44,8 +44,9 @@ markers and inserted jobs become visible to other connections only when the
 application transaction commits; rollback leaves neither behind.
 
 When native notifications are enabled, insertion and cancellation publish the
-same commit-bound notifications as Go. Ruby still consumes changes by polling;
-it does not yet implement a notification listener.
+same commit-bound notifications as Go. Ruby listens for inserts, queue controls,
+and leadership messages on a dedicated connection. Set `poll_only: true` in
+`River::Config` to disable the receiver explicitly.
 
 Native notifications require YugabyteDB 2025.2.3 or later and
 `ysql_yb_enable_listen_notify=true` on both Masters and TServers. Follow

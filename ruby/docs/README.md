@@ -712,10 +712,32 @@ A custom service implements `run(client, driver, now)` and runs only while this 
 Service errors are logged without interrupting other services, stuck-job rescue,
 or cleanup. A failed service is retried on the next scheduled maintenance pass.
 
+Call `client.request_resign` to ask the current maintenance leader to resign.
+The leader releases its lease and briefly delays reelection so another client
+can take over. The request joins the caller's transaction and is delivered only
+on commit.
+
 On SQLite, the leader also removes notification outbox entries older than five
-minutes in bounded batches. Cancellation requests write Go-compatible control
-notifications in the same transaction as the job update; Ruby workers continue
-to observe cancellation through polling.
+minutes in bounded batches.
+
+### Notifications
+
+Started clients receive job insertion, queue control, cancellation, and
+leadership notifications. Postgres uses one dedicated LISTEN connection per
+started client, separate from the application's connection pool. SQLite polls
+the notification outbox with an independent cursor for each client. Inserts,
+scheduled jobs becoming available, and manual retries wake workers promptly.
+
+The receiver starts before workers and stays active during graceful shutdown.
+Startup fails if the initial subscription fails; an established receiver retries
+after connection errors and refreshes persisted state on reconnect. Normal job
+and queue polling also remains active.
+
+Set `poll_only: true` in `River::Config` to disable receiving notifications, for
+example when connecting through a proxy that cannot support LISTEN. Job, queue,
+and cancellation changes are then observed at the polling interval, and
+`request_resign` is not received. Backends without native notification support,
+such as Yugabyte with LISTEN/NOTIFY disabled, use polling automatically.
 
 ### [Renaming job kinds](https://riverqueue.com/docs/renaming-jobs)
 
@@ -746,7 +768,7 @@ The Ruby configuration file must return an unstarted client. The following clien
 methods are for applications managing their own runtime lifecycle:
 
 `client.stop` stops fetching and waits for active jobs to finish. `client.stop_and_cancel` interrupts active worker threads and returns their jobs to `available` without consuming the interrupted attempt.
-While draining, the client continues polling for cancellation requests from
+While draining, the client continues receiving and polling for cancellation requests from
 other clients, including for workers with no timeout. Transient polling errors
 are retried until the active attempts finish.
 

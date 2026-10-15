@@ -23,7 +23,7 @@ The fixture checks cover:
 - All snooze-counter fixtures through real worker attempts and both SQL drivers.
 - Cron occurrences, named zones, daylight-saving transitions, interval schedules,
   and invalid expressions, with the Ruby API differences below checked explicitly.
-- Insertion, cancellation, queue pause/resume/metadata, and leadership resignation
+- Insertion, cancellation, queue pause/resume/metadata, and leadership resignation/request
   notification encoding through both SQL drivers, using in-memory SQLite and
   the bundled canonical migrations.
 
@@ -39,13 +39,13 @@ protocol is not part of the Ruby API.
 
 ## Coverage gaps and API differences
 
-Ruby's runtime still polls job and queue state rather than consuming Postgres
-LISTEN events or the SQLite outbox. The fixture target checks notification
-emission, not dispatch. Ruby does not emit or handle `request_resign`; other
-clients' requests therefore cannot force a Ruby leader to resign. Completing
-that coverage would require a notification listener and runtime dispatch path.
-The ordinary driver suites verify Postgres delivery, commit ordering, and
-rollback for queue controls and resignations as well as insertion/cancellation.
+Ruby consumes Postgres LISTEN events and the SQLite notification outbox. The
+ordinary driver suites exercise insert wakeups, cancellation while draining,
+queue pause/resume, and leadership handoff on `request_resign` through both
+backends and both SQL drivers. They also check commit ordering, rollback,
+independent listeners, startup failures, and recovery after listener failures.
+The fixture target checks wire formats; live mixed-language worker execution
+remains outside its scope.
 
 Shared snooze-counter fixtures cover non-negative integers and absent counters.
 Recovery from other JSON values is implementation-specific. Ruby's shared driver
