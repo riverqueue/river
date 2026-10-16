@@ -730,6 +730,9 @@ func (e *Executor) JobInsertFastManyNoReturning(ctx context.Context, params *riv
 		baseCtx := ctx
 		dbtx := templateReplaceWrapper{dbtx: e.driver.UnwrapTx(execTx), replacer: &e.driver.replacer}
 		insertCtx := schemaTemplateParam(baseCtx, params.Schema)
+		if len(params.Jobs) > 1 {
+			return jobInsertBatch(insertCtx, dbtx, params)
+		}
 		insertCtx = sqlctemplate.WithReplacements(insertCtx, map[string]sqlctemplate.Replacement{
 			"on_duplicate_key": {Value: ""},
 		}, nil)
@@ -985,6 +988,12 @@ func (e *Executor) JobRescueMany(ctx context.Context, params *riverdriver.JobRes
 		ctx = schemaTemplateParam(ctx, params.Schema)
 		dbtx := templateReplaceWrapper{dbtx: e.driver.UnwrapTx(execTx), replacer: &e.driver.replacer}
 
+		if len(params.ID) > 1 && batchIDsUnique(params.ID) {
+			if err := jobRescueBatch(ctx, dbtx, params); !isNoDatabaseSelected(err) {
+				return err
+			}
+		}
+
 		for i := range params.ID {
 			if err := dbsqlc.New().JobRescue(ctx, dbtx, &dbsqlc.JobRescueParams{
 				ID:           params.ID[i],
@@ -1104,39 +1113,49 @@ func (e *Executor) JobSetStateIfRunningMany(ctx context.Context, params *riverdr
 		ctx = schemaTemplateParam(ctx, params.Schema)
 		dbtx := templateReplaceWrapper{dbtx: e.driver.UnwrapTx(execTx), replacer: &e.driver.replacer}
 
-		// Execute all state changes, including metadata-only updates to non-running jobs.
-		for i := range params.ID {
-			setStateParams := &dbsqlc.JobSetStateIfRunningExecParams{
-				ID:              params.ID[i],
-				Error:           []byte("{}"),
-				MetadataUpdates: []byte("{}"),
-				Now:             nullTimeFromPtr(params.Now),
-				State:           string(params.State[i]),
-			}
-
-			if params.Attempt[i] != nil {
-				setStateParams.AttemptDoUpdate = 1
-				setStateParams.Attempt = int64(*params.Attempt[i])
-			}
-			if params.ErrData[i] != nil {
-				setStateParams.ErrorsDoUpdate = 1
-				setStateParams.Error = params.ErrData[i]
-			}
-			if params.FinalizedAt[i] != nil {
-				setStateParams.FinalizedAtDoUpdate = 1
-				setStateParams.FinalizedAt = nullTimeFromPtr(params.FinalizedAt[i])
-			}
-			if params.MetadataDoMerge[i] {
-				setStateParams.MetadataDoMerge = 1
-				setStateParams.MetadataUpdates = params.MetadataUpdates[i]
-			}
-			if params.ScheduledAt[i] != nil {
-				setStateParams.ScheduledAtDoUpdate = 1
-				setStateParams.ScheduledAt = params.ScheduledAt[i].UTC()
-			}
-
-			if err := dbsqlc.New().JobSetStateIfRunningExec(ctx, dbtx, setStateParams); err != nil {
+		batchDone := false
+		if len(params.ID) > 1 && batchIDsUnique(params.ID) {
+			err := jobSetStateBatch(ctx, dbtx, params)
+			if err != nil && !isNoDatabaseSelected(err) {
 				return fmt.Errorf("error setting job state: %w", err)
+			}
+			batchDone = err == nil
+		}
+		if !batchDone {
+			// Execute all state changes, including metadata-only updates to non-running jobs.
+			for i := range params.ID {
+				setStateParams := &dbsqlc.JobSetStateIfRunningExecParams{
+					ID:              params.ID[i],
+					Error:           []byte("{}"),
+					MetadataUpdates: []byte("{}"),
+					Now:             nullTimeFromPtr(params.Now),
+					State:           string(params.State[i]),
+				}
+
+				if params.Attempt[i] != nil {
+					setStateParams.AttemptDoUpdate = 1
+					setStateParams.Attempt = int64(*params.Attempt[i])
+				}
+				if params.ErrData[i] != nil {
+					setStateParams.ErrorsDoUpdate = 1
+					setStateParams.Error = params.ErrData[i]
+				}
+				if params.FinalizedAt[i] != nil {
+					setStateParams.FinalizedAtDoUpdate = 1
+					setStateParams.FinalizedAt = nullTimeFromPtr(params.FinalizedAt[i])
+				}
+				if params.MetadataDoMerge[i] {
+					setStateParams.MetadataDoMerge = 1
+					setStateParams.MetadataUpdates = params.MetadataUpdates[i]
+				}
+				if params.ScheduledAt[i] != nil {
+					setStateParams.ScheduledAtDoUpdate = 1
+					setStateParams.ScheduledAt = params.ScheduledAt[i].UTC()
+				}
+
+				if err := dbsqlc.New().JobSetStateIfRunningExec(ctx, dbtx, setStateParams); err != nil {
+					return fmt.Errorf("error setting job state: %w", err)
+				}
 			}
 		}
 
@@ -1524,6 +1543,10 @@ func (e *Executor) NotifyMany(ctx context.Context, params *riverdriver.NotifyMan
 	return dbutil.WithTx(ctx, e.executor(), func(ctx context.Context, execTx riverdriver.ExecutorTx) error {
 		ctx = schemaTemplateParam(ctx, params.Schema)
 		dbtx := templateReplaceWrapper{dbtx: e.driver.UnwrapTx(execTx), replacer: &e.driver.replacer}
+
+		if len(params.Payload) > 1 {
+			return execJSONBatch(ctx, dbtx, notificationInsertBatchSQL, params.Payload, params.Topic)
+		}
 
 		for _, payload := range params.Payload {
 			if err := dbsqlc.New().NotificationInsert(ctx, dbtx, &dbsqlc.NotificationInsertParams{

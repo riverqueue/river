@@ -1058,16 +1058,26 @@ func TestNotifyManyInsertsNotifications(t *testing.T) {
 		schema = riverdbtest.TestSchema(ctx, t, driver, nil)
 	)
 
+	payloads := []string{"test1", "", "é🌊\n\"quoted\"", "null", "test2"}
 	err := exec.NotifyMany(ctx, &riverdriver.NotifyManyParams{
-		Payload: []string{"test1", "test2"},
+		Payload: payloads,
 		Schema:  schema,
 		Topic:   "test_topic",
 	})
 	require.NoError(t, err)
 
-	var count int
-	require.NoError(t, exec.QueryRow(ctx, "SELECT count(*) FROM "+mysqlIdentifier(schema)+".river_notification WHERE topic = ? AND payload IN (?, ?)", "test_topic", "test1", "test2").Scan(&count))
-	require.Equal(t, 2, count)
+	rows, err := driver.dbPool.QueryContext(ctx, "SELECT payload, topic FROM "+mysqlIdentifier(schema)+".river_notification ORDER BY id") //nolint:gosec
+	require.NoError(t, err)
+	defer rows.Close()
+	var received []string
+	for rows.Next() {
+		var payload, topic string
+		require.NoError(t, rows.Scan(&payload, &topic))
+		require.Equal(t, "test_topic", topic)
+		received = append(received, payload)
+	}
+	require.NoError(t, rows.Err())
+	require.Equal(t, payloads, received)
 }
 
 func TestPGAdvisoryXactLock(t *testing.T) {

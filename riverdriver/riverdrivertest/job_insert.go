@@ -475,6 +475,39 @@ func exerciseJobInsert[TTx any](ctx context.Context, t *testing.T,
 			}
 		})
 
+		t.Run("BatchWithoutUniqueKeys", func(t *testing.T) {
+			t.Parallel()
+
+			exec, bundle := setup(ctx, t)
+			now := time.Date(2026, 10, 15, 12, 30, 1, 123456000, time.FixedZone("offset", -5*60*60))
+			params := &riverdriver.JobInsertFastManyParams{}
+			for i := range 3 {
+				params.Jobs = append(params.Jobs, &riverdriver.JobInsertFastParams{
+					CreatedAt: &now, EncodedArgs: []byte(`{"id":123456789,"text":"é🌊\n\"quoted\""}`),
+					Kind: "batch", MaxAttempts: 25, Metadata: []byte(`{"id":123456789}`),
+					Priority: i + 1, Queue: "default", ScheduledAt: &now,
+					State: rivertype.JobStateAvailable, Tags: []string{"é🌊", `"quoted"`},
+				})
+			}
+
+			count, err := exec.JobInsertFastManyNoReturning(ctx, params)
+			require.NoError(t, err)
+			require.Equal(t, len(params.Jobs), count)
+			jobs, err := exec.JobGetByKindMany(ctx, &riverdriver.JobGetByKindManyParams{Kind: []string{"batch"}})
+			require.NoError(t, err)
+			require.Len(t, jobs, len(params.Jobs))
+			for i, job := range jobs {
+				require.Contains(t, string(job.EncodedArgs), "123456789")
+				require.Contains(t, string(job.Metadata), "123456789")
+				require.JSONEq(t, string(params.Jobs[i].EncodedArgs), string(job.EncodedArgs))
+				require.Equal(t, params.Jobs[i].Tags, job.Tags)
+				require.Equal(t, i+1, job.Priority)
+				require.WithinDuration(t, now, job.CreatedAt, bundle.driver.TimePrecision())
+				require.WithinDuration(t, now, job.ScheduledAt, bundle.driver.TimePrecision())
+				require.Nil(t, job.UniqueKey)
+			}
+		})
+
 		t.Run("MissingValuesDefaultAsExpected", func(t *testing.T) {
 			t.Parallel()
 

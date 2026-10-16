@@ -1495,14 +1495,33 @@ func exerciseJobUpdate[TTx any](ctx context.Context, t *testing.T, executorWithT
 		exec, _ := setup(ctx, t)
 
 		job := testfactory.Job(ctx, t, exec, &testfactory.JobOpts{State: new(rivertype.JobStateRunning)})
+		cancelled := testfactory.Job(ctx, t, exec, &testfactory.JobOpts{
+			Attempt: new(3), Metadata: []byte(`{"cancel_attempted_at":"already requested"}`),
+			State: new(rivertype.JobStateRunning),
+		})
+		completed := testfactory.Job(ctx, t, exec, &testfactory.JobOpts{
+			FinalizedAt: &precisionTestTime, State: new(rivertype.JobStateCompleted),
+		})
 		rows, err := exec.JobSetStateIfRunningMany(ctx, setStateManyParams(
 			riverdriver.JobSetStateErrorRetryable(job.ID, precisionTestTime, []byte(`{"error":"retry"}`), []byte(`{"cancel_attempted_at":"from metadata update"}`)),
+			riverdriver.JobSetStateSnoozed(cancelled.ID, precisionTestTime.Add(time.Hour), 2, []byte(`{"cancel_attempted_at":null}`)),
+			riverdriver.JobSetStateErrorRetryable(completed.ID, precisionTestTime.Add(time.Hour), []byte(`{"error":"ignored"}`), []byte(`{"result":"merged"}`)),
 		))
 		require.NoError(t, err)
-		require.Len(t, rows, 1)
+		require.Len(t, rows, 3)
 		require.Equal(t, rivertype.JobStateRetryable, rows[0].State)
 		require.Nil(t, rows[0].FinalizedAt)
 		require.Equal(t, "from metadata update", gjson.GetBytes(rows[0].Metadata, "cancel_attempted_at").String())
+		require.Equal(t, rivertype.JobStateCancelled, rows[1].State)
+		require.NotNil(t, rows[1].FinalizedAt)
+		require.Equal(t, cancelled.Attempt, rows[1].Attempt)
+		require.Equal(t, cancelled.ScheduledAt, rows[1].ScheduledAt)
+		require.Empty(t, gjson.GetBytes(rows[1].Metadata, "cancel_attempted_at").String())
+		require.Equal(t, rivertype.JobStateCompleted, rows[2].State)
+		require.Equal(t, completed.FinalizedAt, rows[2].FinalizedAt)
+		require.Equal(t, completed.ScheduledAt, rows[2].ScheduledAt)
+		require.Empty(t, rows[2].Errors)
+		require.JSONEq(t, `{"result":"merged"}`, string(rows[2].Metadata))
 	})
 
 	t.Run("JobSetStateIfRunningMany_MultipleJobsAtOnce", func(t *testing.T) {
