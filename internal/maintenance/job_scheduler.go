@@ -137,9 +137,7 @@ func (s *JobScheduler) Start(ctx context.Context) error {
 				if ctx.Err() != nil {
 					return
 				}
-				if !errors.Is(err, context.Canceled) {
-					s.Logger.ErrorContext(ctx, s.Name+": Error scheduling jobs", slog.String("error", err.Error()))
-				}
+				s.Logger.ErrorContext(ctx, s.Name+": Error scheduling jobs", slog.String("error", err.Error()))
 				continue
 			}
 
