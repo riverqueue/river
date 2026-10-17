@@ -194,10 +194,12 @@ metadata=JSON_SET(metadata, '$.unique_key_conflict', 'scheduler_discarded'), sta
 WHERE id=? AND state IN ('scheduled','retryable')
 
 -- name: clean_jobs
-DELETE j FROM (SELECT id FROM {schema}river_job
+DELETE FROM {schema}river_job WHERE id IN ({ids})
+
+-- name: clean_jobs_select
+SELECT id FROM {schema}river_job
 WHERE (state='cancelled' AND finalized_at<?) OR (state='completed' AND finalized_at<?) OR (state='discarded' AND finalized_at<?)
-ORDER BY id LIMIT 1000 FOR UPDATE SKIP LOCKED) expired
-STRAIGHT_JOIN {schema}river_job j FORCE INDEX (PRIMARY) ON expired.id=j.id
+ORDER BY id LIMIT 1000 FOR UPDATE SKIP LOCKED
 
 -- name: clean_queues
 DELETE FROM {schema}river_queue WHERE updated_at<?

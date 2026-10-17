@@ -109,6 +109,13 @@ DELETE FROM /* TEMPLATE: schema */river_job
 WHERE id = sqlc.arg('id')
     AND river_job.state != 'running';
 
+-- name: JobGetMetadataForUpdate :many
+SELECT id, metadata
+FROM /* TEMPLATE: schema */river_job
+WHERE id IN (sqlc.slice('id'))
+ORDER BY id
+FOR UPDATE;
+
 -- name: JobGetByIDForUpdate :one
 SELECT *
 FROM /* TEMPLATE: schema */river_job
@@ -116,8 +123,8 @@ WHERE id = sqlc.arg('id')
 LIMIT 1
 FOR UPDATE;
 
--- name: JobDeleteBefore :execresult
-DELETE FROM /* TEMPLATE: schema */river_job
+-- name: JobDeleteBeforeSelect :many
+SELECT id FROM /* TEMPLATE: schema */river_job
 WHERE (
     (
         CAST(sqlc.arg('cancelled_do_delete') AS UNSIGNED)
@@ -142,7 +149,8 @@ AND (
     OR queue IN (sqlc.slice('queues_included'))
 )
 ORDER BY id
-LIMIT ?;
+LIMIT ?
+FOR UPDATE SKIP LOCKED;
 
 -- name: JobDeleteManySelect :many
 SELECT *
@@ -437,13 +445,13 @@ SET
         THEN 'cancelled'
         WHEN state = 'running' THEN sqlc.arg('state') ELSE state END,
     metadata = CASE WHEN CAST(sqlc.arg('metadata_do_merge') AS SIGNED)
-        THEN JSON_MERGE_PATCH(metadata, CAST(sqlc.arg('metadata_updates') AS JSON)) ELSE metadata END
+        THEN CAST(sqlc.arg('metadata_updates') AS JSON) ELSE metadata END
 WHERE id = sqlc.arg('id');
 
 -- name: JobUpdateExec :exec
 UPDATE /* TEMPLATE: schema */river_job
 SET
-    metadata = CASE WHEN CAST(sqlc.arg('metadata_do_merge') AS SIGNED) THEN JSON_MERGE_PATCH(metadata, CAST(sqlc.arg('metadata') AS JSON)) ELSE metadata END
+    metadata = CASE WHEN CAST(sqlc.arg('metadata_do_merge') AS SIGNED) THEN CAST(sqlc.arg('metadata') AS JSON) ELSE metadata END
 WHERE id = sqlc.arg('id');
 
 -- name: JobUpdateFullExec :exec

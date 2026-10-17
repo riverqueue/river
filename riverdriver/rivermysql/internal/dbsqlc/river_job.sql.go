@@ -153,8 +153,8 @@ func (q *Queries) JobCountByState(ctx context.Context, db DBTX, state string) (i
 	return count, err
 }
 
-const jobDeleteBefore = `-- name: JobDeleteBefore :execresult
-DELETE FROM /* TEMPLATE: schema */river_job
+const jobDeleteBeforeSelect = `-- name: JobDeleteBeforeSelect :many
+SELECT id FROM /* TEMPLATE: schema */river_job
 WHERE (
     (
         CAST(? AS UNSIGNED)
@@ -180,9 +180,10 @@ AND (
 )
 ORDER BY id
 LIMIT ?
+FOR UPDATE SKIP LOCKED
 `
 
-type JobDeleteBeforeParams struct {
+type JobDeleteBeforeSelectParams struct {
 	CancelledDoDelete           int64
 	CancelledFinalizedAtHorizon sql.NullTime
 	CompletedDoDelete           int64
@@ -196,8 +197,8 @@ type JobDeleteBeforeParams struct {
 	Limit                       int32
 }
 
-func (q *Queries) JobDeleteBefore(ctx context.Context, db DBTX, arg *JobDeleteBeforeParams) (sql.Result, error) {
-	query := jobDeleteBefore
+func (q *Queries) JobDeleteBeforeSelect(ctx context.Context, db DBTX, arg *JobDeleteBeforeSelectParams) ([]int64, error) {
+	query := jobDeleteBeforeSelect
 	var queryParams []interface{}
 	queryParams = append(queryParams, arg.CancelledDoDelete)
 	queryParams = append(queryParams, arg.CancelledFinalizedAtHorizon)
@@ -224,7 +225,26 @@ func (q *Queries) JobDeleteBefore(ctx context.Context, db DBTX, arg *JobDeleteBe
 		query = strings.Replace(query, "/*SLICE:queues_included*/?", "NULL", 1)
 	}
 	queryParams = append(queryParams, arg.Limit)
-	return db.ExecContext(ctx, query, queryParams...)
+	rows, err := db.QueryContext(ctx, query, queryParams...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []int64
+	for rows.Next() {
+		var id int64
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		items = append(items, id)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
 }
 
 const jobDeleteExec = `-- name: JobDeleteExec :execresult
@@ -900,6 +920,52 @@ func (q *Queries) JobGetCancelRequested(ctx context.Context, db DBTX, id []int64
 	return items, nil
 }
 
+const jobGetMetadataForUpdate = `-- name: JobGetMetadataForUpdate :many
+SELECT id, metadata
+FROM /* TEMPLATE: schema */river_job
+WHERE id IN (/*SLICE:id*/?)
+ORDER BY id
+FOR UPDATE
+`
+
+type JobGetMetadataForUpdateRow struct {
+	ID       int64
+	Metadata []byte
+}
+
+func (q *Queries) JobGetMetadataForUpdate(ctx context.Context, db DBTX, id []int64) ([]*JobGetMetadataForUpdateRow, error) {
+	query := jobGetMetadataForUpdate
+	var queryParams []interface{}
+	if len(id) > 0 {
+		for _, v := range id {
+			queryParams = append(queryParams, v)
+		}
+		query = strings.Replace(query, "/*SLICE:id*/?", strings.Repeat(",?", len(id))[1:], 1)
+	} else {
+		query = strings.Replace(query, "/*SLICE:id*/?", "NULL", 1)
+	}
+	rows, err := db.QueryContext(ctx, query, queryParams...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []*JobGetMetadataForUpdateRow
+	for rows.Next() {
+		var i JobGetMetadataForUpdateRow
+		if err := rows.Scan(&i.ID, &i.Metadata); err != nil {
+			return nil, err
+		}
+		items = append(items, &i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const jobGetStuck = `-- name: JobGetStuck :many
 SELECT id, args, attempt, attempted_at, attempted_by, created_at, errors, finalized_at, kind, max_attempts, metadata, priority, queue, state, scheduled_at, tags, unique_key, unique_states
 FROM /* TEMPLATE: schema */river_job
@@ -1446,7 +1512,7 @@ SET
         THEN 'cancelled'
         WHEN state = 'running' THEN ? ELSE state END,
     metadata = CASE WHEN CAST(? AS SIGNED)
-        THEN JSON_MERGE_PATCH(metadata, CAST(? AS JSON)) ELSE metadata END
+        THEN CAST(? AS JSON) ELSE metadata END
 WHERE id = ?
 `
 
@@ -1502,7 +1568,7 @@ func (q *Queries) JobSetStateIfRunningExec(ctx context.Context, db DBTX, arg *Jo
 const jobUpdateExec = `-- name: JobUpdateExec :exec
 UPDATE /* TEMPLATE: schema */river_job
 SET
-    metadata = CASE WHEN CAST(? AS SIGNED) THEN JSON_MERGE_PATCH(metadata, CAST(? AS JSON)) ELSE metadata END
+    metadata = CASE WHEN CAST(? AS SIGNED) THEN CAST(? AS JSON) ELSE metadata END
 WHERE id = ?
 `
 

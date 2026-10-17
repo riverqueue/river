@@ -1524,6 +1524,40 @@ func exerciseJobUpdate[TTx any](ctx context.Context, t *testing.T, executorWithT
 		require.JSONEq(t, `{"result":"merged"}`, string(rows[2].Metadata))
 	})
 
+	t.Run("JobSetStateIfRunningMany_MetadataMergeIsShallow", func(t *testing.T) {
+		t.Parallel()
+
+		for _, mode := range []string{"Batch", "RepeatedID", "Single"} {
+			t.Run(mode, func(t *testing.T) {
+				t.Parallel()
+
+				exec, bundle := setup(ctx, t)
+				if mode == "RepeatedID" && bundle.driver.DatabaseName() != riverdriver.DatabaseNameMySQL {
+					t.Skip("MySQL retains sequential updates for repeated IDs")
+				}
+				now := time.Now().UTC()
+				job := testfactory.Job(ctx, t, exec, &testfactory.JobOpts{
+					Metadata: []byte(`{"checkpoint":"before","keep":true,"nested":{"old":1}}`),
+					State:    new(rivertype.JobStateRunning),
+				})
+				updates := []*riverdriver.JobSetStateIfRunningParams{riverdriver.JobSetStateCompleted(job.ID, now, []byte(`{"checkpoint":null,"nested":{"new":2},"large":9007199254740993,"a\".b":[true,"text",null]}`))}
+				switch mode {
+				case "Batch":
+					other := testfactory.Job(ctx, t, exec, &testfactory.JobOpts{State: new(rivertype.JobStateRunning)})
+					updates = append(updates, riverdriver.JobSetStateCompleted(other.ID, now, []byte(`{"checkpoint":null}`)))
+				case "RepeatedID":
+					updates = append(updates, riverdriver.JobSetStateCompleted(job.ID, now, []byte(`{"keep":true}`)))
+				}
+				_, err := exec.JobSetStateIfRunningMany(ctx, setStateManyParams(updates...))
+				require.NoError(t, err)
+				stored, err := exec.JobGetByID(ctx, &riverdriver.JobGetByIDParams{ID: job.ID})
+				require.NoError(t, err)
+				require.JSONEq(t, `{"checkpoint":null,"keep":true,"nested":{"new":2},"large":9007199254740993,"a\".b":[true,"text",null]}`, string(stored.Metadata))
+				require.Equal(t, "9007199254740993", gjson.GetBytes(stored.Metadata, "large").Raw)
+			})
+		}
+	})
+
 	t.Run("JobSetStateIfRunningMany_MultipleJobsAtOnce", func(t *testing.T) {
 		t.Parallel()
 
@@ -1573,16 +1607,16 @@ func exerciseJobUpdate[TTx any](ctx context.Context, t *testing.T, executorWithT
 			exec, _ := setup(ctx, t)
 
 			job := testfactory.Job(ctx, t, exec, &testfactory.JobOpts{
-				Metadata: []byte(`{"key1":"val1"}`),
+				Metadata: []byte(`{"key1":"val1","nested":{"old":1}}`),
 			})
 
 			updatedJob, err := exec.JobUpdate(ctx, &riverdriver.JobUpdateParams{
 				ID:              job.ID,
 				MetadataDoMerge: true,
-				Metadata:        []byte(`{"key2":"val2"}`),
+				Metadata:        []byte(`{"key2":null,"nested":{"new":2},"large":9007199254740993,"a\".b":[true,"text",null]}`),
 			})
 			require.NoError(t, err)
-			require.JSONEq(t, `{"key1":"val1","key2":"val2"}`, string(updatedJob.Metadata))
+			require.JSONEq(t, `{"key1":"val1","key2":null,"nested":{"new":2},"large":9007199254740993,"a\".b":[true,"text",null]}`, string(updatedJob.Metadata))
 		})
 
 		t.Run("NoArgs", func(t *testing.T) {

@@ -1343,7 +1343,7 @@ pub(crate) async fn cleanup_jobs(
     if params.limit <= 0 || horizons.iter().all(|(_, before)| before.is_none()) {
         return Ok(0);
     }
-    let mut query = QueryBuilder::<MySql>::new("DELETE FROM river_job WHERE (");
+    let mut query = QueryBuilder::<MySql>::new("SELECT id FROM river_job WHERE (");
     let mut first = true;
     for (state, before) in horizons {
         let Some(before) = before else {
@@ -1382,12 +1382,23 @@ pub(crate) async fn cleanup_jobs(
     }
     query
         .push(" ORDER BY id ASC LIMIT ")
-        .push_bind(params.limit);
-    Ok(query
-        .build()
-        .execute(&mut *connection)
-        .await?
-        .rows_affected())
+        .push_bind(params.limit)
+        .push(" FOR UPDATE SKIP LOCKED");
+    let mut tx = connection.begin().await?;
+    let ids: Vec<i64> = query.build_query_scalar().fetch_all(&mut *tx).await?;
+    let deleted = if ids.is_empty() {
+        0
+    } else {
+        let mut delete = QueryBuilder::<MySql>::new("DELETE FROM river_job WHERE id IN (");
+        let mut separated = delete.separated(", ");
+        for id in ids {
+            separated.push_bind(id);
+        }
+        separated.push_unseparated(")");
+        delete.build().execute(&mut *tx).await?.rows_affected()
+    };
+    tx.commit().await?;
+    Ok(deleted)
 }
 
 /// A due job the scheduler may make available.

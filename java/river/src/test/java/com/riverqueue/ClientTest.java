@@ -64,16 +64,15 @@ class ClientTest {
     }
     Client.Transaction<Integer> clean =
         connection -> {
-          try (var statement =
-              Sql.prepare(
-                  connection,
-                  Sql.query(database, "clean_jobs"),
-                  database.timestamp(NOW),
-                  database.timestamp(NOW),
-                  database.timestamp(NOW))) {
-            statement.setQueryTimeout(2);
-            return statement.executeUpdate();
+          try (var statement = connection.createStatement()) {
+            statement.execute("SET SESSION innodb_lock_wait_timeout=2");
           }
+          return MySql.clean(
+              database,
+              connection,
+              database.timestamp(NOW),
+              database.timestamp(NOW),
+              database.timestamp(NOW));
         };
     client.transaction(
         connection -> {

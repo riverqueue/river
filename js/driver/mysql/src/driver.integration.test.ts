@@ -320,6 +320,58 @@ describe.skipIf(!url)("MySQL driver", () => {
     ).toHaveLength(1);
   });
 
+  it("cleans expired jobs without waiting for locked jobs", async () => {
+    const now = Temporal.Now.instant();
+    const leader = (await runtime.maintenanceLeaderAcquire(
+      "cleaner",
+      now,
+      60_000,
+      null
+    ))!;
+    const [running, locked, expired] = await runtime.jobInsertMany([
+      params(),
+      params(),
+      params(),
+    ]);
+    await pool.query(
+      `UPDATE \`${schema}\`.river_job SET state='completed', finalized_at='1970-01-01' WHERE id IN (?, ?)`,
+      [locked!.job.id.toString(), expired!.job.id.toString()]
+    );
+    await pool.query(
+      `UPDATE \`${schema}\`.river_job SET state='running' WHERE id=?`,
+      [running!.job.id.toString()]
+    );
+    const tx = await pool.getConnection();
+    try {
+      await tx.beginTransaction();
+      for (const id of [running!.job.id, locked!.job.id]) {
+        await tx.query(
+          `SELECT id FROM \`${schema}\`.river_job WHERE id=? FOR UPDATE`,
+          [id.toString()]
+        );
+      }
+      expect(
+        await runtime.maintenanceCleanJobs(
+          leader,
+          {
+            cancelledBefore: now,
+            completedBefore: now,
+            discardedBefore: now,
+            limit: 100,
+          },
+          null,
+          AbortSignal.timeout(2_000)
+        )
+      ).toBe(1);
+      expect(await runtime.jobGet(expired!.job.id)).toBeNull();
+      expect((await runtime.jobGet(locked!.job.id))?.state).toBe("completed");
+      expect((await runtime.jobGet(running!.job.id))?.state).toBe("running");
+    } finally {
+      await tx.rollback();
+      tx.release();
+    }
+  });
+
   it("schedules, rescues and cleans under an exact leader term", async () => {
     const now = Temporal.Now.instant();
     const leader = (await runtime.maintenanceLeaderAcquire(

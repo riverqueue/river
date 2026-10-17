@@ -1076,11 +1076,18 @@ public final class Workers implements AutoCloseable {
               config.discardedRetention.isNegative()
                   ? null
                   : river.database().timestamp(now.minus(config.discardedRetention));
-          try (var statement =
-              Sql.prepare(
-                  c, Sql.query(river.database(), "clean_jobs"), cancelled, completed, discarded)) {
-            statement.executeUpdate();
-          }
+          if (river.database().dialect() == Database.Dialect.MYSQL)
+            MySql.clean(river.database(), c, cancelled, completed, discarded);
+          else
+            try (var statement =
+                Sql.prepare(
+                    c,
+                    Sql.query(river.database(), "clean_jobs"),
+                    cancelled,
+                    completed,
+                    discarded)) {
+              statement.executeUpdate();
+            }
           try (var statement =
               Sql.prepare(
                   c,

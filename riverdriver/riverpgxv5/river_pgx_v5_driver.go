@@ -692,7 +692,7 @@ func (e *Executor) JobSetStateIfRunningMany(ctx context.Context, params *riverdr
 		FinalizedAt:         make([]time.Time, len(params.ID)),
 		FinalizedAtDoUpdate: make([]bool, len(params.ID)),
 		MetadataDoMerge:     make([]bool, len(params.ID)),
-		MetadataUpdates:     make([][]byte, len(params.ID)),
+		MetadataUpdates:     make([]string, len(params.ID)),
 		Now:                 params.Now,
 		ScheduledAt:         make([]time.Time, len(params.ID)),
 		ScheduledAtDoUpdate: make([]bool, len(params.ID)),
@@ -713,7 +713,9 @@ func (e *Executor) JobSetStateIfRunningMany(ctx context.Context, params *riverdr
 		}
 		if params.MetadataDoMerge[i] {
 			setStateParams.MetadataDoMerge[i] = true
-			setStateParams.MetadataUpdates[i] = params.MetadataUpdates[i]
+			setStateParams.MetadataUpdates[i] = string(params.MetadataUpdates[i])
+		} else {
+			setStateParams.MetadataUpdates[i] = "{}"
 		}
 		if params.ScheduledAt[i] != nil {
 			setStateParams.ScheduledAtDoUpdate[i] = true

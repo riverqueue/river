@@ -1004,10 +1004,10 @@ export class MySqlRuntime implements RuntimeDriver<PoolConnection> {
     signal: AbortSignal
   ): Promise<number> {
     return (
-      (await this.#fenced(leader, { signal }, (tx) =>
-        this.#write(
+      (await this.#fenced(leader, { signal }, async (tx) => {
+        const rows = await this.#rows(
           tx,
-          `DELETE FROM {schema}river_job WHERE ((state='cancelled' AND finalized_at<?) OR (state='completed' AND finalized_at<?) OR (state='discarded' AND finalized_at<?)) ${params.queuesExcluded?.length ? `AND CAST(queue AS BINARY) NOT IN (${params.queuesExcluded.map(() => "?").join(",")})` : ""} ORDER BY id LIMIT ?`,
+          `SELECT CAST(id AS CHAR) AS id FROM {schema}river_job WHERE ((state='cancelled' AND finalized_at<?) OR (state='completed' AND finalized_at<?) OR (state='discarded' AND finalized_at<?)) ${params.queuesExcluded?.length ? `AND CAST(queue AS BINARY) NOT IN (${params.queuesExcluded.map(() => "?").join(",")})` : ""} ORDER BY id LIMIT ? FOR UPDATE SKIP LOCKED`,
           [
             timestamp(params.cancelledBefore),
             timestamp(params.completedBefore),
@@ -1015,8 +1015,14 @@ export class MySqlRuntime implements RuntimeDriver<PoolConnection> {
             ...(params.queuesExcluded ?? []),
             params.limit,
           ]
-        )
-      )) ?? 0
+        );
+        if (!rows.length) return 0;
+        return this.#write(
+          tx,
+          `DELETE FROM {schema}river_job WHERE id IN (${rows.map(() => "?").join(",")})`,
+          rows.map((row) => row.id)
+        );
+      })) ?? 0
     );
   }
   async maintenanceCleanQueues(

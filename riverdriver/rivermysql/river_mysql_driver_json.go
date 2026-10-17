@@ -2,6 +2,7 @@ package rivermysql
 
 import (
 	"bytes"
+	"context"
 	_ "embed"
 	"encoding/json"
 	"fmt"
@@ -9,6 +10,8 @@ import (
 	"slices"
 	"strings"
 	"text/template"
+
+	"github.com/riverqueue/river/riverdriver/rivermysql/internal/dbsqlc"
 )
 
 // sqlc's MySQL parser does not support JSON_TABLE. Keep these predicate
@@ -19,6 +22,53 @@ var jsonContainsSQL string
 
 // Parsed once and used without mutation for all metadata filters.
 var jsonContainsTemplates = template.Must(template.New("json_contains").Parse(jsonContainsSQL)) //nolint:gochecknoglobals
+
+// Merge under row locks before updating. JSON_MERGE_PATCH recursively merges
+// objects and removes JSON nulls, while River replaces each supplied member.
+// Read all metadata in one query to retain batching and preserve repeated IDs.
+func jobMetadataMergeMany(ctx context.Context, dbtx templateReplaceWrapper, ids []int64, doMerge []bool, updates [][]byte) ([][]byte, error) {
+	var mergeIDs []int64
+	for i, id := range ids {
+		if doMerge[i] {
+			mergeIDs = append(mergeIDs, id)
+		}
+	}
+	if len(mergeIDs) == 0 {
+		return updates, nil
+	}
+	rows, err := dbsqlc.New().JobGetMetadataForUpdate(ctx, dbtx, mergeIDs)
+	if err != nil {
+		return nil, err
+	}
+	metadata := make(map[int64]map[string]json.RawMessage, len(rows))
+	for _, row := range rows {
+		value := make(map[string]json.RawMessage)
+		if err := json.Unmarshal(row.Metadata, &value); err != nil {
+			return nil, fmt.Errorf("decoding job %d metadata: %w", row.ID, err)
+		}
+		if value == nil {
+			value = make(map[string]json.RawMessage)
+		}
+		metadata[row.ID] = value
+	}
+	merged := slices.Clone(updates)
+	for i, id := range ids {
+		value, exists := metadata[id]
+		if !doMerge[i] || !exists {
+			continue
+		}
+		var update map[string]json.RawMessage
+		if err := json.Unmarshal(updates[i], &update); err != nil {
+			return nil, fmt.Errorf("decoding job %d metadata update: %w", id, err)
+		}
+		maps.Copy(value, update)
+		merged[i], err = json.Marshal(value)
+		if err != nil {
+			return nil, fmt.Errorf("encoding job %d metadata: %w", id, err)
+		}
+	}
+	return merged, nil
+}
 
 // JSON_CONTAINS flattens nested arrays. Traverse each level explicitly to
 // preserve Postgres containment boundaries, including whole object elements.

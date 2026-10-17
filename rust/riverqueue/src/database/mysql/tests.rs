@@ -76,6 +76,86 @@ impl TestDatabase {
 }
 
 #[tokio::test]
+async fn cleanup_skips_locked_jobs() {
+    let db = TestDatabase::new().await;
+    let running = db
+        .client
+        .insert(Args { value: 1 })
+        .await
+        .unwrap()
+        .job
+        .row
+        .id;
+    let locked = db
+        .client
+        .insert(Args { value: 2 })
+        .await
+        .unwrap()
+        .job
+        .row
+        .id;
+    let expired = db
+        .client
+        .insert(Args { value: 3 })
+        .await
+        .unwrap()
+        .job
+        .row
+        .id;
+    sqlx::query(
+        "UPDATE river_job SET state='completed', finalized_at='1970-01-01' WHERE id IN (?, ?)",
+    )
+    .bind(locked)
+    .bind(expired)
+    .execute(&db.pool)
+    .await
+    .unwrap();
+    sqlx::query("UPDATE river_job SET state='running' WHERE id=?")
+        .bind(running)
+        .execute(&db.pool)
+        .await
+        .unwrap();
+    let mut lock = crate::database::begin_mysql_write(&db.pool).await.unwrap();
+    sqlx::query("SELECT id FROM river_job WHERE id IN (?, ?) FOR UPDATE")
+        .bind(running)
+        .bind(locked)
+        .fetch_all(&mut *lock)
+        .await
+        .unwrap();
+    let mut connection = db.pool.acquire().await.unwrap();
+    let deleted = tokio::time::timeout(
+        Duration::from_secs(2),
+        cleanup_jobs(
+            &mut connection,
+            &CleanupJobs {
+                cancelled_before: None,
+                completed_before: Some(Utc::now()),
+                discarded_before: None,
+                limit: 100,
+                queues_excluded: &[],
+                queues_included: None,
+            },
+        ),
+    )
+    .await
+    .unwrap()
+    .unwrap();
+    assert_eq!(deleted, 1);
+    assert!(db.client.jobs().get(expired).await.is_err());
+    assert_eq!(
+        db.client.jobs().get(locked).await.unwrap().state,
+        JobState::Completed
+    );
+    assert_eq!(
+        db.client.jobs().get(running).await.unwrap().state,
+        JobState::Running
+    );
+    drop(connection);
+    lock.rollback().await.unwrap();
+    db.close().await;
+}
+
+#[tokio::test]
 async fn migrations_are_serialized_and_reversible() {
     let db = TestDatabase::new().await;
     let migrator = MySqlMigrator::new(db.pool.clone());

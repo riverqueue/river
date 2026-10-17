@@ -35,4 +35,4 @@ SET
         WHEN batch.was_running AND batch.should_cancel THEN 'cancelled'
         WHEN batch.was_running THEN batch.state ELSE job.state END,
     job.metadata = CASE WHEN batch.metadata IS NOT NULL
-        THEN JSON_MERGE_PATCH(job.metadata, CAST(batch.metadata AS JSON)) ELSE job.metadata END;
+        THEN CAST(batch.metadata AS JSON) ELSE job.metadata END;

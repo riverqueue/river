@@ -1801,7 +1801,17 @@ func (q *Queries) JobScheduleSetDiscarded(ctx context.Context, db DBTX, arg *Job
 const jobSetMetadataIfNotRunning = `-- name: JobSetMetadataIfNotRunning :one
 UPDATE /* TEMPLATE: schema */river_job
 SET metadata = CASE WHEN typeof(metadata) <> 'text' OR json_valid(metadata)
-                    THEN jsonb_patch(json(metadata), json(?1))
+                    THEN jsonb((
+                            SELECT json_group_object(member_key, json(CASE
+                                WHEN json_type(?1, '$.' || json_quote(member_key)) IS NOT NULL
+                                THEN ?1 -> ('$.' || json_quote(member_key))
+                                ELSE metadata -> ('$.' || json_quote(member_key))
+                            END))
+                            FROM (
+                                SELECT cast(original.key AS text) AS member_key FROM json_each(CASE WHEN typeof(metadata) <> 'text' OR json_valid(metadata) THEN metadata ELSE '{}' END) AS original
+                                UNION SELECT cast(updated.key AS text) AS member_key FROM json_each(?1) AS updated
+                            )
+                        ))
                     ELSE metadata END
 WHERE id = ?2
     AND state != 'running'
@@ -1856,6 +1866,8 @@ type JobSetMetadataIfNotRunningRow struct {
 // for JobSetStateIfRunning to use when falling back to non-running jobs.
 // Metadata that isn't valid JSON is left in place, and columns are listed out
 // to tolerate values that aren't valid JSON. See JobGetAvailable.
+// Rebuild top-level members rather than using JSON Merge Patch, which removes
+// JSON nulls and recursively merges nested objects.
 func (q *Queries) JobSetMetadataIfNotRunning(ctx context.Context, db DBTX, arg *JobSetMetadataIfNotRunningParams) (*JobSetMetadataIfNotRunningRow, error) {
 	row := db.QueryRowContext(ctx, jobSetMetadataIfNotRunning, arg.MetadataUpdates, arg.ID)
 	var i JobSetMetadataIfNotRunningRow
@@ -1907,7 +1919,17 @@ SET
                         THEN cast(?8 AS text)
                         ELSE finalized_at END,
     metadata     = CASE WHEN cast(?9 AS boolean) AND (typeof(metadata) <> 'text' OR json_valid(metadata))
-                        THEN jsonb_patch(json(metadata), json(?10))
+                        THEN jsonb((
+                            SELECT json_group_object(member_key, json(CASE
+                                WHEN json_type(?10, '$.' || json_quote(member_key)) IS NOT NULL
+                                THEN ?10 -> ('$.' || json_quote(member_key))
+                                ELSE metadata -> ('$.' || json_quote(member_key))
+                            END))
+                            FROM (
+                                SELECT cast(original.key AS text) AS member_key FROM json_each(CASE WHEN typeof(metadata) <> 'text' OR json_valid(metadata) THEN metadata ELSE '{}' END) AS original
+                                UNION SELECT cast(updated.key AS text) AS member_key FROM json_each(?10) AS updated
+                            )
+                        ))
                         ELSE metadata END,
     scheduled_at = CASE WHEN /* NOT should_cancel */(cast(?1 AS text) <> 'available' AND ?1 <> 'retryable' AND ?1 <> 'scheduled' OR (CASE WHEN typeof(metadata) <> 'text' OR json_valid(metadata) THEN metadata -> 'cancel_attempted_at' END) IS NULL) AND cast(?11 AS boolean)
                         THEN cast(?12 AS text)
@@ -2026,7 +2048,17 @@ func (q *Queries) JobSetStateIfRunning(ctx context.Context, db DBTX, arg *JobSet
 const jobUpdate = `-- name: JobUpdate :one
 UPDATE /* TEMPLATE: schema */river_job
 SET
-    metadata = CASE WHEN cast(?1 AS boolean) THEN jsonb_patch(json(metadata), json(?2)) ELSE metadata END
+    metadata = CASE WHEN cast(?1 AS boolean) THEN jsonb((
+                            SELECT json_group_object(member_key, json(CASE
+                                WHEN json_type(?2, '$.' || json_quote(member_key)) IS NOT NULL
+                                THEN ?2 -> ('$.' || json_quote(member_key))
+                                ELSE metadata -> ('$.' || json_quote(member_key))
+                            END))
+                            FROM (
+                                SELECT cast(original.key AS text) AS member_key FROM json_each(CASE WHEN typeof(metadata) <> 'text' OR json_valid(metadata) THEN metadata ELSE '{}' END) AS original
+                                UNION SELECT cast(updated.key AS text) AS member_key FROM json_each(?2) AS updated
+                            )
+                        )) ELSE metadata END
 WHERE id = ?3
 RETURNING id, json(args), attempt, attempted_at, json(attempted_by), created_at, json(errors), finalized_at, kind, max_attempts, json(metadata), priority, queue, state, scheduled_at, json(tags), unique_key, unique_states
 `

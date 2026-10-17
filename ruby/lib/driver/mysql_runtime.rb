@@ -42,12 +42,14 @@ module River::Driver
       end
       return 0 if clauses.empty?
 
-      predicate = "(#{clauses.join(" OR ")})"
-      ids = runtime_query_rows("SELECT id FROM river_job WHERE #{predicate} ORDER BY id LIMIT #{Integer(max)}")
-        .map { |row| runtime_value(row, :id) }
-      return 0 if ids.empty?
+      transaction do
+        predicate = "(#{clauses.join(" OR ")})"
+        ids = runtime_query_rows("SELECT id FROM river_job WHERE #{predicate} ORDER BY id LIMIT #{Integer(max)} FOR UPDATE SKIP LOCKED")
+          .map { |row| runtime_value(row, :id) }
+        next 0 if ids.empty?
 
-      mysql_delete("river_job", "id", "#{runtime_in_clause("id", ids)} AND #{predicate}").length
+        mysql_delete("river_job", "id", "#{runtime_in_clause("id", ids)} AND #{predicate}").length
+      end
     end
 
     def job_delete_if_running(id)

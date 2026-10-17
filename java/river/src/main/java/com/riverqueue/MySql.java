@@ -5,6 +5,7 @@ import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Collections;
 import java.util.List;
 import java.util.regex.Pattern;
 import javax.sql.rowset.RowSetProvider;
@@ -13,6 +14,25 @@ import tools.jackson.databind.node.ObjectNode;
 /** MySQL's locking writes and readback; all SQL remains in the query catalog. */
 final class MySql {
   private MySql() {}
+
+  static int clean(Database database, Connection connection, Object... horizons)
+      throws SQLException {
+    var ids = new ArrayList<Long>();
+    try (var selected = rows(database, connection, "clean_jobs_select", horizons)) {
+      while (selected.next()) ids.add(selected.getLong("id"));
+    }
+    if (ids.isEmpty()) return 0;
+    // Lock candidates first, then use primary-key lookups for the delete. A joined
+    // delete needs a default database, while a subquery delete can lock skipped rows.
+    String placeholders = String.join(",", Collections.nCopies(ids.size(), "?"));
+    try (var statement =
+        Sql.prepare(
+            connection,
+            Sql.query(database, "clean_jobs").replace("{ids}", placeholders),
+            ids.toArray())) {
+      return statement.executeUpdate();
+    }
+  }
 
   static ResultSet mutate(Database database, Connection connection, String name, Object[] params)
       throws SQLException {

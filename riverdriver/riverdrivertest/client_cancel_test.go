@@ -24,6 +24,9 @@ func exerciseClientCancelRunningJob[TTx any](ctx context.Context, t *testing.T, 
 
 	config := newTestConfig(t, schema)
 	config.FetchPollInterval = time.Minute
+	// Startup maintenance may briefly lock a job and make the first SKIP LOCKED
+	// fetch miss it. Keep this test focused on cancellation after that fetch.
+	config.LeaderElectionDisabled = true
 	config.PollOnly = pollOnly
 	config.Queues = map[string]river.QueueConfig{river.QueueDefault: {MaxWorkers: 1}}
 

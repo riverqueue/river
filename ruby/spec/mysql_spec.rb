@@ -137,3 +137,39 @@ RSpec.describe "MySQL worker integration", database: :mysql do
     end
   end
 end
+
+RSpec.describe "MySQL cleaner", database: :mysql do
+  [:active_record, :sequel].each do |adapter|
+    it "skips locked jobs with #{adapter}" do
+      ClientTestDatabase.public_send("with_#{adapter}", :mysql) do |driver|
+        params = River::Driver::JobInsertParams.new(encoded_args: "{}", kind: "cleanup", max_attempts: 25,
+          priority: 1, queue: "default", scheduled_at: nil, state: "available", tags: [])
+        running, locked, expired = 3.times.map { driver.job_insert(params).first.id }
+        driver.send(:runtime_execute, "UPDATE river_job SET state = 'completed', finalized_at = '1970-01-01' WHERE id IN (#{locked}, #{expired})")
+        driver.send(:runtime_execute, "UPDATE river_job SET state = 'running' WHERE id = #{running}")
+        ready = Queue.new
+        release = Queue.new
+        locker = Thread.new do
+          driver.transaction do
+            [running, locked].each do |id|
+              driver.send(:runtime_query_rows, "SELECT id FROM river_job WHERE id = #{id} FOR UPDATE")
+            end
+            ready << true
+            release.pop
+          end
+        end
+        begin
+          Timeout.timeout(5) { ready.pop }
+          deleted = Timeout.timeout(2) { driver.job_delete_finalized(retention: {completed: 0}, max: 100) }
+          expect(deleted).to eq(1)
+          expect(driver.job_get_by_id(expired)).to be_nil
+          expect(driver.job_get_by_id(locked).state).to eq("completed")
+          expect(driver.job_get_by_id(running).state).to eq("running")
+        ensure
+          release << true
+          locker.join
+        end
+      end
+    end
+  end
+end

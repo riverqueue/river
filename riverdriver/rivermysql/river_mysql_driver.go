@@ -461,27 +461,32 @@ func (e *Executor) JobDeleteBefore(ctx context.Context, params *riverdriver.JobD
 		queuesIncluded = []string{""}
 	}
 
-	res, err := dbsqlc.New().JobDeleteBefore(schemaTemplateParam(ctx, params.Schema), e.dbtx, &dbsqlc.JobDeleteBeforeParams{
-		CancelledDoDelete:           boolToInt64(params.CancelledDoDelete),
-		CancelledFinalizedAtHorizon: sql.NullTime{Time: params.CancelledFinalizedAtHorizon.UTC(), Valid: true},
-		CompletedDoDelete:           boolToInt64(params.CompletedDoDelete),
-		CompletedFinalizedAtHorizon: sql.NullTime{Time: params.CompletedFinalizedAtHorizon.UTC(), Valid: true},
-		DiscardedDoDelete:           boolToInt64(params.DiscardedDoDelete),
-		DiscardedFinalizedAtHorizon: sql.NullTime{Time: params.DiscardedFinalizedAtHorizon.UTC(), Valid: true},
-		Limit:                       int32(params.Max), //nolint:gosec
-		QueuesExcluded:              queuesExcluded,
-		QueuesExcludedEmpty:         boolToInt64(len(params.QueuesExcluded) < 1),
-		QueuesIncluded:              queuesIncluded,
-		QueuesIncludedEmpty:         boolToInt64(params.QueuesIncluded == nil),
+	return dbutil.WithTxV(ctx, e.executor(), func(ctx context.Context, execTx riverdriver.ExecutorTx) (int, error) {
+		ctx = schemaTemplateParam(ctx, params.Schema)
+		dbtx := templateReplaceWrapper{dbtx: e.driver.UnwrapTx(execTx), replacer: &e.driver.replacer}
+		ids, err := dbsqlc.New().JobDeleteBeforeSelect(ctx, dbtx, &dbsqlc.JobDeleteBeforeSelectParams{
+			CancelledDoDelete:           boolToInt64(params.CancelledDoDelete),
+			CancelledFinalizedAtHorizon: sql.NullTime{Time: params.CancelledFinalizedAtHorizon.UTC(), Valid: true},
+			CompletedDoDelete:           boolToInt64(params.CompletedDoDelete),
+			CompletedFinalizedAtHorizon: sql.NullTime{Time: params.CompletedFinalizedAtHorizon.UTC(), Valid: true},
+			DiscardedDoDelete:           boolToInt64(params.DiscardedDoDelete),
+			DiscardedFinalizedAtHorizon: sql.NullTime{Time: params.DiscardedFinalizedAtHorizon.UTC(), Valid: true},
+			Limit:                       int32(params.Max), //nolint:gosec
+			QueuesExcluded:              queuesExcluded,
+			QueuesExcludedEmpty:         boolToInt64(len(params.QueuesExcluded) < 1),
+			QueuesIncluded:              queuesIncluded,
+			QueuesIncludedEmpty:         boolToInt64(params.QueuesIncluded == nil),
+		})
+		if err != nil {
+			return 0, interpretError(err)
+		}
+		if len(ids) > 0 {
+			if err := dbsqlc.New().JobDeleteManyExec(ctx, dbtx, ids); err != nil {
+				return 0, interpretError(err)
+			}
+		}
+		return len(ids), nil
 	})
-	if err != nil {
-		return 0, interpretError(err)
-	}
-	rowsAffected, err := res.RowsAffected()
-	if err != nil {
-		return 0, interpretError(err)
-	}
-	return int(rowsAffected), nil
 }
 
 func (e *Executor) JobDeleteMany(ctx context.Context, params *riverdriver.JobDeleteManyParams) ([]*rivertype.JobRow, error) {
@@ -1140,6 +1145,14 @@ func (e *Executor) JobSetStateIfRunningMany(ctx context.Context, params *riverdr
 		ctx = schemaTemplateParam(ctx, params.Schema)
 		dbtx := templateReplaceWrapper{dbtx: e.driver.UnwrapTx(execTx), replacer: &e.driver.replacer}
 
+		metadata, err := jobMetadataMergeMany(ctx, dbtx, params.ID, params.MetadataDoMerge, params.MetadataUpdates)
+		if err != nil {
+			return err
+		}
+		paramsCopy := *params
+		paramsCopy.MetadataUpdates = metadata
+		params := &paramsCopy
+
 		batchDone := false
 		if len(params.ID) > 1 && batchIDsUnique(params.ID) {
 			err := jobSetStateBatch(ctx, dbtx, params)
@@ -1231,10 +1244,14 @@ func (e *Executor) JobUpdate(ctx context.Context, params *riverdriver.JobUpdateP
 		ctx = schemaTemplateParam(ctx, params.Schema)
 		dbtx := templateReplaceWrapper{dbtx: e.driver.UnwrapTx(execTx), replacer: &e.driver.replacer}
 
+		merged, err := jobMetadataMergeMany(ctx, dbtx, []int64{params.ID}, []bool{params.MetadataDoMerge}, [][]byte{metadata})
+		if err != nil {
+			return nil, err
+		}
 		if err := dbsqlc.New().JobUpdateExec(ctx, dbtx, &dbsqlc.JobUpdateExecParams{
 			ID:              params.ID,
 			MetadataDoMerge: metadataDoMerge,
-			Metadata:        metadata,
+			Metadata:        merged[0],
 		}); err != nil {
 			return nil, interpretError(err)
 		}
