@@ -1,16 +1,58 @@
-import type { ClientBase } from "pg";
+import type { PostgresTransactionAdapter } from "riverqueue/unstable-driver";
 import type { AttemptError, JobRow, JsonObject } from "riverqueue";
 
 /** Construction options owned by the Postgres backend. */
-export interface PgDriverOptions {
+export interface PgDriverOptions<Transaction = never> {
   /** Postgres schema containing River's tables and functions. */
   schema?: string;
+  /**
+   * Enable native ORM transactions for `completeTx(tx)` in workers and
+   * `{ tx }` on client operations. Import the adapter from its driver package
+   * and configure it on each `PgDriver` that needs it. The ORM owns commit,
+   * rollback, and savepoints; River uses the supplied transaction only.
+   *
+   * Prisma and the pg pool must connect to the same database. Configure the
+   * same River schema on the worker and insertion clients. Prisma remains an
+   * optional dependency, installed with `@riverqueue/driver-prisma`.
+   *
+   * @example
+   * ```ts
+   * import { Pool } from "pg";
+   * import { Client, defineJob, Workers } from "riverqueue";
+   * import { prismaTransactionAdapter } from "@riverqueue/driver-prisma";
+   * import { PgDriver } from "@riverqueue/driver-pg";
+   * import type { Prisma, PrismaClient } from "./generated/prisma/client.js";
+   *
+   * declare const prisma: PrismaClient; // Your generated application client.
+   * const pool = new Pool({ connectionString: process.env.DATABASE_URL });
+   * const syncAccount = defineJob<{ accountId: string }>()({
+   *   kind: "sync_account",
+   * });
+   * const workers = new Workers<Prisma.TransactionClient>().add(
+   *   syncAccount,
+   *   async ({ completeTx, job }) => {
+   *     await prisma.$transaction(async (tx) => {
+   *       await tx.account.update({
+   *         where: { id: job.args.accountId },
+   *         data: { synced: true },
+   *       });
+   *       await completeTx(tx);
+   *     });
+   *   }
+   * );
+   * const client = new Client(
+   *   new PgDriver(pool, { transactionAdapters: [prismaTransactionAdapter] }),
+   *   { queues: { default: { maxWorkers: 10 } }, workers }
+   * );
+   * ```
+   */
+  transactionAdapters?: readonly PostgresTransactionAdapter<Transaction>[];
 }
 
 /** Options common to Postgres semantic operations. */
 export interface PgOperationOptions {
   /** Caller-owned transaction connection used for the entire operation. */
-  tx?: ClientBase;
+  tx?: unknown;
 }
 
 /** Exact semantic inputs for cancelling a job. */

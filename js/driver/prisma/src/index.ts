@@ -1,4 +1,4 @@
-import type { PrismaClientLike } from "./driver.js";
+import type { PrismaTransactionClientLike } from "./transaction.js";
 
 export { PrismaDriver } from "./driver.js";
 export type {
@@ -6,10 +6,12 @@ export type {
   PrismaDriverOptions,
   PrismaTransactionOptions,
 } from "./driver.js";
+export { prismaTransactionAdapter } from "./transaction.js";
+export type { PrismaTransactionClientLike } from "./transaction.js";
 
 declare module "riverqueue" {
   interface RiverTransactionRegistry {
     /** Prisma interactive-transaction clients. */
-    "@riverqueue/driver-prisma": PrismaClientLike;
+    "@riverqueue/driver-prisma": PrismaTransactionClientLike;
   }
 }

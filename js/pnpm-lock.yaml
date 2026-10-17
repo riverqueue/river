@@ -290,9 +290,15 @@ importers:
       '@prisma/client':
         specifier: 7.9.1
         version: 7.9.1(prisma@7.9.1(@types/node@26.1.1)(@types/react@19.2.18)(magicast@0.5.5)(react-dom@19.2.8(react@19.2.8))(react@19.2.8)(typescript@6.0.3))(typescript@6.0.3)
+      '@riverqueue/driver-pg':
+        specifier: workspace:*
+        version: link:../../driver/pg
       '@riverqueue/driver-prisma':
         specifier: workspace:*
         version: link:../../driver/prisma
+      pg:
+        specifier: ^8.22.0
+        version: 8.22.0
       riverqueue:
         specifier: workspace:*
         version: link:../..
@@ -303,6 +309,9 @@ importers:
       '@types/node':
         specifier: ^26.1.1
         version: 26.1.1
+      '@types/pg':
+        specifier: ^8.20.0
+        version: 8.20.0
       prisma:
         specifier: 7.9.1
         version: 7.9.1(@types/node@26.1.1)(@types/react@19.2.18)(magicast@0.5.5)(react-dom@19.2.8(react@19.2.8))(react@19.2.8)(typescript@6.0.3)

@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Support native Prisma interactive transactions with `completeTx` in workers and `{ tx }` on Postgres client operations. Configure `prismaTransactionAdapter` from `@riverqueue/driver-prisma` on `PgDriver` to commit application writes and job completion together. [PR #1517](https://github.com/riverqueue/river/pull/1517).
 - Support Node.js 24 across all packages. River automatically installs a `Temporal` polyfill when the runtime has no native implementation, preserving native `Temporal` on Node.js 26.
 
 ### Changed
