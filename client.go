@@ -2546,8 +2546,12 @@ func (c *Client[TTx]) JobList(ctx context.Context, params *JobListParams) (*JobL
 	if c.driver.DatabaseName() == riverdriver.DatabaseNameSQLite && params.metadataCalled {
 		return nil, errJobListParamsMetadataNotSupportedSQLite
 	}
-	if c.driver.DatabaseName() == riverdriver.DatabaseNameMySQL && params.metadataCalled {
-		params = params.withMetadataPredicateSQL("JSON_CONTAINS(metadata, CAST(@metadata_fragment AS JSON))")
+	if params.metadataCalled {
+		var err error
+		params, err = params.withMetadataPredicateSQL(c.driver.SQLFragmentColumnContainsJSON)
+		if err != nil {
+			return nil, err
+		}
 	}
 	params.schema = c.config.Schema
 
@@ -2589,8 +2593,12 @@ func (c *Client[TTx]) JobListTx(ctx context.Context, tx TTx, params *JobListPara
 	if c.driver.DatabaseName() == riverdriver.DatabaseNameSQLite && params.metadataCalled {
 		return nil, errJobListParamsMetadataNotSupportedSQLite
 	}
-	if c.driver.DatabaseName() == riverdriver.DatabaseNameMySQL && params.metadataCalled {
-		params = params.withMetadataPredicateSQL("JSON_CONTAINS(metadata, CAST(@metadata_fragment AS JSON))")
+	if params.metadataCalled {
+		var err error
+		params, err = params.withMetadataPredicateSQL(c.driver.SQLFragmentColumnContainsJSON)
+		if err != nil {
+			return nil, err
+		}
 	}
 	params.schema = c.config.Schema
 

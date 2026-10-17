@@ -133,6 +133,10 @@ func (d *Driver) SQLFragmentColumnContainsAny(column, namedArg string, values []
 	return fmt.Sprintf("%s && @%s", column, namedArg), pq.Array(values), nil
 }
 
+func (d *Driver) SQLFragmentColumnContainsJSON(column, namedArg, fragment string) (string, map[string]any, error) {
+	return column + " @> @" + namedArg + "::jsonb", map[string]any{namedArg: fragment}, nil
+}
+
 func (d *Driver) SQLFragmentColumnIn(column string, values any) (string, any, error) {
 	// Identical to the Pgx implementation except for use of `pg.Array`.
 	return fmt.Sprintf("%s = any(@%s)", column, column), pq.Array(values), nil

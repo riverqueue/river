@@ -393,14 +393,20 @@ func (p *JobListParams) toDBParams() (*dblist.JobListParams, error) {
 	}, nil
 }
 
-func (p *JobListParams) withMetadataPredicateSQL(predicateSQL string) *JobListParams {
+func (p *JobListParams) withMetadataPredicateSQL(buildFunc func(string, string, string) (string, map[string]any, error)) (*JobListParams, error) {
 	paramsCopy := p.copy()
 	for i := range paramsCopy.where {
-		if paramsCopy.where[i].SQL == jobListMetadataPredicatePostgres {
-			paramsCopy.where[i].SQL = predicateSQL
+		predicate := &paramsCopy.where[i]
+		if predicate.SQL == jobListMetadataPredicatePostgres {
+			fragment, _ := predicate.NamedArgs["metadata_fragment"].(string)
+			var err error
+			predicate.SQL, predicate.NamedArgs, err = buildFunc("metadata", "metadata_fragment", fragment)
+			if err != nil {
+				return nil, err
+			}
 		}
 	}
-	return paramsCopy
+	return paramsCopy, nil
 }
 
 // After returns an updated filter set that will only return jobs

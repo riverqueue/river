@@ -147,6 +147,10 @@ func (d *Driver) SQLFragmentColumnContainsAny(column, namedArg string, values []
 )`, column, namedArg), arg, nil
 }
 
+func (d *Driver) SQLFragmentColumnContainsJSON(column, namedArg, fragment string) (string, map[string]any, error) {
+	return "", nil, errors.New("JSON containment is not supported on SQLite")
+}
+
 func (d *Driver) SQLFragmentColumnIn(column string, values any) (string, any, error) {
 	arg, err := json.Marshal(values)
 	if err != nil {

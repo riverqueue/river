@@ -152,6 +152,12 @@ type Driver[TTx any] interface {
 	// API is not stable. DO NOT USE.
 	SQLFragmentColumnContainsAny(column, namedArg string, values []string) (string, any, error)
 
+	// SQLFragmentColumnContainsJSON generates a structural JSON containment
+	// predicate and its named arguments. Column and namedArg are trusted SQL identifiers.
+	//
+	// API is not stable. DO NOT USE.
+	SQLFragmentColumnContainsJSON(column, namedArg, fragment string) (string, map[string]any, error)
+
 	// SQLFragmentColumnIn generates an SQL fragment to be included as a
 	// predicate in a `WHERE` query for the existence of a set of values in a
 	// column like `id IN (...)`. The actual implementation depends on support

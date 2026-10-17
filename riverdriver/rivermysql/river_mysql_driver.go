@@ -129,6 +129,20 @@ func (d *Driver) SQLFragmentColumnContainsAny(column, namedArg string, values []
 	return fmt.Sprintf("EXISTS (SELECT 1 FROM JSON_TABLE(CAST(@%s AS JSON), '$[*]' COLUMNS(val VARCHAR(255) PATH '$')) AS filter_value WHERE JSON_CONTAINS(%s, JSON_QUOTE(filter_value.val)))", namedArg, column), arg, nil
 }
 
+func (d *Driver) SQLFragmentColumnContainsJSON(column, namedArg, fragment string) (string, map[string]any, error) {
+	if !json.Valid([]byte(fragment)) {
+		return "", nil, errors.New("invalid JSON metadata fragment")
+	}
+	args := make(map[string]any)
+	bindFunc := func(value any) string {
+		name := fmt.Sprintf("%s_%d", namedArg, len(args))
+		args[name] = value
+		return "@" + name
+	}
+	predicate, err := jsonContains(column, json.RawMessage(fragment), bindFunc, 0)
+	return predicate, args, err
+}
+
 func (d *Driver) SQLFragmentColumnIn(column string, values any) (string, any, error) {
 	arg, err := json.Marshal(values)
 	if err != nil {

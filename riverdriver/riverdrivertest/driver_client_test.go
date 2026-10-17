@@ -1174,6 +1174,56 @@ func ExerciseClient[TTx any](ctx context.Context, t *testing.T,
 		require.Equal(t, job.ID, listRes.Jobs[0].ID)
 	})
 
+	t.Run("JobListMetadataStructure", func(t *testing.T) {
+		t.Parallel()
+
+		for _, testCase := range []struct {
+			name     string
+			metadata string
+			fragment string
+			matches  bool
+		}{
+			{"ArrayNestingMatches", `{"array":[[1,2]]}`, `{"array":[[1]]}`, true},
+			{"ArrayNestingMismatch", `{"array":[[1]]}`, `{"array":[1]}`, false},
+			{"ArrayObjectMatches", `{"array":[{"a":1,"b":2}]}`, `{"array":[{"b":2,"a":1}]}`, true},
+			{"ArrayObjectSplit", `{"array":[{"a":1},{"b":2}]}`, `{"array":[{"a":1,"b":2}]}`, false},
+			{"ArrayScalarMismatch", `{"array":[1]}`, `{"array":1}`, false},
+			{"EmptyArrayMatches", `{"array":[1]}`, `{"array":[]}`, true},
+			{"EmptyContainerMismatch", `{"array":{}}`, `{"array":[]}`, false},
+			{"LargeIntegerMatches", `{"number":9007199254740993}`, `{"number":9007199254740993}`, true},
+			{"LargeIntegerMismatch", `{"number":9007199254740993}`, `{"number":9007199254740992}`, false},
+			{"NullMatches", `{"value":null}`, `{"value":null}`, true},
+			{"NullMissing", `{}`, `{"value":null}`, false},
+			{"QuotedKey", `{"a.b\\c\"d'e":true}`, `{"a.b\\c\"d'e":true}`, true},
+		} {
+			t.Run(testCase.name, func(t *testing.T) {
+				t.Parallel()
+
+				client, bundle := setup(t)
+				if bundle.driver.DatabaseName() == riverdriver.DatabaseNameSQLite {
+					t.Skip("Metadata containment is not supported on SQLite")
+				}
+				job := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{
+					Metadata: []byte(testCase.metadata),
+					Schema:   bundle.schema,
+				})
+				params := river.NewJobListParams().Metadata(testCase.fragment)
+				result, err := client.JobList(ctx, params)
+				require.NoError(t, err)
+				wantIDs := []int64{}
+				if testCase.matches {
+					wantIDs = []int64{job.ID}
+				}
+				require.Equal(t, wantIDs, sliceutil.Map(result.Jobs, func(job *rivertype.JobRow) int64 { return job.ID }))
+
+				tx, _ := beginTx(ctx, t, bundle)
+				result, err = client.JobListTx(ctx, tx, params)
+				require.NoError(t, err)
+				require.Equal(t, wantIDs, sliceutil.Map(result.Jobs, func(job *rivertype.JobRow) int64 { return job.ID }))
+			})
+		}
+	})
+
 	t.Run("JobListMixedStatePagination", func(t *testing.T) {
 		t.Parallel()
 
