@@ -4,7 +4,9 @@ A minimal example demonstrating how to use the [River](https://github.com/riverq
 
 The example defines typed jobs and shows single insertion, scheduling, batch
 insertion, and a caller-owned Prisma interactive transaction that commits an
-application row and its River job atomically.
+application row and its River job atomically. It then runs a worker through
+`PgDriver` with `prismaTransactionAdapter`, committing another application
+write and `completeTx(tx)` together inside a native Prisma transaction.
 
 ## Prerequisites
 

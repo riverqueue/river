@@ -20,26 +20,72 @@ declarations, and file layout are omitted.
  * leases from the pool, so a driver constructed from a single client
  * requires `{ tx }` for insertions.
  */
-export declare class PgDriver {
+export declare class PgDriver<Transaction = never> {
   /**
    * Type-only marker: a full runtime driver whose transactions are any
    * node-postgres client (`pg.Client` or a `PoolClient` checked out from a
-   * pool) after `BEGIN`.
+   * pool) after `BEGIN`, plus the transaction types supported by configured
+   * `transactionAdapters`.
    */
   readonly "~river"?: {
     readonly capability: "runtime";
-    readonly transaction: ClientBase;
+    readonly transaction: ClientBase | Transaction;
   };
-  constructor(client: Pool | PoolClient | PgClient, options?: PgDriverOptions);
+  constructor(
+    client: Pool | PoolClient | PgClient,
+    options?: PgDriverOptions<Transaction>
+  );
 }
 ```
 
 ## `PgDriverOptions`
 
-```ts
+````ts
 /** Construction options owned by the Postgres backend. */
-export interface PgDriverOptions {
+export interface PgDriverOptions<Transaction = never> {
   /** Postgres schema containing River's tables and functions. */
   schema?: string;
+  /**
+   * Enable native ORM transactions for `completeTx(tx)` in workers and
+   * `{ tx }` on client operations. Import the adapter from its driver package
+   * and configure it on each `PgDriver` that needs it. The ORM owns commit,
+   * rollback, and savepoints; River uses the supplied transaction only.
+   *
+   * Prisma and the pg pool must connect to the same database. Configure the
+   * same River schema on the worker and insertion clients. Prisma remains an
+   * optional dependency, installed with `@riverqueue/driver-prisma`.
+   *
+   * @example
+   * ```ts
+   * import { Pool } from "pg";
+   * import { Client, defineJob, Workers } from "riverqueue";
+   * import { prismaTransactionAdapter } from "@riverqueue/driver-prisma";
+   * import { PgDriver } from "@riverqueue/driver-pg";
+   * import type { Prisma, PrismaClient } from "./generated/prisma/client.js";
+   *
+   * declare const prisma: PrismaClient; // Your generated application client.
+   * const pool = new Pool({ connectionString: process.env.DATABASE_URL });
+   * const syncAccount = defineJob<{ accountId: string }>()({
+   *   kind: "sync_account",
+   * });
+   * const workers = new Workers<Prisma.TransactionClient>().add(
+   *   syncAccount,
+   *   async ({ completeTx, job }) => {
+   *     await prisma.$transaction(async (tx) => {
+   *       await tx.account.update({
+   *         where: { id: job.args.accountId },
+   *         data: { synced: true },
+   *       });
+   *       await completeTx(tx);
+   *     });
+   *   }
+   * );
+   * const client = new Client(
+   *   new PgDriver(pool, { transactionAdapters: [prismaTransactionAdapter] }),
+   *   { queues: { default: { maxWorkers: 10 } }, workers }
+   * );
+   * ```
+   */
+  transactionAdapters?: readonly PostgresTransactionAdapter<Transaction>[];
 }
-```
+````

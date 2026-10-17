@@ -1,7 +1,7 @@
 /** Leader-fenced maintenance: scheduling, rescue, cleanup, and reindexing. */
 import { quoteIdentifier } from "riverqueue/unstable-driver";
 import { Buffer } from "node:buffer";
-import type { ClientBase, PoolClient } from "pg";
+import type { PoolClient } from "pg";
 import type { AttemptError, JobRow, JsonObject } from "riverqueue";
 import type {
   FinalizedJobDeleteParams,
@@ -67,6 +67,7 @@ export async function jobDeleteBefore(
         ORDER BY id ASC
         LIMIT $6::int
       )
+      RETURNING 1
     `,
     [
       instantParameter(params.cancelledFinalizedAt),
@@ -181,6 +182,7 @@ export async function jobRescueMany(
       WHERE river_job.id = rescued.id
         AND river_job.state = 'running'
         AND river_job.attempted_at < $6::timestamptz
+      RETURNING 1
     `,
     [
       params.items.map(({ id }) => id.toString(10)),
@@ -213,7 +215,8 @@ export async function jobSchedule(
   const inBitmask = db.function("river_job_state_in_bitmask");
   const result = await db.query<PgScheduleRow>(
     "jobSchedule",
-    `
+    {
+      with: `
       WITH jobs_to_schedule AS (
         SELECT id, unique_key, unique_states, priority, scheduled_at
         FROM ${jobTable}
@@ -269,10 +272,13 @@ export async function jobSchedule(
         WHERE river_job.id = job_updates.id
         RETURNING river_job.*, job_updates.conflict_discarded
       )
+      `,
+      text: `
       SELECT updated.*
       FROM updated
       ORDER BY priority ASC, scheduled_at ASC, id ASC
-    `,
+      `,
+    },
     [
       instantParameter(params.scheduledAtHorizon ?? params.now),
       instantParameter(params.now),
@@ -391,9 +397,9 @@ export function maintenanceRescue(
   leader: RuntimeLeader,
   attemptedBefore: Temporal.Instant,
   jobs: readonly RuntimeJobRescue[],
-  tx?: ClientBase
+  tx?: unknown
 ): Promise<number> {
-  const rescue = (transaction: ClientBase): Promise<number> =>
+  const rescue = (transaction: unknown): Promise<number> =>
     jobRescueMany(
       db,
       {
@@ -449,7 +455,7 @@ export function maintenanceTransaction<T>(
   db: PgDatabase,
   leader: RuntimeLeader,
   batch: RuntimeMaintenanceBatch,
-  callback: (tx: ClientBase) => Promise<T>
+  callback: (tx: PoolClient) => Promise<T>
 ): Promise<T | null> {
   return withMaintenanceLeader(
     db,
@@ -506,7 +512,7 @@ export async function notificationDeleteBefore(
        WHERE created_at < $1::timestamptz
        ORDER BY created_at, id
        LIMIT $2::bigint
-     )`,
+     ) RETURNING 1`,
     [instantParameter(params.createdAtHorizon), params.max],
     options
   );
@@ -684,7 +690,7 @@ async function holdLeaderFence(
   db: PgDatabase,
   operation: string,
   leader: RuntimeLeader,
-  tx: ClientBase
+  tx: unknown
 ): Promise<boolean> {
   const held = await db.query(
     `${operation}LeaderFence`,
@@ -711,8 +717,8 @@ async function withLeaderFenceIn<T>(
   db: PgDatabase,
   leader: RuntimeLeader,
   operation: string,
-  tx: ClientBase,
-  run: (transaction: ClientBase) => Promise<T>
+  tx: unknown,
+  run: (transaction: unknown) => Promise<T>
 ): Promise<T | null> {
   if (!(await holdLeaderFence(db, operation, leader, tx))) return null;
   return run(tx);

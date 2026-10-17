@@ -13,9 +13,9 @@ declarations, and file layout are omitted.
 export interface PrismaClientLike {
   $queryRawUnsafe<T = unknown>(query: string, ...values: unknown[]): Promise<T>;
   /**
-   * Prisma's interactive transaction, present on a root client (not on the
-   * transaction client it passes to the callback). River uses it to run an
-   * insertion without `{ tx }` in a transaction of its own.
+   * Prisma's interactive transaction, present on a root client and on
+   * transaction clients in versions supporting nested transactions. River
+   * uses it to run an insertion without `{ tx }` in a transaction of its own.
    */
   $transaction?<R>(
     callback: (tx: PrismaClientLike) => Promise<R>,
@@ -67,6 +67,36 @@ export interface PrismaDriverOptions {
     maxWait?: DurationInput;
     timeout?: DurationInput;
   };
+}
+```
+
+## `prismaTransactionAdapter`
+
+```ts
+/**
+ * Let a PgDriver use native Prisma interactive transactions, including
+ * `completeTx(tx)` in worker handlers. Configure `new PgDriver(pool, {
+ * transactionAdapters: [prismaTransactionAdapter] })`. Prisma owns commit,
+ * rollback, and transaction timeouts; River uses the supplied transaction only.
+ */
+export declare const prismaTransactionAdapter: PostgresTransactionAdapter<PrismaTransactionClientLike>;
+```
+
+## `PrismaTransactionClientLike`
+
+```ts
+/**
+ * The raw-query surface of Prisma's interactive-transaction client. It omits
+ * the root client's connection lifecycle methods. A generated
+ * `Prisma.TransactionClient` is assignable to this interface, including
+ * versions that expose `$transaction` for nested savepoints.
+ */
+export interface PrismaTransactionClientLike extends Pick<
+  PrismaClientLike,
+  "$queryRawUnsafe"
+> {
+  readonly $connect?: never;
+  readonly $disconnect?: never;
 }
 ```
 

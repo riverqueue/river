@@ -175,7 +175,8 @@ async function queueSetPaused(
     PgQueueDatabaseRow | { [Key in keyof PgQueueDatabaseRow]: null }
   >(
     paused ? "queuePause" : "queueResume",
-    `
+    {
+      with: `
       WITH updated AS (
         UPDATE ${db.table("river_queue")}
         SET
@@ -205,11 +206,14 @@ async function queueSetPaused(
         ) END) AS sent
         WHERE $2::text = '*' OR EXISTS (SELECT 1 FROM updated)
       )
+      `,
+      text: `
       SELECT updated.*
       FROM notification
       LEFT JOIN updated ON true
       ORDER BY updated.name
-    `,
+      `,
+    },
     [
       instantParameter(params.now),
       params.name,
@@ -239,7 +243,8 @@ export async function queueUpdate(
   const { supportsListenNotify } = await db.capabilities(options);
   const result = await db.query<PgQueueDatabaseRow>(
     "queueUpdate",
-    `
+    {
+      with: `
       WITH updated AS (
         UPDATE ${db.table("river_queue")}
         SET
@@ -254,8 +259,11 @@ export async function queueUpdate(
           $6::text
         ) END FROM updated WHERE $1::boolean
       )
+      `,
+      text: `
       SELECT updated.* FROM updated LEFT JOIN notification ON true
-    `,
+      `,
+    },
     [
       update !== undefined,
       update?.text ?? "{}",

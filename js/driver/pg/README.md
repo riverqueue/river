@@ -57,6 +57,13 @@ The transaction costs two more round trips per call, for `BEGIN` and `COMMIT`.
 To insert many jobs, pass them to one `insertMany` call rather than calling
 `insert` for each.
 
+To use native Prisma transactions, configure
+`new PgDriver(pool, { transactionAdapters: [prismaTransactionAdapter] })`,
+importing the adapter from `@riverqueue/driver-prisma`. This enables both
+`completeTx(tx)` in workers and `{ tx }` on client operations. See the
+[Prisma transaction example](../prisma/README.md#complete-jobs-inside-prisma-transactions).
+The adapter is optional; this package has no Prisma dependency.
+
 Apply migrations explicitly with `@riverqueue/migrate` or
 `@riverqueue/cli` before starting workers.
 
