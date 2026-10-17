@@ -1,0 +1,63 @@
+{
+  "name": "@riverqueue/driver-knex",
+  "version": "0.2.0",
+  "description": "Knex driver for the riverqueue TypeScript client.",
+  "type": "module",
+  "sideEffects": false,
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js",
+      "default": "./dist/index.js"
+    }
+  },
+  "engines": {
+    "node": ">=24"
+  },
+  "files": [
+    "dist",
+    "src",
+    "!src/**/*.test.ts",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "build": "node ../../node_modules/typescript/bin/tsc && node ../../scripts/copy-license.mjs",
+    "clean": "rm -rf dist",
+    "prepack": "pnpm run clean && pnpm run build"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/riverqueue/river.git",
+    "directory": "js/driver/knex"
+  },
+  "contributors": [
+    "Brandur Leach",
+    "Blake Gentry"
+  ],
+  "license": "MPL-2.0",
+  "publishConfig": {
+    "access": "public",
+    "provenance": true
+  },
+  "peerDependencies": {
+    "knex": "^3.1.0",
+    "pg": "^8.0.0",
+    "riverqueue": "workspace:0.2.0"
+  },
+  "devDependencies": {
+    "knex": "^3.1.0",
+    "pg": "^8.22.0",
+    "riverqueue": "workspace:0.2.0",
+    "typescript": "^6.0.3"
+  },
+  "keywords": [
+    "river",
+    "job-queue",
+    "postgresql",
+    "knex",
+    "driver"
+  ]
+}

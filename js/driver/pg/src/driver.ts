@@ -67,23 +67,24 @@ const RIVER_SCHEMA_RE = /^[A-Za-z_][A-Za-z0-9_]*$/;
  * leases from the pool, so a driver constructed from a single client
  * requires `{ tx }` for insertions.
  */
-export class PgDriver {
+export class PgDriver<Transaction = never> {
   /**
    * Type-only marker: a full runtime driver whose transactions are any
    * node-postgres client (`pg.Client` or a `PoolClient` checked out from a
-   * pool) after `BEGIN`.
+   * pool) after `BEGIN`, plus the transaction types supported by configured
+   * `transactionAdapters`.
    */
   declare readonly "~river"?: {
     readonly capability: "runtime";
-    readonly transaction: ClientBase;
+    readonly transaction: ClientBase | Transaction;
   };
 
   constructor(
     client: Pool | PoolClient | PgClient,
-    options: PgDriverOptions = {}
+    options: PgDriverOptions<Transaction> = {}
   ) {
-    const runtime = new PgRuntime(client, options);
-    registerDriver<ClientBase>(this, runtime.driverRecord());
+    const runtime = new PgRuntime<Transaction>(client, options);
+    registerDriver<ClientBase | Transaction>(this, runtime.driverRecord());
   }
 }
 
@@ -91,12 +92,12 @@ export class PgDriver {
  * @internal A registered driver whose operations are callable, for this
  * package's tests.
  */
-export function testPgDriver(
+export function testPgDriver<Transaction = never>(
   client: Pool | PoolClient | PgClient,
-  options: PgDriverOptions = {}
-): PgRuntime {
-  const runtime = new PgRuntime(client, options);
-  registerDriver<ClientBase>(runtime, runtime.driverRecord());
+  options: PgDriverOptions<Transaction> = {}
+): PgRuntime<Transaction> {
+  const runtime = new PgRuntime<Transaction>(client, options);
+  registerDriver<ClientBase | Transaction>(runtime, runtime.driverRecord());
   return runtime;
 }
 
@@ -104,10 +105,12 @@ export function testPgDriver(
  * @internal The operations behind a {@link PgDriver}, which River reaches
  * through its private driver registry.
  */
-export class PgRuntime implements RuntimeDriver<ClientBase> {
+export class PgRuntime<Transaction = never> implements RuntimeDriver<
+  ClientBase | Transaction
+> {
   declare readonly "~river"?: {
     readonly capability: "runtime";
-    readonly transaction: ClientBase;
+    readonly transaction: ClientBase | Transaction;
   };
 
   readonly backend = "postgres" as const;
@@ -123,7 +126,7 @@ export class PgRuntime implements RuntimeDriver<ClientBase> {
 
   constructor(
     client: Pool | PoolClient | PgClient,
-    options: PgDriverOptions = {}
+    options: PgDriverOptions<Transaction> = {}
   ) {
     if (!isQueryable(client)) {
       throw configurationError(
@@ -136,12 +139,16 @@ export class PgRuntime implements RuntimeDriver<ClientBase> {
     if (schema !== undefined) validateSchema(schema);
 
     this.#connection = client;
-    this.#db = new PgDatabase(client, schema ?? null);
+    this.#db = new PgDatabase(
+      client,
+      schema ?? null,
+      options.transactionAdapters
+    );
     this.pool = this.#db.pool;
   }
 
   /** What River's private registry records about this driver. */
-  driverRecord(): DriverRecord<ClientBase> {
+  driverRecord(): DriverRecord<ClientBase | Transaction> {
     return {
       backend: this.backend,
       capability: "runtime",
@@ -152,7 +159,7 @@ export class PgRuntime implements RuntimeDriver<ClientBase> {
       operations: this,
       ...(this.pool === null
         ? {}
-        : { database: new PgPilotDatabase(this.#db, this.pool) }),
+        : { database: new PgPilotDatabase<Transaction>(this.#db, this.pool) }),
     };
   }
 
@@ -252,7 +259,7 @@ export class PgRuntime implements RuntimeDriver<ClientBase> {
    */
   jobClaim(
     params: JobClaimParams,
-    options?: JobClaimOptions<ClientBase>
+    options?: JobClaimOptions<ClientBase | Transaction>
   ): Promise<JobClaimResult> {
     return jobSql.jobClaim(this.#db, params, options);
   }
@@ -264,7 +271,10 @@ export class PgRuntime implements RuntimeDriver<ClientBase> {
    */
   jobCompleteMany(
     commands: readonly JobCompletionCommand[],
-    options?: { readonly signal?: AbortSignal; readonly tx?: ClientBase }
+    options?: {
+      readonly signal?: AbortSignal;
+      readonly tx?: ClientBase | Transaction;
+    }
   ): Promise<readonly JobCompletionResult[]> {
     return jobSql.jobCompleteMany(this.#db, commands, options);
   }
@@ -304,7 +314,7 @@ export class PgRuntime implements RuntimeDriver<ClientBase> {
    */
   jobInsert(
     params: JobInsertParams,
-    options?: InsertDriverOptions<ClientBase>
+    options?: InsertDriverOptions<ClientBase | Transaction>
   ): Promise<DriverInsertResult> {
     return jobSql.jobInsert(this.#db, params, options);
   }
@@ -319,7 +329,7 @@ export class PgRuntime implements RuntimeDriver<ClientBase> {
    */
   jobInsertMany(
     params: readonly JobInsertParams[],
-    options?: InsertDriverOptions<ClientBase>
+    options?: InsertDriverOptions<ClientBase | Transaction>
   ): Promise<readonly DriverInsertResult[]> {
     return jobSql.jobInsertMany(this.#db, params, options);
   }
@@ -585,7 +595,7 @@ export class PgRuntime implements RuntimeDriver<ClientBase> {
    */
   notifyInsert(
     queues: readonly string[],
-    options?: InsertDriverOptions<ClientBase>
+    options?: InsertDriverOptions<ClientBase | Transaction>
   ): Promise<void> {
     return notifySql.notifyInsert(this.#db, queues, options);
   }
@@ -676,8 +686,8 @@ export class PgRuntime implements RuntimeDriver<ClientBase> {
    * @internal
    */
   async operationScope<T>(
-    tx: ClientBase | undefined,
-    callback: (tx: ClientBase) => Promise<T>
+    tx: ClientBase | Transaction | undefined,
+    callback: (tx: ClientBase | Transaction) => Promise<T>
   ): Promise<T> {
     if (tx !== undefined) return callback(tx);
     if (this.pool === null) {
@@ -785,7 +795,7 @@ export class PgRuntime implements RuntimeDriver<ClientBase> {
     leader: RuntimeLeader,
     attemptedBefore: Temporal.Instant,
     jobs: readonly RuntimeJobRescue[],
-    options?: InsertDriverOptions<ClientBase>
+    options?: InsertDriverOptions<ClientBase | Transaction>
   ): Promise<number> {
     return maintenanceSql.maintenanceRescue(
       this.#db,
@@ -816,7 +826,7 @@ export class PgRuntime implements RuntimeDriver<ClientBase> {
   maintenanceTransaction<Result>(
     leader: RuntimeLeader,
     batch: RuntimeMaintenanceBatch,
-    callback: (tx: ClientBase) => Promise<Result>
+    callback: (tx: ClientBase | Transaction) => Promise<Result>
   ): Promise<Result | null> {
     return maintenanceSql.maintenanceTransaction(
       this.#db,

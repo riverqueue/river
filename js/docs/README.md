@@ -265,7 +265,7 @@ Without `{ tx }`, River's own transaction rolls the whole call back.
 
 The job's insert notification is delivered when the transaction commits, so
 workers never see a job whose transaction rolled back. Prisma and SQLite use
-the same `{ tx }` option; see the [Prisma](../driver/prisma/README.md) and
+the same `{ tx }` option; see the [Knex](../driver/knex/README.md), [Prisma](../driver/prisma/README.md), and
 [SQLite](../driver/sqlite/README.md) drivers.
 
 ## Work jobs
@@ -360,6 +360,11 @@ normal return completes it. `new Workers<PoolClient>()` types `completeTx`
 transaction of any installed River driver, so with both the Postgres and
 SQLite drivers installed, passing a SQLite transaction to a Postgres client's
 handler would compile and then fail at runtime.
+
+For native Knex transactions, configure `knexTransactionAdapter` on the
+worker's `PgDriver` and use `new Workers<Knex.Transaction>()`. See the
+[Knex example](../driver/knex/README.md#complete-jobs-inside-knex-transactions).
+Installing the Knex driver alone does not enable its transactions on `PgDriver`.
 
 ## Run workers
 

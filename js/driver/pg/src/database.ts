@@ -8,14 +8,14 @@ import {
   postgresCapabilitiesFromRow,
   quoteIdentifier,
   type PostgresCapabilities,
+  type PostgresTransactionAdapter,
+  type PostgresTransactionResult,
 } from "riverqueue/unstable-driver";
 import type {
   Client as PgClient,
-  ClientBase,
   Pool,
   PoolClient,
   QueryConfig,
-  QueryResult,
   QueryResultRow,
 } from "pg";
 import { RiverError } from "riverqueue";
@@ -55,9 +55,15 @@ export class PgDatabase {
    */
   #capabilities: PostgresCapabilities | undefined;
   readonly #client: PgQueryable;
+  readonly #transactionAdapters: readonly PostgresTransactionAdapter[];
 
   /** Wrap a validated pool or client; `schema` is already validated. */
-  constructor(client: Pool | PoolClient | PgClient, schema: string | null) {
+  constructor(
+    client: Pool | PoolClient | PgClient,
+    schema: string | null,
+    transactionAdapters: readonly PostgresTransactionAdapter[] = []
+  ) {
+    this.#transactionAdapters = [...transactionAdapters];
     this.#client = client;
     this.pool = isPool(client) ? client : null;
     this.schemaName = schema;
@@ -72,7 +78,7 @@ export class PgDatabase {
    * the first result stored wins, and nothing is cached after a failure.
    */
   async capabilities(
-    options?: PgOperationOptions | InsertDriverOptions<ClientBase>
+    options?: PgOperationOptions | InsertDriverOptions
   ): Promise<PostgresCapabilities> {
     if (this.#capabilities !== undefined) return this.#capabilities;
     const result = await this.query<{
@@ -167,8 +173,8 @@ export class PgDatabase {
     operation: string,
     text: string,
     values: unknown[],
-    options?: PgOperationOptions | InsertDriverOptions<ClientBase>
-  ): Promise<QueryResult<Row>> {
+    options?: PgOperationOptions | InsertDriverOptions
+  ): Promise<PostgresTransactionResult<Row>> {
     const queryable = this.resolveQueryable(operation, options);
     const config: QueryConfig<unknown[]> = {
       text,
@@ -198,7 +204,7 @@ export class PgDatabase {
     operation: string,
     text: string,
     values: unknown[]
-  ): Promise<QueryResult<Row>> {
+  ): Promise<PostgresTransactionResult<Row>> {
     return this.withConnection(signal, (options) =>
       this.query<Row>(operation, text, values, options)
     );
@@ -212,7 +218,7 @@ export class PgDatabase {
    */
   async withConnection<T>(
     signal: AbortSignal | undefined,
-    run: (options: { readonly tx?: ClientBase }) => Promise<T>
+    run: (options: { readonly tx?: unknown }) => Promise<T>
   ): Promise<T> {
     if (signal === undefined || this.pool === null) return run({});
     const acquiring = this.pool.connect();
@@ -240,9 +246,9 @@ export class PgDatabase {
     operation: string,
     text: string,
     values: unknown[],
-    options: { readonly signal?: AbortSignal; readonly tx?: ClientBase } = {},
+    options: { readonly signal?: AbortSignal; readonly tx?: unknown } = {},
     cancelPrefix?: string
-  ): Promise<QueryResult<Row>> {
+  ): Promise<PostgresTransactionResult<Row>> {
     const signal = options.signal;
     if (signal === undefined) {
       return this.query(
@@ -359,13 +365,30 @@ export class PgDatabase {
   /** The caller's transaction client when given, else the configured pool or client. */
   resolveQueryable(
     operation: string,
-    options?: PgOperationOptions | InsertDriverOptions<ClientBase>
-  ): PgQueryable {
+    options?: PgOperationOptions | InsertDriverOptions
+  ): {
+    query<Row extends QueryResultRow>(
+      config: QueryConfig<unknown[]>
+    ): Promise<PostgresTransactionResult<Row>>;
+  } {
     if (options?.tx === undefined) return this.#client;
+    const tx = options.tx;
+    for (const adapter of this.#transactionAdapters) {
+      if (!adapter.matches(tx)) continue;
+      adapter.validate(tx);
+      return {
+        query: (config) =>
+          adapter.query(tx, {
+            text: config.text,
+            types: config.types,
+            values: config.values ?? [],
+          }),
+      };
+    }
     if (!isQueryable(options.tx)) {
       throw backendMismatchError(
         operation,
-        "the transaction is not a node-postgres client"
+        "the transaction is not a node-postgres client or a configured transaction adapter"
       );
     }
     return options.tx;
@@ -390,7 +413,7 @@ function isPool(value: Pool | PoolClient | PgClient): value is Pool {
 /** Whether a value can run node-postgres queries. */
 export function isQueryable(value: unknown): value is PgQueryable {
   return (
-    (typeof value === "object" || typeof value === "function") &&
+    typeof value === "object" &&
     value !== null &&
     "query" in value &&
     typeof value.query === "function"

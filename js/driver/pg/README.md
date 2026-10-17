@@ -57,6 +57,13 @@ The transaction costs two more round trips per call, for `BEGIN` and `COMMIT`.
 To insert many jobs, pass them to one `insertMany` call rather than calling
 `insert` for each.
 
+To use native Knex transactions, configure
+`new PgDriver(pool, { transactionAdapters: [knexTransactionAdapter] })`,
+importing the adapter from `@riverqueue/driver-knex`. This enables both
+`completeTx(tx)` in workers and `{ tx }` on client operations. See the
+[Knex transaction example](../knex/README.md#complete-jobs-inside-knex-transactions).
+The adapter is optional; this package has no Knex dependency.
+
 Apply migrations explicitly with `@riverqueue/migrate` or
 `@riverqueue/cli` before starting workers.
 

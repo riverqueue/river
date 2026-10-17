@@ -66,7 +66,9 @@ export interface PgScheduleRow extends PgJobRow {
 }
 
 /** Decode the first row of a result, or null when there is none. */
-export function mapOneJob(result: QueryResult<PgJobRow>): JobRow | null {
+export function mapOneJob(
+  result: Pick<QueryResult<PgJobRow>, "rows">
+): JobRow | null {
   const row = result.rows[0];
   return row === undefined ? null : toJobRow(row);
 }
@@ -77,7 +79,9 @@ export function mapOneJob(result: QueryResult<PgJobRow>): JobRow | null {
  * that act on a job by ID use it, so an operator can cancel, retry, or delete
  * a row another engine wrote that River can't fully read.
  */
-export function mapOneJobPartial(result: QueryResult<PgJobRow>): JobRow | null {
+export function mapOneJobPartial(
+  result: Pick<QueryResult<PgJobRow>, "rows">
+): JobRow | null {
   const row = result.rows[0];
   return row === undefined ? null : toJobRowPartial(row).job;
 }

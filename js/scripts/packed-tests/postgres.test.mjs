@@ -3,8 +3,10 @@ import { randomBytes } from "node:crypto";
 import process from "node:process";
 import { after, before, describe, it } from "node:test";
 
+import { knexTransactionAdapter } from "@riverqueue/driver-knex";
 import { PgDriver } from "@riverqueue/driver-pg";
 import { createMigrator } from "@riverqueue/migrate";
+import knex from "knex";
 import pg from "pg";
 import {
   Client,
@@ -45,6 +47,81 @@ describe(
     after(async () => {
       await pool.query(`DROP SCHEMA IF EXISTS ${schema} CASCADE`);
       await pool.end();
+    });
+
+    it("completes jobs atomically with native Knex transactions", async () => {
+      const db = knex({ client: "pg", connection: DATABASE_URL });
+      try {
+        await db.schema.withSchema(schema).createTable("account", (table) => {
+          table.integer("id").primary();
+        });
+        const workers = new Workers().add(
+          accountJob,
+          async ({ completeTx, job }) => {
+            await db.transaction(async (tx) => {
+              await tx
+                .withSchema(schema)
+                .table("account")
+                .insert({ id: job.args.accountId });
+              const completed = await completeTx(tx, {
+                output: { exact: exactJsonNumber(INT8_MAX.toString()) },
+              });
+              assert.equal(completed.state, "completed");
+              assert.equal(
+                jsonNumberToBigInt(completed.metadata.output.exact),
+                INT8_MAX
+              );
+              const { rows } = await pool.query(
+                `SELECT state FROM ${schema}.river_job WHERE id = $1`,
+                [job.id.toString()]
+              );
+              assert.equal(
+                rows[0].state,
+                "running",
+                "completion is invisible before commit"
+              );
+              if (job.args.accountId === 2)
+                throw new Error("roll back Knex transaction");
+            });
+          }
+        );
+        const client = new Client(
+          new PgDriver(pool, {
+            schema,
+            transactionAdapters: [knexTransactionAdapter],
+          }),
+          { queues: { default: { maxWorkers: 1 } }, workers }
+        );
+        const committed = await client.insert(
+          accountJob,
+          { accountId: 1 },
+          { maxAttempts: 1 }
+        );
+        const rolledBack = await client.insert(
+          accountJob,
+          { accountId: 2 },
+          { maxAttempts: 1 }
+        );
+        const events = await workUntilFinalized(client, [
+          committed.job.id,
+          rolledBack.job.id,
+        ]);
+        assert.equal(events.get(committed.job.id)?.kind, "job_completed");
+        assert.equal(
+          (await client.jobs.get(committed.job.id)).state,
+          "completed"
+        );
+        assert.equal(events.get(rolledBack.job.id)?.kind, "job_failed");
+        assert.equal(
+          (await client.jobs.get(rolledBack.job.id)).state,
+          "discarded"
+        );
+        assert.deepEqual(await db.withSchema(schema).table("account"), [
+          { id: 1 },
+        ]);
+      } finally {
+        await db.destroy();
+      }
     });
 
     it("works exact int64 args end to end", async () => {

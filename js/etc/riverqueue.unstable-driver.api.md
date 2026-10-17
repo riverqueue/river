@@ -1940,6 +1940,84 @@ export declare function postgresCapabilitiesFromRow(row: {
 }): PostgresCapabilities;
 ```
 
+## `PostgresInserter`
+
+```ts
+/** Shared insertion SQL and exact row decoding for Postgres ORM adapters. */
+export declare class PostgresInserter<
+  Transaction,
+> implements InsertDriver<Transaction> {
+  readonly "~river"?: {
+    readonly capability: "insert";
+    readonly transaction: Transaction;
+  };
+  readonly backend: string;
+  constructor(options: PostgresInserterOptions<Transaction>);
+  /**
+   * Insert one job, or return the existing job that holds its unique key.
+   *
+   * Part of River's unstable driver interface, which `Client` calls;
+   * applications insert through the client instead. Its parameter and result
+   * types come from `riverqueue/unstable-driver` and may change in any
+   * release.
+   */
+  jobInsert(
+    params: JobInsertParams,
+    options?: InsertDriverOptions<Transaction>
+  ): Promise<DriverInsertResult>;
+  /**
+   * Insert an ordered batch of jobs atomically.
+   *
+   * Part of River's unstable driver interface, which `Client` calls;
+   * applications insert through the client instead. Its parameter and result
+   * types come from `riverqueue/unstable-driver` and may change in any
+   * release.
+   */
+  jobInsertMany(
+    params: readonly JobInsertParams[],
+    options?: InsertDriverOptions<Transaction>
+  ): Promise<readonly DriverInsertResult[]>;
+  /**
+   * Notify producers of new jobs in each of `queues`. NOTIFY is
+   * transactional, so in a caller-owned transaction it's delivered only on
+   * commit.
+   *
+   * Part of River's unstable driver interface, which `Client` calls after
+   * inserting jobs. Its parameter types come from
+   * `riverqueue/unstable-driver` and may change in any release.
+   */
+  notifyInsert(
+    queues: readonly string[],
+    options?: InsertDriverOptions<Transaction>
+  ): Promise<void>;
+  /** Run the operation in the adapter's transaction scope. */
+  operationScope<T>(
+    tx: Transaction | undefined,
+    callback: (tx: Transaction) => Promise<T>
+  ): Promise<T>;
+}
+```
+
+## `PostgresInserterOptions`
+
+```ts
+/** Transport and transaction callbacks for Postgres insertion adapters. */
+export interface PostgresInserterOptions<Transaction> {
+  backend: string;
+  name: string;
+  operationScope<T>(
+    tx: Transaction | undefined,
+    callback: (tx: Transaction) => Promise<T>
+  ): Promise<T>;
+  query<T>(
+    tx: Transaction | undefined,
+    sql: string,
+    ...values: unknown[]
+  ): Promise<T>;
+  schema?: string;
+}
+```
+
 ## `postgresTimestamp`
 
 ```ts
@@ -1951,6 +2029,49 @@ export declare function postgresCapabilitiesFromRow(row: {
  * instant for the same value.
  */
 export declare function postgresTimestamp(value: Temporal.Instant): string;
+```
+
+## `PostgresTransactionAdapter`
+
+```ts
+/**
+ * Query transport for a caller-owned Postgres transaction. First-party ORM
+ * packages provide these adapters; applications configure them on PgDriver.
+ * An adapter never begins, commits, rolls back, or releases the transaction.
+ */
+export interface PostgresTransactionAdapter<Transaction = unknown> {
+  /** Recognize the ORM's transaction handle, including a completed handle. */
+  matches(transaction: unknown): transaction is Transaction;
+  /** Run River's SQL on that exact transaction with the supplied parsers. */
+  query<Row>(
+    transaction: unknown,
+    query: PostgresTransactionQuery
+  ): Promise<PostgresTransactionResult<Row>>;
+  /** Reject completed transactions and unsupported database dialects. */
+  validate(transaction: unknown): void;
+}
+```
+
+## `PostgresTransactionQuery`
+
+```ts
+/** River's numbered-parameter SQL and query-scoped Postgres type parsers. */
+export interface PostgresTransactionQuery {
+  readonly text: string;
+  /** Driver-owned parsers; the adapter must pass these through unchanged. */
+  readonly types?: unknown;
+  readonly values: readonly unknown[];
+}
+```
+
+## `PostgresTransactionResult`
+
+```ts
+/** Query results used by River, independent of an ORM or pg package. */
+export interface PostgresTransactionResult<Row> {
+  readonly rowCount: number | null;
+  readonly rows: Row[];
+}
 ```
 
 ## `PreparedInsertParams`

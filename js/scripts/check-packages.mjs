@@ -37,6 +37,7 @@ const rootPackageJson = JSON.parse(
 const packageSpecs = [
   { directory: ".", name: "riverqueue" },
   { directory: "migrate", name: "@riverqueue/migrate" },
+  { directory: "driver/knex", name: "@riverqueue/driver-knex" },
   { directory: "driver/pg", name: "@riverqueue/driver-pg" },
   { directory: "driver/prisma", name: "@riverqueue/driver-prisma" },
   { directory: "driver/sqlite", name: "@riverqueue/driver-sqlite" },
@@ -393,6 +394,7 @@ async function verifyConsumers(archiveByPackageName) {
     `
 import * as river from "riverqueue";
 import * as cli from "@riverqueue/cli";
+import * as knexDriver from "@riverqueue/driver-knex";
 import * as pg from "@riverqueue/driver-pg";
 import * as prisma from "@riverqueue/driver-prisma";
 import * as sqlite from "@riverqueue/driver-sqlite";
@@ -400,7 +402,7 @@ import * as migrate from "@riverqueue/migrate";
 import * as testing from "@riverqueue/test";
 import * as workerThreads from "@riverqueue/worker-threads";
 
-for (const packageNamespace of [river, cli, pg, prisma, sqlite, migrate, testing, workerThreads]) {
+for (const packageNamespace of [river, cli, knexDriver, pg, prisma, sqlite, migrate, testing, workerThreads]) {
   if (Object.keys(packageNamespace).length === 0) throw new Error("empty package namespace");
 }
 
@@ -449,6 +451,7 @@ if (cron("@every 1s").next(start).toString() !== "2026-10-11T12:34:57Z") {
 const packageNames = [
   "riverqueue",
   "@riverqueue/cli",
+  "@riverqueue/driver-knex",
   "@riverqueue/driver-pg",
   "@riverqueue/driver-prisma",
   "@riverqueue/driver-sqlite",
@@ -565,6 +568,8 @@ import type {
   RunHandle,
 } from "riverqueue";
 import { run as runCli } from "@riverqueue/cli";
+import { KnexDriver, knexTransactionAdapter } from "@riverqueue/driver-knex";
+import type { Knex } from "knex";
 import { PgDriver } from "@riverqueue/driver-pg";
 import { PrismaDriver, type PrismaClientLike } from "@riverqueue/driver-prisma";
 import {
@@ -586,12 +591,36 @@ const emailJob = defineJob({
 });
 declare const driver: RuntimeDriver;
 declare const prisma: PrismaClientLike;
+declare const knex: Knex;
+declare const knexTx: Knex.Transaction;
+const knexClient = new Client(new KnexDriver(knex));
+void knexClient.insert(emailJob, { address: "a@example.com" }, { tx: knexTx });
+// @ts-expect-error Knex is an insertion-only driver.
+void knexClient.start();
+// @ts-expect-error A root Knex instance is not a transaction.
+void knexClient.insert(emailJob, { address: "a@example.com" }, { tx: knex });
 declare const pgPool: Pool;
 declare const pgTx: PoolClient;
 declare const sqliteDatabase: DatabaseSync;
 const client = new Client(driver);
 const pgDriver = new PgDriver(pgPool);
 const pgClient = new Client(pgDriver);
+const knexWorkers = new Workers<Knex.Transaction>().add(emailJob, async ({ completeTx, client }) => {
+  await completeTx(knexTx);
+  await client.insert(emailJob, { address: "followup@example.com" }, { tx: knexTx });
+  // @ts-expect-error A root Knex instance is not a transaction.
+  await completeTx(knex);
+});
+const knexRuntimeClient = new Client(
+  new PgDriver(pgPool, { transactionAdapters: [knexTransactionAdapter] }),
+  { workers: knexWorkers },
+);
+void knexRuntimeClient.jobs.get(1n, { tx: knexTx });
+void knexRuntimeClient.jobs.get(1n, { tx: pgTx });
+// @ts-expect-error A root Knex instance is not a transaction.
+void knexRuntimeClient.jobs.get(1n, { tx: knex });
+// @ts-expect-error Knex transactions require a configured adapter.
+void pgClient.jobs.get(1n, { tx: knexTx });
 const sqliteDriver = new SqliteDriver(sqliteDatabase);
 const sqliteClient = new Client(sqliteDriver);
 const migrators: Migrator[] = [

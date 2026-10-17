@@ -11,7 +11,7 @@ import type {
   PilotDatabase,
 } from "riverqueue/unstable-driver";
 
-import { isQueryable, type PgDatabase } from "./database.js";
+import type { PgDatabase } from "./database.js";
 import { backendMismatchError } from "./errors.js";
 import { abortablePromise, PgClientLease } from "./lease.js";
 import { jobLoadClaimed } from "./sql/jobs.js";
@@ -19,7 +19,9 @@ import { jobDeleteFinalized } from "./sql/maintenance.js";
 import { notifyMany } from "./sql/notify.js";
 
 /** A pilot's view of a pool-backed `PgDriver`. */
-export class PgPilotDatabase implements PilotDatabase<ClientBase> {
+export class PgPilotDatabase<Transaction = never> implements PilotDatabase<
+  ClientBase | Transaction
+> {
   readonly backend = "postgres";
   readonly schema: string | null;
 
@@ -33,7 +35,9 @@ export class PgPilotDatabase implements PilotDatabase<ClientBase> {
   }
 
   async connection<Result>(
-    callback: (handle: ClientBase) => PromiseLike<Result> | Result,
+    callback: (
+      handle: ClientBase | Transaction
+    ) => PromiseLike<Result> | Result,
     options: { readonly signal?: AbortSignal } = {}
   ): Promise<Result> {
     const acquiring = this.#pool.connect();
@@ -101,48 +105,48 @@ export class PgPilotDatabase implements PilotDatabase<ClientBase> {
 
   async deleteFinalizedJobs(
     params: FinalizedJobDeleteParams,
-    options: { readonly tx?: ClientBase } = {}
+    options: { readonly tx?: ClientBase | Transaction } = {}
   ): Promise<number> {
     return jobDeleteFinalized(
       this.#db,
       params,
       options.tx === undefined
         ? {}
-        : { tx: requireTransaction(options, "deleteFinalizedJobs") }
+        : { tx: this.#requireTransaction(options, "deleteFinalizedJobs") }
     );
   }
 
   async loadClaimed(
     ids: readonly bigint[],
-    options: { readonly tx: ClientBase }
+    options: { readonly tx: ClientBase | Transaction }
   ): Promise<JobClaimResult> {
     return jobLoadClaimed(
       this.#db,
       ids,
-      requireTransaction(options, "loadClaimed")
+      this.#requireTransaction(options, "loadClaimed")
     );
   }
 
   async notify(
     topic: "control" | "insert",
     payloads: readonly string[],
-    options: { readonly tx: ClientBase }
+    options: { readonly tx: ClientBase | Transaction }
   ): Promise<void> {
-    const tx = requireTransaction(options, "notify");
+    const tx = this.#requireTransaction(options, "notify");
     await notifyMany(this.#db, notificationTopic(topic), payloads, { tx });
   }
 
   async transaction<Result>(
-    callback: (tx: ClientBase) => PromiseLike<Result> | Result,
+    callback: (tx: ClientBase | Transaction) => PromiseLike<Result> | Result,
     options: {
       readonly signal?: AbortSignal;
-      readonly tx?: ClientBase;
+      readonly tx?: ClientBase | Transaction;
     } = {}
   ): Promise<Result> {
     if (options.tx !== undefined) {
       // Like River for Go, run directly in the caller's transaction without
       // a savepoint; the caller rolls it back when this fails.
-      const tx = requireTransaction(options, "pilotTransaction");
+      const tx = this.#requireTransaction(options, "pilotTransaction");
       options.signal?.throwIfAborted();
       const result = await callback(tx);
       options.signal?.throwIfAborted();
@@ -154,6 +158,20 @@ export class PgPilotDatabase implements PilotDatabase<ClientBase> {
       options.signal,
       callback
     );
+  }
+
+  #requireTransaction(
+    options: { readonly tx?: unknown } | undefined,
+    operation: string
+  ): ClientBase | Transaction {
+    const tx = options?.tx;
+    if (tx === undefined)
+      throw backendMismatchError(
+        operation,
+        "a caller-owned transaction is required"
+      );
+    this.#db.resolveQueryable(operation, { tx });
+    return tx as ClientBase | Transaction;
   }
 }
 
@@ -168,18 +186,4 @@ function notificationTopic(topic: string): string {
         `River notifications can be sent on "control" or "insert", not ${JSON.stringify(topic)}`
       );
   }
-}
-
-function requireTransaction(
-  options: { readonly tx?: unknown } | undefined,
-  operation: string
-): ClientBase {
-  const tx = options?.tx;
-  if (!isQueryable(tx)) {
-    throw backendMismatchError(
-      operation,
-      "the transaction is not a node-postgres client"
-    );
-  }
-  return tx as ClientBase;
 }
