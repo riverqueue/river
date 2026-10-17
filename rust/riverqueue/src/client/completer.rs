@@ -566,7 +566,7 @@ pub(super) async fn persist_completion_batch(
     match inner.database.pool() {
         #[cfg(feature = "mysql")]
         DatabasePool::MySql(pool) => {
-            let mut transaction = crate::database::begin_mysql_write(pool).await?;
+            let mut transaction = crate::database::mysql::Transaction::begin(pool).await?;
             let mut rows = Vec::with_capacity(batch.len());
             let now = Utc::now();
             for update in batch {

@@ -405,7 +405,7 @@ async fn rescue_batch_mysql(
     limit: i64,
     stuck_horizon: DateTime<Utc>,
 ) -> Result<Batch, MaintenanceError> {
-    let mut transaction = crate::database::begin_mysql_write(pool).await?;
+    let mut transaction = crate::database::mysql::Transaction::begin(pool).await?;
     let selected_ids = if inner.pilot.intercepts_rescue() {
         inner
             .pilot

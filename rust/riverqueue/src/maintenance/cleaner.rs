@@ -86,7 +86,7 @@ async fn clean_jobs_batch(
         #[cfg(feature = "mysql")]
         DatabasePool::MySql(pool) => {
             let operation = async {
-                let mut transaction = crate::database::begin_mysql_write(pool).await?;
+                let mut transaction = crate::database::mysql::Transaction::begin(pool).await?;
                 let count = job_delete_before(
                     &context.inner,
                     DatabaseConnection::MySql(&mut transaction),
@@ -320,7 +320,7 @@ async fn clean_queues_batch(
         #[cfg(feature = "mysql")]
         DatabasePool::MySql(pool) => {
             let operation = async {
-                let mut transaction = crate::database::begin_mysql_write(pool).await?;
+                let mut transaction = crate::database::mysql::Transaction::begin(pool).await?;
                 let deleted = mysql::queue_delete_expired(
                     &mut transaction,
                     updated_before,
@@ -395,10 +395,10 @@ pub(super) async fn clean_mysql_notifications(
     loop {
         let limit = batch_size(&context.breakers.notification_cleaner);
         let operation = async {
-            let mut connection = pool.acquire().await?;
-            Ok::<_, MaintenanceError>(
-                mysql::notification_cleanup(&mut connection, created_before, limit).await?,
-            )
+            let mut connection = mysql::Connection::acquire(pool).await?;
+            let count = mysql::notification_cleanup(&mut connection, created_before, limit).await?;
+            connection.release();
+            Ok::<_, MaintenanceError>(count)
         };
         let result = super::mysql_cancellable(&context.cancel, TIMEOUT_DEFAULT, operation).await;
         record_batch(&context.breakers.notification_cleaner, &result);

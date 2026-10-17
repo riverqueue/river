@@ -230,7 +230,7 @@ async fn schedule_batch_mysql(
     look_ahead: DateTime<Utc>,
     limit: i64,
 ) -> Result<usize, MaintenanceError> {
-    let mut transaction = crate::database::begin_mysql_write(pool).await?;
+    let mut transaction = crate::database::mysql::Transaction::begin(pool).await?;
     let candidates = mysql::schedule_candidates(
         &mut transaction,
         look_ahead,

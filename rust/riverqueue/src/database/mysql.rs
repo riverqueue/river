@@ -21,7 +21,7 @@ use std::{
 
 use chrono::{DateTime, Utc};
 use serde_json::{Map, Value, value::RawValue};
-use sqlx::{AssertSqlSafe, Connection, FromRow, MySql, MySqlConnection, QueryBuilder, Row};
+use sqlx::{AssertSqlSafe, Connection as _, FromRow, MySql, MySqlConnection, QueryBuilder, Row};
 
 use sqlx::mysql::MySqlRow;
 
@@ -30,6 +30,10 @@ use crate::{
     client::{DecodedJob, FieldErrors, UndecodableJob, go_time_json, tolerant_row},
     query::{JobListKeyset, JobListSqlPart},
 };
+
+mod connection;
+
+pub(crate) use connection::{Connection, Transaction};
 
 /// MySQL JSON values are projected as bytes so decoding preserves large integers.
 pub(crate) const JOB_COLUMNS: &str = r#"

@@ -598,7 +598,7 @@ impl Client {
                 }
                 #[cfg(feature = "mysql")]
                 DatabasePool::MySql(pool) => {
-                    let mut transaction = crate::database::begin_mysql_write(pool).await?;
+                    let mut transaction = crate::database::mysql::Transaction::begin(pool).await?;
                     let inserted = self
                         .insert_and_finish(
                             PilotDatabaseConnection::MySql(&mut transaction),

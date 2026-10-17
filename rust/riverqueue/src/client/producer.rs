@@ -1216,7 +1216,7 @@ pub(super) async fn fetch_jobs(
         #[cfg(feature = "mysql")]
         DatabasePool::MySql(pool) => {
             let Some(transaction) =
-                unless_cancelled(cancel, crate::database::begin_mysql_write(pool)).await
+                unless_cancelled(cancel, crate::database::mysql::Transaction::begin(pool)).await
             else {
                 return Ok(FetchedJobs::default());
             };

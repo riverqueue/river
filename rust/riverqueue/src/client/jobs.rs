@@ -314,7 +314,9 @@ impl JobGetRequest<'_> {
     async fn run(self) -> Result<JobRow, Error> {
         let inner = &self.client.inner;
         let mut session = self.target.session(inner, Access::Autocommit).await?;
-        session.storage(inner).job_get(self.id).await
+        let result = session.storage(inner).job_get(self.id).await;
+        session.commit().await?;
+        result
     }
 }
 
@@ -329,6 +331,7 @@ impl JobListRequest<'_> {
         let inner = &self.client.inner;
         let mut session = self.target.session(inner, Access::Autocommit).await?;
         let jobs = session.storage(inner).job_list(&self.params).await?;
+        session.commit().await?;
         let last_cursor = jobs
             .last()
             .map(|job| JobListCursor::after_job(job, &self.params));

@@ -66,12 +66,68 @@ impl TestDatabase {
     }
 
     async fn close(self) {
-        self.pool.close().await;
+        tokio::time::timeout(Duration::from_secs(10), self.pool.close())
+            .await
+            .expect("MySQL test pool did not close");
         sqlx::query(AssertSqlSafe(format!("DROP DATABASE `{}`", self.name)))
             .execute(&self.admin)
             .await
             .unwrap();
         self.admin.close().await;
+    }
+}
+
+#[tokio::test]
+async fn cancelled_operations_do_not_block_pool_close() {
+    use crate::storage::{Access, Session};
+
+    for access in [Access::Autocommit, Access::Transaction] {
+        let db = TestDatabase::new().await;
+        // Keep the blocker outside the pool so closing the pool only waits
+        // for the operation under test, while its statement is still blocked.
+        let mut blocker = db.pool.acquire().await.unwrap().detach();
+        sqlx::raw_sql("LOCK TABLES river_job WRITE")
+            .execute(&mut blocker)
+            .await
+            .unwrap();
+
+        let mut session = Session::begin(&db.client.inner.database, access)
+            .await
+            .unwrap();
+        let client = db.client.clone();
+        let query = tokio::spawn(async move {
+            session.storage(&client.inner).job_get(1).await.unwrap();
+            session.commit().await.unwrap();
+        });
+        tokio::time::timeout(Duration::from_secs(5), async {
+            loop {
+                let waiting: i64 = sqlx::query_scalar(
+                    "SELECT COUNT(*) FROM performance_schema.threads \
+                     WHERE PROCESSLIST_DB = ? AND PROCESSLIST_STATE = 'Waiting for table metadata lock'",
+                )
+                .bind(&db.name)
+                .fetch_one(&db.admin)
+                .await
+                .unwrap();
+                if waiting > 0 {
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .expect("query did not block while preparing its statement");
+
+        query.abort();
+        assert!(query.await.unwrap_err().is_cancelled());
+        let closed = tokio::time::timeout(Duration::from_secs(2), db.pool.close()).await;
+        sqlx::raw_sql("UNLOCK TABLES")
+            .execute(&mut blocker)
+            .await
+            .unwrap();
+        drop(blocker);
+        db.close().await;
+        closed.expect("pool close waited for a cancelled query's table lock");
     }
 }
 
@@ -152,6 +208,58 @@ async fn cleanup_skips_locked_jobs() {
     );
     drop(connection);
     lock.rollback().await.unwrap();
+    db.close().await;
+}
+
+#[tokio::test]
+async fn committed_transactions_preserve_savepoints_and_reuse_connections() {
+    let db = TestDatabase::new().await;
+    let pool = MySqlPoolOptions::new()
+        .max_connections(1)
+        .connect_with((*db.pool.connect_options()).clone())
+        .await
+        .unwrap();
+    let mut transaction = Transaction::begin(&pool).await.unwrap();
+    let connection_id: u64 = sqlx::query_scalar("SELECT CONNECTION_ID()")
+        .fetch_one(&mut *transaction)
+        .await
+        .unwrap();
+    let mut savepoint = sqlx::Connection::begin(&mut *transaction).await.unwrap();
+    let inserted = db
+        .client
+        .insert(Args { value: 1 })
+        .tx(&mut savepoint)
+        .await
+        .unwrap();
+    savepoint.rollback().await.unwrap();
+    transaction.commit().await.unwrap();
+
+    let client = Client::builder(pool.clone()).build().unwrap();
+    assert!(
+        client
+            .jobs()
+            .list(JobListParams::default())
+            .await
+            .unwrap()
+            .jobs
+            .is_empty()
+    );
+    assert!(client.jobs().get(inserted.job.row.id).await.is_err());
+    assert_eq!(
+        client
+            .queues()
+            .list(crate::QueueListParams::default())
+            .await
+            .unwrap(),
+        [] as [crate::Queue; 0]
+    );
+
+    let reused_connection_id: u64 = sqlx::query_scalar("SELECT CONNECTION_ID()")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(connection_id, reused_connection_id);
+    pool.close().await;
     db.close().await;
 }
 

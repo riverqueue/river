@@ -8,12 +8,11 @@ use std::{fmt, sync::Arc, time::Duration};
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use serde_json::{Map, Value};
-#[cfg(feature = "mysql")]
-use sqlx::MySql;
 #[cfg(feature = "postgres")]
 use sqlx::Postgres;
 #[cfg(feature = "sqlite")]
 use sqlx::Sqlite;
+#[cfg(any(feature = "postgres", feature = "sqlite"))]
 use sqlx::Transaction;
 use tokio_util::sync::CancellationToken;
 
@@ -55,9 +54,9 @@ impl PilotDatabase {
                 PilotTransactionInner::Postgres(crate::database::begin_postgres(pool).await?)
             }
             #[cfg(feature = "mysql")]
-            DatabasePool::MySql(pool) => {
-                PilotTransactionInner::MySql(crate::database::begin_mysql_write(pool).await?)
-            }
+            DatabasePool::MySql(pool) => PilotTransactionInner::MySql(
+                crate::database::mysql::Transaction::begin(pool).await?,
+            ),
             #[cfg(feature = "sqlite")]
             DatabasePool::Sqlite(pool) => {
                 PilotTransactionInner::Sqlite(crate::database::begin_sqlite_write(pool).await?)
@@ -102,7 +101,7 @@ enum PilotTransactionInner {
     #[cfg(feature = "postgres")]
     Postgres(Transaction<'static, Postgres>),
     #[cfg(feature = "mysql")]
-    MySql(Transaction<'static, MySql>),
+    MySql(crate::database::mysql::Transaction),
     #[cfg(feature = "sqlite")]
     Sqlite(Transaction<'static, Sqlite>),
 }

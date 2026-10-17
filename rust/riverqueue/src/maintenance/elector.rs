@@ -449,7 +449,7 @@ impl LeaderStore for DatabaseLeaderStore {
         match self.inner.database.pool() {
             #[cfg(feature = "mysql")]
             DatabasePool::MySql(pool) => {
-                let mut transaction = crate::database::begin_mysql_write(pool).await?;
+                let mut transaction = crate::database::mysql::Transaction::begin(pool).await?;
                 let now = Utc::now();
                 mysql::leader_delete_expired(&mut transaction, now)
                     .await
@@ -505,7 +505,7 @@ impl LeaderStore for DatabaseLeaderStore {
         match self.inner.database.pool() {
             #[cfg(feature = "mysql")]
             DatabasePool::MySql(pool) => {
-                let mut transaction = crate::database::begin_mysql_write(pool).await?;
+                let mut transaction = crate::database::mysql::Transaction::begin(pool).await?;
                 let leader = mysql::leader_reelect(
                     &mut transaction,
                     &self.inner.id,
@@ -556,7 +556,7 @@ impl LeaderStore for DatabaseLeaderStore {
         match self.inner.database.pool() {
             #[cfg(feature = "mysql")]
             DatabasePool::MySql(pool) => {
-                let mut transaction = crate::database::begin_mysql_write(pool).await?;
+                let mut transaction = crate::database::mysql::Transaction::begin(pool).await?;
                 let resigned = mysql::leader_resign(&mut transaction, &self.inner.id, elected_at)
                     .await
                     .map_err(mysql_error)?;
