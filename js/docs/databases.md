@@ -62,9 +62,10 @@ On Postgres, `@riverqueue/migrate` serializes concurrent migrators with a
 transaction-scoped advisory lock. YugabyteDB has advisory locks only behind a
 preview flag, so there it takes no lock; run one migrator at a time.
 
-`@riverqueue/driver-prisma` is deliberately producer-only. It lets application
-writes and job insertion share a Prisma transaction, but it does not claim or
-work jobs. Use the Postgres runtime in worker services.
+[`@riverqueue/driver-knex`](../driver/knex/README.md) and
+[`@riverqueue/driver-prisma`](../driver/prisma/README.md) provide producer
+clients. They let application writes and job insertion share a Knex or Prisma
+transaction. Use the Postgres runtime in worker services.
 
 ## SQLite
 

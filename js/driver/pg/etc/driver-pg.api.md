@@ -20,26 +20,72 @@ declarations, and file layout are omitted.
  * leases from the pool, so a driver constructed from a single client
  * requires `{ tx }` for insertions.
  */
-export declare class PgDriver {
+export declare class PgDriver<Transaction = never> {
   /**
    * Type-only marker: a full runtime driver whose transactions are any
    * node-postgres client (`pg.Client` or a `PoolClient` checked out from a
-   * pool) after `BEGIN`.
+   * pool) after `BEGIN`, plus the transaction types supported by configured
+   * `transactionAdapters`.
    */
   readonly "~river"?: {
     readonly capability: "runtime";
-    readonly transaction: ClientBase;
+    readonly transaction: ClientBase | Transaction;
   };
-  constructor(client: Pool | PoolClient | PgClient, options?: PgDriverOptions);
+  constructor(
+    client: Pool | PoolClient | PgClient,
+    options?: PgDriverOptions<Transaction>
+  );
 }
 ```
 
 ## `PgDriverOptions`
 
-```ts
+````ts
 /** Construction options owned by the Postgres backend. */
-export interface PgDriverOptions {
+export interface PgDriverOptions<Transaction = never> {
   /** Postgres schema containing River's tables and functions. */
   schema?: string;
+  /**
+   * Enable native ORM transactions for `completeTx(tx)` in workers and
+   * `{ tx }` on client operations. Import the adapter from its driver package
+   * and configure it on each `PgDriver` that needs it. The ORM owns commit,
+   * rollback, and savepoints; River uses the supplied transaction only.
+   *
+   * Knex and the pg pool must connect to the same database. Configure the
+   * same River schema on the worker and insertion clients. Knex remains an
+   * optional dependency, installed with `@riverqueue/driver-knex`.
+   *
+   * @example
+   * ```ts
+   * import knex, { type Knex } from "knex";
+   * import { Pool } from "pg";
+   * import { Client, defineJob, Workers } from "riverqueue";
+   * import { knexTransactionAdapter } from "@riverqueue/driver-knex";
+   * import { PgDriver } from "@riverqueue/driver-pg";
+   *
+   * const connectionString = "postgres://localhost/river";
+   * const db = knex({ client: "pg", connection: connectionString });
+   * const pool = new Pool({ connectionString });
+   * const syncAccount = defineJob<{ accountId: string }>()({
+   *   kind: "sync_account",
+   * });
+   * const workers = new Workers<Knex.Transaction>().add(
+   *   syncAccount,
+   *   async ({ completeTx, job }) => {
+   *     await db.transaction(async (tx) => {
+   *       await tx("account")
+   *         .where({ id: job.args.accountId })
+   *         .update({ synced: true });
+   *       await completeTx(tx);
+   *     });
+   *   }
+   * );
+   * const client = new Client(
+   *   new PgDriver(pool, { transactionAdapters: [knexTransactionAdapter] }),
+   *   { queues: { default: { maxWorkers: 10 } }, workers }
+   * );
+   * ```
+   */
+  transactionAdapters?: readonly PostgresTransactionAdapter<Transaction>[];
 }
-```
+````

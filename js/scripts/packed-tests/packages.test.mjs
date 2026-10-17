@@ -20,6 +20,7 @@ const consumerDirectory = fileURLToPath(new URL("..", import.meta.url));
 
 const SATELLITES = [
   "@riverqueue/cli",
+  "@riverqueue/driver-knex",
   "@riverqueue/driver-pg",
   "@riverqueue/driver-prisma",
   "@riverqueue/driver-sqlite",

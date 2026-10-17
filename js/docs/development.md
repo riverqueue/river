@@ -208,7 +208,7 @@ order are Rust-only because JavaScript objects cannot preserve them.
 
 ## Preparing a release
 
-Run this section's commands from the repository root. The eight publishable packages are `js/package.json` (`riverqueue`), the three drivers under `js/driver/*`, and `js/{migrate,worker-threads,test,cli}`. They share one version, independently of Go and Rust. Examples are private and stay at `0.0.0`. `VERSION` has no leading `v`; JavaScript Git tags use `js/vX.Y.Z`.
+Run this section's commands from the repository root. The nine publishable packages are `js/package.json` (`riverqueue`), the four drivers under `js/driver/*`, and `js/{migrate,worker-threads,test,cli}`. They share one version, independently of Go and Rust. Examples are private and stay at `0.0.0`. `VERSION` has no leading `v`; JavaScript Git tags use `js/vX.Y.Z`.
 
 1. Fetch changes and tags, choose the next JavaScript version (including a prerelease suffix when applicable), and create a release branch:
 
@@ -242,18 +242,18 @@ Run this section's commands from the repository root. The eight publishable pack
    git push origin "js/v$VERSION"
    ```
 
-6. Publish locally from the clean `master` checkout tagged above after its JavaScript checks pass. Use official Node.js 26 and the pinned pnpm version, and log in with an npm account that can publish all eight packages. A publication workflow is optional. Disable [provenance](https://docs.npmjs.com/generating-provenance-statements/) for local publication with `--provenance=false`, overriding the packages' `publishConfig.provenance: true`:
+6. Publish locally from the clean `master` checkout tagged above after its JavaScript checks pass. Use official Node.js 26 and the pinned pnpm version, and log in with an npm account that can publish all nine packages. A publication workflow is optional. Disable [provenance](https://docs.npmjs.com/generating-provenance-statements/) for local publication with `--provenance=false`, overriding the packages' `publishConfig.provenance: true`:
 
    ```shell
    test "$(git rev-parse HEAD)" = "$(git rev-parse "js/v$VERSION^{commit}")"
    pnpm login
    pnpm -C js install --frozen-lockfile
    pnpm -C js run build:all
-   for package in js js/migrate js/driver/pg js/driver/prisma js/driver/sqlite js/worker-threads js/test js/cli; do
+   for package in js js/migrate js/driver/knex js/driver/pg js/driver/prisma js/driver/sqlite js/worker-threads js/test js/cli; do
      (cd "$package" && pnpm publish --access public --no-git-checks --tag latest --provenance=false) || break
    done
    ```
 
    Complete npm's authentication prompts as needed. Publish packages individually because pnpm 10.22.0's recursive publication does not forward `--provenance=false` to npm. Run publication inside each package directory: `pnpm -C "$package" publish` in this version forwards extra arguments to npm and fails with `EUSAGE`. The loop publishes dependencies first and stops on failure; after a partial publication, remove the already-published packages from the loop before rerunning it. For a prerelease, use `--tag next` instead of `--tag latest`.
 
-7. Once all eight packages are published, create a [GitHub release](https://github.com/riverqueue/river/releases/new) for `js/v$VERSION` and copy the version's `js/CHANGELOG.md` notes into its body. Mark alpha, beta, and RC versions as prereleases.
+7. Once all nine packages are published, create a [GitHub release](https://github.com/riverqueue/river/releases/new) for `js/v$VERSION` and copy the version's `js/CHANGELOG.md` notes into its body. Mark alpha, beta, and RC versions as prereleases.

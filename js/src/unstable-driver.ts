@@ -171,3 +171,11 @@ export type {
   ReadonlyJsonObject,
   ReadonlyJsonValue,
 } from "./job-args-transform.js";
+
+export { PostgresInserter } from "./internal/postgres-inserter.js";
+export type { PostgresInserterOptions } from "./internal/postgres-inserter.js";
+export type {
+  PostgresTransactionAdapter,
+  PostgresTransactionQuery,
+  PostgresTransactionResult,
+} from "./internal/postgres-transaction.js";

@@ -20,6 +20,9 @@
       ],
       "@riverqueue/worker-threads": [
         "./worker-threads/src/index.ts"
+      ],
+      "@riverqueue/driver-knex": [
+        "./driver/knex/src/index.ts"
       ]
     }
   },

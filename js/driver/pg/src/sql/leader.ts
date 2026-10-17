@@ -133,7 +133,7 @@ export async function leaderResign(
 }
 
 function mapOneLeader(
-  result: QueryResult<PgLeaderDatabaseRow>
+  result: Pick<QueryResult<PgLeaderDatabaseRow>, "rows">
 ): PgLeader | null {
   const row = result.rows[0];
   return row === undefined

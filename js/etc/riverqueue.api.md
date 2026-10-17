@@ -2639,6 +2639,11 @@ export interface RiverPlugin {
 export interface RiverTransactionRegistry {}
 
 interface RiverTransactionRegistry {
+  /** Knex transactions on Postgres. */
+  "@riverqueue/driver-knex": Knex.Transaction;
+}
+
+interface RiverTransactionRegistry {
   /** node-postgres clients (`pg.Client` or a pool's `PoolClient`). */
   "@riverqueue/driver-pg": ClientBase;
 }

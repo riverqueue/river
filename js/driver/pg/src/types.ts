@@ -1,16 +1,58 @@
-import type { ClientBase } from "pg";
+import type { PostgresTransactionAdapter } from "riverqueue/unstable-driver";
 import type { AttemptError, JobRow, JsonObject } from "riverqueue";
 
 /** Construction options owned by the Postgres backend. */
-export interface PgDriverOptions {
+export interface PgDriverOptions<Transaction = never> {
   /** Postgres schema containing River's tables and functions. */
   schema?: string;
+  /**
+   * Enable native ORM transactions for `completeTx(tx)` in workers and
+   * `{ tx }` on client operations. Import the adapter from its driver package
+   * and configure it on each `PgDriver` that needs it. The ORM owns commit,
+   * rollback, and savepoints; River uses the supplied transaction only.
+   *
+   * Knex and the pg pool must connect to the same database. Configure the
+   * same River schema on the worker and insertion clients. Knex remains an
+   * optional dependency, installed with `@riverqueue/driver-knex`.
+   *
+   * @example
+   * ```ts
+   * import knex, { type Knex } from "knex";
+   * import { Pool } from "pg";
+   * import { Client, defineJob, Workers } from "riverqueue";
+   * import { knexTransactionAdapter } from "@riverqueue/driver-knex";
+   * import { PgDriver } from "@riverqueue/driver-pg";
+   *
+   * const connectionString = "postgres://localhost/river";
+   * const db = knex({ client: "pg", connection: connectionString });
+   * const pool = new Pool({ connectionString });
+   * const syncAccount = defineJob<{ accountId: string }>()({
+   *   kind: "sync_account",
+   * });
+   * const workers = new Workers<Knex.Transaction>().add(
+   *   syncAccount,
+   *   async ({ completeTx, job }) => {
+   *     await db.transaction(async (tx) => {
+   *       await tx("account")
+   *         .where({ id: job.args.accountId })
+   *         .update({ synced: true });
+   *       await completeTx(tx);
+   *     });
+   *   }
+   * );
+   * const client = new Client(
+   *   new PgDriver(pool, { transactionAdapters: [knexTransactionAdapter] }),
+   *   { queues: { default: { maxWorkers: 10 } }, workers }
+   * );
+   * ```
+   */
+  transactionAdapters?: readonly PostgresTransactionAdapter<Transaction>[];
 }
 
 /** Options common to Postgres semantic operations. */
 export interface PgOperationOptions {
   /** Caller-owned transaction connection used for the entire operation. */
-  tx?: ClientBase;
+  tx?: unknown;
 }
 
 /** Exact semantic inputs for cancelling a job. */
