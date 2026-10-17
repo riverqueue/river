@@ -50,8 +50,11 @@ func (ts *PeriodicJobEnqueuerTestSignals) Init(tb testutil.TestingTB) {
 // river.PeriodicJobArgs, but needs a separate type because the enqueuer is in a
 // subpackage.
 type PeriodicJob struct {
-	ID              string
-	ConstructorFunc func() (*rivertype.JobInsertParams, error)
+	ID string
+
+	// ConstructorFunc generates insert params using the occurrence time as
+	// the default schedule, before computing any period-based unique key.
+	ConstructorFunc func(scheduledAt time.Time) (*rivertype.JobInsertParams, error)
 	RunOnStart      bool
 	ScheduleFunc    func(time.Time) time.Time
 
@@ -562,8 +565,8 @@ func (s *PeriodicJobEnqueuer) insertBatch(ctx context.Context, insertParamsMany 
 	}
 }
 
-func (s *PeriodicJobEnqueuer) insertParamsFromConstructor(ctx context.Context, periodicJobID string, constructorFunc func() (*rivertype.JobInsertParams, error), scheduledAt time.Time) (*rivertype.JobInsertParams, bool) {
-	insertParams, err := constructorFunc()
+func (s *PeriodicJobEnqueuer) insertParamsFromConstructor(ctx context.Context, periodicJobID string, constructorFunc func(time.Time) (*rivertype.JobInsertParams, error), scheduledAt time.Time) (*rivertype.JobInsertParams, bool) {
+	insertParams, err := constructorFunc(scheduledAt)
 	if err != nil {
 		if errors.Is(err, ErrNoJobToInsert) {
 			s.Logger.InfoContext(ctx, s.Name+": nil returned from periodic job constructor, skipping")
@@ -572,10 +575,6 @@ func (s *PeriodicJobEnqueuer) insertParamsFromConstructor(ctx context.Context, p
 		}
 		s.Logger.ErrorContext(ctx, s.Name+": Internal error generating periodic job", "error", err.Error())
 		return nil, false
-	}
-
-	if insertParams.ScheduledAt == nil {
-		insertParams.ScheduledAt = &scheduledAt
 	}
 
 	if periodicJobID != "" {
