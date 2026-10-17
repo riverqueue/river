@@ -1019,7 +1019,7 @@ export class MySqlRuntime implements RuntimeDriver<PoolConnection> {
         if (!rows.length) return 0;
         return this.#write(
           tx,
-          `DELETE FROM {schema}river_job WHERE id IN (${rows.map(() => "?").join(",")})`,
+          `DELETE /*+ JOIN_INDEX(river_job PRIMARY) */ FROM {schema}river_job WHERE id IN (${rows.map(() => "?").join(",")})`,
           rows.map((row) => row.id)
         );
       })) ?? 0

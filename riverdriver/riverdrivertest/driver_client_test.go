@@ -730,6 +730,10 @@ func ExerciseClient[TTx any](ctx context.Context, t *testing.T,
 		running := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{Schema: bundle.schema, State: new(rivertype.JobStateRunning)})
 		locked := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{FinalizedAt: new(now.Add(-time.Hour)), Schema: bundle.schema, State: new(rivertype.JobStateCompleted)})
 		unlocked := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{FinalizedAt: new(now.Add(-time.Hour)), Schema: bundle.schema, State: new(rivertype.JobStateCompleted)})
+		// A full batch must also avoid a DELETE table scan through locked rows.
+		for range 999 {
+			testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{FinalizedAt: new(now.Add(-time.Hour)), Schema: bundle.schema, State: new(rivertype.JobStateCompleted)})
+		}
 		_, execTx := beginTx(ctx, t, bundle)
 		for _, id := range []int64{running.ID, locked.ID} {
 			_, err := execTx.JobUpdate(ctx, &riverdriver.JobUpdateParams{ID: id, Metadata: []byte(`{"locked":true}`), MetadataDoMerge: true, Schema: bundle.schema})
@@ -739,7 +743,7 @@ func ExerciseClient[TTx any](ctx context.Context, t *testing.T,
 		defer cancel()
 		deleted, err := bundle.exec.JobDeleteBefore(cleanupCtx, &riverdriver.JobDeleteBeforeParams{CompletedDoDelete: true, CompletedFinalizedAtHorizon: now, Max: 1000, Schema: bundle.schema})
 		require.NoError(t, err)
-		require.Equal(t, 1, deleted)
+		require.Equal(t, 1000, deleted)
 		_, err = bundle.exec.JobGetByID(ctx, &riverdriver.JobGetByIDParams{ID: unlocked.ID, Schema: bundle.schema})
 		require.ErrorIs(t, err, rivertype.ErrNotFound)
 		for _, id := range []int64{running.ID, locked.ID} {

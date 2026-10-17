@@ -1389,7 +1389,9 @@ pub(crate) async fn cleanup_jobs(
     let deleted = if ids.is_empty() {
         0
     } else {
-        let mut delete = QueryBuilder::<MySql>::new("DELETE FROM river_job WHERE id IN (");
+        let mut delete = QueryBuilder::<MySql>::new(
+            "DELETE /*+ JOIN_INDEX(river_job PRIMARY) */ FROM river_job WHERE id IN (",
+        );
         let mut separated = delete.separated(", ");
         for id in ids {
             separated.push_bind(id);

@@ -102,14 +102,14 @@ async fn cleanup_skips_locked_jobs() {
         .job
         .row
         .id;
-    sqlx::query(
-        "UPDATE river_job SET state='completed', finalized_at='1970-01-01' WHERE id IN (?, ?)",
-    )
-    .bind(locked)
-    .bind(expired)
-    .execute(&db.pool)
-    .await
-    .unwrap();
+    for value in 4..1003 {
+        db.client.insert(Args { value }).await.unwrap();
+    }
+    sqlx::query("UPDATE river_job SET state='completed', finalized_at='1970-01-01' WHERE id >= ?")
+        .bind(locked)
+        .execute(&db.pool)
+        .await
+        .unwrap();
     sqlx::query("UPDATE river_job SET state='running' WHERE id=?")
         .bind(running)
         .execute(&db.pool)
@@ -131,7 +131,7 @@ async fn cleanup_skips_locked_jobs() {
                 cancelled_before: None,
                 completed_before: Some(Utc::now()),
                 discarded_before: None,
-                limit: 100,
+                limit: 1000,
                 queues_excluded: &[],
                 queues_included: None,
             },
@@ -140,7 +140,7 @@ async fn cleanup_skips_locked_jobs() {
     .await
     .unwrap()
     .unwrap();
-    assert_eq!(deleted, 1);
+    assert_eq!(deleted, 1000);
     assert!(db.client.jobs().get(expired).await.is_err());
     assert_eq!(
         db.client.jobs().get(locked).await.unwrap().state,

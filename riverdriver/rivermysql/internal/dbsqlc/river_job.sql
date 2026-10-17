@@ -110,7 +110,7 @@ WHERE id = sqlc.arg('id')
     AND river_job.state != 'running';
 
 -- name: JobGetMetadataForUpdate :many
-SELECT id, metadata
+SELECT /*+ JOIN_INDEX(river_job PRIMARY) */ id, metadata
 FROM /* TEMPLATE: schema */river_job
 WHERE id IN (sqlc.slice('id'))
 ORDER BY id
@@ -161,8 +161,9 @@ ORDER BY /* TEMPLATE_BEGIN: order_by_clause */ id /* TEMPLATE_END */
 LIMIT ?
 FOR UPDATE;
 
+-- Keep large batches on primary-key ranges so a scan cannot lock skipped jobs.
 -- name: JobDeleteManyExec :exec
-DELETE FROM /* TEMPLATE: schema */river_job
+DELETE /*+ JOIN_INDEX(river_job PRIMARY) */ FROM /* TEMPLATE: schema */river_job
 WHERE id IN (sqlc.slice('id'));
 
 -- name: JobGetAvailableIDs :many

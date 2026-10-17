@@ -328,14 +328,12 @@ describe.skipIf(!url)("MySQL driver", () => {
       60_000,
       null
     ))!;
-    const [running, locked, expired] = await runtime.jobInsertMany([
-      params(),
-      params(),
-      params(),
-    ]);
+    const [running, locked, ...expired] = await runtime.jobInsertMany(
+      Array.from({ length: 1002 }, () => params())
+    );
     await pool.query(
-      `UPDATE \`${schema}\`.river_job SET state='completed', finalized_at='1970-01-01' WHERE id IN (?, ?)`,
-      [locked!.job.id.toString(), expired!.job.id.toString()]
+      `UPDATE \`${schema}\`.river_job SET state='completed', finalized_at='1970-01-01' WHERE id>=?`,
+      [locked!.job.id.toString()]
     );
     await pool.query(
       `UPDATE \`${schema}\`.river_job SET state='running' WHERE id=?`,
@@ -357,13 +355,13 @@ describe.skipIf(!url)("MySQL driver", () => {
             cancelledBefore: now,
             completedBefore: now,
             discardedBefore: now,
-            limit: 100,
+            limit: 1000,
           },
           null,
           AbortSignal.timeout(2_000)
         )
-      ).toBe(1);
-      expect(await runtime.jobGet(expired!.job.id)).toBeNull();
+      ).toBe(1000);
+      expect(await runtime.jobGet(expired[0]!.job.id)).toBeNull();
       expect((await runtime.jobGet(locked!.job.id))?.state).toBe("completed");
       expect((await runtime.jobGet(running!.job.id))?.state).toBe("running");
     } finally {

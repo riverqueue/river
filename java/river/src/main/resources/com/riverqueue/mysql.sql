@@ -194,7 +194,7 @@ metadata=JSON_SET(metadata, '$.unique_key_conflict', 'scheduler_discarded'), sta
 WHERE id=? AND state IN ('scheduled','retryable')
 
 -- name: clean_jobs
-DELETE FROM {schema}river_job WHERE id IN ({ids})
+DELETE /*+ JOIN_INDEX(river_job PRIMARY) */ FROM {schema}river_job WHERE id IN ({ids})
 
 -- name: clean_jobs_select
 SELECT id FROM {schema}river_job

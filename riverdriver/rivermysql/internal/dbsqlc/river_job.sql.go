@@ -258,10 +258,11 @@ func (q *Queries) JobDeleteExec(ctx context.Context, db DBTX, id int64) (sql.Res
 }
 
 const jobDeleteManyExec = `-- name: JobDeleteManyExec :exec
-DELETE FROM /* TEMPLATE: schema */river_job
+DELETE /*+ JOIN_INDEX(river_job PRIMARY) */ FROM /* TEMPLATE: schema */river_job
 WHERE id IN (/*SLICE:id*/?)
 `
 
+// Keep large batches on primary-key ranges so a scan cannot lock skipped jobs.
 func (q *Queries) JobDeleteManyExec(ctx context.Context, db DBTX, id []int64) error {
 	query := jobDeleteManyExec
 	var queryParams []interface{}
@@ -921,7 +922,7 @@ func (q *Queries) JobGetCancelRequested(ctx context.Context, db DBTX, id []int64
 }
 
 const jobGetMetadataForUpdate = `-- name: JobGetMetadataForUpdate :many
-SELECT id, metadata
+SELECT /*+ JOIN_INDEX(river_job PRIMARY) */ id, metadata
 FROM /* TEMPLATE: schema */river_job
 WHERE id IN (/*SLICE:id*/?)
 ORDER BY id

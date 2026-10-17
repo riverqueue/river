@@ -55,6 +55,7 @@ class ClientTest {
     org.junit.jupiter.api.Assumptions.assumeTrue(database.dialect() == Database.Dialect.MYSQL);
     var locked = client.insert(EMAIL, new Email("locked@example.com")).job();
     var unlocked = client.insert(EMAIL, new Email("unlocked@example.com")).job();
+    for (int i = 0; i < 999; i++) client.insert(EMAIL, new Email("expired@example.com"));
     try (var connection = database.connection();
         var statement = connection.createStatement()) {
       statement.execute(
@@ -80,7 +81,7 @@ class ClientTest {
                   Sql.prepare(connection, Sql.query(database, "lock_get"), locked.id());
               var rows = statement.executeQuery()) {
             assertTrue(rows.next());
-            assertEquals(1, client.transaction(clean));
+            assertEquals(1000, client.transaction(clean));
           }
           assertThrows(RiverException.class, () -> client.get(unlocked.id()));
           assertEquals(locked.id(), client.get(locked.id()).id());

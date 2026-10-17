@@ -144,8 +144,8 @@ RSpec.describe "MySQL cleaner", database: :mysql do
       ClientTestDatabase.public_send("with_#{adapter}", :mysql) do |driver|
         params = River::Driver::JobInsertParams.new(encoded_args: "{}", kind: "cleanup", max_attempts: 25,
           priority: 1, queue: "default", scheduled_at: nil, state: "available", tags: [])
-        running, locked, expired = 3.times.map { driver.job_insert(params).first.id }
-        driver.send(:runtime_execute, "UPDATE river_job SET state = 'completed', finalized_at = '1970-01-01' WHERE id IN (#{locked}, #{expired})")
+        running, locked, *expired = 1002.times.map { driver.job_insert(params).first.id }
+        driver.send(:runtime_execute, "UPDATE river_job SET state = 'completed', finalized_at = '1970-01-01' WHERE id >= #{locked}")
         driver.send(:runtime_execute, "UPDATE river_job SET state = 'running' WHERE id = #{running}")
         ready = Queue.new
         release = Queue.new
@@ -160,9 +160,9 @@ RSpec.describe "MySQL cleaner", database: :mysql do
         end
         begin
           Timeout.timeout(5) { ready.pop }
-          deleted = Timeout.timeout(2) { driver.job_delete_finalized(retention: {completed: 0}, max: 100) }
-          expect(deleted).to eq(1)
-          expect(driver.job_get_by_id(expired)).to be_nil
+          deleted = Timeout.timeout(2) { driver.job_delete_finalized(retention: {completed: 0}, max: 1000) }
+          expect(deleted).to eq(1000)
+          expect(driver.job_get_by_id(expired.first)).to be_nil
           expect(driver.job_get_by_id(locked).state).to eq("completed")
           expect(driver.job_get_by_id(running).state).to eq("running")
         ensure

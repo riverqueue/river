@@ -235,8 +235,9 @@ module River::Driver
 
     private def mysql_delete(table, key, predicate, limit: nil)
       transaction do
-        rows = runtime_query_rows("SELECT #{mysql_columns(table)} FROM #{table} WHERE #{predicate} ORDER BY #{key} #{"LIMIT #{Integer(limit)}" if limit} FOR UPDATE")
-        runtime_execute("DELETE FROM #{table} WHERE #{runtime_in_clause(key, rows.map { |row| runtime_value(row, key.to_sym) })}") unless rows.empty?
+        hint = (table == "river_job") ? "/*+ JOIN_INDEX(river_job PRIMARY) */ " : ""
+        rows = runtime_query_rows("SELECT #{hint}#{mysql_columns(table)} FROM #{table} WHERE #{predicate} ORDER BY #{key} #{"LIMIT #{Integer(limit)}" if limit} FOR UPDATE")
+        runtime_execute("DELETE /*+ JOIN_INDEX(#{table} PRIMARY) */ FROM #{table} WHERE #{runtime_in_clause(key, rows.map { |row| runtime_value(row, key.to_sym) })}") unless rows.empty?
         rows
       end
     end
