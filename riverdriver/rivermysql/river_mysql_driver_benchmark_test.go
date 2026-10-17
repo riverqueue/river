@@ -153,6 +153,54 @@ func BenchmarkJobGetAvailableKnownKinds(b *testing.B) {
 	}
 }
 
+// BenchmarkJobInsertManyReturning measures the path used by standard InsertMany,
+// including fetching returned jobs and classifying uniqueness conflicts.
+func BenchmarkJobInsertManyReturning(b *testing.B) {
+	riversharedtest.SkipIfMySQLNotEnabled(b)
+
+	ctx := b.Context()
+	driver := New(riversharedtest.DBPoolMySQL(ctx, b))
+	schema := riverdbtest.TestSchema(ctx, b, driver, nil)
+	exec := driver.GetExecutor()
+	for _, mode := range []string{"MixedDuplicates", "Plain", "Unique"} {
+		for _, size := range []int{1, 10, 100, 1000} {
+			b.Run(fmt.Sprintf("%s/%d", mode, size), func(b *testing.B) {
+				params := &riverdriver.JobInsertFastManyParams{Schema: schema}
+				for i := range size {
+					job := &riverdriver.JobInsertFastParams{
+						EncodedArgs: []byte(fmt.Sprintf(`{"message":"benchmark","index":%d}`, i)),
+						Kind:        "benchmark",
+						MaxAttempts: 25,
+						Priority:    1,
+						Queue:       "default",
+						State:       rivertype.JobStateAvailable,
+						Tags:        []string{"benchmark"},
+					}
+					if mode != "Plain" {
+						job.UniqueKey = fmt.Appendf(nil, "%s/%d/%d", mode, size, i)
+						job.UniqueStates = 0xff
+					}
+					params.Jobs = append(params.Jobs, job)
+					if mode == "MixedDuplicates" && i%2 == 0 {
+						_, err := exec.JobInsertFastMany(ctx, &riverdriver.JobInsertFastManyParams{Jobs: []*riverdriver.JobInsertFastParams{job}, Schema: schema})
+						require.NoError(b, err)
+					}
+				}
+
+				b.ReportAllocs()
+				for b.Loop() {
+					tx, err := exec.Begin(ctx)
+					require.NoError(b, err)
+					jobs, err := tx.JobInsertFastMany(ctx, params)
+					require.NoError(b, err)
+					require.Len(b, jobs, size)
+					require.NoError(b, tx.Rollback(ctx))
+				}
+			})
+		}
+	}
+}
+
 func BenchmarkListenerNotificationDrain(b *testing.B) {
 	riversharedtest.SkipIfMySQLNotEnabled(b)
 

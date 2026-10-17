@@ -212,6 +212,62 @@ func exerciseJobInsert[TTx any](ctx context.Context, t *testing.T,
 			}
 		})
 
+		t.Run("MixedNewAndDuplicateJobs", func(t *testing.T) {
+			t.Parallel()
+
+			exec, _ := setup(ctx, t)
+
+			params := &riverdriver.JobInsertFastManyParams{}
+			for i := range 6 {
+				params.Jobs = append(params.Jobs, &riverdriver.JobInsertFastParams{
+					EncodedArgs: []byte(fmt.Sprintf(`{"index":%d}`, i)),
+					Kind:        "test_kind", MaxAttempts: 25, Metadata: []byte(fmt.Sprintf(`{"index":%d}`, i)),
+					Priority: 1, Queue: "default", State: rivertype.JobStateAvailable, Tags: []string{},
+				})
+			}
+			for _, i := range []byte{0, 2, 4} {
+				// Include bytes that aren't UTF-8 and differ only after a NUL.
+				params.Jobs[i].UniqueKey = []byte{0xff, 0x00, i, 0x80}
+				params.Jobs[i].UniqueStates = 0xff
+			}
+			params.Jobs[3].UniqueKey = params.Jobs[0].UniqueKey
+			params.Jobs[3].UniqueStates = 1 << 2 // Inactive for an available job.
+
+			// Seed in reverse order, so returning rows sorted by ID would be wrong.
+			seed, err := exec.JobInsertFastMany(ctx, &riverdriver.JobInsertFastManyParams{
+				Jobs: []*riverdriver.JobInsertFastParams{params.Jobs[4], params.Jobs[0]},
+			})
+			require.NoError(t, err)
+			results, err := exec.JobInsertFastMany(ctx, params)
+			require.NoError(t, err)
+			require.Len(t, results, len(params.Jobs))
+			require.Equal(t, seed[1].Job.ID, results[0].Job.ID)
+			require.Equal(t, seed[0].Job.ID, results[4].Job.ID)
+			for i, result := range results {
+				require.Equal(t, i == 0 || i == 4, result.UniqueSkippedAsDuplicate)
+				require.JSONEq(t, string(params.Jobs[i].EncodedArgs), string(result.Job.EncodedArgs))
+				require.Equal(t, params.Jobs[i].UniqueKey, result.Job.UniqueKey)
+				stored, err := exec.JobGetByID(ctx, &riverdriver.JobGetByIDParams{ID: result.Job.ID})
+				require.NoError(t, err)
+				for _, job := range []*rivertype.JobRow{result.Job, stored} {
+					metadata, err := sjson.DeleteBytes(job.Metadata, riverdriver.UniqueInsertMetadataKey)
+					require.NoError(t, err)
+					require.JSONEq(t, string(params.Jobs[i].Metadata), string(metadata))
+				}
+			}
+
+			// No new IDs are generated when every job conflicts.
+			duplicates, err := exec.JobInsertFastMany(ctx, &riverdriver.JobInsertFastManyParams{
+				Jobs: []*riverdriver.JobInsertFastParams{params.Jobs[4], params.Jobs[2], params.Jobs[0]},
+			})
+			require.NoError(t, err)
+			require.Len(t, duplicates, 3)
+			for i, original := range []int{4, 2, 0} {
+				require.True(t, duplicates[i].UniqueSkippedAsDuplicate)
+				require.Equal(t, results[original].Job.ID, duplicates[i].Job.ID)
+			}
+		})
+
 		t.Run("UniqueConflict", func(t *testing.T) {
 			t.Parallel()
 

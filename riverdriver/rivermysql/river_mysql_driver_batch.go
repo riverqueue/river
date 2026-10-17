@@ -2,14 +2,24 @@ package rivermysql
 
 import (
 	"context"
+	"database/sql"
 	_ "embed"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"strconv"
 	"time"
 
 	"github.com/go-sql-driver/mysql"
+	"github.com/tidwall/gjson"
+	"github.com/tidwall/sjson"
 
 	"github.com/riverqueue/river/riverdriver"
+	"github.com/riverqueue/river/riverdriver/rivermysql/internal/dbsqlc"
+	"github.com/riverqueue/river/rivershared/sqlctemplate"
+	"github.com/riverqueue/river/rivershared/uniquestates"
+	"github.com/riverqueue/river/rivershared/util/randutil"
 	"github.com/riverqueue/river/rivershared/util/sliceutil"
 	"github.com/riverqueue/river/rivertype"
 )
@@ -20,10 +30,14 @@ import (
 var (
 	//go:embed internal/dbbatch/job_insert.sql
 	jobInsertBatchSQL string
+	//go:embed internal/dbbatch/job_insert_upsert.sql
+	jobInsertBatchUpsertSQL string
 	//go:embed internal/dbbatch/job_rescue.sql
 	jobRescueBatchSQL string
 	//go:embed internal/dbbatch/job_set_state.sql
 	jobSetStateBatchSQL string
+	//go:embed internal/dbbatch/job_unique_key.sql
+	jobUniqueKeySQL string
 	//go:embed internal/dbbatch/notification_insert.sql
 	notificationInsertBatchSQL string
 )
@@ -65,7 +79,7 @@ func isNoDatabaseSelected(err error) bool {
 	return errors.As(err, &mysqlErr) && mysqlErr.Number == 1046
 }
 
-func jobInsertBatch(ctx context.Context, dbtx templateReplaceWrapper, params *riverdriver.JobInsertFastManyParams) error {
+func jobInsertBatch(ctx context.Context, dbtx templateReplaceWrapper, params *riverdriver.JobInsertFastManyParams, nonces []string) (sql.Result, error) {
 	// JSON documents travel as strings, then CAST back to JSON in SQL. This
 	// preserves JSON null (distinct from SQL NULL), large integers, and the
 	// database's validation of malformed JSON without decoding job arguments.
@@ -81,13 +95,23 @@ func jobInsertBatch(ctx context.Context, dbtx templateReplaceWrapper, params *ri
 		ScheduledAt  *string            `json:"scheduled_at"`
 		State        rivertype.JobState `json:"state"`
 		Tags         string             `json:"tags"`
+		UniqueActive bool               `json:"unique_active"`
+		UniqueKey    string             `json:"unique_key"`
 		UniqueStates byte               `json:"unique_states"`
 	}
 	rows := make([]row, len(params.Jobs))
+	upsert := ""
 	for i, job := range params.Jobs {
 		tags, err := json.Marshal(job.Tags)
 		if err != nil {
-			return err
+			return nil, err
+		}
+		metadata := sliceutil.FirstNonEmpty(job.Metadata, []byte("{}"))
+		if nonces != nil {
+			metadata, err = sjson.SetBytes(metadata, riverdriver.UniqueInsertMetadataKey, nonces[i])
+			if err != nil {
+				return nil, err
+			}
 		}
 		rows[i] = row{
 			ID:           job.ID,
@@ -95,16 +119,108 @@ func jobInsertBatch(ctx context.Context, dbtx templateReplaceWrapper, params *ri
 			CreatedAt:    batchTime(job.CreatedAt),
 			Kind:         job.Kind,
 			MaxAttempts:  job.MaxAttempts,
-			Metadata:     string(sliceutil.FirstNonEmpty(job.Metadata, []byte("{}"))),
+			Metadata:     string(metadata),
 			Priority:     job.Priority,
 			Queue:        job.Queue,
 			ScheduledAt:  batchTime(job.ScheduledAt),
 			State:        job.State,
 			Tags:         string(tags),
+			UniqueActive: job.UniqueStates&uniquestates.UniqueStatesToBitmask([]rivertype.JobState{job.State}) != 0,
+			UniqueKey:    hex.EncodeToString(job.UniqueKey),
 			UniqueStates: job.UniqueStates,
 		}
+		if len(job.UniqueKey) > 0 {
+			upsert = jobInsertBatchUpsertSQL
+		}
 	}
-	return execJSONBatch(ctx, dbtx, jobInsertBatchSQL, rows)
+	encoded, err := json.Marshal(rows)
+	if err != nil {
+		return nil, err
+	}
+	ctx = sqlctemplate.WithReplacements(ctx, map[string]sqlctemplate.Replacement{
+		"on_duplicate_key": {Stable: true, Value: upsert},
+	}, nil)
+	result, err := dbtx.ExecContext(ctx, jobInsertBatchSQL, encoded)
+	return result, interpretError(err)
+}
+
+func jobInsertBatchReturning(ctx context.Context, dbtx templateReplaceWrapper, params *riverdriver.JobInsertFastManyParams, nonces []string) ([]*dbsqlc.RiverJob, error) {
+	// Use the first generated ID only as a lower bound, never to infer the
+	// remaining IDs: concurrent INSERT ... SELECT statements may interleave them.
+	// A per-input nonce preserves order and distinguishes newly inserted jobs.
+	// The caller removes these temporary nonces before committing.
+	prefix := randutil.Hex(16) + ":"
+	for i := range nonces {
+		nonces[i] = prefix + strconv.Itoa(i)
+	}
+	result, err := jobInsertBatch(schemaTemplateParam(ctx, params.Schema), dbtx, params, nonces)
+	if err != nil {
+		return nil, err
+	}
+	firstID, err := result.LastInsertId()
+	if err != nil {
+		return nil, err
+	}
+	jobsByNonce := make(map[string]*dbsqlc.RiverJob, len(nonces))
+	if firstID != 0 {
+		jobs, err := dbsqlc.New().JobGetByInsertNonce(schemaTemplateParam(ctx, params.Schema), dbtx, &dbsqlc.JobGetByInsertNonceParams{
+			FirstID: firstID, NoncePrefix: []byte(prefix + "%"),
+		})
+		if err != nil {
+			return nil, interpretError(err)
+		}
+		for _, job := range jobs {
+			jobsByNonce[gjson.GetBytes(job.Metadata, riverdriver.UniqueInsertMetadataKey).String()] = job
+		}
+	}
+
+	inserted := make([]*dbsqlc.RiverJob, len(nonces))
+	var missingKeys []sql.NullString
+	for i, nonce := range nonces {
+		inserted[i] = jobsByNonce[nonce]
+		if inserted[i] == nil && len(params.Jobs[i].UniqueKey) > 0 {
+			missingKeys = append(missingKeys, sql.NullString{String: string(params.Jobs[i].UniqueKey), Valid: true})
+		}
+	}
+	if len(missingKeys) > 0 {
+		lookupCtx := sqlctemplate.WithReplacements(schemaTemplateParam(ctx, params.Schema), map[string]sqlctemplate.Replacement{
+			"unique_key": {Stable: true, Value: "(" + jobUniqueKeySQL + ")"},
+		}, nil)
+		jobs, err := dbsqlc.New().JobGetByUniqueKeyManyForUpdate(lookupCtx, dbtx, missingKeys)
+		if err != nil {
+			return nil, interpretError(err)
+		}
+		jobsByKey := make(map[string]*dbsqlc.RiverJob, len(jobs))
+		for _, job := range jobs {
+			jobsByKey[job.UniqueKey.String] = job
+		}
+		for i, job := range params.Jobs {
+			if inserted[i] == nil {
+				inserted[i] = jobsByKey[string(job.UniqueKey)]
+			}
+		}
+	}
+	for i, job := range inserted {
+		if job == nil {
+			return nil, fmt.Errorf("could not find job inserted at index %d", i)
+		}
+	}
+	return inserted, nil
+}
+
+func jobInsertBatchSupported(params *riverdriver.JobInsertFastManyParams) bool {
+	if len(params.Jobs) < 2 {
+		return false
+	}
+	for _, job := range params.Jobs {
+		// Explicit IDs may precede the first generated ID. Preserve non-object
+		// metadata and caller-supplied reserved keys through the sequential path.
+		if job.ID != nil || (len(job.Metadata) > 0 && (!json.Valid(job.Metadata) || !gjson.ParseBytes(job.Metadata).IsObject())) ||
+			gjson.GetBytes(job.Metadata, riverdriver.UniqueInsertMetadataKey).Exists() {
+			return false
+		}
+	}
+	return true
 }
 
 func jobRescueBatch(ctx context.Context, dbtx templateReplaceWrapper, params *riverdriver.JobRescueManyParams) error {

@@ -610,62 +610,75 @@ func (e *Executor) JobInsertFastMany(ctx context.Context, params *riverdriver.Jo
 		baseCtx := ctx
 		ctx = schemaTemplateParam(ctx, params.Schema)
 		dbtx := templateReplaceWrapper{dbtx: e.driver.UnwrapTx(execTx), replacer: &e.driver.replacer}
-		plainInsertCtx := schemaTemplateParam(baseCtx, params.Schema)
-		plainInsertCtx = sqlctemplate.WithReplacements(plainInsertCtx, map[string]sqlctemplate.Replacement{
-			"on_duplicate_key": {Value: ""},
-		}, nil)
-		uniqueInsertCtx := schemaTemplateParam(baseCtx, params.Schema)
-		uniqueInsertCtx = sqlctemplate.WithReplacements(uniqueInsertCtx, map[string]sqlctemplate.Replacement{
-			"on_duplicate_key": {Value: "ON DUPLICATE KEY UPDATE id = LAST_INSERT_ID(id)"},
-		}, nil)
 
-		var idsWithNonce []int64
-		ids := make([]int64, len(params.Jobs))
-		for i, jobParams := range params.Jobs {
-			// Only use MySQL's broad ON DUPLICATE KEY behavior when a River unique
-			// key is present. Otherwise, a primary key conflict or a user-added
-			// unique constraint must be returned as an error.
-			insertCtx := plainInsertCtx
-			if len(jobParams.UniqueKey) > 0 {
-				insertCtx = uniqueInsertCtx
-
-				// Postgres can inspect xmax to determine whether an upsert inserted a
-				// row. MySQL has no equivalent, so add a per-row nonce to metadata and
-				// compare it with the selected result. Each input needs its own nonce
-				// so duplicates within this batch are classified correctly.
-				uniqueNonceByIndex[i] = randutil.Hex(8)
-			}
-
-			insertParams, err := jobInsertFastParams(jobParams, uniqueNonceByIndex[i])
+		var (
+			idsWithNonce []int64
+			jobs         []*dbsqlc.RiverJob
+		)
+		if jobInsertBatchSupported(params) {
+			var err error
+			jobs, err = jobInsertBatchReturning(baseCtx, dbtx, params, uniqueNonceByIndex)
 			if err != nil {
 				return err
 			}
+			idsWithNonce = sliceutil.Map(jobs, func(job *dbsqlc.RiverJob) int64 { return job.ID })
+		} else {
+			plainInsertCtx := schemaTemplateParam(baseCtx, params.Schema)
+			plainInsertCtx = sqlctemplate.WithReplacements(plainInsertCtx, map[string]sqlctemplate.Replacement{
+				"on_duplicate_key": {Value: ""},
+			}, nil)
+			uniqueInsertCtx := schemaTemplateParam(baseCtx, params.Schema)
+			uniqueInsertCtx = sqlctemplate.WithReplacements(uniqueInsertCtx, map[string]sqlctemplate.Replacement{
+				"on_duplicate_key": {Value: "ON DUPLICATE KEY UPDATE id = LAST_INSERT_ID(id)"},
+			}, nil)
 
-			res, err := dbsqlc.New().JobInsertFast(insertCtx, dbtx, insertParams)
+			ids := make([]int64, len(params.Jobs))
+			for i, jobParams := range params.Jobs {
+				// Only use MySQL's broad ON DUPLICATE KEY behavior when a River unique
+				// key is present. Otherwise, a primary key conflict or a user-added
+				// unique constraint must be returned as an error.
+				insertCtx := plainInsertCtx
+				if len(jobParams.UniqueKey) > 0 {
+					insertCtx = uniqueInsertCtx
+
+					// Postgres can inspect xmax to determine whether an upsert inserted a
+					// row. MySQL has no equivalent, so add a per-row nonce to metadata and
+					// compare it with the selected result. Each input needs its own nonce
+					// so duplicates within this batch are classified correctly.
+					uniqueNonceByIndex[i] = randutil.Hex(8)
+				}
+
+				insertParams, err := jobInsertFastParams(jobParams, uniqueNonceByIndex[i])
+				if err != nil {
+					return err
+				}
+
+				res, err := dbsqlc.New().JobInsertFast(insertCtx, dbtx, insertParams)
+				if err != nil {
+					return interpretError(err)
+				}
+				ids[i], err = res.LastInsertId()
+				if err != nil {
+					return err
+				}
+				if uniqueNonceByIndex[i] != "" {
+					idsWithNonce = append(idsWithNonce, ids[i])
+				}
+			}
+
+			selected, err := dbsqlc.New().JobGetByIDManyForUpdate(ctx, dbtx, ids)
 			if err != nil {
 				return interpretError(err)
 			}
-			ids[i], err = res.LastInsertId()
-			if err != nil {
-				return err
+			jobsByID := make(map[int64]*dbsqlc.RiverJob, len(selected))
+			for _, job := range selected {
+				jobsByID[job.ID] = job
 			}
-			if uniqueNonceByIndex[i] != "" {
-				idsWithNonce = append(idsWithNonce, ids[i])
-			}
+			jobs = sliceutil.Map(ids, func(id int64) *dbsqlc.RiverJob { return jobsByID[id] })
 		}
 
-		jobs, err := dbsqlc.New().JobGetByIDManyForUpdate(ctx, dbtx, ids)
-		if err != nil {
-			return interpretError(err)
-		}
-
-		jobsByID := make(map[int64]*dbsqlc.RiverJob, len(jobs))
-		for _, j := range jobs {
-			jobsByID[j.ID] = j
-		}
-
-		for i, id := range ids {
-			job, err := jobRowFromInternal(jobsByID[id])
+		for i, internal := range jobs {
+			job, err := jobRowFromInternal(internal)
 			if err != nil {
 				return err
 			}
@@ -673,10 +686,9 @@ func (e *Executor) JobInsertFastMany(ctx context.Context, params *riverdriver.Jo
 			insertRes[i] = &riverdriver.JobInsertFastResult{Job: job}
 			if uniqueNonceByIndex[i] != "" {
 				uniqueSkippedAsDuplicate := gjson.GetBytes(job.Metadata, riverdriver.UniqueInsertMetadataKey).Str != uniqueNonceByIndex[i]
-				riverUniqueConstraintConflict := bytes.Equal(job.UniqueKey, params.Jobs[i].UniqueKey) &&
-					slices.Contains(job.UniqueStates, job.State) &&
-					slices.Contains(uniquestates.UniqueBitmaskToStates(params.Jobs[i].UniqueStates), params.Jobs[i].State)
-				if uniqueSkippedAsDuplicate && !riverUniqueConstraintConflict {
+				if uniqueSkippedAsDuplicate && (!bytes.Equal(job.UniqueKey, params.Jobs[i].UniqueKey) ||
+					!slices.Contains(job.UniqueStates, job.State) ||
+					params.Jobs[i].UniqueStates&uniquestates.UniqueStatesToBitmask([]rivertype.JobState{params.Jobs[i].State}) == 0) {
 					// Unlike Postgres and SQLite, MySQL's ON DUPLICATE KEY
 					// cannot target River's unique-job index. Reject a conflict
 					// on any other unique constraint instead of silently treating
@@ -731,7 +743,8 @@ func (e *Executor) JobInsertFastManyNoReturning(ctx context.Context, params *riv
 		dbtx := templateReplaceWrapper{dbtx: e.driver.UnwrapTx(execTx), replacer: &e.driver.replacer}
 		insertCtx := schemaTemplateParam(baseCtx, params.Schema)
 		if len(params.Jobs) > 1 {
-			return jobInsertBatch(insertCtx, dbtx, params)
+			_, err := jobInsertBatch(insertCtx, dbtx, params, nil)
+			return err
 		}
 		insertCtx = sqlctemplate.WithReplacements(insertCtx, map[string]sqlctemplate.Replacement{
 			"on_duplicate_key": {Value: ""},

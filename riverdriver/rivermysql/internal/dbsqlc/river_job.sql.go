@@ -34,11 +34,12 @@ func (q *Queries) JobCancelExec(ctx context.Context, db DBTX, arg *JobCancelExec
 }
 
 const jobClearUniqueNonce = `-- name: JobClearUniqueNonce :exec
-UPDATE /* TEMPLATE: schema */river_job
+UPDATE /* TEMPLATE: schema */river_job FORCE INDEX (PRIMARY)
 SET metadata = JSON_REMOVE(metadata, '$."river:unique_nonce"')
 WHERE id IN (/*SLICE:id*/?)
 `
 
+// Avoid a table scan locking other sessions' uncommitted inserts.
 func (q *Queries) JobClearUniqueNonce(ctx context.Context, db DBTX, id []int64) error {
 	query := jobClearUniqueNonce
 	var queryParams []interface{}
@@ -679,6 +680,63 @@ func (q *Queries) JobGetByIDManyOrdered(ctx context.Context, db DBTX, id []int64
 	return items, nil
 }
 
+const jobGetByInsertNonce = `-- name: JobGetByInsertNonce :many
+SELECT id, args, attempt, attempted_at, attempted_by, created_at, errors, finalized_at, kind, max_attempts, metadata, priority, queue, state, scheduled_at, tags, unique_key, unique_states
+FROM /* TEMPLATE: schema */river_job
+WHERE id >= ?
+    AND JSON_UNQUOTE(JSON_EXTRACT(metadata, '$."river:unique_nonce"')) LIKE ?
+ORDER BY id
+`
+
+type JobGetByInsertNonceParams struct {
+	FirstID     int64
+	NoncePrefix []byte
+}
+
+// Own writes are visible even in an older REPEATABLE READ snapshot. Do not use
+// a locking read: the range can contain interleaved inserts from other sessions.
+func (q *Queries) JobGetByInsertNonce(ctx context.Context, db DBTX, arg *JobGetByInsertNonceParams) ([]*RiverJob, error) {
+	rows, err := db.QueryContext(ctx, jobGetByInsertNonce, arg.FirstID, arg.NoncePrefix)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []*RiverJob
+	for rows.Next() {
+		var i RiverJob
+		if err := rows.Scan(
+			&i.ID,
+			&i.Args,
+			&i.Attempt,
+			&i.AttemptedAt,
+			&i.AttemptedBy,
+			&i.CreatedAt,
+			&i.Errors,
+			&i.FinalizedAt,
+			&i.Kind,
+			&i.MaxAttempts,
+			&i.Metadata,
+			&i.Priority,
+			&i.Queue,
+			&i.State,
+			&i.ScheduledAt,
+			&i.Tags,
+			&i.UniqueKey,
+			&i.UniqueStates,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, &i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const jobGetByKindMany = `-- name: JobGetByKindMany :many
 SELECT id, args, attempt, attempted_at, attempted_by, created_at, errors, finalized_at, kind, max_attempts, metadata, priority, queue, state, scheduled_at, tags, unique_key, unique_states
 FROM /* TEMPLATE: schema */river_job
@@ -696,6 +754,69 @@ func (q *Queries) JobGetByKindMany(ctx context.Context, db DBTX, kind []string) 
 		query = strings.Replace(query, "/*SLICE:kind*/?", strings.Repeat(",?", len(kind))[1:], 1)
 	} else {
 		query = strings.Replace(query, "/*SLICE:kind*/?", "NULL", 1)
+	}
+	rows, err := db.QueryContext(ctx, query, queryParams...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []*RiverJob
+	for rows.Next() {
+		var i RiverJob
+		if err := rows.Scan(
+			&i.ID,
+			&i.Args,
+			&i.Attempt,
+			&i.AttemptedAt,
+			&i.AttemptedBy,
+			&i.CreatedAt,
+			&i.Errors,
+			&i.FinalizedAt,
+			&i.Kind,
+			&i.MaxAttempts,
+			&i.Metadata,
+			&i.Priority,
+			&i.Queue,
+			&i.State,
+			&i.ScheduledAt,
+			&i.Tags,
+			&i.UniqueKey,
+			&i.UniqueStates,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, &i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const jobGetByUniqueKeyManyForUpdate = `-- name: JobGetByUniqueKeyManyForUpdate :many
+SELECT id, args, attempt, attempted_at, attempted_by, created_at, errors, finalized_at, kind, max_attempts, metadata, priority, queue, state, scheduled_at, tags, unique_key, unique_states
+FROM /* TEMPLATE: schema */river_job FORCE INDEX (river_job_unique_idx)
+WHERE /* TEMPLATE_BEGIN: unique_key */ unique_key /* TEMPLATE_END */ IN (/*SLICE:unique_keys*/?)
+ORDER BY id
+FOR UPDATE
+`
+
+// Match the expression in river_job_unique_idx so lookups use the unique index.
+// A current read is needed for existing jobs committed after a caller's snapshot.
+// Force the index to avoid locking unrelated rows if a table scan looks cheaper.
+func (q *Queries) JobGetByUniqueKeyManyForUpdate(ctx context.Context, db DBTX, uniqueKeys []sql.NullString) ([]*RiverJob, error) {
+	query := jobGetByUniqueKeyManyForUpdate
+	var queryParams []interface{}
+	if len(uniqueKeys) > 0 {
+		for _, v := range uniqueKeys {
+			queryParams = append(queryParams, v)
+		}
+		query = strings.Replace(query, "/*SLICE:unique_keys*/?", strings.Repeat(",?", len(uniqueKeys))[1:], 1)
+	} else {
+		query = strings.Replace(query, "/*SLICE:unique_keys*/?", "NULL", 1)
 	}
 	rows, err := db.QueryContext(ctx, query, queryParams...)
 	if err != nil {

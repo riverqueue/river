@@ -42,11 +42,30 @@ WHERE id IN (sqlc.slice('id'))
 ORDER BY id
 FOR UPDATE;
 
+-- name: JobGetByInsertNonce :many
+-- Own writes are visible even in an older REPEATABLE READ snapshot. Do not use
+-- a locking read: the range can contain interleaved inserts from other sessions.
+SELECT *
+FROM /* TEMPLATE: schema */river_job
+WHERE id >= sqlc.arg('first_id')
+    AND JSON_UNQUOTE(JSON_EXTRACT(metadata, '$."river:unique_nonce"')) LIKE sqlc.arg('nonce_prefix')
+ORDER BY id;
+
 -- name: JobGetByKindMany :many
 SELECT *
 FROM /* TEMPLATE: schema */river_job
 WHERE kind IN (sqlc.slice('kind'))
 ORDER BY id;
+
+-- name: JobGetByUniqueKeyManyForUpdate :many
+-- Match the expression in river_job_unique_idx so lookups use the unique index.
+-- A current read is needed for existing jobs committed after a caller's snapshot.
+-- Force the index to avoid locking unrelated rows if a table scan looks cheaper.
+SELECT *
+FROM /* TEMPLATE: schema */river_job FORCE INDEX (river_job_unique_idx)
+WHERE /* TEMPLATE_BEGIN: unique_key */ unique_key /* TEMPLATE_END */ IN (sqlc.slice('unique_keys'))
+ORDER BY id
+FOR UPDATE;
 
 -- name: JobCancelExec :execresult
 UPDATE /* TEMPLATE: schema */river_job
@@ -59,7 +78,8 @@ WHERE id = sqlc.arg('id')
     AND finalized_at IS NULL;
 
 -- name: JobClearUniqueNonce :exec
-UPDATE /* TEMPLATE: schema */river_job
+-- Avoid a table scan locking other sessions' uncommitted inserts.
+UPDATE /* TEMPLATE: schema */river_job FORCE INDEX (PRIMARY)
 SET metadata = JSON_REMOVE(metadata, '$."river:unique_nonce"')
 WHERE id IN (sqlc.slice('id'));
 
