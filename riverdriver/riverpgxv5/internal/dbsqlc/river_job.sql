@@ -648,7 +648,9 @@ WITH job_input AS (
         unnest(@finalized_at_do_update::boolean[]) AS finalized_at_do_update,
         unnest(@finalized_at::timestamptz[])       AS finalized_at,
         unnest(@metadata_do_merge::boolean[])      AS metadata_do_merge,
-        unnest(@metadata_updates::jsonb[])         AS metadata_updates,
+        -- Cast text elements on the server so database/sql drivers do not decode
+        -- JSON numbers through float64 while converting array parameters.
+        unnest(@metadata_updates::text[])::jsonb   AS metadata_updates,
         unnest(@scheduled_at_do_update::boolean[]) AS scheduled_at_do_update,
         unnest(@scheduled_at::timestamptz[])       AS scheduled_at,
         -- To avoid requiring pgx users to register the OID of the river_job_state[]

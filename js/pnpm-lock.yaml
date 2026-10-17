@@ -49,6 +49,9 @@ importers:
       license-checker-rseidelsohn:
         specifier: ^5.0.1
         version: 5.0.1
+      mysql2:
+        specifier: 3.24.4
+        version: 3.24.4(@types/node@26.1.1)
       pg:
         specifier: ^8.22.0
         version: 8.22.0
@@ -94,6 +97,9 @@ importers:
       '@riverqueue/migrate':
         specifier: workspace:0.2.0
         version: link:../migrate
+      mysql2:
+        specifier: 3.24.4
+        version: 3.24.4(@types/node@26.1.1)
       pg:
         specifier: ^8.22.0
         version: 8.22.0
@@ -107,6 +113,18 @@ importers:
       '@types/pg':
         specifier: ^8.20.0
         version: 8.20.0
+      typescript:
+        specifier: ^6.0.3
+        version: 6.0.3
+
+  driver/mysql:
+    devDependencies:
+      mysql2:
+        specifier: 3.24.4
+        version: 3.24.4(@types/node@26.1.1)
+      riverqueue:
+        specifier: workspace:0.2.0
+        version: link:../..
       typescript:
         specifier: ^6.0.3
         version: 6.0.3

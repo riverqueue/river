@@ -13,21 +13,30 @@ Run tests:
 
     make test
 
-By default, this runs all workspace modules and database drivers. Use
-`make test/race` to enable the race detector.
+By default, this runs all workspace modules and database drivers except MySQL,
+which is opt-in. Use `make test/race` to enable the race detector.
+
+To run only the MySQL driver tests (no Postgres needed):
+
+    make test TEST_DATABASE=mysql
+
+These connect as `root` without a password on `localhost:3306`. Set
+`TEST_MYSQL_URL` to override the connection DSN. To include MySQL in the full
+suite, set `RIVER_MYSQL_TESTS_ENABLED=1`.
 
 To run only the SQLite, libSQL, and Turso driver tests (no Postgres needed):
 
     make test TEST_DATABASE=sqlite
 
-To run the regular suite with the SQLite driver tests excluded:
+To run the regular suite with the MySQL and SQLite driver tests excluded:
 
     make test TEST_DATABASE=postgres
 
 `TEST_DATABASE` also applies to `make test/race`. CI separates these suites so
-the Postgres version matrix doesn't repeat the SQLite tests. Each suite still
-runs on both supported Go versions. Only the latest combination in each matrix
-uses the race detector, marked `race` in its job title.
+the Postgres version matrix doesn't repeat the MySQL and SQLite tests. Postgres
+and SQLite run on both supported Go versions, with the latest combination in
+each matrix using the race detector. MySQL runs separately with the race
+detector on the latest supported Go version.
 
 ## Run lint
 

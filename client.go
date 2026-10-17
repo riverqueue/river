@@ -1067,11 +1067,11 @@ func NewClient[TTx any](driver riverdriver.Driver[TTx], config *Config) (*Client
 			client.testSignals.queueCleaner = &queueCleaner.TestSignals
 		}
 
-		if driver.DatabaseName() == riverdriver.DatabaseNameSQLite {
-			sqliteNotificationCleaner := maintenance.NewSQLiteNotificationCleaner(archetype, &maintenance.SQLiteNotificationCleanerConfig{
+		if driver.DatabaseName() == riverdriver.DatabaseNameMySQL || driver.DatabaseName() == riverdriver.DatabaseNameSQLite {
+			notificationCleaner := maintenance.NewSQLiteNotificationCleaner(archetype, &maintenance.SQLiteNotificationCleanerConfig{
 				Schema: config.Schema,
 			}, driver.GetExecutor())
-			maintenanceServices = append(maintenanceServices, sqliteNotificationCleaner)
+			maintenanceServices = append(maintenanceServices, notificationCleaner)
 		}
 
 		{
@@ -2543,11 +2543,17 @@ func (c *Client[TTx]) JobList(ctx context.Context, params *JobListParams) (*JobL
 	if params == nil {
 		params = NewJobListParams()
 	}
-	params.schema = c.config.Schema
-
 	if c.driver.DatabaseName() == riverdriver.DatabaseNameSQLite && params.metadataCalled {
 		return nil, errJobListParamsMetadataNotSupportedSQLite
 	}
+	if params.metadataCalled {
+		var err error
+		params, err = params.withMetadataPredicateSQL(c.driver.SQLFragmentColumnContainsJSON)
+		if err != nil {
+			return nil, err
+		}
+	}
+	params.schema = c.config.Schema
 
 	dbParams, err := params.toDBParams()
 	if err != nil {
@@ -2584,11 +2590,17 @@ func (c *Client[TTx]) JobListTx(ctx context.Context, tx TTx, params *JobListPara
 	if params == nil {
 		params = NewJobListParams()
 	}
-	params.schema = c.config.Schema
-
 	if c.driver.DatabaseName() == riverdriver.DatabaseNameSQLite && params.metadataCalled {
 		return nil, errJobListParamsMetadataNotSupportedSQLite
 	}
+	if params.metadataCalled {
+		var err error
+		params, err = params.withMetadataPredicateSQL(c.driver.SQLFragmentColumnContainsJSON)
+		if err != nil {
+			return nil, err
+		}
+	}
+	params.schema = c.config.Schema
 
 	dbParams, err := params.toDBParams()
 	if err != nil {

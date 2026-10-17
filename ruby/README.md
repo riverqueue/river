@@ -1,6 +1,6 @@
 # River for Ruby
 
-River is a fast, reliable background job system backed by Postgres or SQLite. The Ruby client inserts and works jobs using the same database schema and job protocol as River's other languages. It includes Active Record and Sequel drivers, plus Rails and Active Job integration.
+River is a fast, reliable background job system backed by MySQL, Postgres, or SQLite. The Ruby client inserts and works jobs using the same database schema and job protocol as River's other languages. It includes Active Record and Sequel drivers, plus Rails and Active Job integration.
 
 ## Installation
 
@@ -11,7 +11,7 @@ gem "riverqueue-sequel"
 gem "pg"
 ```
 
-Use `riverqueue-activerecord` for Active Record, or `sqlite3` instead of `pg` for SQLite. Install the gems with `bundle install`. Rails applications can use [`riverqueue-rails`](rails/riverqueue-rails/README.md) to configure River as their Active Job backend.
+Use `riverqueue-activerecord` for Active Record, or replace `pg` with `mysql2` for MySQL or `sqlite3` for SQLite. Install the gems with `bundle install`. Rails applications can use [`riverqueue-rails`](rails/riverqueue-rails/README.md) to configure River as their Active Job backend.
 
 ## Quick start
 
@@ -67,7 +67,7 @@ ensure
 end
 ```
 
-Run `bundle exec ruby worker.rb`. Replace the worker body with your mail service. Job arguments implement `kind` and `to_json`; workers read decoded JSON keys as strings. Services sharing a job must agree on its kind and JSON fields. For SQLite and alternate Postgres schemas, see [migrations](docs/migrations.md).
+Run `bundle exec ruby worker.rb`. Replace the worker body with your mail service. Job arguments implement `kind` and `to_json`; workers read decoded JSON keys as strings. Services sharing a job must agree on its kind and JSON fields. For MySQL, SQLite, and alternate schemas, see [migrations](docs/migrations.md).
 
 A client without configured queues can insert jobs without starting worker threads. Applications own their database pools and should close them only after stopping River.
 
@@ -89,3 +89,15 @@ See the [usage and configuration guide](docs/README.md), [migration guide](docs/
 ## Development
 
 See [developing River for Ruby](docs/development.md).
+
+## MySQL
+
+Both Active Record and Sequel drivers support MySQL 8.0 and later. Use the latest
+patch release, add `gem "mysql2"` to your bundle, and connect with a
+`mysql2://user:password@localhost/my_app` URL. Active Record applications can
+configure `adapter: "mysql2"` in their existing database configuration.
+
+The same insertion, worker, queue, and transaction APIs apply. Workers use
+`FOR UPDATE SKIP LOCKED`, and River stores notification hints in the shared
+MySQL outbox. Ruby's runtime polls for available work and cancellation requests.
+See [migrations](docs/migrations.md) for deployment and MySQL's DDL behavior.

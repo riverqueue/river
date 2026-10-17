@@ -13,6 +13,8 @@ use crate::__private::{
 #[cfg(feature = "postgres")]
 use crate::client::{JobRecord, job_projection, tolerant_row};
 use crate::database::DatabasePool;
+#[cfg(feature = "mysql")]
+use crate::database::mysql;
 #[cfg(feature = "sqlite")]
 use crate::database::sqlite;
 use crate::{AttemptError, Error, JobRow, JobState, WorkerTimeout, client::ClientInner};
@@ -64,6 +66,15 @@ async fn rescue_batch(
     stuck_horizon: DateTime<Utc>,
 ) -> Result<Batch, MaintenanceError> {
     match context.inner.database.pool() {
+        #[cfg(feature = "mysql")]
+        DatabasePool::MySql(pool) => {
+            super::mysql_cancellable(
+                &context.cancel,
+                TIMEOUT_DEFAULT,
+                rescue_batch_mysql(&context.inner, pool, after_id, limit, stuck_horizon),
+            )
+            .await
+        }
         #[cfg(feature = "sqlite")]
         DatabasePool::Sqlite(pool) => {
             super::sqlite_cancellable(
@@ -386,6 +397,92 @@ async fn rescue_batch_postgres(
     Ok(batch)
 }
 
+#[cfg(feature = "mysql")]
+async fn rescue_batch_mysql(
+    inner: &ClientInner,
+    pool: &sqlx::MySqlPool,
+    after_id: i64,
+    limit: i64,
+    stuck_horizon: DateTime<Utc>,
+) -> Result<Batch, MaintenanceError> {
+    let mut transaction = crate::database::mysql::Transaction::begin(pool).await?;
+    let selected_ids = if inner.pilot.intercepts_rescue() {
+        inner
+            .pilot
+            .select_rescue_job_ids(
+                PilotDatabaseConnection::MySql(&mut transaction),
+                &rescue_params(inner, after_id, limit, stuck_horizon),
+            )
+            .await
+            .map_err(|source| Error::Extension {
+                phase: crate::ExtensionPhase::AddOn {
+                    operation: "rescue selection",
+                },
+                source,
+            })?
+    } else {
+        None
+    };
+    let rows = match selected_ids {
+        Some(ids) => mysql::jobs_by_ids(&mut transaction, &ids).await?,
+        None => {
+            mysql::stuck_jobs(
+                &mut transaction,
+                after_id,
+                stuck_horizon,
+                i32::try_from(limit).unwrap_or(i32::MAX),
+            )
+            .await?
+        }
+    };
+    let batch = Batch {
+        last_id: rows.last().map(|row| row.id),
+        selected: rows.len(),
+    };
+    let jobs = rescue_jobs(inner, &rows, Utc::now())?;
+    if !jobs.is_empty() {
+        let params = RescueManyParams {
+            database: inner.pilot_database_config(),
+            jobs,
+            stuck_horizon,
+        };
+        let action = if inner.pilot.intercepts_rescue() {
+            inner
+                .pilot
+                .rescue_jobs(PilotDatabaseConnection::MySql(&mut transaction), &params)
+                .await
+                .map_err(|source| Error::Extension {
+                    phase: crate::ExtensionPhase::AddOn {
+                        operation: "rescue",
+                    },
+                    source,
+                })?
+        } else {
+            RescueAction::Continue
+        };
+        if action == RescueAction::Continue {
+            for job in &params.jobs {
+                let state = job.state;
+                let error: AttemptError =
+                    serde_json::from_value(job.attempt_error.clone()).map_err(Error::from)?;
+                mysql::rescue(
+                    &mut transaction,
+                    &mysql::RescueJob {
+                        error: &error,
+                        finalized_at: job.finalized_at,
+                        id: job.id,
+                        scheduled_at: job.scheduled_at,
+                        state,
+                        stuck_horizon,
+                    },
+                )
+                .await?;
+            }
+        }
+    }
+    transaction.commit().await?;
+    Ok(batch)
+}
 #[cfg(feature = "sqlite")]
 async fn rescue_batch_sqlite(
     inner: &ClientInner,

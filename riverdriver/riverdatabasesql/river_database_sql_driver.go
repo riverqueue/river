@@ -90,8 +90,9 @@ func NewWithPgxListener(dbPool *sql.DB, listenerPool *pgxpool.Pool) *Driver {
 
 const argPlaceholder = "$"
 
-func (d *Driver) ArgPlaceholder() string { return argPlaceholder }
-func (d *Driver) DatabaseName() string   { return riverdriver.DatabaseNamePostgres }
+func (d *Driver) ArgPlaceholder() string             { return argPlaceholder }
+func (d *Driver) DatabaseName() string               { return riverdriver.DatabaseNamePostgres }
+func (d *Driver) SafeIdentifier(ident string) string { return dbutil.SafeIdentifier(ident) }
 
 func (d *Driver) GetExecutor() riverdriver.Executor {
 	return &Executor{d.dbPool, templateReplaceWrapper{d.dbPool, &d.replacer}, d}
@@ -130,6 +131,10 @@ func (d *Driver) SQLFragmentColumnContainsAll(column, namedArg string, values []
 
 func (d *Driver) SQLFragmentColumnContainsAny(column, namedArg string, values []string) (string, any, error) {
 	return fmt.Sprintf("%s && @%s", column, namedArg), pq.Array(values), nil
+}
+
+func (d *Driver) SQLFragmentColumnContainsJSON(column, namedArg, fragment string) (string, map[string]any, error) {
+	return column + " @> @" + namedArg + "::jsonb", map[string]any{namedArg: fragment}, nil
 }
 
 func (d *Driver) SQLFragmentColumnIn(column string, values any) (string, any, error) {

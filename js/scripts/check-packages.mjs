@@ -37,6 +37,7 @@ const rootPackageJson = JSON.parse(
 const packageSpecs = [
   { directory: ".", name: "riverqueue" },
   { directory: "migrate", name: "@riverqueue/migrate" },
+  { directory: "driver/mysql", name: "@riverqueue/driver-mysql" },
   { directory: "driver/pg", name: "@riverqueue/driver-pg" },
   { directory: "driver/prisma", name: "@riverqueue/driver-prisma" },
   { directory: "driver/sqlite", name: "@riverqueue/driver-sqlite" },
@@ -378,8 +379,10 @@ async function verifyConsumers(archiveByPackageName) {
     )}\n`
   );
   // Install without type packages first: JavaScript consumers must not need
-  // them, and the published metadata must not pull them in.
-  await npmInstall(consumerDirectory);
+  // them. mysql2 declares @types/node as a required peer, so omit automatic
+  // peer installation here to exercise consumers without type packages.
+  // inspectDependencies checks that River itself keeps typings optional.
+  await npmInstall(consumerDirectory, ["--omit=peer"]);
   for (const typesPackage of ["@types/node", "@types/pg"]) {
     await assert.rejects(
       stat(join(consumerDirectory, "node_modules", typesPackage)),
@@ -393,6 +396,7 @@ async function verifyConsumers(archiveByPackageName) {
     `
 import * as river from "riverqueue";
 import * as cli from "@riverqueue/cli";
+import * as mysql from "@riverqueue/driver-mysql";
 import * as pg from "@riverqueue/driver-pg";
 import * as prisma from "@riverqueue/driver-prisma";
 import * as sqlite from "@riverqueue/driver-sqlite";
@@ -400,7 +404,7 @@ import * as migrate from "@riverqueue/migrate";
 import * as testing from "@riverqueue/test";
 import * as workerThreads from "@riverqueue/worker-threads";
 
-for (const packageNamespace of [river, cli, pg, prisma, sqlite, migrate, testing, workerThreads]) {
+for (const packageNamespace of [river, cli, mysql, pg, prisma, sqlite, migrate, testing, workerThreads]) {
   if (Object.keys(packageNamespace).length === 0) throw new Error("empty package namespace");
 }
 
@@ -449,6 +453,7 @@ if (cron("@every 1s").next(start).toString() !== "2026-10-11T12:34:57Z") {
 const packageNames = [
   "riverqueue",
   "@riverqueue/cli",
+  "@riverqueue/driver-mysql",
   "@riverqueue/driver-pg",
   "@riverqueue/driver-prisma",
   "@riverqueue/driver-sqlite",

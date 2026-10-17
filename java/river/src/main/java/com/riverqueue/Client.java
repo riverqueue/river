@@ -182,9 +182,10 @@ public final class Client {
           var before = locked(c, id);
           if (before.state().isFinalized()) return before;
           try (var statement =
-                  Sql.prepare(
+                  Sql.mutation(
+                      database,
                       c,
-                      Sql.query(database, "cancel"),
+                      "cancel",
                       database.timestamp(clock.instant()),
                       Json.encode(clock.instant()),
                       id);
@@ -209,7 +210,7 @@ public final class Client {
           var job = locked(c, id);
           if (job.state() == Job.State.RUNNING)
             throw new RiverException(RiverException.Code.REJECTED, "Cannot delete a running job");
-          try (var statement = Sql.prepare(c, Sql.query(database, "delete"), id);
+          try (var statement = Sql.mutation(database, c, "delete", id);
               var rows = statement.executeQuery()) {
             rows.next();
             var deleted = read(rows);
@@ -256,9 +257,10 @@ public final class Client {
         connection,
         c -> {
           try (var statement =
-                  Sql.prepare(
+                  Sql.mutation(
+                      database,
                       c,
-                      Sql.query(database, "complete"),
+                      "complete",
                       "completed",
                       database.timestamp(clock.instant()),
                       "completed",
@@ -309,6 +311,13 @@ public final class Client {
           try (var statement = Sql.prepare(c, sql, params.toArray())) {
             for (var job : jobs) {
               statement.setLong(params.size() + 1, job.id());
+              if (database.dialect() == Database.Dialect.MYSQL) {
+                if (statement.executeUpdate() != 0) {
+                  plugin.afterDelete(c, driver(), job);
+                  result.add(job);
+                }
+                continue;
+              }
               try (var rows = statement.executeQuery()) {
                 // Recheck every filter atomically: a peer may have updated this job since listing.
                 if (!rows.next()) continue;
@@ -526,7 +535,9 @@ public final class Client {
             : original.uniqueStates().stream().mapToInt(Job.State::bit).reduce(0, (a, b) -> a | b);
     boolean postgres = database.dialect() == Database.Dialect.POSTGRES;
     try {
-      if (!postgres && key != null && (stateMask & Job.State.of(state).bit()) != 0) {
+      if (database.dialect() == Database.Dialect.SQLITE
+          && key != null
+          && (stateMask & Job.State.of(state).bit()) != 0) {
         try (var statement = Sql.prepare(connection, Sql.query(database, "writer_lock"))) {
           statement.executeUpdate();
         }
@@ -568,13 +579,7 @@ public final class Client {
         key == null ? null : HexFormat.of().parseHex(key),
         mask
       };
-      String insertSql = Sql.query(database, "insert");
-      if (postgres)
-        insertSql =
-            insertSql.replace(
-                "{duplicate}",
-                Sql.query(database, nonce ? "insert_duplicate_nonce" : "insert_duplicate_xmax"));
-      try (var statement = Sql.prepare(connection, insertSql, params);
+      try (var statement = Sql.mutation(database, connection, "insert", params);
           var rows = statement.executeQuery()) {
         if (!rows.next())
           throw new RiverException(RiverException.Code.REJECTED, "Insertion returned no row");
@@ -585,6 +590,15 @@ public final class Client {
                     .path(Protocol.METADATA_UNIQUE_NONCE)
                     .equals(metadata.path(Protocol.METADATA_UNIQUE_NONCE))
                 : rows.getBoolean("duplicate");
+        if (duplicate
+            && database.dialect() == Database.Dialect.MYSQL
+            && (key == null
+                || (stateMask & Job.State.of(state).bit()) == 0
+                || !key.equals(job.uniqueKey())
+                || job.uniqueStates() == null
+                || !job.uniqueStates().contains(job.state())))
+          throw new RiverException(
+              RiverException.Code.REJECTED, "Insertion violated an unrelated unique constraint");
         if (!duplicate) plugin.afterInsert(connection, driver(), job);
         if (!duplicate && job.state() == Job.State.AVAILABLE) notifyInsert(connection, job.queue());
         return new Job.InsertResult(job, duplicate);
@@ -680,8 +694,7 @@ public final class Client {
     return atomic(
         connection,
         c -> {
-          try (var statement =
-                  Sql.prepare(c, Sql.query(database, "output"), Json.encode(output), id);
+          try (var statement = Sql.mutation(database, c, "output", Json.encode(output), id);
               var rows = statement.executeQuery()) {
             if (!rows.next())
               throw new RiverException(RiverException.Code.NOT_FOUND, "Job " + id + " not found");
@@ -700,9 +713,10 @@ public final class Client {
         c -> {
           var before = locked(c, id);
           try (var statement =
-                  Sql.prepare(
+                  Sql.mutation(
+                      database,
                       c,
-                      Sql.query(database, "retry"),
+                      "retry",
                       database.timestamp(clock.instant()),
                       id,
                       database.timestamp(clock.instant()));
@@ -730,6 +744,9 @@ public final class Client {
   /** Runs a callback in a new transaction, committing on success and rolling back on failure. */
   public <T> T transaction(Transaction<T> action) {
     try (var connection = database.connection()) {
+      int isolation = connection.getTransactionIsolation();
+      if (database.dialect() == Database.Dialect.MYSQL)
+        connection.setTransactionIsolation(Connection.TRANSACTION_READ_COMMITTED);
       connection.setAutoCommit(false);
       var previous = ownedCommit.get();
       var commit = new Commit(connection);
@@ -751,6 +768,8 @@ public final class Client {
       } finally {
         if (previous == null) ownedCommit.remove();
         else ownedCommit.set(previous);
+        if (database.dialect() == Database.Dialect.MYSQL)
+          connection.setTransactionIsolation(isolation);
       }
     } catch (SQLException e) {
       throw databaseError("River transaction", e);

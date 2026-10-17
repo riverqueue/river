@@ -89,6 +89,14 @@ type Replacement struct {
 // be initialized with a constructor. This lets it default to a usable instance
 // on drivers that may themselves not be initialized.
 type Replacer struct {
+	// UnnumberedPlaceholders, when true, causes Run to emit plain `?`
+	// placeholders instead of numbered `?1`, `?2`, etc. for named args
+	// injected via the template system. The args slice is reordered to
+	// match the positional order of placeholders in the SQL. This is
+	// needed for MySQL, whose database/sql driver does not support
+	// numbered `?N` syntax.
+	UnnumberedPlaceholders bool
+
 	cache   map[replacerCacheKey]string
 	cacheMu sync.RWMutex
 }
@@ -142,6 +150,13 @@ func (r *Replacer) RunSafely(ctx context.Context, argPlaceholder, sql string, ar
 	}
 
 	cacheKey, cacheEligible := replacerCacheKeyFrom(sql, container)
+
+	// In unnumbered mode, named args are interleaved with sqlc args during a
+	// left-to-right SQL walk. The cache can't reconstruct this ordering on hit.
+	if r.UnnumberedPlaceholders && len(container.NamedArgs) > 0 {
+		cacheEligible = false
+	}
+
 	if cacheEligible {
 		r.cacheMu.RLock()
 		var (
@@ -212,28 +227,36 @@ func (r *Replacer) RunSafely(ctx context.Context, argPlaceholder, sql string, ar
 	}
 
 	if len(container.NamedArgs) > 0 {
-		placeholderNum := len(args)
-
 		// For the benefit of the test suite's output being predictable, sort
 		// named args before processing them.
 		sortedNamedArgs := maputil.Keys(container.NamedArgs)
 		slices.Sort(sortedNamedArgs)
-		for _, arg := range sortedNamedArgs {
-			placeholderNum++
 
-			var (
-				symbol      = "@" + arg
-				symbolIndex = strings.Index(updatedSQL, symbol)
-				val         = container.NamedArgs[arg]
-			)
-
-			if symbolIndex == -1 {
-				return "", nil, fmt.Errorf("sqltemplate expected to find named arg %q, but it wasn't present", symbol)
+		if r.UnnumberedPlaceholders {
+			var err error
+			updatedSQL, args, err = replaceUnnumberedArgs(updatedSQL, args, container.NamedArgs, sortedNamedArgs)
+			if err != nil {
+				return "", nil, err
 			}
+		} else {
+			placeholderNum := len(args)
+			for _, arg := range sortedNamedArgs {
+				placeholderNum++
 
-			// ReplaceAll because an input parameter may appear multiple times.
-			updatedSQL = strings.ReplaceAll(updatedSQL, symbol, argPlaceholder+strconv.Itoa(placeholderNum))
-			args = append(args, val)
+				var (
+					symbol      = "@" + arg
+					symbolIndex = strings.Index(updatedSQL, symbol)
+					val         = container.NamedArgs[arg]
+				)
+
+				if symbolIndex == -1 {
+					return "", nil, fmt.Errorf("sqltemplate expected to find named arg %q, but it wasn't present", symbol)
+				}
+
+				// ReplaceAll because an input parameter may appear multiple times.
+				updatedSQL = strings.ReplaceAll(updatedSQL, symbol, argPlaceholder+strconv.Itoa(placeholderNum))
+				args = append(args, val)
+			}
 		}
 	}
 
@@ -247,6 +270,148 @@ func (r *Replacer) RunSafely(ctx context.Context, argPlaceholder, sql string, ar
 	}
 
 	return updatedSQL, args, nil
+}
+
+func replaceUnnumberedArgs(sql string, args []any, namedArgs map[string]any, sortedNamedArgs []string) (string, []any, error) {
+	// Prefer the longest name when one named argument is a prefix of another.
+	slices.SortFunc(sortedNamedArgs, func(left, right string) int {
+		switch {
+		case len(left) > len(right):
+			return -1
+		case len(left) < len(right):
+			return 1
+		default:
+			return strings.Compare(left, right)
+		}
+	})
+
+	var (
+		inBlockComment bool
+		inLineComment  bool
+		newArgs        = make([]any, 0, len(args)+len(namedArgs))
+		out            strings.Builder
+		quote          byte
+		sqlcArgIndex   int
+		usedNamedArgs  = make(map[string]bool, len(namedArgs))
+	)
+	out.Grow(len(sql))
+
+	for i := 0; i < len(sql); {
+		if inLineComment {
+			out.WriteByte(sql[i])
+			if sql[i] == '\n' {
+				inLineComment = false
+			}
+			i++
+			continue
+		}
+
+		if inBlockComment {
+			if sql[i] == '*' && i+1 < len(sql) && sql[i+1] == '/' {
+				out.WriteString("*/")
+				i += 2
+				inBlockComment = false
+				continue
+			}
+			out.WriteByte(sql[i])
+			i++
+			continue
+		}
+
+		if quote != 0 {
+			out.WriteByte(sql[i])
+			if sql[i] == '\\' && i+1 < len(sql) {
+				out.WriteByte(sql[i+1])
+				i += 2
+				continue
+			}
+			if sql[i] == quote {
+				if i+1 < len(sql) && sql[i+1] == quote {
+					out.WriteByte(sql[i+1])
+					i += 2
+					continue
+				}
+				quote = 0
+			}
+			i++
+			continue
+		}
+
+		switch {
+		case sql[i] == '\'', sql[i] == '"', sql[i] == '`':
+			quote = sql[i]
+			out.WriteByte(sql[i])
+			i++
+
+		case sql[i] == '#':
+			inLineComment = true
+			out.WriteByte(sql[i])
+			i++
+
+		case sql[i] == '-' && i+2 < len(sql) && sql[i+1] == '-' && sql[i+2] <= ' ':
+			inLineComment = true
+			out.WriteString("--")
+			i += 2
+
+		case sql[i] == '/' && i+1 < len(sql) && sql[i+1] == '*':
+			inBlockComment = true
+			out.WriteString("/*")
+			i += 2
+
+		case sql[i] == '@':
+			matched := false
+			for _, name := range sortedNamedArgs {
+				symbol := "@" + name
+				if !strings.HasPrefix(sql[i:], symbol) {
+					continue
+				}
+
+				end := i + len(symbol)
+				if end < len(sql) && isNamedArgChar(sql[end]) {
+					continue
+				}
+
+				out.WriteByte('?')
+				newArgs = append(newArgs, namedArgs[name])
+				usedNamedArgs[name] = true
+				i = end
+				matched = true
+				break
+			}
+			if !matched {
+				out.WriteByte(sql[i])
+				i++
+			}
+
+		case sql[i] == '?':
+			if sqlcArgIndex >= len(args) {
+				return "", nil, errors.New("sqlctemplate found more unnumbered placeholders than sqlc arguments")
+			}
+			out.WriteByte('?')
+			newArgs = append(newArgs, args[sqlcArgIndex])
+			sqlcArgIndex++
+			i++
+
+		default:
+			out.WriteByte(sql[i])
+			i++
+		}
+	}
+
+	if sqlcArgIndex != len(args) {
+		return "", nil, errors.New("sqlctemplate found fewer unnumbered placeholders than sqlc arguments")
+	}
+	for _, name := range sortedNamedArgs {
+		if !usedNamedArgs[name] {
+			return "", nil, fmt.Errorf("sqltemplate expected to find named arg %q, but it wasn't present", "@"+name)
+		}
+	}
+
+	return out.String(), newArgs, nil
+}
+
+func isNamedArgChar(c byte) bool {
+	return c >= '0' && c <= '9' || c >= 'A' && c <= 'Z' || c == '_' || c >= 'a' && c <= 'z'
 }
 
 // WithReplacements adds sqlctemplate templates to the given context (they go in

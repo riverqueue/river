@@ -1,4 +1,4 @@
-// The README's examples use both backends, so it's the crate documentation
+// The README's Postgres and SQLite examples need both features, so it's the crate documentation
 // (and its examples run as doctests) when both are enabled, as on docs.rs.
 #![cfg_attr(
     all(feature = "postgres", feature = "sqlite"),
@@ -14,8 +14,10 @@
 #![forbid(unsafe_code)]
 #![warn(missing_docs)]
 
-#[cfg(not(any(feature = "postgres", feature = "sqlite")))]
-compile_error!("riverqueue requires at least one database feature: `postgres` or `sqlite`");
+#[cfg(not(any(feature = "postgres", feature = "sqlite", feature = "mysql")))]
+compile_error!(
+    "riverqueue requires at least one database feature: `mysql`, `postgres`, or `sqlite`"
+);
 
 extern crate self as riverqueue;
 

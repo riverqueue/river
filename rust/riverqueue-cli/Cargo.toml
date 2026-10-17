@@ -15,8 +15,9 @@ homepage.workspace = true
 include = ["src/**", "LICENSE", "README.md"]
 
 [features]
-default = ["postgres", "sqlite"]
+default = ["mysql", "postgres", "sqlite"]
 postgres = ["riverqueue/postgres", "riverqueue-migrate/postgres", "sqlx/postgres"]
+mysql = ["riverqueue/mysql", "riverqueue-migrate/mysql", "sqlx/mysql"]
 sqlite = ["riverqueue/sqlite", "riverqueue-migrate/sqlite", "sqlx/sqlite"]
 
 [[bin]]

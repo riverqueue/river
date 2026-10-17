@@ -250,3 +250,36 @@ jobs:
       - run: node cli/dist/bin.js migrate-up --database-url "$TEST_DATABASE_URL"
 
       - run: pnpm run test:integration
+
+  mysql:
+    name: Test (MySQL ${{ matrix.mysql-version }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        mysql-version: ["8.0", "8.4"]
+    env:
+      TEST_MYSQL_URL: mysql://root@127.0.0.1:3306/
+    services:
+      mysql:
+        image: mysql:${{ matrix.mysql-version }}
+        env:
+          MYSQL_ALLOW_EMPTY_PASSWORD: "yes"
+          MYSQL_ROOT_HOST: "%"
+        ports: ["3306:3306"]
+        options: >-
+          --health-cmd "mysqladmin ping -h 127.0.0.1 -u root"
+          --health-interval 2s
+          --health-timeout 5s
+          --health-retries 30
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/setup-js
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.work
+      - run: make test/js/mysql
+        working-directory: .

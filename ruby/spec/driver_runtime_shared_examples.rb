@@ -15,6 +15,8 @@ RSpec.shared_examples "overflowing metadata counters" do
   let(:now) { Time.utc(2026, 1, 2, 3, 4, 5) }
 
   it "rescues a job whose JSON rescue counter overflows a Ruby float" do
+    skip "MySQL rejects numbers outside the JSON numeric range" if driver.migration_backend == :mysql
+
     inserted = client.insert(DriverRuntimeArgs.new(1), scheduled_at: now - 120).job
     encoded = driver.send(:runtime_json, '{"river:rescue_count":1e999}')
     driver.send(:runtime_execute, "UPDATE river_job SET metadata = #{encoded} WHERE id = #{inserted.id}")
@@ -28,6 +30,8 @@ RSpec.shared_examples "overflowing metadata counters" do
   end
 
   it "snoozes a job whose JSON snooze counter overflows a Ruby float" do
+    skip "MySQL rejects numbers outside the JSON numeric range" if driver.migration_backend == :mysql
+
     worker = Object.new
     worker.define_singleton_method(:work) { |_job| raise River.job_snooze(60) }
     client = River::Client.new(driver, config: River::Config.new(workers: River::Workers.new.add("driver_runtime", worker)))
@@ -176,7 +180,7 @@ RSpec.shared_examples "driver job state machine" do
     row = insert_job(1, scheduled_at: now - 1)
     driver.job_claim(id: row.id, attempted_by: "test", now: now)
     cancel_before_write = true
-    driver.define_singleton_method(:runtime_returning_ids) do |sql|
+    driver.define_singleton_method(:runtime_query_rows) do |sql|
       if cancel_before_write
         cancel_before_write = false
         job_cancel(row.id)
@@ -246,7 +250,7 @@ RSpec.shared_examples "driver job state machine" do
     row = insert_job(1, scheduled_at: now - 1)
     driver.job_claim(id: row.id, attempted_by: "test", now: now)
     cancel_before_write = true
-    driver.define_singleton_method(:runtime_returning_ids) do |sql|
+    driver.define_singleton_method(:runtime_query_rows) do |sql|
       if cancel_before_write
         cancel_before_write = false
         job_cancel(row.id)

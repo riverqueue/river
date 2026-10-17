@@ -65,6 +65,8 @@ GEM
     minitest (6.0.2)
       drb (~> 2.0)
       prism (~> 1.5)
+    mysql2 (0.5.7)
+      bigdecimal
     optparse (0.8.1)
     parallel (1.27.0)
     parser (3.3.11.1)
@@ -153,6 +155,7 @@ PLATFORMS
 
 DEPENDENCIES
   debug
+  mysql2 (~> 0.5)
   pg
   riverqueue!
   riverqueue-activerecord!

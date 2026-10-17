@@ -696,10 +696,22 @@ RETURNING
 -- for JobSetStateIfRunning to use when falling back to non-running jobs.
 -- Metadata that isn't valid JSON is left in place, and columns are listed out
 -- to tolerate values that aren't valid JSON. See JobGetAvailable.
+-- Rebuild top-level members rather than using JSON Merge Patch, which removes
+-- JSON nulls and recursively merges nested objects.
 -- name: JobSetMetadataIfNotRunning :one
 UPDATE /* TEMPLATE: schema */river_job
 SET metadata = CASE WHEN typeof(metadata) <> 'text' OR json_valid(metadata)
-                    THEN jsonb_patch(json(metadata), json(@metadata_updates))
+                    THEN jsonb((
+                            SELECT json_group_object(member_key, json(CASE
+                                WHEN json_type(@metadata_updates, '$.' || json_quote(member_key)) IS NOT NULL
+                                THEN @metadata_updates -> ('$.' || json_quote(member_key))
+                                ELSE metadata -> ('$.' || json_quote(member_key))
+                            END))
+                            FROM (
+                                SELECT cast(original.key AS text) AS member_key FROM json_each(CASE WHEN typeof(metadata) <> 'text' OR json_valid(metadata) THEN metadata ELSE '{}' END) AS original
+                                UNION SELECT cast(updated.key AS text) AS member_key FROM json_each(@metadata_updates) AS updated
+                            )
+                        ))
                     ELSE metadata END
 WHERE id = @id
     AND state != 'running'
@@ -756,7 +768,17 @@ SET
                         THEN cast(sqlc.narg('finalized_at') AS text)
                         ELSE finalized_at END,
     metadata     = CASE WHEN cast(@metadata_do_merge AS boolean) AND (typeof(metadata) <> 'text' OR json_valid(metadata))
-                        THEN jsonb_patch(json(metadata), json(@metadata_updates))
+                        THEN jsonb((
+                            SELECT json_group_object(member_key, json(CASE
+                                WHEN json_type(@metadata_updates, '$.' || json_quote(member_key)) IS NOT NULL
+                                THEN @metadata_updates -> ('$.' || json_quote(member_key))
+                                ELSE metadata -> ('$.' || json_quote(member_key))
+                            END))
+                            FROM (
+                                SELECT cast(original.key AS text) AS member_key FROM json_each(CASE WHEN typeof(metadata) <> 'text' OR json_valid(metadata) THEN metadata ELSE '{}' END) AS original
+                                UNION SELECT cast(updated.key AS text) AS member_key FROM json_each(@metadata_updates) AS updated
+                            )
+                        ))
                         ELSE metadata END,
     scheduled_at = CASE WHEN /* NOT should_cancel */(cast(@state AS text) <> 'available' AND @state <> 'retryable' AND @state <> 'scheduled' OR (CASE WHEN typeof(metadata) <> 'text' OR json_valid(metadata) THEN metadata -> 'cancel_attempted_at' END) IS NULL) AND cast(@scheduled_at_do_update AS boolean)
                         THEN cast(@scheduled_at AS text)
@@ -789,7 +811,17 @@ RETURNING
 -- name: JobUpdate :one
 UPDATE /* TEMPLATE: schema */river_job
 SET
-    metadata = CASE WHEN cast(@metadata_do_merge AS boolean) THEN jsonb_patch(json(metadata), json(@metadata)) ELSE metadata END
+    metadata = CASE WHEN cast(@metadata_do_merge AS boolean) THEN jsonb((
+                            SELECT json_group_object(member_key, json(CASE
+                                WHEN json_type(@metadata, '$.' || json_quote(member_key)) IS NOT NULL
+                                THEN @metadata -> ('$.' || json_quote(member_key))
+                                ELSE metadata -> ('$.' || json_quote(member_key))
+                            END))
+                            FROM (
+                                SELECT cast(original.key AS text) AS member_key FROM json_each(CASE WHEN typeof(metadata) <> 'text' OR json_valid(metadata) THEN metadata ELSE '{}' END) AS original
+                                UNION SELECT cast(updated.key AS text) AS member_key FROM json_each(@metadata) AS updated
+                            )
+                        )) ELSE metadata END
 WHERE id = @id
 RETURNING *;
 

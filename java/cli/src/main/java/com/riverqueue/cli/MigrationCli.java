@@ -33,19 +33,26 @@ public final class MigrationCli {
       Options options, Map<String, String> environment, boolean offline) {
     String url = options.values.getOrDefault("database-url", environment.get("DATABASE_URL"));
     String driver = options.values.get("driver");
-    if (driver != null && !Set.of("postgres", "sqlite").contains(driver))
-      throw new Usage("--driver must be postgres or sqlite");
+    if (driver != null && !Set.of("mysql", "postgres", "sqlite").contains(driver))
+      throw new Usage("--driver must be mysql, postgres, or sqlite");
     if (offline && driver != null && !options.values.containsKey("database-url")) url = null;
     if (url == null || url.isBlank()) {
       if (!offline) throw new Usage("Set DATABASE_URL or pass --database-url");
-      url = "sqlite".equals(driver) ? "jdbc:sqlite::memory:" : "jdbc:postgresql://localhost/unused";
+      url =
+          "mysql".equals(driver)
+              ? "jdbc:mysql://localhost/unused"
+              : "sqlite".equals(driver)
+                  ? "jdbc:sqlite::memory:"
+                  : "jdbc:postgresql://localhost/unused";
     }
-    if (!url.startsWith("postgres://")
+    if (!url.startsWith("mysql://")
+        && !url.startsWith("jdbc:mysql:")
+        && !url.startsWith("postgres://")
         && !url.startsWith("postgresql://")
         && !url.startsWith("jdbc:postgresql:")
         && !url.startsWith("sqlite:")
         && !url.startsWith("jdbc:sqlite:"))
-      throw new Usage("Expected a Postgres URL or a SQLite JDBC URL");
+      throw new Usage("Expected a MySQL, Postgres, or SQLite URL");
     Database database;
     try {
       database =
@@ -55,7 +62,7 @@ public final class MigrationCli {
       throw new Usage("Invalid database URL or schema");
     }
     if (driver != null
-        && !driver.equals(database.dialect() == Database.Dialect.SQLITE ? "sqlite" : "postgres"))
+        && !driver.equals(database.dialect().name().toLowerCase(java.util.Locale.ROOT)))
       throw new Usage("--driver does not match the database URL");
     return database;
   }
@@ -101,10 +108,11 @@ public final class MigrationCli {
     out.println("  version        Print CLI version");
     out.println();
     out.println("Connection options:");
-    out.println("  --database-url URL    Postgres or SQLite JDBC URL; defaults to DATABASE_URL");
+    out.println("  --database-url URL    MySQL, Postgres, or SQLite URL; defaults to DATABASE_URL");
     out.println(
-        "  --driver DRIVER       postgres or sqlite; selects dialect for offline SQL export");
-    out.println("  --schema NAME         Postgres schema (default: connection's current schema)");
+        "  --driver DRIVER       mysql, postgres, or sqlite; selects dialect for offline SQL export");
+    out.println(
+        "  --schema NAME         MySQL database or Postgres schema (default: connection's current schema)");
     out.printf(
         "  --line NAME           Migration line: %s (default: main)%n", String.join(", ", lines));
     out.println();

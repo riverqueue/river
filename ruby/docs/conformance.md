@@ -9,9 +9,16 @@ make test/ruby/conformance
 ```
 
 This generates `conformance/testdata/` and runs `ruby/spec/conformance_spec.rb`.
-No Postgres server, pinned upstream checkout, protocol adapter, or separately
-maintained golden files are needed. Missing fixtures fail with instructions to
-regenerate them. The regular Ruby suite includes these checks too.
+By default, no database server, pinned upstream checkout, protocol adapter, or
+separately maintained golden files are needed. Missing fixtures fail with
+instructions to regenerate them. The regular Ruby suite includes these checks too. To run the
+same persistence cases on MySQL through both Active Record and Sequel:
+
+```sh
+TEST_MYSQL_URL=mysql2://root@localhost/ make test/ruby/conformance/mysql
+```
+
+Each case creates and drops a disposable database using the canonical migrations.
 
 The fixture checks cover:
 
@@ -24,13 +31,13 @@ The fixture checks cover:
 - Cron occurrences, named zones, daylight-saving transitions, interval schedules,
   and invalid expressions, with the Ruby API differences below checked explicitly.
 - Insertion, cancellation, queue pause/resume/metadata, and leadership resignation
-  notification encoding through both SQL drivers, using in-memory SQLite and
+  notification encoding through both SQL drivers, using SQLite or MySQL and
   the bundled canonical migrations.
 
 The Ruby workflow runs on Ruby changes. The shared Conformance workflow also
-runs these tests when Go code changes. The ordinary driver suites retain
-Postgres notification delivery/commit-ordering tests and shared Postgres /
-SQLite insertion, transaction, uniqueness, and worker tests.
+runs these tests on SQLite and MySQL when Go code changes. The ordinary driver
+suites retain Postgres notification delivery/commit-ordering tests and shared
+Postgres / SQLite / MySQL insertion, transaction, uniqueness, and worker tests.
 
 This replaces the old `insert-only-v1` adapter and its pinned external harness.
 It checks shared data formats, not live mixed-language worker execution. Adapter
@@ -40,7 +47,7 @@ protocol is not part of the Ruby API.
 ## Coverage gaps and API differences
 
 Ruby's runtime still polls job and queue state rather than consuming Postgres
-LISTEN events or the SQLite outbox. The fixture target checks notification
+LISTEN events or the SQLite/MySQL outbox. The fixture target checks notification
 emission, not dispatch. Ruby does not emit or handle `request_resign`; other
 clients' requests therefore cannot force a Ruby leader to resign. Completing
 that coverage would require a notification listener and runtime dispatch path.
@@ -49,7 +56,7 @@ rollback for queue controls and resignations as well as insertion/cancellation.
 
 Shared snooze-counter fixtures cover non-negative integers and absent counters.
 Recovery from other JSON values is implementation-specific. Ruby's shared driver
-tests cover its lenient conversion rules separately on Postgres and SQLite.
+tests cover its lenient conversion rules separately on Postgres, SQLite, and MySQL.
 
 Cron retains Ruby's existing Fugit extensions: six fields with seconds, Sunday
 as 7, hour 24, and descending ranges. These four expressions are accepted in

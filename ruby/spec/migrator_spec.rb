@@ -29,7 +29,7 @@ RSpec.describe River::Migrator do
     expect { described_class.new(driver, schema: "other") }.to raise_error(ArgumentError, /SQLite/)
   end
 
-  [:postgres, :sqlite].each do |adapter|
+  [:mysql, :postgres, :sqlite].each do |adapter|
     context "with #{adapter}", database: adapter do
       around do |example|
         skip "Postgres unavailable" if adapter == :postgres && !DB
@@ -55,6 +55,37 @@ RSpec.describe River::Migrator do
         migrator.define_singleton_method(:existing_versions) { ((calls += 1) == 1) ? [] : [1] }
 
         expect { migrator.migrate }.to raise_error(River::Error, /changed concurrently/)
+      end
+
+      if adapter == :mysql
+        it "supports explicit schemas and rejects unsafe identifiers" do
+          schema = @driver.send(:runtime_query_rows, "SELECT DATABASE() AS name").first.fetch(:name)
+          expect(described_class.new(@driver, schema: schema).migrate.length).to eq(8)
+          expect { described_class.new(@driver, schema: "bad'name").status }.to raise_error(ArgumentError, /identifier/)
+        end
+
+        it "refuses concurrent migrators and releases its named lock" do
+          schema = @driver.send(:runtime_query_rows, "SELECT DATABASE() AS name").first.fetch(:name)
+          admin = Sequel.connect(ENV.fetch("TEST_MYSQL_URL"))
+          admin.fetch("SELECT GET_LOCK('river_migrate:#{schema}', 0)").all
+          expect { described_class.new(@driver).migrate }.to raise_error(River::Error, /database lock/)
+          admin.fetch("SELECT RELEASE_LOCK('river_migrate:#{schema}')").all
+          expect(described_class.new(@driver).migrate.length).to eq(8)
+        ensure
+          admin&.disconnect
+        end
+
+        it "requires a selected database" do
+          admin = Sequel.connect(ENV.fetch("TEST_MYSQL_URL").sub(%r{/[^/]*$}, "/"))
+          expect { described_class.new(River::Driver::Sequel.new(admin)).status }.to raise_error(ArgumentError, /identifier/)
+        ensure
+          admin&.disconnect
+        end
+
+        it "splits migration scripts while preserving quoted semicolons" do
+          migrator = described_class.new(@driver)
+          expect(migrator.send(:mysql_statements, "; SELECT 'a;b'; -- comment;\n SELECT \"x;y\"; /* ; */ SELECT `a;b` # comment;\n")).to eq(["SELECT 'a;b'", "SELECT \"x;y\"", "SELECT `a;b`"])
+        end
       end
 
       if adapter == :postgres

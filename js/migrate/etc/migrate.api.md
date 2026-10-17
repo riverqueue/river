@@ -135,7 +135,7 @@ export declare const MIGRATION_LINE_MAIN = "main";
 
 ```ts
 /** Database backend that a migration bundle targets. */
-export type MigrationBackend = "postgres" | "sqlite";
+export type MigrationBackend = "mysql" | "postgres" | "sqlite";
 ```
 
 ## `MigrationDirection`
@@ -162,7 +162,10 @@ export declare class MigrationError extends RiverError<"migration"> {
 ```ts
 /** A database connection to migrate, given without a River driver. */
 export type MigrationTarget =
-  PgClientMigrationTarget | PgPoolMigrationTarget | SqliteMigrationTarget;
+  | MySqlMigrationTarget
+  | PgClientMigrationTarget
+  | PgPoolMigrationTarget
+  | SqliteMigrationTarget;
 ```
 
 ## `Migrator`
@@ -237,6 +240,36 @@ export interface MigratorOptions {
  * `SqliteDriver`, or a connection given directly.
  */
 export type MigratorSource = ClientDriver | MigrationTarget;
+```
+
+## `MySqlMigrationConnection`
+
+```ts
+/** The mysql2 promise connection methods used by the migrator. */
+export interface MySqlMigrationConnection {
+  query(sql: string, values?: unknown[]): Promise<[unknown, unknown]>;
+  release(): void;
+}
+```
+
+## `MySqlMigrationPool`
+
+```ts
+/** A caller-owned mysql2 promise pool. */
+export interface MySqlMigrationPool {
+  getConnection(): Promise<MySqlMigrationConnection>;
+}
+```
+
+## `MySqlMigrationTarget`
+
+```ts
+/** Migrate MySQL through a caller-owned mysql2 pool. */
+export interface MySqlMigrationTarget {
+  readonly backend: "mysql";
+  readonly pool: MySqlMigrationPool;
+  readonly schema?: string | undefined;
+}
 ```
 
 ## `PgClientMigrationTarget`

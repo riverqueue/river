@@ -10,6 +10,7 @@ group :development, :test do
 end
 
 group :test do
+  gem "mysql2", "~> 0.5"
   gem "debug"
   gem "pg"
   gem "rspec-core"

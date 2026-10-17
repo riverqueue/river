@@ -84,7 +84,9 @@ class SchedulingTest {
       assertNotNull(second);
       assertEquals(java.util.Set.of("periodic", "scheduled"), java.util.Set.of(first, second));
       assertFalse(errors.isEmpty());
-      assertTrue(errors.stream().allMatch(error -> "periodic failed".equals(error.getMessage())));
+      assertTrue(
+          errors.stream().allMatch(error -> "periodic failed".equals(error.getMessage())),
+          () -> "Unexpected errors: " + errors);
     }
   }
 

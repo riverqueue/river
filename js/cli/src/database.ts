@@ -16,6 +16,7 @@ export type DatabaseLocation =
       readonly backend: "postgres";
       readonly connectionString: string | undefined;
     }
+  | { readonly backend: "mysql"; readonly connectionString: string }
   | { readonly backend: "sqlite"; readonly path: string | URL };
 
 // Match River's Go CLI: bound statements so a stuck lock can't hang a
@@ -65,6 +66,8 @@ export function parseDatabaseUrl(
 
   const scheme = /^([a-z][a-z0-9+.-]*):\/\//i.exec(url)?.[1]?.toLowerCase();
   switch (scheme) {
+    case "mysql":
+      return { backend: "mysql", connectionString: url };
     case "postgres":
     case "postgresql":
       return { backend: "postgres", connectionString: url };
@@ -83,7 +86,7 @@ export function parseDatabaseUrl(
     }
     default:
       throw new UsageError(
-        "--database-url must start with postgres://, postgresql://, or sqlite://",
+        "--database-url must start with postgres://, postgresql://, mysql://, or sqlite://",
         command
       );
   }

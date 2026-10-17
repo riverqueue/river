@@ -22,6 +22,8 @@ use crate::client::attempts::{
 use crate::client::backoff::{RestartBackoff, exponential_backoff};
 use crate::client::completer::CompletionUpdate;
 use crate::client::executor::{AbortOnDrop, execute_job};
+#[cfg(feature = "mysql")]
+use crate::client::mysql_backend_error;
 #[cfg(feature = "sqlite")]
 use crate::client::sqlite_backend_error;
 use crate::client::{
@@ -1032,6 +1034,8 @@ async fn fetch_available(
     let use_parallel_fetch = match inner.database.kind() {
         #[cfg(feature = "postgres")]
         DatabaseKind::Postgres => true,
+        #[cfg(feature = "mysql")]
+        DatabaseKind::MySql => true,
         #[cfg(feature = "sqlite")]
         DatabaseKind::Sqlite => false,
     };
@@ -1130,6 +1134,20 @@ pub(crate) async fn standard_claim(
         .iter()
         .map(decode_job_row)
         .collect()),
+        #[cfg(feature = "mysql")]
+        PilotDatabaseConnection::MySql(connection) => {
+            let params = crate::database::mysql::ClaimJobs {
+                client_id: &inner.id,
+                kinds: inner.fetch_kinds.as_deref(),
+                limit,
+                max_attempted_by: ATTEMPTED_BY_MAX,
+                now: Utc::now(),
+                queue,
+            };
+            crate::database::mysql::claim(connection, &params)
+                .await
+                .map_err(mysql_backend_error)
+        }
         #[cfg(feature = "sqlite")]
         PilotDatabaseConnection::Sqlite(connection) => {
             let params = crate::database::sqlite::ClaimJobs {
@@ -1194,6 +1212,24 @@ pub(super) async fn fetch_jobs(
                 maximum,
             )
             .await?
+        }
+        #[cfg(feature = "mysql")]
+        DatabasePool::MySql(pool) => {
+            let Some(transaction) =
+                unless_cancelled(cancel, crate::database::mysql::Transaction::begin(pool)).await
+            else {
+                return Ok(FetchedJobs::default());
+            };
+            let mut transaction = transaction?;
+            let rows = standard_claim(
+                inner,
+                PilotDatabaseConnection::MySql(&mut transaction),
+                queue,
+                maximum,
+            )
+            .await?;
+            transaction.commit().await?;
+            rows
         }
         #[cfg(feature = "sqlite")]
         DatabasePool::Sqlite(pool) => {

@@ -21,6 +21,7 @@ import {
   SqliteMigrationStorage,
   type SqliteMigrationRunner,
 } from "./sqlite.js";
+import { MySqlMigrationStorage, type MySqlMigrationPool } from "./mysql.js";
 import type { MigrationStorage } from "./storage.js";
 
 export { MIGRATION_LINE_MAIN };
@@ -137,7 +138,17 @@ export type MigratorSource = ClientDriver | MigrationTarget;
 
 /** A database connection to migrate, given without a River driver. */
 export type MigrationTarget =
-  PgClientMigrationTarget | PgPoolMigrationTarget | SqliteMigrationTarget;
+  | MySqlMigrationTarget
+  | PgClientMigrationTarget
+  | PgPoolMigrationTarget
+  | SqliteMigrationTarget;
+
+/** Migrate MySQL through a caller-owned mysql2 pool. */
+export interface MySqlMigrationTarget {
+  readonly backend: "mysql";
+  readonly pool: MySqlMigrationPool;
+  readonly schema?: string | undefined;
+}
 
 /** Migrate Postgres through one dedicated connection. */
 export interface PgClientMigrationTarget {
@@ -216,12 +227,16 @@ export function createMigrator(
 ): Migrator {
   const target = resolveTarget(source);
   const storage: MigrationStorage =
-    "database" in target
-      ? new SqliteMigrationStorage(target.database, target.run)
-      : new PgMigrationStorage(
-          "pool" in target ? { pool: target.pool } : { client: target.client },
-          target.schema
-        );
+    "backend" in target
+      ? new MySqlMigrationStorage(target.pool, target.schema)
+      : "database" in target
+        ? new SqliteMigrationStorage(target.database, target.run)
+        : new PgMigrationStorage(
+            "pool" in target
+              ? { pool: target.pool }
+              : { client: target.client },
+            target.schema
+          );
   const line = options.line ?? MIGRATION_LINE_MAIN;
   validateLine(storage.backend, line);
   const migrations =
@@ -420,6 +435,7 @@ function copyMigrations(
 function resolveTarget(
   source: MigratorSource
 ):
+  | MySqlMigrationTarget
   | PgClientMigrationTarget
   | PgPoolMigrationTarget
   | (SqliteMigrationTarget & { readonly run?: SqliteMigrationRunner }) {
@@ -437,6 +453,7 @@ function resolveTarget(
     };
   }
   if (typeof source === "object" && (source as unknown) !== null) {
+    if ("backend" in source) return source;
     if ("database" in source) return { database: source.database };
     if ("pool" in source) {
       return { pool: source.pool, schema: source.schema };

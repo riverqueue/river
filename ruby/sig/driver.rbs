@@ -146,10 +146,12 @@ module River
       def runtime_job_list: (JobListParams, ?for_delete: bool) -> Array[JobRow]
       def runtime_job_rows: (String) -> untyped
       def runtime_json: (untyped) -> untyped
+      def runtime_locks_rows?: () -> bool
       def runtime_merge_metadata: (untyped) -> untyped
       def runtime_metadata_equals: (untyped, untyped) -> untyped
       def runtime_nullable_time: (untyped) -> untyped
       def runtime_notify: (String, untyped) -> untyped
+      def runtime_order_by: (JobListParams, String) -> String
       def sqlite_insert_nonces: (Array[JobInsertParams]) -> Array[String]
       def runtime_parse_json: (untyped) -> untyped
       def runtime_parse_time: (untyped) -> untyped

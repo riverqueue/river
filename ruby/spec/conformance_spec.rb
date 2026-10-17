@@ -2,18 +2,13 @@
 
 require "spec_helper"
 
-# The fixture-backed checks run once, alongside SQLite, without a Go setup in
-# every Postgres matrix entry.
-return unless RiverTestDatabase.enabled?(:sqlite)
+# Keep the serverless SQLite checks and opt into MySQL with TEST_DATABASE.
+return unless RiverTestDatabase.enabled?(:sqlite) || RiverTestDatabase.enabled?(:mysql)
+require_relative "support/client_test_database"
 require_relative "support/conformance_fixtures"
-require_relative "support/river_test_schema"
 require "riverqueue-activerecord"
 require "riverqueue-sequel"
 require "riverqueue/testing"
-
-class ConformanceRecord < ActiveRecord::Base
-  self.abstract_class = true
-end
 
 RSpec.describe "Go-generated conformance fixtures" do
   fixture_source = RiverConformanceFixtures.read("unique_keys")
@@ -131,24 +126,16 @@ RSpec.describe "Go-generated conformance fixtures" do
     expect(River::RESUMABLE_STEP_METADATA_KEY).to eq(keys.fetch("resumable_step"))
   end
 
-  # These exercise actual insertion/cancellation and the SQL outbox in both
-  # drivers without requiring a server. Postgres delivery/commit ordering is
-  # separately exercised by the shared driver specs.
-  %w[activerecord sequel].each do |adapter|
-    context "#{adapter} persisted protocol" do
+  # Exercise the same persisted protocol on both outbox backends. Postgres
+  # delivery/commit ordering is separately exercised by the shared driver specs.
+  %w[active_record sequel].product(%i[mysql sqlite]).each do |adapter, backend|
+    context "#{adapter} #{backend} persisted protocol", database: backend do
       around do |example|
-        if adapter == "activerecord"
-          ConformanceRecord.establish_connection(adapter: "sqlite3", database: ":memory:")
-          @driver = River::Driver::ActiveRecord.new(connection_class: ConformanceRecord)
-        else
-          database = Sequel.sqlite
-          @driver = River::Driver::Sequel.new(database)
+        ClientTestDatabase.public_send("with_#{adapter}", backend) do |driver|
+          @driver = driver
+          @client = River::Client.new(@driver)
+          example.run
         end
-        RiverTestSchema.load(@driver)
-        @client = River::Client.new(@driver)
-        example.run
-      ensure
-        (adapter == "activerecord") ? ConformanceRecord.remove_connection : database&.disconnect
       end
 
       # Ruby emits these messages; its polling runtime does not consume

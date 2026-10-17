@@ -1,0 +1,16 @@
+module River::Driver
+  module MySQLRuntime
+    include Runtime
+
+    def job_get_by_id: (untyped) -> untyped
+    def job_insert_many: (Array[JobInsertParams]) -> Array[[River::JobRow, bool]]
+
+    private
+
+    def mysql_columns: (String) -> String
+    def mysql_delete: (String, String, String, ?limit: untyped) -> untyped
+    def mysql_locked_job: (untyped) -> untyped
+    def mysql_queue_paused: (untyped, bool, untyped) -> untyped
+    def mysql_update: (String, String, String, Array[String]) -> untyped
+  end
+end

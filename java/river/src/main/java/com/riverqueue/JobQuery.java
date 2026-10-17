@@ -216,7 +216,7 @@ public record JobQuery(
     return !metadata.isObject() || !metadata.isEmpty();
   }
 
-  private static String sqliteMetadata(
+  private static String jsonMetadata(
       Database database,
       List<Object> parameters,
       JsonNode wanted,
@@ -225,22 +225,28 @@ public record JobQuery(
       int depth) {
     // Array containment is unordered, but each wanted object must match one complete element.
     // Correlated predicates retain that boundary instead of comparing independent JSON paths.
+    // MySQL uses scalar subqueries to avoid semijoin rewrites losing nested correlations.
     String query;
     if (wanted.isContainer()) {
       var children = new ArrayList<String>();
       String alias = "metadata_" + depth;
       if (wanted.isObject()) {
         for (var entry : wanted.properties()) {
-          parameters.add(entry.getKey());
+          parameters.add(
+              database.dialect() == Database.Dialect.MYSQL
+                  ? "$." + Json.encode(entry.getKey())
+                  : entry.getKey());
           children.add(
               Sql.query(database, "filter_metadata_member")
                   .replace(
                       "{predicate}",
-                      sqliteMetadata(
+                      jsonMetadata(
                           database,
                           parameters,
                           entry.getValue(),
-                          alias + ".type",
+                          database.dialect() == Database.Dialect.MYSQL
+                              ? "LOWER(COALESCE(JSON_TYPE(" + alias + ".value), 'NULL'))"
+                              : alias + ".type",
                           alias + ".value",
                           depth + 1)));
         }
@@ -250,11 +256,13 @@ public record JobQuery(
               Sql.query(database, "filter_metadata_element")
                   .replace(
                       "{predicate}",
-                      sqliteMetadata(
+                      jsonMetadata(
                           database,
                           parameters,
                           element,
-                          alias + ".type",
+                          database.dialect() == Database.Dialect.MYSQL
+                              ? "LOWER(COALESCE(JSON_TYPE(" + alias + ".value), 'NULL'))"
+                              : alias + ".type",
                           alias + ".value",
                           depth + 1)));
         }
@@ -321,6 +329,17 @@ public record JobQuery(
                 : field + " " + sort + (descending ? " NULLS FIRST, " : " NULLS LAST, "))
             + "id "
             + sort;
+    if (database.dialect() == Database.Dialect.MYSQL && !field.isEmpty())
+      orderSQL =
+          field
+              + " IS NULL "
+              + (descending ? "DESC" : "ASC")
+              + ", "
+              + field
+              + " "
+              + sort
+              + ", id "
+              + sort;
     parameters.add(limit);
     return Sql.query(database, forDelete ? "list_deletable" : "list")
         .replace("{where}", where)
@@ -337,10 +356,19 @@ public record JobQuery(
     filter(database, filters, parameters, "tags_all", tagsAll);
     filter(database, filters, parameters, "tags_any", tagsAny);
     if (hasMetadataFilter()) {
-      if (database.dialect() == Database.Dialect.SQLITE)
-        filters.add(
-            sqliteMetadata(database, parameters, metadata, "json_type(metadata)", "metadata", 0));
-      else {
+      if (database.dialect() != Database.Dialect.POSTGRES) {
+        String predicate =
+            jsonMetadata(
+                database,
+                parameters,
+                metadata,
+                database.dialect() == Database.Dialect.MYSQL
+                    ? "LOWER(JSON_TYPE(metadata))"
+                    : "json_type(metadata)",
+                "metadata",
+                0);
+        filters.add(predicate);
+      } else {
         filters.add(Sql.query(database, "filter_metadata"));
         parameters.add(Json.encode(metadata));
       }

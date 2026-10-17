@@ -93,9 +93,8 @@ func exerciseJobInsert[TTx any](ctx context.Context, t *testing.T,
 					uniqueNonces[nonce] = true
 				}
 
-				// SQLite needs to set a special metadata key to be able to
-				// check for duplicates. Remove this for purposes of comparing
-				// inserted metadata.
+				// Some drivers use a special metadata key to detect duplicates.
+				// Remove it for purposes of comparing inserted metadata.
 				job.Metadata, err = sjson.DeleteBytes(job.Metadata, riverdriver.UniqueInsertMetadataKey)
 				require.NoError(t, err)
 
@@ -118,6 +117,33 @@ func exerciseJobInsert[TTx any](ctx context.Context, t *testing.T,
 				require.Equal(t, []byte("unique-key-fast-many-"+strconv.Itoa(i)), job.UniqueKey)
 				require.Equal(t, rivertype.JobStates(), job.UniqueStates)
 			}
+		})
+
+		t.Run("DuplicateIDWithoutUniqueKeyErrors", func(t *testing.T) {
+			t.Parallel()
+
+			exec, _ := setup(ctx, t)
+			id := rand.Int64()
+			params := &riverdriver.JobInsertFastManyParams{
+				Jobs: []*riverdriver.JobInsertFastParams{
+					{
+						EncodedArgs: []byte(`{}`),
+						ID:          &id,
+						Kind:        "test_kind",
+						MaxAttempts: rivercommon.MaxAttemptsDefault,
+						Priority:    rivercommon.PriorityDefault,
+						Queue:       rivercommon.QueueDefault,
+						State:       rivertype.JobStateAvailable,
+						Tags:        []string{},
+					},
+				},
+			}
+
+			_, err := exec.JobInsertFastMany(ctx, params)
+			require.NoError(t, err)
+
+			_, err = exec.JobInsertFastMany(ctx, params)
+			require.Error(t, err)
 		})
 
 		t.Run("MissingValuesDefaultAsExpected", func(t *testing.T) {
@@ -183,6 +209,62 @@ func exerciseJobInsert[TTx any](ctx context.Context, t *testing.T,
 				require.Nil(t, job.UniqueKey)
 				var emptyJobStates []rivertype.JobState
 				require.Equal(t, emptyJobStates, job.UniqueStates)
+			}
+		})
+
+		t.Run("MixedNewAndDuplicateJobs", func(t *testing.T) {
+			t.Parallel()
+
+			exec, _ := setup(ctx, t)
+
+			params := &riverdriver.JobInsertFastManyParams{}
+			for i := range 6 {
+				params.Jobs = append(params.Jobs, &riverdriver.JobInsertFastParams{
+					EncodedArgs: []byte(fmt.Sprintf(`{"index":%d}`, i)),
+					Kind:        "test_kind", MaxAttempts: 25, Metadata: []byte(fmt.Sprintf(`{"index":%d}`, i)),
+					Priority: 1, Queue: "default", State: rivertype.JobStateAvailable, Tags: []string{},
+				})
+			}
+			for _, i := range []byte{0, 2, 4} {
+				// Include bytes that aren't UTF-8 and differ only after a NUL.
+				params.Jobs[i].UniqueKey = []byte{0xff, 0x00, i, 0x80}
+				params.Jobs[i].UniqueStates = 0xff
+			}
+			params.Jobs[3].UniqueKey = params.Jobs[0].UniqueKey
+			params.Jobs[3].UniqueStates = 1 << 2 // Inactive for an available job.
+
+			// Seed in reverse order, so returning rows sorted by ID would be wrong.
+			seed, err := exec.JobInsertFastMany(ctx, &riverdriver.JobInsertFastManyParams{
+				Jobs: []*riverdriver.JobInsertFastParams{params.Jobs[4], params.Jobs[0]},
+			})
+			require.NoError(t, err)
+			results, err := exec.JobInsertFastMany(ctx, params)
+			require.NoError(t, err)
+			require.Len(t, results, len(params.Jobs))
+			require.Equal(t, seed[1].Job.ID, results[0].Job.ID)
+			require.Equal(t, seed[0].Job.ID, results[4].Job.ID)
+			for i, result := range results {
+				require.Equal(t, i == 0 || i == 4, result.UniqueSkippedAsDuplicate)
+				require.JSONEq(t, string(params.Jobs[i].EncodedArgs), string(result.Job.EncodedArgs))
+				require.Equal(t, params.Jobs[i].UniqueKey, result.Job.UniqueKey)
+				stored, err := exec.JobGetByID(ctx, &riverdriver.JobGetByIDParams{ID: result.Job.ID})
+				require.NoError(t, err)
+				for _, job := range []*rivertype.JobRow{result.Job, stored} {
+					metadata, err := sjson.DeleteBytes(job.Metadata, riverdriver.UniqueInsertMetadataKey)
+					require.NoError(t, err)
+					require.JSONEq(t, string(params.Jobs[i].Metadata), string(metadata))
+				}
+			}
+
+			// No new IDs are generated when every job conflicts.
+			duplicates, err := exec.JobInsertFastMany(ctx, &riverdriver.JobInsertFastManyParams{
+				Jobs: []*riverdriver.JobInsertFastParams{params.Jobs[4], params.Jobs[2], params.Jobs[0]},
+			})
+			require.NoError(t, err)
+			require.Len(t, duplicates, 3)
+			for i, original := range []int{4, 2, 0} {
+				require.True(t, duplicates[i].UniqueSkippedAsDuplicate)
+				require.Equal(t, results[original].Job.ID, duplicates[i].Job.ID)
 			}
 		})
 
@@ -300,7 +382,7 @@ func exerciseJobInsert[TTx any](ctx context.Context, t *testing.T,
 				Jobs:   []*riverdriver.JobInsertFastParams{job, job},
 				Schema: schema,
 			})
-			if driver.DatabaseName() == riverdriver.DatabaseNameSQLite {
+			if driver.DatabaseName() != riverdriver.DatabaseNamePostgres {
 				require.ErrorContains(t, err, "unique key appears more than once in batch")
 			} else {
 				require.ErrorContains(t, err, "ON CONFLICT DO UPDATE command cannot affect row a second time")
@@ -446,6 +528,39 @@ func exerciseJobInsert[TTx any](ctx context.Context, t *testing.T,
 				require.Equal(t, rivertype.JobStateAvailable, job.State)
 				require.Equal(t, []string{"tag"}, job.Tags)
 				require.Equal(t, []byte("unique-key-no-returning-"+strconv.Itoa(i)), job.UniqueKey)
+			}
+		})
+
+		t.Run("BatchWithoutUniqueKeys", func(t *testing.T) {
+			t.Parallel()
+
+			exec, bundle := setup(ctx, t)
+			now := time.Date(2026, 10, 15, 12, 30, 1, 123456000, time.FixedZone("offset", -5*60*60))
+			params := &riverdriver.JobInsertFastManyParams{}
+			for i := range 3 {
+				params.Jobs = append(params.Jobs, &riverdriver.JobInsertFastParams{
+					CreatedAt: &now, EncodedArgs: []byte(`{"id":123456789,"text":"é🌊\n\"quoted\""}`),
+					Kind: "batch", MaxAttempts: 25, Metadata: []byte(`{"id":123456789}`),
+					Priority: i + 1, Queue: "default", ScheduledAt: &now,
+					State: rivertype.JobStateAvailable, Tags: []string{"é🌊", `"quoted"`},
+				})
+			}
+
+			count, err := exec.JobInsertFastManyNoReturning(ctx, params)
+			require.NoError(t, err)
+			require.Equal(t, len(params.Jobs), count)
+			jobs, err := exec.JobGetByKindMany(ctx, &riverdriver.JobGetByKindManyParams{Kind: []string{"batch"}})
+			require.NoError(t, err)
+			require.Len(t, jobs, len(params.Jobs))
+			for i, job := range jobs {
+				require.Contains(t, string(job.EncodedArgs), "123456789")
+				require.Contains(t, string(job.Metadata), "123456789")
+				require.JSONEq(t, string(params.Jobs[i].EncodedArgs), string(job.EncodedArgs))
+				require.Equal(t, params.Jobs[i].Tags, job.Tags)
+				require.Equal(t, i+1, job.Priority)
+				require.WithinDuration(t, now, job.CreatedAt, bundle.driver.TimePrecision())
+				require.WithinDuration(t, now, job.ScheduledAt, bundle.driver.TimePrecision())
+				require.Nil(t, job.UniqueKey)
 			}
 		})
 
@@ -837,7 +952,7 @@ func exerciseJobInsert[TTx any](ctx context.Context, t *testing.T,
 					_, err := exec.JobInsertFull(ctx, params)
 					require.Error(t, err)
 					// two separate error messages here for Postgres and SQLite
-					require.Regexp(t, `(CHECK constraint failed: finalized_or_finalized_at_null|violates check constraint "finalized_or_finalized_at_null")`, err.Error())
+					require.Regexp(t, `(CHECK constraint failed: finalized_or_finalized_at_null|violates check constraint "finalized_or_finalized_at_null"|Check constraint 'finalized_or_finalized_at_null' is violated)`, err.Error())
 				})
 
 				t.Run(fmt.Sprintf("CanSetState%sWithFinalizedAt", capitalizeJobState(state)), func(t *testing.T) {
@@ -887,7 +1002,7 @@ func exerciseJobInsert[TTx any](ctx context.Context, t *testing.T,
 					}))
 					require.Error(t, err)
 					// two separate error messages here for Postgres and SQLite
-					require.Regexp(t, `(CHECK constraint failed: finalized_or_finalized_at_null|violates check constraint "finalized_or_finalized_at_null")`, err.Error())
+					require.Regexp(t, `(CHECK constraint failed: finalized_or_finalized_at_null|violates check constraint "finalized_or_finalized_at_null"|Check constraint 'finalized_or_finalized_at_null' is violated)`, err.Error())
 				})
 			}
 		})

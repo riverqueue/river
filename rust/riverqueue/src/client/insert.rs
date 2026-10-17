@@ -33,6 +33,8 @@ use crate::__private::{
     DatabaseConnection as PilotDatabaseConnection, JobInsertParams as PilotJobInsertParams,
 };
 use crate::client::RuntimeNotification;
+#[cfg(feature = "mysql")]
+use crate::client::mysql_backend_error;
 use crate::client::request::Target;
 #[cfg(feature = "sqlite")]
 use crate::client::sqlite_backend_error;
@@ -594,6 +596,19 @@ impl Client {
                     transaction.commit().await?;
                     inserted
                 }
+                #[cfg(feature = "mysql")]
+                DatabasePool::MySql(pool) => {
+                    let mut transaction = crate::database::mysql::Transaction::begin(pool).await?;
+                    let inserted = self
+                        .insert_and_finish(
+                            PilotDatabaseConnection::MySql(&mut transaction),
+                            jobs,
+                            finish,
+                        )
+                        .await?;
+                    transaction.commit().await?;
+                    inserted
+                }
                 #[cfg(feature = "sqlite")]
                 DatabasePool::Sqlite(pool) => {
                     let mut transaction = crate::database::begin_sqlite_write(pool).await?;
@@ -807,6 +822,23 @@ impl Client {
                 .execute(connection)
                 .await?;
             }
+            #[cfg(feature = "mysql")]
+            PilotDatabaseConnection::MySql(connection) => {
+                let payloads = queues
+                    .into_iter()
+                    .map(crate::protocol::insert_notification_payload)
+                    .collect::<Vec<_>>();
+                let notifications = payloads
+                    .iter()
+                    .map(|payload| crate::database::mysql::NotificationInput {
+                        payload,
+                        topic: crate::protocol::NOTIFICATION_TOPIC_INSERT,
+                    })
+                    .collect::<Vec<_>>();
+                crate::database::mysql::notification_insert(connection, &notifications)
+                    .await
+                    .map_err(mysql_backend_error)?;
+            }
             #[cfg(feature = "sqlite")]
             PilotDatabaseConnection::Sqlite(connection) => {
                 let payloads = queues
@@ -834,18 +866,19 @@ impl Client {
         connection: PilotDatabaseConnection<'_>,
         job: InsertContext,
     ) -> Result<InsertedJob, Error> {
-        let InsertContext {
-            encoded_args,
-            kind,
-            opts,
-            state,
-            created_at,
-            unique_key,
-            unique_states,
-        } = job;
         match connection {
             #[cfg(feature = "postgres")]
             PilotDatabaseConnection::Postgres(connection) => {
+                let InsertContext {
+                    encoded_args,
+                    kind,
+                    opts,
+                    state,
+                    created_at,
+                    unique_key,
+                    unique_states,
+                } = job;
+
                 let table = self.inner.schema.qualify("river_job");
                 let state_type = self.inner.schema.qualify("river_job_state");
                 let state_function = self.inner.schema.qualify("river_job_state_in_bitmask");
@@ -897,44 +930,110 @@ impl Client {
                 let duplicate = nonce.map_or(duplicate, |nonce| lacks_nonce(&row, &nonce));
                 Ok(InsertedJob::new(row, duplicate))
             }
+            #[cfg(feature = "mysql")]
+            PilotDatabaseConnection::MySql(connection) => insert_mysql_row(connection, job).await,
             #[cfg(feature = "sqlite")]
-            PilotDatabaseConnection::Sqlite(connection) => {
-                // Like Go's SQLite driver, every inserted row carries a nonce,
-                // and times left unset are filled in by SQLite's own clock.
-                let nonce = unique_insert_nonce();
-                let inserted = crate::database::sqlite::insert(
-                    connection,
-                    &crate::database::sqlite::InsertJob {
-                        attempt: 0,
-                        attempted_at: None,
-                        attempted_by: &[],
-                        created_at,
-                        encoded_args: &encoded_args,
-                        errors: &[],
-                        finalized_at: None,
-                        id: None,
-                        kind: &kind,
-                        max_attempts: opts.max_attempts,
-                        metadata: &opts.metadata,
-                        priority: opts.priority,
-                        queue: &opts.queue,
-                        scheduled_at: opts.scheduled_at,
-                        state,
-                        tags: &opts.tags,
-                        unique_key: unique_key.as_deref(),
-                        unique_nonce: Some(&nonce),
-                        unique_states,
-                    },
-                )
-                .await
-                .map_err(sqlite_backend_error)?;
-                Ok(InsertedJob::new(
-                    inserted.job,
-                    inserted.unique_skipped_as_duplicate,
-                ))
-            }
+            PilotDatabaseConnection::Sqlite(connection) => insert_sqlite_row(connection, job).await,
         }
     }
+}
+
+#[cfg(feature = "mysql")]
+async fn insert_mysql_row(
+    connection: &mut sqlx::MySqlConnection,
+    job: InsertContext,
+) -> Result<InsertedJob, Error> {
+    let InsertContext {
+        encoded_args,
+        kind,
+        opts,
+        state,
+        created_at,
+        unique_key,
+        unique_states,
+    } = job;
+    // Like Go's MySQL driver, every inserted row carries a nonce,
+    // and times left unset are filled in by MySQL's own clock.
+    let nonce = unique_insert_nonce();
+    let inserted = crate::database::mysql::insert(
+        connection,
+        &crate::database::mysql::InsertJob {
+            attempt: 0,
+            attempted_at: None,
+            attempted_by: &[],
+            created_at,
+            encoded_args: &encoded_args,
+            errors: &[],
+            finalized_at: None,
+            id: None,
+            kind: &kind,
+            max_attempts: opts.max_attempts,
+            metadata: &opts.metadata,
+            priority: opts.priority,
+            queue: &opts.queue,
+            scheduled_at: opts.scheduled_at,
+            state,
+            tags: &opts.tags,
+            unique_key: unique_key.as_deref(),
+            unique_nonce: Some(&nonce),
+            unique_states,
+        },
+    )
+    .await
+    .map_err(mysql_backend_error)?;
+    Ok(InsertedJob::new(
+        inserted.job,
+        inserted.unique_skipped_as_duplicate,
+    ))
+}
+
+#[cfg(feature = "sqlite")]
+async fn insert_sqlite_row(
+    connection: &mut sqlx::SqliteConnection,
+    job: InsertContext,
+) -> Result<InsertedJob, Error> {
+    let InsertContext {
+        encoded_args,
+        kind,
+        opts,
+        state,
+        created_at,
+        unique_key,
+        unique_states,
+    } = job;
+    // Like Go's SQLite driver, every inserted row carries a nonce,
+    // and times left unset are filled in by SQLite's own clock.
+    let nonce = unique_insert_nonce();
+    let inserted = crate::database::sqlite::insert(
+        connection,
+        &crate::database::sqlite::InsertJob {
+            attempt: 0,
+            attempted_at: None,
+            attempted_by: &[],
+            created_at,
+            encoded_args: &encoded_args,
+            errors: &[],
+            finalized_at: None,
+            id: None,
+            kind: &kind,
+            max_attempts: opts.max_attempts,
+            metadata: &opts.metadata,
+            priority: opts.priority,
+            queue: &opts.queue,
+            scheduled_at: opts.scheduled_at,
+            state,
+            tags: &opts.tags,
+            unique_key: unique_key.as_deref(),
+            unique_nonce: Some(&nonce),
+            unique_states,
+        },
+    )
+    .await
+    .map_err(sqlite_backend_error)?;
+    Ok(InsertedJob::new(
+        inserted.job,
+        inserted.unique_skipped_as_duplicate,
+    ))
 }
 
 /// Exposes the mutable fields of each job to an extension's insert hook.

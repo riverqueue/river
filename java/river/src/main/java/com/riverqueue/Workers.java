@@ -349,11 +349,10 @@ public final class Workers implements AutoCloseable {
                         ignored -> {
                           var result = new ArrayList<Client.Decoded>();
                           try (var statement =
-                                  Sql.prepare(
+                                  Sql.mutation(
+                                      river.database(),
                                       c,
-                                      Sql.query(
-                                          river.database(),
-                                          config.fetchOnlyKnownKinds ? "claim_known" : "claim"),
+                                      config.fetchOnlyKnownKinds ? "claim_known" : "claim",
                                       config.fetchOnlyKnownKinds
                                           ? new Object[] {
                                             river.database().timestamp(Instant.now()),
@@ -663,8 +662,7 @@ public final class Workers implements AutoCloseable {
                     var rows = new ArrayList<Job<JsonNode>>();
                     for (var completion : batch)
                       try (var statement =
-                              Sql.prepare(
-                                  c, Sql.query(river.database(), "complete"), completion.params);
+                              Sql.mutation(river.database(), c, "complete", completion.params);
                           var result = statement.executeQuery()) {
                         if (result.next()) rows.add(river.readPartial(result).job());
                         else {
@@ -722,8 +720,8 @@ public final class Workers implements AutoCloseable {
   }
 
   private void listen() {
-    if (river.database().dialect() == Database.Dialect.SQLITE) {
-      listenSqlite();
+    if (river.database().dialect() != Database.Dialect.POSTGRES) {
+      listenOutbox();
       return;
     }
     while (running.get()) {
@@ -785,7 +783,7 @@ public final class Workers implements AutoCloseable {
     }
   }
 
-  private void listenSqlite() {
+  private void listenOutbox() {
     long after = 0;
     boolean initialized = false;
     while (running.get()) {
@@ -797,8 +795,9 @@ public final class Workers implements AutoCloseable {
                     try (var statement =
                             Sql.prepare(c, Sql.query(river.database(), "notification_cursor"));
                         var rows = statement.executeQuery()) {
-                      rows.next();
-                      return rows.getLong(1);
+                      long cursor = 0;
+                      while (rows.next()) cursor = rows.getLong(1);
+                      return cursor;
                     }
                   });
           initialized = true;
@@ -929,9 +928,10 @@ public final class Workers implements AutoCloseable {
                   }
                 }
                 try (var statement =
-                        Sql.prepare(
+                        Sql.mutation(
+                            river.database(),
                             c,
-                            Sql.query(river.database(), "leader_elect"),
+                            "leader_elect",
                             id,
                             river.database().timestamp(now),
                             river.database().timestamp(expiresAt));
@@ -1076,11 +1076,18 @@ public final class Workers implements AutoCloseable {
               config.discardedRetention.isNegative()
                   ? null
                   : river.database().timestamp(now.minus(config.discardedRetention));
-          try (var statement =
-              Sql.prepare(
-                  c, Sql.query(river.database(), "clean_jobs"), cancelled, completed, discarded)) {
-            statement.executeUpdate();
-          }
+          if (river.database().dialect() == Database.Dialect.MYSQL)
+            MySql.clean(river.database(), c, cancelled, completed, discarded);
+          else
+            try (var statement =
+                Sql.prepare(
+                    c,
+                    Sql.query(river.database(), "clean_jobs"),
+                    cancelled,
+                    completed,
+                    discarded)) {
+              statement.executeUpdate();
+            }
           try (var statement =
               Sql.prepare(
                   c,
@@ -1093,7 +1100,7 @@ public final class Workers implements AutoCloseable {
   }
 
   private void cleanNotifications(Instant now) {
-    if (river.database().dialect() != Database.Dialect.SQLITE) return;
+    if (river.database().dialect() == Database.Dialect.POSTGRES) return;
     river.transaction(
         c -> {
           try (var statement =
@@ -1158,13 +1165,12 @@ public final class Workers implements AutoCloseable {
             try {
               if (!collision)
                 try (var statement =
-                        Sql.prepare(
-                            c, Sql.query(river.database(), "schedule_available"), job.id());
+                        Sql.mutation(river.database(), c, "schedule_available", job.id());
                     var rows = statement.executeQuery()) {
                   if (rows.next()) river.notifyInsert(c, rows.getString(1));
                 }
             } catch (SQLException error) {
-              if (!"23505".equals(error.getSQLState())) throw error;
+              if (!"23505".equals(error.getSQLState()) && error.getErrorCode() != 1062) throw error;
               c.rollback(savepoint);
               collision = true;
             } finally {
@@ -1256,9 +1262,10 @@ public final class Workers implements AutoCloseable {
                               Protocol.METADATA_RESCUE_COUNT,
                               job.metadata().path(Protocol.METADATA_RESCUE_COUNT).asLong(0) + 1));
                   try (var statement =
-                          Sql.prepare(
+                          Sql.mutation(
+                              river.database(),
                               c,
-                              Sql.query(river.database(), "rescue_update"),
+                              "rescue_update",
                               state.value(),
                               river.database().timestamp(state.isFinalized() ? now : null),
                               river.database().timestamp(scheduled),

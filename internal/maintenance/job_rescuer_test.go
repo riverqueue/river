@@ -7,6 +7,7 @@ import (
 	"math"
 	"sync/atomic"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/stretchr/testify/require"
@@ -75,6 +76,14 @@ func (p *SimpleClientRetryPolicy) NextRetry(job *rivertype.JobRow) time.Time {
 	errorCount := len(job.Errors) + 1
 	retrySeconds := math.Pow(float64(errorCount), 4)
 	return job.AttemptedAt.Add(timeutil.SecondsAsDuration(retrySeconds))
+}
+
+type jobRescuerExecutorMock struct {
+	riverdriver.Executor
+}
+
+func (e *jobRescuerExecutorMock) JobGetStuck(context.Context, *riverdriver.JobGetStuckParams) ([]*rivertype.JobRow, error) {
+	return nil, nil
 }
 
 type jobRescuerPilotSpy struct {
@@ -359,16 +368,38 @@ func TestJobRescuer(t *testing.T) {
 	t.Run("CustomizableInterval", func(t *testing.T) {
 		t.Parallel()
 
-		cleaner, _ := setup(t)
-		cleaner.Config.Interval = 1 * time.Microsecond
+		synctest.Test(t, func(t *testing.T) {
+			// Keep database I/O out of the fake-clock test so each interval runs
+			// only when time advances, without overflowing either test signal.
+			const interval = time.Minute
+			rescuer := NewRescuer(riversharedtest.BaseServiceArchetype(t), &JobRescuerConfig{
+				ClientRetryPolicy: &SimpleClientRetryPolicy{},
+				Interval:          interval,
+				WorkUnitFactoryFunc: func(string) workunit.WorkUnitFactory {
+					return nil
+				},
+			}, &jobRescuerExecutorMock{})
+			rescuer.StaggerStartupDisable(true)
+			rescuer.TestSignals.Init(t)
+			t.Cleanup(rescuer.Stop)
 
-		require.NoError(t, cleaner.Start(ctx))
+			require.NoError(t, rescuer.Start(ctx))
+			synctest.Wait()
+			rescuer.TestSignals.FetchedBatch.WaitOrTimeout()
+			rescuer.TestSignals.UpdatedBatch.WaitOrTimeout()
 
-		// This should trigger ~immediately every time:
-		for i := range 5 {
-			t.Logf("Iteration %d", i)
-			cleaner.TestSignals.FetchedBatch.WaitOrTimeout()
-		}
+			for range 5 {
+				time.Sleep(interval - time.Nanosecond)
+				synctest.Wait()
+				rescuer.TestSignals.FetchedBatch.RequireEmpty()
+				rescuer.TestSignals.UpdatedBatch.RequireEmpty()
+
+				time.Sleep(time.Nanosecond)
+				synctest.Wait()
+				rescuer.TestSignals.FetchedBatch.WaitOrTimeout()
+				rescuer.TestSignals.UpdatedBatch.WaitOrTimeout()
+			}
+		})
 	})
 
 	t.Run("StopsImmediately", func(t *testing.T) {
