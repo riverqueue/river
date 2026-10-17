@@ -21,7 +21,7 @@ use std::{
 
 use chrono::{DateTime, Utc};
 use serde_json::{Map, Value, value::RawValue};
-use sqlx::{AssertSqlSafe, FromRow, MySql, MySqlConnection, QueryBuilder, Row};
+use sqlx::{AssertSqlSafe, Connection, FromRow, MySql, MySqlConnection, QueryBuilder, Row};
 
 use sqlx::mysql::MySqlRow;
 
@@ -1178,7 +1178,10 @@ impl NotificationListener {
         &mut self,
         connection: &mut MySqlConnection,
     ) -> Result<(), BackendError> {
-        self.last_id = Some(notification_last_id(connection).await?);
+        let mut tx = connection.begin().await?;
+        let last_id = notification_last_id(&mut tx).await?;
+        tx.commit().await?;
+        self.last_id = Some(last_id);
         Ok(())
     }
 
@@ -1199,7 +1202,9 @@ impl NotificationListener {
         }
         // Only this topic's starting ID advances. Advancing the shared cursor
         // could skip undelivered rows of topics that are already subscribed.
-        let last_id = notification_last_id(connection).await?;
+        let mut tx = connection.begin().await?;
+        let last_id = notification_last_id(&mut tx).await?;
+        tx.commit().await?;
         // Cleanup may have deleted rows that are still buffered locally.
         let start_id = last_id.max(self.last_id.unwrap_or_default());
         self.topics.insert(topic.to_owned(), start_id);
@@ -1218,9 +1223,14 @@ impl NotificationListener {
                     return Ok(None);
                 };
                 let topics = self.topics.keys().map(String::as_str).collect::<Vec<_>>();
+                // Lock each bounded scan in its own transaction, then release
+                // its locks before dispatching notifications. Cursor and buffer
+                // changes become visible only after a successful commit.
+                let mut tx = connection.begin().await?;
                 let notifications =
-                    notification_get_after(connection, after_id, &topics, NOTIFICATION_BATCH_SIZE)
+                    notification_get_after(&mut tx, after_id, &topics, NOTIFICATION_BATCH_SIZE)
                         .await?;
+                tx.commit().await?;
                 let Some(last) = notifications.last() else {
                     return Ok(None);
                 };

@@ -363,16 +363,36 @@ async fn outbox_waits_for_lower_uncommitted_ids() {
     .await
     .unwrap();
     db.client.request_resign().await.unwrap();
-    let mut read = tokio::spawn(async move {
+    let read = tokio::spawn(async move {
         let first = listener.next(&mut connection).await.unwrap().unwrap();
         let second = listener.next(&mut connection).await.unwrap().unwrap();
         (first, second)
     });
-    assert!(
-        tokio::time::timeout(Duration::from_millis(50), &mut read)
+    // Wait for the actual blocked scan, then verify it holds its locks in
+    // an explicit transaction instead of relying on autocommit semantics.
+    let autocommit = tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            let autocommit: Option<String> = sqlx::query_scalar(
+                "SELECT t.AUTOCOMMIT FROM performance_schema.data_lock_waits w \
+                 JOIN performance_schema.data_locks l \
+                 ON l.ENGINE_LOCK_ID=w.REQUESTING_ENGINE_LOCK_ID AND l.ENGINE=w.ENGINE \
+                 JOIN performance_schema.events_transactions_current t \
+                 ON t.THREAD_ID=w.REQUESTING_THREAD_ID \
+                 WHERE l.OBJECT_SCHEMA=? AND l.OBJECT_NAME='river_notification'",
+            )
+            .bind(&db.name)
+            .fetch_optional(&db.admin)
             .await
-            .is_err()
-    );
+            .unwrap();
+            if let Some(autocommit) = autocommit {
+                break autocommit;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .unwrap();
+    assert_eq!(autocommit, "NO");
     tx.commit().await.unwrap();
     let (first, second) = tokio::time::timeout(Duration::from_secs(5), read)
         .await

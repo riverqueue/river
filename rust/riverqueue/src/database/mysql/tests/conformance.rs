@@ -95,7 +95,7 @@ async fn emits_go_notification_payloads() {
                     &mut connection,
                     "client-1",
                     Utc::now(),
-                    Duration::from_secs(60),
+                    Duration::from_mins(1),
                 )
                 .await
                 .unwrap()
@@ -138,7 +138,7 @@ async fn persists_go_snooze_counters_through_workers() {
     let mut workers = Workers::new();
     workers
         .add_fn(|_: WorkContext, _: Job<Args>| async {
-            Ok::<_, crate::BoxError>(WorkOutcome::Snooze(Duration::from_secs(3600)))
+            Ok::<_, crate::BoxError>(WorkOutcome::Snooze(Duration::from_hours(1)))
         })
         .unwrap();
     let worker = Client::builder(db.pool.clone())
