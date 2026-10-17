@@ -291,8 +291,11 @@ module River::Driver
     end
 
     private def runtime_in_clause(column, values)
-      column = "CAST(#{column} AS BINARY)" if %w[kind name queue].include?(column)
-      super
+      predicate = super
+      return predicate unless %w[kind name queue].include?(column)
+
+      # Keep the indexed comparison so claims do not scan and lock other queues.
+      "(#{predicate} AND #{super("CAST(#{column} AS BINARY)", values)})"
     end
 
     private def runtime_job_rows(suffix)

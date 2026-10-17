@@ -158,6 +158,46 @@ describe.skipIf(!url)("MySQL driver", () => {
     expect(duplicate.job.kind).toBe("message");
   });
 
+  it("allows repeated batch keys outside the unique states", async () => {
+    const uniqueKey = new Uint8Array(32).fill(4);
+    const pending = params({
+      uniqueKey,
+      uniqueStates: ["available"],
+      state: "pending",
+    });
+    const active = params({ uniqueKey, uniqueStates: ["available"] });
+    const inserted = await runtime.jobInsertMany([pending, active, pending]);
+    expect(inserted.map((item) => item.status)).toEqual([
+      "inserted",
+      "inserted",
+      "inserted",
+    ]);
+    expect(new Set(inserted.map((item) => item.job.id)).size).toBe(3);
+    await expect(
+      runtime.jobInsertMany([active, pending, active])
+    ).rejects.toThrow("Batch repeats a unique key");
+    expect(await runtime.jobList(listing)).toHaveLength(3);
+  });
+
+  it("rejects unrelated unique constraints when the incoming key is inactive", async () => {
+    await pool.query(
+      `CREATE UNIQUE INDEX custom_kind ON \`${schema}\`.river_job(kind)`
+    );
+    const uniqueKey = new Uint8Array(32).fill(5);
+    const original = await runtime.jobInsert(
+      params({ uniqueKey, uniqueStates: ["available"] })
+    );
+    await expect(
+      runtime.jobInsert(
+        params({ uniqueKey, uniqueStates: ["available"], state: "pending" })
+      )
+    ).rejects.toMatchObject({
+      cause: { message: "Insertion violated an unrelated unique constraint" },
+    });
+    expect(await runtime.jobGet(original.job.id)).toEqual(original.job);
+    expect(await runtime.jobList(listing)).toHaveLength(1);
+  });
+
   it("claims concurrently without duplicate work, and respects paused queues", async () => {
     await runtime.runtimeQueueUpsert("paused", Temporal.Now.instant());
     await runtime.queuePause("paused");

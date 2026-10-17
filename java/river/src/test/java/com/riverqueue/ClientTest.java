@@ -49,6 +49,49 @@ class ClientTest {
   }
 
   @Test
+  void cleanupSkipsLockedJobs() throws Exception {
+    var client = database();
+    var database = client.database();
+    org.junit.jupiter.api.Assumptions.assumeTrue(database.dialect() == Database.Dialect.MYSQL);
+    var locked = client.insert(EMAIL, new Email("locked@example.com")).job();
+    var unlocked = client.insert(EMAIL, new Email("unlocked@example.com")).job();
+    try (var connection = database.connection();
+        var statement = connection.createStatement()) {
+      statement.execute(
+          "UPDATE "
+              + database.prefix()
+              + "river_job SET state='completed', finalized_at='1970-01-01 00:00:00'");
+    }
+    Client.Transaction<Integer> clean =
+        connection -> {
+          try (var statement =
+              Sql.prepare(
+                  connection,
+                  Sql.query(database, "clean_jobs"),
+                  database.timestamp(NOW),
+                  database.timestamp(NOW),
+                  database.timestamp(NOW))) {
+            statement.setQueryTimeout(2);
+            return statement.executeUpdate();
+          }
+        };
+    client.transaction(
+        connection -> {
+          try (var statement =
+                  Sql.prepare(connection, Sql.query(database, "lock_get"), locked.id());
+              var rows = statement.executeQuery()) {
+            assertTrue(rows.next());
+            assertEquals(1, client.transaction(clean));
+          }
+          assertThrows(RiverException.class, () -> client.get(unlocked.id()));
+          assertEquals(locked.id(), client.get(locked.id()).id());
+          return null;
+        });
+    assertEquals(1, client.transaction(clean));
+    assertTrue(client.list(JobQuery.all()).jobs().isEmpty());
+  }
+
+  @Test
   void crossKindUniqueConflictsPreserveTheIncumbent() {
     var client = database();
     var firstType = JobType.of("original_kind", tools.jackson.databind.JsonNode.class);
@@ -706,6 +749,40 @@ class ClientTest {
     assertEquals(first.job().id(), duplicate.job().id());
     assertFalse(different.uniqueSkippedAsDuplicate());
     assertNotEquals(first.job().id(), different.job().id());
+  }
+
+  @ParameterizedTest
+  @ValueSource(strings = {"inactive_existing", "inactive_incoming"})
+  void unrelatedUniqueConflictsAreRejectedWhenReinserting(String mode) throws Exception {
+    var client = database();
+    var database = client.database();
+    org.junit.jupiter.api.Assumptions.assumeTrue(database.dialect() == Database.Dialect.MYSQL);
+    var inserted =
+        client
+            .insert(
+                EMAIL,
+                new Email("unique@example.com"),
+                InsertOptions.builder().unique(Unique.args()).build())
+            .job();
+    try (var connection = database.connection();
+        var statement = connection.createStatement()) {
+      statement.execute(
+          "CREATE UNIQUE INDEX custom_kind ON " + database.prefix() + "river_job(kind)");
+      statement.execute(
+          "UPDATE "
+              + database.prefix()
+              + "river_job SET state='running', unique_states="
+              + (mode.equals("inactive_incoming") ? "64" : "NULL"));
+    }
+    var original = client.get(inserted.id());
+    // Reinsertion uses available; either its key or the existing key is inactive.
+    var error =
+        assertThrows(
+            RiverException.class,
+            () -> client.transaction(connection -> client.driver().reinsert(connection, original)));
+    assertTrue(error.getMessage().contains("unrelated unique constraint"));
+    assertEquals(original, client.get(original.id()));
+    assertEquals(1, client.list(JobQuery.all()).jobs().size());
   }
 
   record Report(int accountId) {}

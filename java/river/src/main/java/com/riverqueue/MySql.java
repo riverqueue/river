@@ -61,9 +61,11 @@ final class MySql {
   private static ResultSet claim(
       Database database, Connection connection, String name, Object[] params) throws SQLException {
     var ids = new ArrayList<Long>();
-    try (var selected =
-        rows(
-            database, connection, name + "_select", Arrays.copyOfRange(params, 2, params.length))) {
+    // Keep an indexable queue equality alongside the exact binary comparison so
+    // concurrent fetches do not briefly lock and skip jobs in unrelated queues.
+    var selection = new ArrayList<>(Arrays.asList(Arrays.copyOfRange(params, 2, params.length)));
+    selection.addFirst(params[2]);
+    try (var selected = rows(database, connection, name + "_select", selection.toArray())) {
       while (selected.next()) ids.add(selected.getLong("id"));
     }
     if (ids.isEmpty()) return rows(database, connection, "empty_jobs", 0);

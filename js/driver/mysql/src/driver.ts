@@ -300,6 +300,7 @@ export class MySqlRuntime implements RuntimeDriver<PoolConnection> {
       if (
         duplicate &&
         (params.uniqueKey === null ||
+          !params.uniqueStates?.includes(params.state) ||
           job.uniqueKey === null ||
           !Buffer.from(params.uniqueKey).equals(job.uniqueKey) ||
           !job.uniqueStates?.includes(job.state))
@@ -316,7 +317,10 @@ export class MySqlRuntime implements RuntimeDriver<PoolConnection> {
       const keys = new Set<string>();
       const results = [];
       for (const item of params) {
-        if (item.uniqueKey !== null) {
+        if (
+          item.uniqueKey !== null &&
+          item.uniqueStates?.includes(item.state)
+        ) {
           const key = Buffer.from(item.uniqueKey).toString("hex");
           if (keys.has(key))
             throw new ConfigurationError("Batch repeats a unique key");
@@ -492,12 +496,13 @@ export class MySqlRuntime implements RuntimeDriver<PoolConnection> {
         const kindSql = params.kinds.length
           ? ` AND CAST(kind AS BINARY) IN (${params.kinds.map(() => "?").join(",")})`
           : "";
+        // Keep an indexable equality so claims do not scan and lock other queues.
         const rows = await this.#rows(
           tx,
-          `SELECT CAST(id AS CHAR) AS id FROM {schema}river_job WHERE queue=CAST(? AS BINARY) AND state='available' AND scheduled_at<=?
+          `SELECT CAST(id AS CHAR) AS id FROM {schema}river_job WHERE queue=? AND queue=CAST(? AS BINARY) AND state='available' AND scheduled_at<=?
           AND NOT EXISTS(SELECT 1 FROM {schema}river_queue q WHERE q.name=CAST(river_job.queue AS BINARY) AND paused_at IS NOT NULL)${kindSql}
           ORDER BY priority,scheduled_at,id LIMIT ? FOR UPDATE SKIP LOCKED`,
-          [queue.name, now, ...params.kinds, queue.limit]
+          [queue.name, queue.name, now, ...params.kinds, queue.limit]
         );
         for (const row of rows) {
           await this.#write(

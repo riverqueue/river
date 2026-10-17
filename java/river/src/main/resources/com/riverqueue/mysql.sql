@@ -194,7 +194,10 @@ metadata=JSON_SET(metadata, '$.unique_key_conflict', 'scheduler_discarded'), sta
 WHERE id=? AND state IN ('scheduled','retryable')
 
 -- name: clean_jobs
-DELETE FROM {schema}river_job WHERE (state='cancelled' AND finalized_at<?) OR (state='completed' AND finalized_at<?) OR (state='discarded' AND finalized_at<?) ORDER BY id LIMIT 1000
+DELETE j FROM (SELECT id FROM {schema}river_job
+WHERE (state='cancelled' AND finalized_at<?) OR (state='completed' AND finalized_at<?) OR (state='discarded' AND finalized_at<?)
+ORDER BY id LIMIT 1000 FOR UPDATE SKIP LOCKED) expired
+STRAIGHT_JOIN {schema}river_job j FORCE INDEX (PRIMARY) ON expired.id=j.id
 
 -- name: clean_queues
 DELETE FROM {schema}river_queue WHERE updated_at<?
@@ -257,12 +260,12 @@ SELECT RELEASE_LOCK(CONCAT('river_migrate:',COALESCE(NULLIF('{schema_name}',''),
 CREATE DATABASE IF NOT EXISTS `{schema_name}`
 
 -- name: claim_select
-SELECT id FROM {schema}river_job WHERE queue=CAST(? AS BINARY) AND state='available' AND scheduled_at<=?
+SELECT id FROM {schema}river_job WHERE queue=? AND queue=CAST(? AS BINARY) AND state='available' AND scheduled_at<=?
 AND NOT EXISTS(SELECT 1 FROM {schema}river_queue q WHERE q.name=CAST(river_job.queue AS BINARY) AND paused_at IS NOT NULL)
 ORDER BY priority,scheduled_at,id LIMIT ? FOR UPDATE SKIP LOCKED
 
 -- name: claim_known_select
-SELECT id FROM {schema}river_job WHERE queue=CAST(? AS BINARY) AND state='available' AND scheduled_at<=?
+SELECT id FROM {schema}river_job WHERE queue=? AND queue=CAST(? AS BINARY) AND state='available' AND scheduled_at<=?
 AND NOT EXISTS(SELECT 1 FROM {schema}river_queue q WHERE q.name=CAST(river_job.queue AS BINARY) AND paused_at IS NOT NULL)
 AND CAST(kind AS BINARY) IN (SELECT value FROM JSON_TABLE(CAST(? AS JSON), '$[*]' COLUMNS(value VARCHAR(128) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin PATH '$')) AS wanted)
 ORDER BY priority,scheduled_at,id LIMIT ? FOR UPDATE SKIP LOCKED

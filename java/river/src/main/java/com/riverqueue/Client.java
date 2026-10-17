@@ -593,7 +593,9 @@ public final class Client {
         if (duplicate
             && database.dialect() == Database.Dialect.MYSQL
             && (key == null
+                || (stateMask & Job.State.of(state).bit()) == 0
                 || !key.equals(job.uniqueKey())
+                || job.uniqueStates() == null
                 || !job.uniqueStates().contains(job.state())))
           throw new RiverException(
               RiverException.Code.REJECTED, "Insertion violated an unrelated unique constraint");
