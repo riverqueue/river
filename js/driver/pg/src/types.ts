@@ -11,9 +11,10 @@ export interface PgDriverOptions<Transaction = never> {
    * and configure it on each `PgDriver` that needs it. The ORM owns commit,
    * rollback, and savepoints; River uses the supplied transaction only.
    *
-   * Knex and the pg pool must connect to the same database. Configure the
-   * same River schema on the worker and insertion clients. Knex remains an
-   * optional dependency, installed with `@riverqueue/driver-knex`.
+   * The ORM and the pg pool must connect to the same database. Configure the
+   * same River schema on the worker and insertion clients. Knex and Prisma
+   * remain optional dependencies, installed with `@riverqueue/driver-knex`
+   * and `@riverqueue/driver-prisma`, respectively.
    *
    * @example
    * ```ts
@@ -42,6 +43,37 @@ export interface PgDriverOptions<Transaction = never> {
    * );
    * const client = new Client(
    *   new PgDriver(pool, { transactionAdapters: [knexTransactionAdapter] }),
+   *   { queues: { default: { maxWorkers: 10 } }, workers }
+   * );
+   * ```
+   *
+   * @example
+   * ```ts
+   * import { Pool } from "pg";
+   * import { Client, defineJob, Workers } from "riverqueue";
+   * import { prismaTransactionAdapter } from "@riverqueue/driver-prisma";
+   * import { PgDriver } from "@riverqueue/driver-pg";
+   * import type { Prisma, PrismaClient } from "./generated/prisma/client.js";
+   *
+   * declare const prisma: PrismaClient; // Your generated application client.
+   * const pool = new Pool({ connectionString: process.env.DATABASE_URL });
+   * const syncAccount = defineJob<{ accountId: string }>()({
+   *   kind: "sync_account",
+   * });
+   * const workers = new Workers<Prisma.TransactionClient>().add(
+   *   syncAccount,
+   *   async ({ completeTx, job }) => {
+   *     await prisma.$transaction(async (tx) => {
+   *       await tx.account.update({
+   *         where: { id: job.args.accountId },
+   *         data: { synced: true },
+   *       });
+   *       await completeTx(tx);
+   *     });
+   *   }
+   * );
+   * const client = new Client(
+   *   new PgDriver(pool, { transactionAdapters: [prismaTransactionAdapter] }),
    *   { queues: { default: { maxWorkers: 10 } }, workers }
    * );
    * ```

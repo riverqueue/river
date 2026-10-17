@@ -69,7 +69,8 @@ export async function jobCancelWithOptions(
 ): Promise<JobRow | null> {
   const jobTable = db.table("river_job");
   const { supportsListenNotify } = await db.capabilities(options);
-  const sql = `
+  const sql = {
+    with: `
     WITH locked_job AS (
       SELECT id, queue, state, finalized_at
       FROM ${jobTable}
@@ -112,6 +113,8 @@ export async function jobCancelWithOptions(
       WHERE river_job.id = notification.id
       RETURNING river_job.*
     )
+    `,
+    text: `
     -- A cancel that lost a race to another committed after this statement
     -- began updates nothing. Like River for Go, the fallback read locks the
     -- row so it returns the committed row, not the one this statement first
@@ -125,7 +128,8 @@ export async function jobCancelWithOptions(
     WHERE fallback_job.id NOT IN (SELECT id FROM updated_job)
     UNION
     SELECT * FROM updated_job
-  `;
+    `,
+  };
 
   const result = await db.query<PgJobRow>(
     "jobCancel",
@@ -150,7 +154,8 @@ export async function jobDelete(
   options?: PgOperationOptions
 ): Promise<JobDeleteResult> {
   const jobTable = db.table("river_job");
-  const sql = `
+  const sql = {
+    with: `
     WITH job_to_delete AS (
       SELECT id
       FROM ${jobTable}
@@ -164,6 +169,8 @@ export async function jobDelete(
         AND river_job.state != 'running'
       RETURNING river_job.*
     )
+    `,
+    text: `
     SELECT *, false AS was_deleted
     FROM ${jobTable}
     WHERE id = $1::bigint
@@ -171,7 +178,8 @@ export async function jobDelete(
     UNION
     SELECT *, true AS was_deleted
     FROM deleted_job
-  `;
+    `,
+  };
   const result = await db.query<PgJobRow & { was_deleted: boolean }>(
     "jobDelete",
     sql,
@@ -217,7 +225,8 @@ export async function jobDeleteMany(
   const jobTable = db.table("river_job");
   const result = await db.query<PgJobRow>(
     "jobDeleteMany",
-    `
+    {
+      with: `
       WITH jobs_to_delete AS (
         SELECT id FROM ${jobTable}
         WHERE state != 'running'
@@ -236,8 +245,11 @@ export async function jobDeleteMany(
         WHERE river_job.id = jobs_to_delete.id
         RETURNING river_job.*
       )
+      `,
+      text: `
       SELECT * FROM deleted ORDER BY id ASC
-    `,
+      `,
+    },
     [
       params.ids.map((id) => id.toString(10)),
       params.kinds,
@@ -381,7 +393,8 @@ export async function jobCompleteMany(
   const jobTable = db.table("river_job");
   const result = await db.queryAbortable<PgCompletionRow>(
     "jobCompleteMany",
-    `${COMPLETE_MANY_STATEMENT}
+    {
+      with: `${COMPLETE_MANY_STATEMENT}
       WITH job_input AS (
         SELECT *
         FROM unnest(
@@ -467,6 +480,8 @@ export async function jobCompleteMany(
           )
         RETURNING river_job.*, job_input.input_order
       )
+      `,
+      text: `
       SELECT updated.*, true AS transition_applied
       FROM updated
       UNION ALL
@@ -483,7 +498,8 @@ export async function jobCompleteMany(
           WHERE metadata_updated.id = river_job.id
         )
       ORDER BY input_order
-    `,
+      `,
+    },
     [
       commands.map(({ id }) => id.toString(10)),
       commands.map(({ attempt }) => attempt),
@@ -659,7 +675,8 @@ export async function jobInsertMany(
       : null;
   const jobTable = db.table("river_job");
   const stateInBitmask = db.function("river_job_state_in_bitmask");
-  const sql = `
+  const sql = {
+    with: `
     WITH raw_job_data AS (
       SELECT
         input_order, args, coalesce(created_at, now()) AS created_at, kind,
@@ -713,6 +730,8 @@ export async function jobInsertMany(
       DO UPDATE SET kind = river_job.kind
       RETURNING *, ${uniqueInsertConflictSql(uniqueInsertMode)} AS conflicted
     )
+    `,
+    text: `
     SELECT
       inserted_jobs.*,
       inserted_jobs.conflicted AS unique_skipped_as_duplicate
@@ -725,7 +744,8 @@ export async function jobInsertMany(
       ELSE inserted_jobs.id = prepared_job_data.proposed_id
     END
     ORDER BY prepared_job_data.input_order
-  `;
+    `,
+  };
 
   const result = await db.query<PgInsertRow>(
     "jobInsertMany",
@@ -789,7 +809,8 @@ export async function jobRetryWithOptions(
   options?: PgOperationOptions
 ): Promise<JobRow | null> {
   const jobTable = db.table("river_job");
-  const sql = `
+  const sql = {
+    with: `
     WITH job_to_update AS (
       SELECT id
       FROM ${jobTable}
@@ -816,6 +837,8 @@ export async function jobRetryWithOptions(
         )
       RETURNING river_job.*
     )
+    `,
+    text: `
     -- Like a cancel's, the fallback read locks the row so that a retry that
     -- lost a race returns the committed row.
     SELECT * FROM (
@@ -828,7 +851,8 @@ export async function jobRetryWithOptions(
     UNION
     SELECT updated_job.*
     FROM updated_job
-  `;
+    `,
+  };
   const result = await db.query<PgJobRow>(
     "jobRetry",
     sql,

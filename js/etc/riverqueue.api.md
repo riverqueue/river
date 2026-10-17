@@ -2650,7 +2650,7 @@ interface RiverTransactionRegistry {
 
 interface RiverTransactionRegistry {
   /** Prisma interactive-transaction clients. */
-  "@riverqueue/driver-prisma": PrismaClientLike;
+  "@riverqueue/driver-prisma": PrismaTransactionClientLike;
 }
 
 interface RiverTransactionRegistry {

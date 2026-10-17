@@ -67,6 +67,7 @@ export async function jobDeleteBefore(
         ORDER BY id ASC
         LIMIT $6::int
       )
+      RETURNING 1
     `,
     [
       instantParameter(params.cancelledFinalizedAt),
@@ -181,6 +182,7 @@ export async function jobRescueMany(
       WHERE river_job.id = rescued.id
         AND river_job.state = 'running'
         AND river_job.attempted_at < $6::timestamptz
+      RETURNING 1
     `,
     [
       params.items.map(({ id }) => id.toString(10)),
@@ -213,7 +215,8 @@ export async function jobSchedule(
   const inBitmask = db.function("river_job_state_in_bitmask");
   const result = await db.query<PgScheduleRow>(
     "jobSchedule",
-    `
+    {
+      with: `
       WITH jobs_to_schedule AS (
         SELECT id, unique_key, unique_states, priority, scheduled_at
         FROM ${jobTable}
@@ -269,10 +272,13 @@ export async function jobSchedule(
         WHERE river_job.id = job_updates.id
         RETURNING river_job.*, job_updates.conflict_discarded
       )
+      `,
+      text: `
       SELECT updated.*
       FROM updated
       ORDER BY priority ASC, scheduled_at ASC, id ASC
-    `,
+      `,
+    },
     [
       instantParameter(params.scheduledAtHorizon ?? params.now),
       instantParameter(params.now),
@@ -506,7 +512,7 @@ export async function notificationDeleteBefore(
        WHERE created_at < $1::timestamptz
        ORDER BY created_at, id
        LIMIT $2::bigint
-     )`,
+     ) RETURNING 1`,
     [instantParameter(params.createdAtHorizon), params.max],
     options
   );

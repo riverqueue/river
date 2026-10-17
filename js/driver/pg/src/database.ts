@@ -10,6 +10,7 @@ import {
   type PostgresCapabilities,
   type PostgresTransactionAdapter,
   type PostgresTransactionResult,
+  type PostgresTransactionTextQuery,
 } from "riverqueue/unstable-driver";
 import type {
   Client as PgClient,
@@ -27,6 +28,11 @@ import {
 } from "./errors.js";
 import { PG_EXACT_TYPES } from "./exact-types.js";
 import { abortablePromise, PgClientLease } from "./lease.js";
+import {
+  postgresQueryText,
+  postgresTextQuery,
+  type PgStatement,
+} from "./text-query.js";
 import type { PgOperationOptions } from "./types.js";
 
 /** Postgres's maximum identifier length (`NAMEDATALEN - 1`). */
@@ -171,13 +177,15 @@ export class PgDatabase {
    */
   async query<Row extends QueryResultRow = QueryResultRow>(
     operation: string,
-    text: string,
+    text: PgStatement,
     values: unknown[],
     options?: PgOperationOptions | InsertDriverOptions
   ): Promise<PostgresTransactionResult<Row>> {
-    const queryable = this.resolveQueryable(operation, options);
+    const queryable = this.resolveQueryable(operation, options, () =>
+      postgresTextQuery(text)
+    );
     const config: QueryConfig<unknown[]> = {
-      text,
+      text: postgresQueryText(text),
       types: PG_EXACT_TYPES,
       values,
     };
@@ -202,7 +210,7 @@ export class PgDatabase {
   async queryAfterAcquire<Row extends QueryResultRow = QueryResultRow>(
     signal: AbortSignal | undefined,
     operation: string,
-    text: string,
+    text: PgStatement,
     values: unknown[]
   ): Promise<PostgresTransactionResult<Row>> {
     return this.withConnection(signal, (options) =>
@@ -244,7 +252,7 @@ export class PgDatabase {
    */
   async queryAbortable<Row extends QueryResultRow = QueryResultRow>(
     operation: string,
-    text: string,
+    text: PgStatement,
     values: unknown[],
     options: { readonly signal?: AbortSignal; readonly tx?: unknown } = {},
     cancelPrefix?: string
@@ -365,7 +373,8 @@ export class PgDatabase {
   /** The caller's transaction client when given, else the configured pool or client. */
   resolveQueryable(
     operation: string,
-    options?: PgOperationOptions | InsertDriverOptions
+    options?: PgOperationOptions | InsertDriverOptions,
+    textResult?: () => PostgresTransactionTextQuery
   ): {
     query<Row extends QueryResultRow>(
       config: QueryConfig<unknown[]>
@@ -380,6 +389,7 @@ export class PgDatabase {
         query: (config) =>
           adapter.query(tx, {
             text: config.text,
+            ...(textResult === undefined ? {} : { textResult }),
             types: config.types,
             values: config.values ?? [],
           }),
