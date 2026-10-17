@@ -151,7 +151,9 @@ describe("MaintenanceBatcher", () => {
   });
 
   it("resets the breaker when a batch succeeds", async () => {
-    const batcher = new MaintenanceBatcher({ random: () => 0, timeoutMs: 1 });
+    // Keep elapsed time fixed so CI scheduling cannot make the successful
+    // batch overrun 1 ms. Failed batches still exercise real timeout signals.
+    const { batcher } = setup(1);
     const limit = batcher.breaker.limit;
 
     for (let round = 0; round < 2; round++) {
