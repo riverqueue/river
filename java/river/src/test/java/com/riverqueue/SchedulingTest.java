@@ -37,8 +37,8 @@ class SchedulingTest {
     var worked = new LinkedBlockingQueue<String>();
     var client =
         new Client(databases.open(directory.resolve("river.db")))
-            .withPlugin(
-                new Plugin() {
+            .withPilot(
+                new Pilot() {
                   @Override
                   public void afterInsert(
                       Connection connection, Client.Driver driver, Job<JsonNode> job) {
@@ -95,8 +95,8 @@ class SchedulingTest {
     var errors = new LinkedBlockingQueue<Throwable>();
     var client =
         new Client(databases.open(directory.resolve("river.db")))
-            .withPlugin(
-                new Plugin() {
+            .withPilot(
+                new Pilot() {
                   @Override
                   public void maintain(Client client, Instant now) {
                     if (calls.get() >= 3) maintained.complete(null);
@@ -138,8 +138,8 @@ class SchedulingTest {
     var inserted = new AtomicReference<Job<JsonNode>>();
     var client =
         new Client(databases.open(directory.resolve("river.db")))
-            .withPlugin(
-                new Plugin() {
+            .withPilot(
+                new Pilot() {
                   @Override
                   public void afterInsert(
                       Connection connection, Client.Driver driver, Job<JsonNode> job) {

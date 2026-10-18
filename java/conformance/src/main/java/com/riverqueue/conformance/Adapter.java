@@ -71,7 +71,7 @@ public final class Adapter implements AutoCloseable {
             applicationName);
     pool = Connections.pool(source);
     database = new Database(pool, source.dialect());
-    river = new Client(database).withExtension(runtime.instrumentation());
+    river = runtime.instrument(new Client(database));
     try (var input = Adapter.class.getResourceAsStream("/contract.json")) {
       contract = Json.MAPPER.readTree(input);
     }
@@ -266,7 +266,7 @@ public final class Adapter implements AutoCloseable {
       case "reset" -> {
         runtime.stop(true);
         river.driver().reset();
-        river = new Client(database).withExtension(runtime.instrumentation());
+        river = runtime.instrument(new Client(database));
         yield Json.object();
       }
       case "get" -> normalized(scoped(params).get(params.path("id").asLong()));
@@ -509,8 +509,7 @@ public final class Adapter implements AutoCloseable {
   private Client scoped(JsonNode params) {
     return params.path("schema").asString("").isEmpty()
         ? river
-        : new Client(database.withSchema(params.path("schema").asString()))
-            .withExtension(runtime.instrumentation());
+        : runtime.instrument(new Client(database.withSchema(params.path("schema").asString())));
   }
 
   private static boolean fitsDouble(JsonNode value) {

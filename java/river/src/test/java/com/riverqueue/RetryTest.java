@@ -75,8 +75,8 @@ class RetryTest {
     var idle = new CompletableFuture<Void>();
     var client =
         new Client(database)
-            .withPlugin(
-                new Plugin() {
+            .withPilot(
+                new Pilot() {
                   @Override
                   public void afterAttempt(
                       Connection connection, Client.Driver driver, Job<JsonNode> original) {

@@ -103,8 +103,8 @@ class BulkDeleteTest {
     var first = base.insert(TYPE, "first").job();
     var second = base.insert(TYPE, "second").job();
     var client =
-        base.withPlugin(
-            new Plugin() {
+        base.withPilot(
+            new Pilot() {
               @Override
               public void afterDelete(
                   Connection connection, Client.Driver driver, Job<JsonNode> job) {
@@ -136,8 +136,8 @@ class BulkDeleteTest {
     var last = base.insert(TYPE, "last").job();
     var deleted = new ArrayList<Long>();
     var client =
-        base.withPlugin(
-            new Plugin() {
+        base.withPilot(
+            new Pilot() {
               @Override
               public void afterDelete(
                   Connection connection, Client.Driver driver, Job<JsonNode> job) {
@@ -219,8 +219,8 @@ class BulkDeleteTest {
             .build();
     var deleted = new ArrayList<Long>();
     var client =
-        base.withPlugin(
-            new Plugin() {
+        base.withPilot(
+            new Pilot() {
               @Override
               public void afterDelete(
                   Connection connection, Client.Driver driver, Job<JsonNode> job) {

@@ -209,10 +209,10 @@ class ClientTest {
           return null;
         });
     var river =
-        base.withExtension(
-            new Extension() {
+        base.withHooks(
+            new HookInsertBegin() {
               @Override
-              public void beforeInsert(
+              public void insertBegin(
                   Connection connection, JobType<?> type, Object args, InsertOptions options) {
                 try (var statement = connection.createStatement()) {
                   statement.executeUpdate(
@@ -437,10 +437,10 @@ class ClientTest {
   void checkedHookFailureRollsBackInsideCallerTransaction() throws Exception {
     var base = database();
     var river =
-        base.withExtension(
-            new Extension() {
+        base.withHooks(
+            new HookInsertBegin() {
               @Override
-              public void beforeInsert(
+              public void insertBegin(
                   Connection connection, JobType<?> type, Object args, InsertOptions options)
                   throws java.sql.SQLException {
                 try (var statement = connection.createStatement()) {
@@ -631,8 +631,8 @@ class ClientTest {
     var releaseAcknowledgement = new CountDownLatch(1);
     var river =
         database()
-            .withPlugin(
-                new Plugin() {
+            .withPilot(
+                new Pilot() {
                   @Override
                   public void afterAttempt(
                       Connection connection,

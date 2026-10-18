@@ -51,8 +51,8 @@ class NotificationTest {
     var initiallyFetched = new CompletableFuture<Void>();
     var client =
         new Client(new Database(source, Database.Dialect.SQLITE))
-            .withPlugin(
-                new Plugin() {
+            .withPilot(
+                new Pilot() {
                   @Override
                   public List<Client.Decoded> claim(
                       Connection connection,

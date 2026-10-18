@@ -14,7 +14,7 @@
  * corresponding value, such as a job's finalization time. Missing jobs throw an exception with code
  * {@code NOT_FOUND}.
  *
- * <p>{@link com.riverqueue.Plugin}, {@link com.riverqueue.Client.Driver}, and members explicitly
+ * <p>{@link com.riverqueue.Pilot}, {@link com.riverqueue.Client.Driver}, and members explicitly
  * marked internal are integration seams for the matching Pro release, not stable application APIs.
  */
 package com.riverqueue;

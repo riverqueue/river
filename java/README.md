@@ -285,7 +285,7 @@ requested. Call `context.checkCancelled()` when abandoning unfinished work.
 ### Getting the client within workers
 
 [`context.client()`](https://riverqueue.com/docs/context-client) gives a handler
-its client, including configured extensions. Use its transaction overloads when
+its client, including configured hooks and middleware. Use its transaction overloads when
 enqueueing follow-up work that must commit with other writes or job completion.
 
 ```java
@@ -300,22 +300,21 @@ workerConfig.add(welcome, context ->
 Java exceptions and uncaught `Error`s are handled as failed attempts; River
 persists failures and retries according to policy. For
 [application error reporting](https://riverqueue.com/docs/error-handling), attach
-an `Extension.afterWork` hook. `Workers.Builder.errorHandler` separately receives
+a `HookWorkEnd` hook. `Workers.Builder.errorHandler` separately receives
 runtime failures, such as database or subscriber errors.
 Failures in observers or event subscribers are reported without changing the
 job's outcome or preventing other callbacks from running. If the runtime error
 handler itself throws, River logs both failures and continues.
 
 ```java
-var monitoredClient = client.withExtension(new Extension() {
-  @Override
-  public void afterWork(WorkContext<?> context, Throwable failure) {
-    if (failure != null) {
-      System.getLogger("jobs").log(System.Logger.Level.ERROR,
-          "Job " + context.job().id() + " failed", failure);
-    }
+HookWorkEnd reportFailure = (context, failure) -> {
+  if (failure != null) {
+    System.getLogger("jobs").log(System.Logger.Level.ERROR,
+        "Job " + context.job().id() + " failed", failure);
   }
-});
+  return failure;
+};
+var monitoredClient = client.withPlugins(reportFailure);
 var workerConfig = monitoredClient.workers()
     .queue("default", 10)
     .errorHandler(failure ->
@@ -325,6 +324,88 @@ var workerConfig = monitoredClient.workers()
 
 Hooks also see the control exceptions used for snoozing and cancellation. Keep
 reporting hooks fast and avoid throwing from them.
+
+### Plugins, hooks, and middleware
+
+Use `client.withPlugins(...)` to install hooks and middleware together. `Plugin`
+is their common marker interface: `Hook` and `Middleware` both extend it. A
+plugin automatically activates every operation-specific interface it implements.
+
+Hooks observe individual lifecycle stages through `HookInsertBegin`,
+`HookWorkBegin`, `HookWorkEnd`, and `HookPeriodicJobsStart`. Middleware wraps an
+operation with a `next` callback through `JobInsertMiddleware` and
+`WorkerMiddleware`. Each is a functional interface for lambdas or method
+references. For example, individual callbacks can be installed together:
+
+```java
+JobInsertMiddleware logInsert = (connection, submissions, next) -> {
+  var results = next.call();
+  System.getLogger("jobs").log(System.Logger.Level.DEBUG,
+      "Inserted " + results.size() + " jobs");
+  return results;
+};
+WorkerMiddleware timeWork = (context, next) -> {
+  long started = System.nanoTime();
+  try {
+    next.run();
+  } finally {
+    System.getLogger("jobs").log(System.Logger.Level.DEBUG,
+        "Job " + context.job().id() + " took " + (System.nanoTime() - started) + " ns");
+  }
+};
+var instrumentedClient = client.withPlugins(reportFailure, logInsert, timeWork);
+```
+
+A reusable plugin can implement multiple interfaces on one class:
+
+```java
+final class JobInstrumentation implements HookWorkEnd, WorkerMiddleware {
+  @Override
+  public void work(WorkContext<?> context, WorkContext.Step next) throws Exception {
+    System.getLogger("jobs").log(System.Logger.Level.DEBUG,
+        "Starting job " + context.job().id());
+    next.run();
+  }
+
+  @Override
+  public Throwable workEnd(WorkContext<?> context, Throwable failure) {
+    if (failure != null) {
+      System.getLogger("jobs").log(System.Logger.Level.ERROR,
+          "Job " + context.job().id() + " failed", failure);
+    }
+    return failure;
+  }
+}
+
+var instrumentedClient = client.withPlugins(new JobInstrumentation());
+```
+
+Use `withHooks(...)` or `withMiddleware(...)` when only that side of an
+implementation should be activated. All three registration methods return a new
+client and append to their respective lists. Use the returned client for insertion
+and worker configuration. Instances can run concurrently and must protect shared
+mutable state.
+
+As in Go, plugins run first, followed by separately registered hooks or middleware,
+regardless of which registration method was called first. Each list preserves its
+registration order. Repeated registrations are retained, so registering the same
+instance twice invokes it twice for each applicable phase.
+
+Hooks run in registration order inside the innermost middleware. Middleware runs
+in registration order before `next` and unwinds in reverse order afterward.
+Insertion middleware runs once per batch, including a one-element batch for a
+single insertion; insert hooks run once per job. Middleware receives an immutable
+list of submissions with the caller's arguments and option overrides. Insert
+hooks and middleware run in the insertion's transaction, and a failure anywhere
+rolls back the insertion, even after `next` returns.
+
+Work hooks and middleware receive decoded arguments. A work-begin failure skips
+the handler and work-end hooks. Work-end hooks receive the handler's exception
+or `Error`, or `null` for success, and return the outcome passed to the next hook.
+Return the received failure to preserve it, a different failure to replace it,
+or `null` to report success. A thrown exception skips remaining work-end hooks.
+The internal `Pilot` interface is a River Pro storage integration point, separate
+from application plugins.
 
 ### Job-persisted logging
 
