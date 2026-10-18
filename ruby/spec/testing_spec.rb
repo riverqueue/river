@@ -35,7 +35,10 @@ RSpec.describe River::Testing, database: :sqlite do
     calls = []
     failure = RuntimeError.new("step failed")
     plugin = Object.new
-    plugin.define_singleton_method(:work_end) { |_job, error| calls << error }
+    plugin.define_singleton_method(:work_end) do |_job, error|
+      calls << error
+      error
+    end
     plugins << plugin
     worker.define_singleton_method(:work) do |job|
       job.resumable_step(:download) { raise failure }
@@ -313,7 +316,10 @@ RSpec.describe River::Testing, database: :sqlite do
     callbacks = []
     plugins << Object.new.tap do |plugin|
       plugin.define_singleton_method(:work_begin) { |_job| callbacks << :begin }
-      plugin.define_singleton_method(:work_end) { |_job, error| callbacks << error }
+      plugin.define_singleton_method(:work_end) do |_job, error|
+        callbacks << error
+        error
+      end
       plugin.define_singleton_method(:work) do |_job, operation|
         callbacks << :before
         operation.call

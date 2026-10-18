@@ -416,7 +416,10 @@ RSpec.describe "River worker runtime", database: :sqlite do
     plugin.define_singleton_method(:insert_begin) { |_params| calls << :insert_begin }
     plugin.define_singleton_method(:insert_end) { |_result| calls << :insert_end }
     plugin.define_singleton_method(:work_begin) { |_job| calls << :work_begin }
-    plugin.define_singleton_method(:work_end) { |_job, error| calls << (error ? :work_error : :work_end) }
+    plugin.define_singleton_method(:work_end) do |_job, error|
+      calls << (error ? :work_error : :work_end)
+      error
+    end
     plugin.define_singleton_method(:work) do |_job, operation|
       calls << :middleware
       operation.call
