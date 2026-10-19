@@ -582,7 +582,7 @@ A plugin may implement any combination of these methods:
 | Hook       | `insert_begin(params)`           | Before each job is inserted; `params` may be modified.                                       |
 | Hook       | `insert_end(result)`             | After each job is inserted.                                                                  |
 | Hook       | `work_begin(job)`                | After a job is claimed, immediately before its worker runs.                                  |
-| Hook       | `work_end(job, error)`           | After the worker returns or raises; `error` is `nil` on success.                             |
+| Hook       | `work_end(job, error)`           | After the worker returns or raises a `StandardError`; returns the attempt's error or `nil`. |
 | Hook       | `job_finalize(job, state)`       | Before successful finalization; returning `:delete` deletes the job instead of retaining it. |
 | Middleware | `insert_many(params, operation)` | Around one insertion call; `params` is an array even for `Client#insert`.                    |
 | Middleware | `work(job, operation)`           | Around the work hooks and worker for one claimed job.                                        |
@@ -609,10 +609,33 @@ end
 config = River::Config.new(plugins: [AuditPlugin.new, TimingPlugin.new])
 ```
 
-Plugins earlier in the list are the outermost wrappers. Begin callbacks run in
-configuration order, while `insert_end` callbacks run in reverse order. In
-effect, work execution is nested as: middleware before, `work_begin`, worker,
-`work_end`, middleware after.
+Plugins earlier in the list are the outermost wrappers. Begin callbacks and
+`work_end` callbacks run in configuration order, while `insert_end` callbacks
+run in reverse order. In effect, work execution is nested as: middleware before,
+`work_begin`, worker, `work_end`, middleware after.
+
+Each `work_end(job, error)` receives `nil` on success or the worker's exception
+on failure. Return `error` to preserve that outcome, a different exception to
+replace it, or `nil` to clear a failure. Each subsequent end hook receives the
+previous hook's return value. After all end hooks run, River raises the final
+error through the middleware, or completes the operation if it is `nil`.
+Returning `River.job_cancel(...)` or `River.job_snooze(...)` selects the
+corresponding cancellation or snooze behavior.
+
+An observing hook must explicitly return its incoming error:
+
+```ruby
+def work_end(job, error)
+  Metrics.record_attempt(job.kind, error: error)
+  error
+end
+```
+
+If a `work_begin` hook raises, River skips the worker and all end hooks. If an
+end hook raises instead of returning an error, it stops the end-hook chain and
+propagates that exception through the middleware. Fatal exceptions outside
+`StandardError` also bypass end hooks. Use middleware with `ensure` for cleanup
+that must run when hooks or work raise.
 
 ### [Subscriptions](https://riverqueue.com/docs/subscriptions)
 

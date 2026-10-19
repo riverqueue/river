@@ -425,15 +425,22 @@ module River
       return perform_work(worker, job) if @config.plugins.empty?
 
       operation = -> do
+        invoke_plugins(:work_begin, job)
+
         error = nil
-        begin
-          invoke_plugins(:work_begin, job)
+        result = begin
           perform_work(worker, job)
-        rescue => error
-          raise
-        ensure
-          invoke_plugins(:work_end, job, error)
+        rescue => work_error
+          error = work_error
+          nil
         end
+
+        @config.plugins.each do |plugin|
+          error = plugin.work_end(job, error) if plugin.respond_to?(:work_end)
+        end
+        raise error if error
+
+        result
       end
       @config.plugins.reverse_each do |plugin|
         next unless plugin.respond_to?(:work)

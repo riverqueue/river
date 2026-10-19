@@ -419,10 +419,16 @@ RSpec.describe "River worker execution features", database: :sqlite do
     calls = []
     plugin_one = Object.new
     plugin_one.define_singleton_method(:work_begin) { |_job| calls << :one_begin }
-    plugin_one.define_singleton_method(:work_end) { |_job, _error| calls << :one_end }
+    plugin_one.define_singleton_method(:work_end) do |_job, error|
+      calls << :one_end
+      error
+    end
     plugin_two = Object.new
     plugin_two.define_singleton_method(:work_begin) { |_job| calls << :two_begin }
-    plugin_two.define_singleton_method(:work_end) { |_job, _error| calls << :two_end }
+    plugin_two.define_singleton_method(:work_end) do |_job, error|
+      calls << :two_end
+      error
+    end
     client = build_client(Class.new {
       def work(_job)
       end
