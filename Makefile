@@ -219,6 +219,7 @@ test/js/conformance: generate/fixtures
 .PHONY: test/js/integration
 test/js/integration: ## Run JavaScript integration tests against Postgres
 test/js/integration: build/js
+test/js/integration: generate/fixtures
 	pnpm -C js run test:integration
 
 .PHONY: test/rust
@@ -238,7 +239,7 @@ test/rust: generate/fixtures
 .PHONY: test/rust/conformance
 test/rust/conformance: ## Run Rust tests that check Go-generated conformance fixtures
 test/rust/conformance: generate/fixtures
-	cd rust && cargo test -p riverqueue --features chrono-tz --lib --test protocol_fixtures --locked
+	cd rust && cargo test -p riverqueue --features chrono-tz,sqlite --lib --test protocol_fixtures --test resumable_conformance --locked
 
 .PHONY: test/rust/postgres
 test/rust/postgres: ## Run all Rust tests, including Postgres integration tests (requires RIVER_RUST_DATABASE_URL)

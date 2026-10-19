@@ -268,6 +268,46 @@ RSpec.describe "Go-generated conformance fixtures" do
         end
       end
 
+      RiverConformanceFixtures.load("resumable").fetch("cases").each do |fixture|
+        it "matches Go's resumable #{fixture.fetch("name")}" do
+          driver = @driver
+          name = fixture.fetch("name")
+          worker = Object.new
+          worker.define_singleton_method(:work) do |job|
+            job.resumable_step("first") {} unless name == "first_cursor_error"
+            raise River.job_snooze(60) if name == "step_snooze"
+            job.resumable_step_cursor("loop") do
+              if name == "first_cursor_error"
+                job.resumable_set_cursor(7)
+              else
+                driver.transaction do
+                  if name == "checkpoint_write_failure"
+                    # Exercise the write failure boundary without disrupting
+                    # the result update on the same database connection.
+                    original = driver.method(:job_metadata_merge)
+                    begin
+                      driver.define_singleton_method(:job_metadata_merge) { |*_args| raise "write failed" }
+                      job.resumable_checkpoint(cursor: 1)
+                    ensure
+                      driver.define_singleton_method(:job_metadata_merge, original)
+                    end
+                  else
+                    job.resumable_checkpoint(cursor: 1)
+                    raise "rollback" if name == "checkpoint_rollback_error"
+                  end
+                end
+              end
+              job.resumable_set_cursor(2) if name == "checkpoint_then_cursor_error"
+              raise "retry"
+            end
+          end
+          client = River::Client.new(driver, config: River::Config.new(workers: River::Workers.new.add(:resumable, worker)))
+          row = client.insert(River::JobArgsHash.new(:resumable, {}), max_attempts: 1).job
+          result = River::Testing.perform_job(client, row.id)
+          expect(result.job.metadata.select { |key, _| key.start_with?("river:resumable_") }).to eq(fixture.fetch("expected_metadata"))
+        end
+      end
+
       it "resumes from and persists Go's step and cursor metadata" do
         keys = protocol.fetch("metadata_keys")
         calls = []

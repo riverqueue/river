@@ -44,12 +44,10 @@ func (*ResumableMiddleware) Work(ctx context.Context, job *rivertype.JobRow, doI
 		state.ResumeMatched = false
 	}
 
-	hadCursors := false
 	if cursorJSON := gjson.GetBytes(job.Metadata, rivercommon.MetadataKeyResumableCursor); cursorJSON.Exists() && cursorJSON.Type == gjson.JSON {
 		if err := json.Unmarshal([]byte(cursorJSON.Raw), &state.Cursors); err != nil {
 			return fmt.Errorf("river: unmarshal resumable cursors: %w", err)
 		}
-		hadCursors = len(state.Cursors) > 0
 	}
 
 	ctx = context.WithValue(ctx, ResumableContextKey{}, state)
@@ -64,16 +62,18 @@ func (*ResumableMiddleware) Work(ctx context.Context, job *rivertype.JobRow, doI
 		}
 	}
 
-	if err != nil && state.CompletedStep != "" {
-		if len(state.Cursors) > 0 {
+	if err != nil {
+		if state.CursorsDirty && len(state.Cursors) > 0 {
 			metadataUpdates[rivercommon.MetadataKeyResumableCursor] = state.Cursors
-		} else if hadCursors {
+		} else if state.CursorsDirty {
 			// All cursors were consumed (their steps completed). Write null
 			// to clear the stale cursor metadata, since the metadata merge
 			// is additive and wouldn't remove the old key on its own.
 			metadataUpdates[rivercommon.MetadataKeyResumableCursor] = nil
 		}
-		metadataUpdates[rivercommon.MetadataKeyResumableStep] = state.CompletedStep
+		if state.CompletedStep != "" {
+			metadataUpdates[rivercommon.MetadataKeyResumableStep] = state.CompletedStep
+		}
 	}
 
 	return err
@@ -85,6 +85,7 @@ type ResumableState struct {
 	AllStepNames  map[string]struct{}
 	CompletedStep string
 	Cursors       map[string]json.RawMessage
+	CursorsDirty  bool
 	Err           error
 	ResumeMatched bool
 	ResumeStep    string

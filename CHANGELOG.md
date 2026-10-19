@@ -13,6 +13,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Fixed resumable transactional checkpoints being saved again after rollback or a failed write, and first-step cursors being lost on error, snooze, or cooperative shutdown. After a successful checkpoint write, the caller's transaction owns that progress; rollback may replay earlier unpersisted steps. The Rust, JavaScript, and Java runtimes now share the applicable behavior, including preserving progress on snooze.
+
 - Fixed `AddWorkerSafely` leaving a worker's primary kind and earlier aliases registered when a later kind alias conflicts with an existing registration. Failed registrations now leave the worker registry unchanged. [PR #1440](https://github.com/riverqueue/river/pull/1440).
 - Fixed the notifier retrying without backoff and flooding logs when the context passed to `Client.Start` reaches its deadline. [PR #1495](https://github.com/riverqueue/river/pull/1495).
 - Fixed `JobSnooze` accepting negative durations despite documenting that they panic. [PR #1529](https://github.com/riverqueue/river/pull/1529).

@@ -120,11 +120,11 @@ class ProtocolStorageTest {
                 .retryPolicy(
                     job -> {
                       if (!postgres) {
-                        // Retry selection runs after the read transaction closes, so another
-                        // writer can commit without invalidating rescue's update transaction.
+                        // Retry selection runs after the read transaction closes. Keep the normal
+                        // busy timeout for unrelated worker writes; a transaction held by this
+                        // callback would stay locked until the timeout expires.
                         try (var connection = database.connection();
                             var statement = connection.createStatement()) {
-                          statement.execute("PRAGMA busy_timeout=0");
                           statement.executeUpdate(
                               "UPDATE river_job SET priority = 2 WHERE id = " + job.id());
                           writeFailure.complete(null);
@@ -140,7 +140,7 @@ class ProtocolStorageTest {
             workers.subscribe(completed::complete, Workers.EventKind.JOB_COMPLETED)) {
       if (!postgres)
         assertNull(
-            writeFailure.get(5, TimeUnit.SECONDS), "Rescue callbacks must not hold the writer");
+            writeFailure.get(10, TimeUnit.SECONDS), "Rescue callbacks must not hold the writer");
       maintained.get(5, TimeUnit.SECONDS);
       var rescued = client.get(inserted.id());
       assertEquals(Job.State.RETRYABLE, rescued.state());

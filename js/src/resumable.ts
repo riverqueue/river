@@ -9,7 +9,11 @@ const STEP_KEY = "river:resumable_step";
 
 /**
  * Save resumable progress now, atomically with `tx`, instead of when the
- * attempt ends.
+ * attempt ends. If it rolls back, earlier unpersisted progress may be replayed.
+ *
+ * Commit the transaction before the step callback resolves, and let transaction
+ * and commit errors reject the callback. Resolving it marks the step complete
+ * even if an enclosing transaction later rolls back.
  */
 export interface ResumableCheckpointOptions<Transaction = unknown> {
   readonly cursor?: JsonValue;
@@ -26,10 +30,10 @@ export class Resumable {
   readonly #allNames = new Set<string>();
   readonly #client: Client;
   readonly #cursors = new Map<string, JsonValue>();
-  readonly #hadCursors: boolean;
   readonly #job: JobRow;
   readonly #resumeStep: string | null;
   #completedStep: string | null = null;
+  #cursorsDirty = false;
   #failure: Error | null = null;
   #resumeMatched: boolean;
   #stepName: string | null = null;
@@ -61,7 +65,6 @@ export class Resumable {
         if (cursor !== undefined) this.#cursors.set(name, cursor);
       }
     }
-    this.#hadCursors = this.#cursors.size > 0;
   }
 
   /**
@@ -95,7 +98,7 @@ export class Resumable {
     try {
       await callback(this.#cursors.get(name) ?? null);
       this.#completedStep = name;
-      this.#cursors.delete(name);
+      if (this.#cursors.delete(name)) this.#cursorsDirty = true;
     } catch (cause: unknown) {
       this.#failure = stepError(name, cause);
       throw cause;
@@ -112,9 +115,16 @@ export class Resumable {
       );
     }
     this.#cursors.set(this.#stepName, toJsonValue(cursor));
+    this.#cursorsDirty = true;
   }
 
-  /** Persist the current step and optional cursor in a caller transaction. */
+  /**
+   * Persist the current step and optional cursor in a caller transaction.
+   *
+   * Commit the transaction before the step callback resolves, and let transaction
+   * and commit errors reject the callback. Resolving it marks the step complete
+   * even if an enclosing transaction later rolls back.
+   */
   async checkpoint<Transaction>(
     options: ResumableCheckpointOptions<Transaction>
   ): Promise<JobRow> {
@@ -123,18 +133,30 @@ export class Resumable {
         "resumable checkpoint can only be set inside a resumable step"
       );
     }
-    this.#completedStep = this.#stepName;
+    const cursors = new Map(this.#cursors);
     if (options.cursor !== undefined) {
-      this.#cursors.set(this.#stepName, toJsonValue(options.cursor));
+      cursors.set(this.#stepName, toJsonValue(options.cursor));
     }
     const updated = await this.#client.jobs.update(
       this.#job.id,
-      { metadata: this.#checkpointMetadata() },
+      {
+        metadata: {
+          [STEP_KEY]: this.#stepName,
+          [CURSOR_KEY]:
+            cursors.size > 0 ? toJsonObject(Object.fromEntries(cursors)) : null,
+        },
+      },
       { tx: options.tx }
     );
     if (updated === null) {
       throw new LifecycleError(`running job ${this.#job.id} no longer exists`);
     }
+    // The caller transaction owns this checkpoint, including its rollback.
+    // Only subsequent progress belongs in deferred attempt metadata.
+    this.#cursors.clear();
+    for (const [name, cursor] of cursors) this.#cursors.set(name, cursor);
+    this.#cursorsDirty = false;
+    this.#completedStep = null;
     return updated;
   }
 
@@ -150,7 +172,7 @@ export class Resumable {
     }
     return {
       error: this.#failure,
-      metadata: this.#completedStep === null ? {} : this.#checkpointMetadata(),
+      metadata: this.#checkpointMetadata(),
     };
   }
 
@@ -177,15 +199,13 @@ export class Resumable {
   }
 
   #checkpointMetadata(): JsonObject {
-    const metadata: JsonObject = {
-      [STEP_KEY]: this.#completedStep ?? this.#stepName ?? "",
-    };
-    if (this.#cursors.size > 0) {
-      metadata[CURSOR_KEY] = toJsonObject(
-        Object.fromEntries(this.#cursors.entries())
-      );
-    } else if (this.#hadCursors) {
-      metadata[CURSOR_KEY] = null;
+    const metadata: JsonObject = {};
+    if (this.#completedStep !== null) metadata[STEP_KEY] = this.#completedStep;
+    if (this.#cursorsDirty) {
+      metadata[CURSOR_KEY] =
+        this.#cursors.size > 0
+          ? toJsonObject(Object.fromEntries(this.#cursors))
+          : null;
     }
     return metadata;
   }

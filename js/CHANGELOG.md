@@ -21,6 +21,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Preserve first-step resumable cursors on failure and step progress on snooze. Transactional checkpoints no longer leak into deferred updates after rollback or a failed write; rolling back a successful checkpoint write may replay earlier unpersisted steps.
+
 - Worker threads respect cancellation received while loading a handler module, before invoking its handler.
 - Like River for Go, a leader whose renewal finds its term gone, because it expired or another process replaced it, gives up leadership at once instead of running maintenance until its local deadline passes. [PR #1504](https://github.com/riverqueue/river/pull/1504).
 - `updateQueue` raising a full queue's `maxWorkers` starts jobs at once instead of waiting for a running job to finish. [PR #1504](https://github.com/riverqueue/river/pull/1504).

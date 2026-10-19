@@ -610,6 +610,10 @@ disabled. Let transaction failures propagate out of the step so a rollback leave
 the last committed checkpoint authoritative. Neither overload commits the caller's
 transaction.
 
+Commit the transaction before the step callback returns successfully, and propagate
+transaction and commit errors from that callback. A successful callback marks the
+step complete even if an enclosing transaction later rolls back.
+
 ### Scheduled jobs
 
 [Schedule a job](https://riverqueue.com/docs/scheduled-jobs) by supplying an

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 
@@ -200,6 +201,54 @@ func TestResumableStepCursor(t *testing.T) {
 		require.EqualError(t, err, `river: duplicate resumable step name "step1"`)
 		require.Equal(t, []string{"step"}, ran)
 	})
+
+	for _, outcome := range []string{"Cancel", "Error", "Shutdown", "Snooze"} {
+		t.Run("FirstStepCursorOn"+outcome, func(t *testing.T) {
+			t.Parallel()
+
+			ctx, updates, job := setup(t, `{}`)
+			ctx, cancel := context.WithCancel(ctx)
+			defer cancel()
+
+			err := (&riverplugin.ResumableMiddleware{}).Work(ctx, job, func(ctx context.Context) error {
+				ResumableStepCursor(ctx, "loop", nil, func(ctx context.Context, cursor resumableCursor) error {
+					require.Zero(t, cursor.ID)
+					require.NoError(t, ResumableSetCursor(ctx, resumableCursor{ID: 7}))
+					switch outcome {
+					case "Cancel":
+						return JobCancel(errors.New("cancel"))
+					case "Shutdown":
+						cancel()
+						return ctx.Err()
+					case "Snooze":
+						return JobSnooze(time.Minute)
+					default:
+						return errors.New("retry")
+					}
+				})
+				return nil
+			})
+			require.Error(t, err)
+			encoded, err := json.Marshal(updates)
+			require.NoError(t, err)
+			require.JSONEq(t, `{"river:resumable_cursor":{"loop":{"id":7}}}`, string(encoded))
+
+			// Without a completed step, start from the beginning and supply the
+			// saved cursor when its named step is reached.
+			ctx, updates, job = setup(t, string(encoded))
+			err = (&riverplugin.ResumableMiddleware{}).Work(ctx, job, func(ctx context.Context) error {
+				ResumableStepCursor(ctx, "loop", nil, func(ctx context.Context, cursor resumableCursor) error {
+					require.Equal(t, 7, cursor.ID)
+					return nil
+				})
+				return errors.New("later failure")
+			})
+			require.EqualError(t, err, "later failure")
+			require.Equal(t, "loop", updates[rivercommon.MetadataKeyResumableStep])
+			require.Contains(t, updates, rivercommon.MetadataKeyResumableCursor)
+			require.Nil(t, updates[rivercommon.MetadataKeyResumableCursor])
+		})
+	}
 
 	t.Run("ResumesCursor", func(t *testing.T) {
 		t.Parallel()
