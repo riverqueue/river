@@ -588,6 +588,7 @@ SET
     state = 'available',
     max_attempts = CASE WHEN attempt = max_attempts THEN max_attempts + 1 ELSE max_attempts END,
     finalized_at = NULL,
+    metadata = jsonb_remove(metadata, '$.cancel_attempted_at'),
     scheduled_at = coalesce(cast(sqlc.narg('now') AS text), datetime('now', 'subsec'))
 WHERE id = @id
     -- Do not touch running jobs:

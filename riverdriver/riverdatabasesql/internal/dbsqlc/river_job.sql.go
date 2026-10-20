@@ -1320,6 +1320,7 @@ updated_job AS (
         state = 'available',
         max_attempts = CASE WHEN attempt = max_attempts THEN max_attempts + 1 ELSE max_attempts END,
         finalized_at = NULL,
+        metadata = metadata - 'cancel_attempted_at',
         scheduled_at = coalesce($2::timestamptz, now())
     FROM job_to_update
     WHERE river_job.id = job_to_update.id

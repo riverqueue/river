@@ -22,6 +22,21 @@ import (
 	"github.com/riverqueue/river/rivershared/util/timeoututil"
 )
 
+// ListenerReadyFunc runs after initial connection and each successful reconnect.
+type ListenerReadyFunc func()
+
+// ListenerReadySubscription unregisters a listener-ready callback.
+type ListenerReadySubscription struct {
+	notifier *Notifier
+}
+
+// Unregister stops future callbacks; an invocation already in progress may finish.
+func (s *ListenerReadySubscription) Unregister() {
+	s.notifier.mu.Lock()
+	defer s.notifier.mu.Unlock()
+	delete(s.notifier.listenerReadyFuncs, s)
+}
+
 type NotificationTopic string
 
 const (
@@ -97,39 +112,6 @@ type Notifier struct {
 	waitCancel         context.CancelFunc
 }
 
-// ListenerReadyFunc is invoked each time the notifier establishes healthy
-// listening on all of its currently subscribed topics. This includes the
-// very first connect as well as every subsequent reconnect that follows a
-// connection loss, so callers whose work is only meaningful after a genuine
-// reconnect (as opposed to the initial connect) should make that check
-// themselves.
-type ListenerReadyFunc func()
-
-// ListenerReadySubscription is a handle to a func registered with
-// RegisterListenerReadyFunc. Call Unregister to stop receiving invocations.
-type ListenerReadySubscription struct {
-	notifier *Notifier
-}
-
-func (s *ListenerReadySubscription) Unregister() {
-	s.notifier.mu.Lock()
-	defer s.notifier.mu.Unlock()
-	delete(s.notifier.listenerReadyFuncs, s)
-}
-
-// RegisterListenerReadyFunc registers a function to be invoked every time the
-// notifier (re)establishes healthy listening on all of its subscribed topics.
-// It's used to let callers reconcile any state that could have missed a
-// notification while the notifier was disconnected/reconnecting.
-func (n *Notifier) RegisterListenerReadyFunc(listenerReadyFunc ListenerReadyFunc) *ListenerReadySubscription {
-	n.mu.Lock()
-	defer n.mu.Unlock()
-
-	sub := &ListenerReadySubscription{notifier: n}
-	n.listenerReadyFuncs[sub] = listenerReadyFunc
-	return sub
-}
-
 func New(archetype *baseservice.Archetype, listener riverdriver.Listener) *Notifier {
 	notifier := baseservice.Init(archetype, &Notifier{
 		listener:          listener,
@@ -140,6 +122,16 @@ func New(archetype *baseservice.Archetype, listener riverdriver.Listener) *Notif
 		subscriptions:      make(map[NotificationTopic][]*Subscription),
 	})
 	return notifier
+}
+
+// RegisterListenerReadyFunc registers a callback for initial connection and reconnects.
+func (n *Notifier) RegisterListenerReadyFunc(listenerReadyFunc ListenerReadyFunc) *ListenerReadySubscription {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+
+	sub := &ListenerReadySubscription{notifier: n}
+	n.listenerReadyFuncs[sub] = listenerReadyFunc
+	return sub
 }
 
 func (n *Notifier) Start(ctx context.Context) error {

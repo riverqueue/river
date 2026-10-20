@@ -19,6 +19,7 @@ import (
 	"github.com/riverqueue/river/riverdriver/riverpgxv5"
 	"github.com/riverqueue/river/rivershared/riversharedtest"
 	"github.com/riverqueue/river/rivershared/startstoptest"
+	"github.com/riverqueue/river/rivershared/testsignal"
 	"github.com/riverqueue/river/rivershared/util/maputil"
 	"github.com/riverqueue/river/rivershared/util/randutil"
 	"github.com/riverqueue/river/rivershared/util/serviceutil"
@@ -279,6 +280,57 @@ func TestNotifier(t *testing.T) {
 		sendNotification(ctx, t, bundle.exec, bundle.schema, testTopic1, "msg1")
 
 		require.Equal(t, TopicAndPayload{testTopic1, "msg1"}, riversharedtest.WaitOrTimeout(t, notifyChan))
+	})
+
+	t.Run("RegisterListenerReadyFunc", func(t *testing.T) {
+		t.Parallel()
+
+		notifier, _ := setup(t, nil)
+		notifier.testDisableSleep = true
+
+		var errorNum int
+
+		listenerMock := NewListenerMock(notifier.listener)
+		listenerMock.waitForNotificationFunc = func(ctx context.Context) (*riverdriver.Notification, error) {
+			// Returns an error the first time, but then works after.
+			errorNum++
+			switch errorNum {
+			case 1:
+				return nil, errors.New("error during wait")
+			default:
+				return listenerMock.Listener.WaitForNotification(ctx)
+			}
+		}
+		notifier.listener = listenerMock
+
+		var ready testsignal.TestSignal[struct{}]
+		ready.Init(t)
+		sub := notifier.RegisterListenerReadyFunc(func() { ready.Signal(struct{}{}) })
+		t.Cleanup(sub.Unregister)
+
+		start(t, notifier)
+
+		// Fires once on the initial connect.
+		ready.WaitOrTimeout()
+
+		// And again once the notifier reconnects after the injected failure.
+		require.EqualError(t, notifier.testSignals.BackoffError.WaitOrTimeout(), "error during wait")
+		ready.WaitOrTimeout()
+
+		notifier.Stop()
+		sub.Unregister()
+
+		// WaitForNotification is entered after listener-ready callbacks finish.
+		var waiting testsignal.TestSignal[struct{}]
+		waiting.Init(t)
+		listenerMock.waitForNotificationFunc = func(ctx context.Context) (*riverdriver.Notification, error) {
+			waiting.Signal(struct{}{})
+			return listenerMock.Listener.WaitForNotification(ctx)
+		}
+
+		require.NoError(t, notifier.Start(ctx))
+		waiting.WaitOrTimeout()
+		ready.RequireEmpty()
 	})
 
 	t.Run("SingleTopicMultipleSubscribers", func(t *testing.T) {
@@ -622,54 +674,6 @@ func TestNotifier(t *testing.T) {
 
 		// Subscription should still work.
 		require.Equal(t, TopicAndPayload{testTopic1, "msg1"}, riversharedtest.WaitOrTimeout(t, notifyChan))
-	})
-
-	t.Run("RegisterListenerReadyFunc", func(t *testing.T) {
-		t.Parallel()
-
-		notifier, _ := setup(t, nil)
-		notifier.testDisableSleep = true
-
-		var errorNum int
-
-		listenerMock := NewListenerMock(notifier.listener)
-		listenerMock.waitForNotificationFunc = func(ctx context.Context) (*riverdriver.Notification, error) {
-			// Returns an error the first time, but then works after.
-			errorNum++
-			switch errorNum {
-			case 1:
-				return nil, errors.New("error during wait")
-			default:
-				return listenerMock.Listener.WaitForNotification(ctx)
-			}
-		}
-		notifier.listener = listenerMock
-
-		readyChan := make(chan struct{}, 10)
-		sub := notifier.RegisterListenerReadyFunc(func() { readyChan <- struct{}{} })
-		t.Cleanup(sub.Unregister)
-
-		start(t, notifier)
-
-		// Fires once on the initial connect.
-		riversharedtest.WaitOrTimeout(t, readyChan)
-
-		// And again once the notifier reconnects after the injected failure.
-		require.EqualError(t, notifier.testSignals.BackoffError.WaitOrTimeout(), "error during wait")
-		riversharedtest.WaitOrTimeout(t, readyChan)
-
-		// Unregister stops further invocations. There's no direct signal for
-		// "would have fired again", so drain what's pending, unregister, and
-		// confirm a subsequent restart doesn't add anything new.
-		for len(readyChan) > 0 {
-			<-readyChan
-		}
-		sub.Unregister()
-
-		notifier.Stop()
-		require.NoError(t, notifier.Start(ctx))
-		notifier.testSignals.ListeningBegin.WaitOrTimeout()
-		require.Empty(t, readyChan)
 	})
 }
 
