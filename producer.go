@@ -215,9 +215,10 @@ type producer struct {
 	pilot           riverpilot.Pilot
 	workers         *Workers
 
-	// Receives job IDs to cancel. Written by notifier and polling goroutines,
-	// only read from the main goroutine.
-	cancelCh chan int64
+	// Receives job IDs from notifier, polling, and local cancellation calls.
+	// Only the main goroutine reads it.
+	cancelCh    chan int64
+	cancelState atomic.Pointer[producerCancelState]
 
 	// Set to true when the producer thinks it should trigger another fetch as
 	// soon as slots are available. This is written and read by the main
@@ -241,18 +242,8 @@ type producer struct {
 	// goroutine, only read from main goroutine.
 	queueControlCh chan *controlEventPayload
 
-	// Receives a signal every time the notifier (re)establishes healthy
-	// listening. Written by the notifier goroutine (via a registered
-	// ListenerReadyFunc), only read from main goroutine. Used to reconcile
-	// activeJobs against cancel_attempted_at in case a cancel NOTIFY was lost
-	// while the notifier was disconnected/reconnecting. Buffered to 1 and
-	// written to non-blockingly because reconnects are rare and coalescing
-	// multiple signals into one reconciliation pass is fine.
+	// Coalesces reconnect notifications for reconciliation on the main goroutine.
 	reconnectCh chan struct{}
-
-	// Only used by main goroutine. Tracks the current backoff attempt for
-	// retrying the reconnect reconciliation query after a failure.
-	reconcileAttempt int
 
 	retryPolicy ClientRetryPolicy
 	testSignals producerTestSignals
@@ -425,14 +416,7 @@ func (p *producer) StartWorkContext(fetchCtx, workCtx context.Context) error {
 			return err
 		}
 
-		// Reconcile activeJobs against cancel_attempted_at every time the
-		// notifier (re)establishes healthy listening. This closes the window
-		// described in https://github.com/riverqueue/river/issues/1358: a
-		// cancel NOTIFY sent while the notifier was disconnected/reconnecting
-		// is otherwise lost for good (Postgres NOTIFY is fire-and-forget).
-		// Firing on the very first connect too is harmless: activeJobs is
-		// always empty at that point in startup, so the fetchAndRunLoop
-		// handler below is a no-op query-free check.
+		// Recover cancellations whose NOTIFY was lost while disconnected.
 		reconnectSub = p.config.Notifier.RegisterListenerReadyFunc(func() {
 			select {
 			case p.reconnectCh <- struct{}{}:
@@ -441,9 +425,13 @@ func (p *producer) StartWorkContext(fetchCtx, workCtx context.Context) error {
 		})
 	}
 
+	subroutineCtx, cancelSubroutines := context.WithCancelCause(context.WithoutCancel(fetchCtx))
+	p.cancelState.Store(&producerCancelState{done: subroutineCtx.Done()})
+
 	go func() {
 		started()
 		defer stopped() // this defer should come first so it's last out
+		defer p.cancelState.Store(nil)
 
 		p.Logger.DebugContext(fetchCtx, p.Name+": Run loop started", slog.String("queue", p.config.Queue), slog.Bool("paused", p.paused))
 		defer func() {
@@ -463,7 +451,6 @@ func (p *producer) StartWorkContext(fetchCtx, workCtx context.Context) error {
 		}
 
 		var subroutineWG sync.WaitGroup
-		subroutineCtx, cancelSubroutines := context.WithCancelCause(context.WithoutCancel(fetchCtx))
 
 		subroutineWG.Add(1)
 		go p.fetchPollLoop(subroutineCtx, &subroutineWG)
@@ -595,6 +582,64 @@ func (p *producer) fetchAndRunLoop(fetchCtx, workCtx context.Context) {
 	p.fetchLimiter.Call()
 
 	fetchResultCh := make(chan producerFetchResult)
+	reconcileCtx, cancelReconcile := context.WithCancel(fetchCtx)
+	var reconcileWG sync.WaitGroup
+	defer func() {
+		cancelReconcile()
+		reconcileWG.Wait()
+	}()
+
+	reconcileResultCh := make(chan producerReconcileResult)
+	var (
+		reconcileAttempt int
+		reconcilePending bool
+		reconciling      bool
+		retryTimer       *time.Timer
+	)
+	defer func() {
+		if retryTimer != nil {
+			retryTimer.Stop()
+		}
+	}()
+	startReconcile := func() {
+		if reconciling {
+			reconcilePending = true
+			return
+		}
+		if retryTimer != nil {
+			retryTimer.Stop()
+			retryTimer = nil
+		}
+		p.activeJobsMu.Lock()
+		numActiveJobs := len(p.activeJobs)
+		p.activeJobsMu.Unlock()
+		if numActiveJobs == 0 {
+			reconcileAttempt = 0
+			return
+		}
+		reconciling = true
+		reconcileWG.Add(1)
+		p.handleNotifierReconnect(reconcileCtx, reconcileResultCh, &reconcileWG)
+	}
+	handleReconcileResult := func(result producerReconcileResult) {
+		reconciling = false
+		if result.err != nil {
+			p.Logger.ErrorContext(workCtx, p.Name+": Error reconciling cancellations; will retry", slog.String("err", result.err.Error()))
+			if retryTimer != nil {
+				retryTimer.Stop()
+			}
+			retryTimer = p.scheduleReconnectRetry(reconcileCtx, reconcileAttempt)
+			reconcileAttempt++
+		} else {
+			reconcileAttempt = 0
+			p.applyReconcileResult(workCtx, result)
+		}
+		if reconcilePending {
+			reconcilePending = false
+			startReconcile()
+		}
+	}
+
 	for {
 		select {
 		case <-fetchCtx.Done():
@@ -642,9 +687,11 @@ func (p *producer) fetchAndRunLoop(fetchCtx, workCtx context.Context) {
 		case jobID := <-p.cancelCh:
 			p.maybeCancelJob(workCtx, jobID)
 		case <-p.reconnectCh:
-			p.handleNotifierReconnect(workCtx)
+			startReconcile()
+		case result := <-reconcileResultCh:
+			handleReconcileResult(result)
 		case <-p.fetchLimiter.C():
-			p.innerFetchLoop(workCtx, fetchResultCh)
+			p.innerFetchLoop(workCtx, fetchResultCh, reconcileResultCh, handleReconcileResult, startReconcile)
 			// Ensure we can't start another fetch when fetchCtx is done, even if
 			// the fetchLimiter is also ready to fire:
 			select {
@@ -698,7 +745,7 @@ func (p *producer) jitteredFetchPollInterval() time.Duration {
 	return randutil.DurationBetween(p.config.FetchPollInterval, p.config.FetchPollInterval+jitterRange)
 }
 
-func (p *producer) innerFetchLoop(workCtx context.Context, fetchResultCh chan producerFetchResult) {
+func (p *producer) innerFetchLoop(workCtx context.Context, fetchResultCh chan producerFetchResult, reconcileResultCh <-chan producerReconcileResult, handleReconcileResult func(producerReconcileResult), startReconcile func()) {
 	var limit int
 	if p.paused {
 		limit = 0
@@ -734,6 +781,10 @@ func (p *producer) innerFetchLoop(workCtx context.Context, fetchResultCh chan pr
 				}
 			}
 			return
+		case <-p.reconnectCh:
+			startReconcile()
+		case result := <-reconcileResultCh:
+			handleReconcileResult(result)
 		case result := <-p.jobResultCh:
 			p.removeActiveJob(result)
 		case jobID := <-p.cancelCh:
@@ -824,6 +875,30 @@ func (p *producer) addActiveJob(id int64, executor *jobexecutor.JobExecutor) {
 	p.activeJobsMu.Unlock()
 }
 
+// applyReconcileResult runs on the producer goroutine and ignores replaced executions.
+func (p *producer) applyReconcileResult(ctx context.Context, result producerReconcileResult) {
+	for _, job := range result.jobs {
+		p.activeJobsMu.Lock()
+		executor := p.activeJobs[job.ID]
+		p.activeJobsMu.Unlock()
+		if executor == nil || executor != result.executors[job.ID] || executor.JobRow.Attempt != job.Attempt {
+			continue
+		}
+
+		var metadata struct {
+			CancelAttemptedAt time.Time `json:"cancel_attempted_at"`
+		}
+		if err := json.Unmarshal(job.Metadata, &metadata); err != nil {
+			p.Logger.ErrorContext(ctx, p.Name+": Error unmarshaling cancellation metadata",
+				slog.Int64("job_id", job.ID), slog.String("err", err.Error()))
+			continue
+		}
+		if !metadata.CancelAttemptedAt.IsZero() {
+			p.maybeCancelJob(ctx, job.ID)
+		}
+	}
+}
+
 func (p *producer) removeActiveJob(job *rivertype.JobRow) {
 	p.activeJobsMu.Lock()
 	executor := p.activeJobs[job.ID]
@@ -876,73 +951,41 @@ func (p *producer) maybeCancelJob(ctx context.Context, id int64) bool {
 	return true
 }
 
-// jobMetadataWithCancelAttemptedAt mirrors the identical unexported struct in
-// internal/maintenance/job_rescuer.go, which reads the same field for the
-// same reason.
-type jobMetadataWithCancelAttemptedAt struct {
-	CancelAttemptedAt time.Time `json:"cancel_attempted_at"`
-}
-
-// handleNotifierReconnect reconciles activeJobs against cancel_attempted_at
-// after the notifier has (re)established healthy listening. It exists to
-// close the window described in
-// https://github.com/riverqueue/river/issues/1358: a cancel NOTIFY sent while
-// the notifier was disconnected/reconnecting is lost for good (Postgres
-// NOTIFY is fire-and-forget), so a job cancelled during that window would
-// otherwise run to completion unaware, undetected until JobRescuer's much
-// longer stuck-job sweep.
-//
-// Only ever called from the main goroutine, so activeJobs can be read
-// without a lock.
-func (p *producer) handleNotifierReconnect(ctx context.Context) {
-	if len(p.activeJobs) == 0 {
-		p.reconcileAttempt = 0
-		return
-	}
-
+// handleNotifierReconnect snapshots active executions before querying asynchronously.
+func (p *producer) handleNotifierReconnect(ctx context.Context, resultCh chan<- producerReconcileResult, wg *sync.WaitGroup) {
+	p.activeJobsMu.Lock()
+	executors := make(map[int64]*jobexecutor.JobExecutor, len(p.activeJobs))
 	ids := make([]int64, 0, len(p.activeJobs))
-	for id := range p.activeJobs {
+	for id, executor := range p.activeJobs {
+		executors[id] = executor
 		ids = append(ids, id)
 	}
 
-	jobs, err := p.exec.JobGetByIDMany(ctx, &riverdriver.JobGetByIDManyParams{
-		ID:     ids,
-		Schema: p.config.Schema,
-	})
-	if err != nil {
-		p.Logger.ErrorContext(ctx, p.Name+": Error reconciling active jobs against cancel_attempted_at after notifier reconnect; will retry",
-			slog.String("err", err.Error()))
-		p.scheduleReconnectRetry(ctx)
-		return
-	}
-	p.reconcileAttempt = 0
+	p.activeJobsMu.Unlock()
 
-	for _, job := range jobs {
-		var metadata jobMetadataWithCancelAttemptedAt
-		if err := json.Unmarshal(job.Metadata, &metadata); err != nil {
-			p.Logger.ErrorContext(ctx, p.Name+": Error unmarshaling job metadata while reconciling cancellations after notifier reconnect",
-				slog.Int64("job_id", job.ID), slog.String("err", err.Error()))
-			continue
+	go func() {
+		defer wg.Done()
+
+		jobs, err := timeoututil.WithTimeoutV(ctx, 10*time.Second, p.Name+".handleNotifierReconnect", func(ctx context.Context) ([]*rivertype.JobRow, error) {
+			return p.exec.JobGetByIDMany(ctx, &riverdriver.JobGetByIDManyParams{
+				ID:     ids,
+				Schema: p.config.Schema,
+			})
+		})
+		select {
+		case <-ctx.Done():
+		case resultCh <- producerReconcileResult{err: err, executors: executors, jobs: jobs}:
 		}
-		if !metadata.CancelAttemptedAt.IsZero() {
-			p.maybeCancelJob(ctx, job.ID)
-		}
-	}
+	}()
 }
 
-// scheduleReconnectRetry re-arms p.reconnectCh after a backoff so a
-// reconciliation query that failed (e.g. a transient DB error) doesn't
-// silently drop the only signal that a reconnect happened, which would
-// recreate the lost-cancel window this mechanism exists to close.
-func (p *producer) scheduleReconnectRetry(ctx context.Context) {
-	if ctx.Err() != nil {
-		return
-	}
-
-	sleepDuration := serviceutil.ExponentialBackoff(p.reconcileAttempt, serviceutil.MaxAttemptsBeforeResetDefault)
-	p.reconcileAttempt++
-
-	time.AfterFunc(sleepDuration, func() {
+// scheduleReconnectRetry retries a failed lookup without blocking the producer.
+func (p *producer) scheduleReconnectRetry(ctx context.Context, attempt int) *time.Timer {
+	sleepDuration := serviceutil.ExponentialBackoff(attempt, serviceutil.MaxAttemptsBeforeResetDefault)
+	return time.AfterFunc(sleepDuration, func() {
+		if ctx.Err() != nil {
+			return
+		}
 		select {
 		case p.reconnectCh <- struct{}{}:
 		default:
@@ -1344,10 +1387,20 @@ func (p *producer) reportQueueStatusOnce(ctx context.Context) {
 	p.testSignals.ReportedQueueStatus.Signal(struct{}{})
 }
 
+type producerCancelState struct {
+	done <-chan struct{}
+}
+
 type producerFetchResult struct {
 	decodeErrors map[int64]error
 	err          error
 	jobs         []*rivertype.JobRow
+}
+
+type producerReconcileResult struct {
+	err       error
+	executors map[int64]*jobexecutor.JobExecutor
+	jobs      []*rivertype.JobRow
 }
 
 type errorHandlerAdapter struct {

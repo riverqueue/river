@@ -1465,22 +1465,17 @@ func Test_Client_Common(t *testing.T) {
 		require.WithinDuration(t, time.Now(), *event.Job.FinalizedAt, 2*time.Second)
 	})
 
-	// Unlike CancelRunningJobPollOnly above (which uses a fake driver that
-	// reports SupportsListener() == false to simulate a driver that can't
-	// listen/notify at all), this uses the real pgx driver with an explicit
-	// Config.PollOnly, which is the actually-common "I don't want a notifier"
-	// case. driver.SupportsListener() is true here, so a same-process
-	// cancellation delivered via JobCancel() has nothing to do with the
-	// listen/notify path at all: it must go through the client's local,
-	// no-notifier dispatch instead.
+	// Explicit PollOnly also bypasses notifications on listener-capable drivers.
 	t.Run("CancelRunningJobExplicitPollOnly", func(t *testing.T) {
 		t.Parallel()
 
 		config, bundle := setupConfig(t)
 		config.PollOnly = true
+		config.queuePollInterval = time.Hour
 
 		client, err := NewClient(bundle.driver, config)
 		require.NoError(t, err)
+		client.producersByQueueName[QueueDefault].testSignals.QueueControlEventTriggered.Init(t)
 
 		jobStartedChan := make(chan int64)
 
@@ -1507,6 +1502,9 @@ func Test_Client_Common(t *testing.T) {
 		updatedJob, err := client.JobCancel(ctx, insertRes.Job.ID)
 		require.NoError(t, err)
 		require.Equal(t, rivertype.JobStateRunning, updatedJob.State)
+		controlEvent := client.producersByQueueName[QueueDefault].testSignals.QueueControlEventTriggered.WaitOrTimeout()
+		require.NotNil(t, controlEvent)
+		require.Equal(t, insertRes.Job.ID, controlEvent.JobID)
 
 		event := riversharedtest.WaitOrTimeout(t, subscribeChan)
 		require.Equal(t, EventKindJobCancelled, event.Kind)
@@ -1514,15 +1512,66 @@ func Test_Client_Common(t *testing.T) {
 		require.WithinDuration(t, time.Now(), *event.Job.FinalizedAt, 2*time.Second)
 	})
 
-	// A non-running job (available, scheduled, or retryable) is cancelled
-	// directly in the database and has no in-process executor to notify, so
-	// JobCancel must not dispatch a local control event for it. This matters
-	// beyond efficiency: notifyProducerOfCancelWithoutNotifier's dispatch
-	// blocks if the target producer's control-event channel (buffered to
-	// 100) fills up, which an unstarted (or otherwise not-yet-draining)
-	// producer never does. Cancelling more than that many never-started jobs
-	// against an explicit-PollOnly client (which has no notifier and so
-	// would otherwise take the local dispatch path) must not block.
+	t.Run("CancelRunningJobExplicitPollOnlyDuringGracefulStop", func(t *testing.T) {
+		t.Parallel()
+
+		config, bundle := setupConfig(t)
+		config.PollOnly = true
+		config.queuePollInterval = time.Hour
+
+		client, err := NewClient(bundle.driver, config)
+		require.NoError(t, err)
+		client.producersByQueueName[QueueDefault].testSignals.QueueControlEventTriggered.Init(t)
+
+		type JobArgs struct {
+			testutil.JobArgsReflectKind[JobArgs]
+		}
+
+		var signals clientJobCancelTestSignals
+		signals.Init(t)
+		AddWorker(client.config.Workers, WorkFunc(func(ctx context.Context, job *Job[JobArgs]) error {
+			signals.JobStarted.Signal(job.ID)
+			<-ctx.Done()
+			return ctx.Err()
+		}))
+
+		subscribeChan := subscribe(t, client)
+		require.NoError(t, client.Start(ctx))
+		t.Cleanup(func() {
+			stopCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+			defer cancel()
+			require.NoError(t, client.StopAndCancel(stopCtx))
+		})
+		riversharedtest.WaitOrTimeout(t, client.baseStartStop.Started())
+
+		insertRes, err := client.Insert(ctx, &JobArgs{}, nil)
+		require.NoError(t, err)
+		require.Equal(t, insertRes.Job.ID, signals.JobStarted.WaitOrTimeout())
+
+		fetchDone := client.queues.fetchCtx.Done()
+		var stopped testsignal.TestSignal[error]
+		stopped.Init(t)
+		go func() {
+			stopCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+			defer cancel()
+			stopped.Signal(client.Stop(stopCtx))
+		}()
+		riversharedtest.WaitOrTimeout(t, fetchDone)
+
+		cancelCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+		defer cancel()
+		_, err = client.JobCancel(cancelCtx, insertRes.Job.ID)
+		require.NoError(t, err)
+		controlEvent := client.producersByQueueName[QueueDefault].testSignals.QueueControlEventTriggered.WaitOrTimeout()
+		require.NotNil(t, controlEvent)
+		require.Equal(t, insertRes.Job.ID, controlEvent.JobID)
+
+		event := riversharedtest.WaitOrTimeout(t, subscribeChan)
+		require.Equal(t, EventKindJobCancelled, event.Kind)
+		require.Equal(t, insertRes.Job.ID, event.Job.ID)
+		require.NoError(t, stopped.WaitOrTimeout())
+	})
+
 	t.Run("CancelManyNonRunningJobsExplicitPollOnlyDoesNotBlock", func(t *testing.T) {
 		t.Parallel()
 
@@ -1549,9 +1598,7 @@ func Test_Client_Common(t *testing.T) {
 			jobIDs[i] = insertRes.Job.ID
 		}
 
-		// Deliberately cancelling before the client is started: nothing is
-		// running yet, and nothing is consuming the (not-yet-existent)
-		// producer's control-event channel either.
+		// Producers exist before Start, but have no consumer yet.
 		cancelDone := make(chan error, 1)
 		go func() {
 			for _, jobID := range jobIDs {
@@ -1570,6 +1617,56 @@ func Test_Client_Common(t *testing.T) {
 			t.Fatal("cancelling non-running jobs blocked, presumably on the producer's control-event channel")
 		}
 	})
+
+	for _, stopped := range []bool{false, true} {
+		name := "CancelManyRunningJobsExplicitPollOnlyBeforeStart"
+		if stopped {
+			name = "CancelManyRunningJobsExplicitPollOnlyAfterStop"
+		}
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+
+			config, bundle := setupConfig(t)
+			config.PollOnly = true
+
+			client, err := NewClient(bundle.driver, config)
+			require.NoError(t, err)
+
+			if stopped {
+				require.NoError(t, client.Start(ctx))
+				riversharedtest.WaitOrTimeout(t, client.baseStartStop.Started())
+				require.NoError(t, client.Stop(ctx))
+			}
+
+			producer := client.producersByQueueName[QueueDefault]
+			jobIDs := make([]int64, cap(producer.queueControlCh)+1)
+			for i := range jobIDs {
+				jobIDs[i] = testfactory.Job(ctx, t, bundle.driver.GetExecutor(), &testfactory.JobOpts{
+					Schema: bundle.schema,
+					State:  new(rivertype.JobStateRunning),
+				}).ID
+			}
+
+			cancelCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+			defer cancel()
+
+			var cancelled testsignal.TestSignal[error]
+			cancelled.Init(t)
+			go func() {
+				for _, jobID := range jobIDs {
+					if _, err := client.JobCancel(cancelCtx, jobID); err != nil {
+						cancelled.Signal(err)
+						return
+					}
+				}
+				cancelled.Signal(nil)
+			}()
+
+			require.NoError(t, cancelled.WaitOrTimeout())
+			require.Empty(t, producer.cancelCh)
+			require.Empty(t, producer.queueControlCh)
+		})
+	}
 
 	t.Run("CancelScheduledJob", func(t *testing.T) {
 		t.Parallel()
@@ -1651,9 +1748,7 @@ func Test_Client_Common(t *testing.T) {
 		insertRes, err := client.Insert(ctx, &JobArgs{}, nil)
 		require.NoError(t, err)
 
-		// Only a running job dispatches a local control event (see
-		// notifyProducerOfCancelWithoutNotifier), so make sure the job has
-		// actually started before cancelling it.
+		// Wait for a running attempt before testing local cancellation delivery.
 		startedJobID := riversharedtest.WaitOrTimeout(t, jobStartedChan)
 		require.Equal(t, insertRes.Job.ID, startedJobID)
 
@@ -2761,6 +2856,114 @@ func Test_Client_LeaderElectionDisabled(t *testing.T) {
 
 		_, err = bundle.driver.GetExecutor().LeaderGetElectedLeader(ctx, getLeaderParams)
 		require.ErrorIs(t, err, rivertype.ErrNotFound)
+	})
+}
+
+func Test_Client_NotifyProducerOfCancelWithoutNotifier(t *testing.T) {
+	t.Parallel()
+
+	type testBundle struct {
+		client   *Client[pgx.Tx]
+		producer *producer
+		stopped  func()
+	}
+
+	setup := func(t *testing.T) *testBundle {
+		t.Helper()
+
+		targetProducer := &producer{cancelCh: make(chan int64, 1)}
+		ctx, cancel := context.WithCancel(context.Background())
+		ctx, _, started, stopped := targetProducer.StartInit(ctx)
+		targetProducer.cancelState.Store(&producerCancelState{done: ctx.Done()})
+		started()
+		targetProducer.cancelCh <- 123
+		stop := sync.OnceFunc(func() {
+			cancel()
+			stopped()
+		})
+		t.Cleanup(stop)
+
+		return &testBundle{
+			client: &Client[pgx.Tx]{
+				producersByQueueName: map[string]*producer{QueueDefault: targetProducer},
+			},
+			producer: targetProducer,
+			stopped:  stop,
+		}
+	}
+
+	t.Run("FullBufferContextCancelled", func(t *testing.T) {
+		t.Parallel()
+
+		bundle := setup(t)
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel()
+
+		var returned testsignal.TestSignal[struct{}]
+		returned.Init(t)
+		go func() {
+			bundle.client.notifyProducerOfCancelWithoutNotifier(ctx, QueueDefault, &controlEventPayload{})
+			returned.Signal(struct{}{})
+		}()
+
+		returned.WaitOrTimeout()
+		require.Len(t, bundle.producer.cancelCh, 1)
+	})
+
+	t.Run("FullBufferProducerStopped", func(t *testing.T) {
+		t.Parallel()
+
+		bundle := setup(t)
+		var returned testsignal.TestSignal[struct{}]
+		returned.Init(t)
+		go func() {
+			bundle.client.notifyProducerOfCancelWithoutNotifier(context.Background(), QueueDefault, &controlEventPayload{})
+			returned.Signal(struct{}{})
+		}()
+		bundle.stopped()
+
+		returned.WaitOrTimeout()
+		require.Len(t, bundle.producer.cancelCh, 1)
+	})
+
+	t.Run("RunningProducer", func(t *testing.T) {
+		t.Parallel()
+
+		bundle := setup(t)
+		<-bundle.producer.cancelCh
+
+		bundle.client.notifyProducerOfCancelWithoutNotifier(context.Background(), QueueDefault, &controlEventPayload{
+			Action: controlActionCancel,
+			JobID:  456,
+			Queue:  QueueDefault,
+		})
+
+		require.Equal(t, int64(456), <-bundle.producer.cancelCh)
+	})
+
+	t.Run("StopInProgress", func(t *testing.T) {
+		t.Parallel()
+
+		bundle := setup(t)
+		shouldStop, _, finalizeStop := bundle.producer.StopInit()
+		require.True(t, shouldStop)
+		defer func() {
+			bundle.stopped()
+			finalizeStop(true)
+		}()
+
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel()
+
+		var returned testsignal.TestSignal[struct{}]
+		returned.Init(t)
+		go func() {
+			bundle.client.notifyProducerOfCancelWithoutNotifier(ctx, QueueDefault, &controlEventPayload{})
+			returned.Signal(struct{}{})
+		}()
+
+		returned.WaitOrTimeout()
+		require.Len(t, bundle.producer.cancelCh, 1)
 	})
 }
 
