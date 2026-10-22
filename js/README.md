@@ -105,6 +105,7 @@ packages; it uses Node's built-in `node:sqlite`. See the
 | Package                      | Purpose                                                             |
 | ---------------------------- | ------------------------------------------------------------------- |
 | `riverqueue`                 | Job definitions, insertion, workers, runtime, queries, and events   |
+| `@riverqueue/driver-knex`    | Insert jobs inside Knex transactions on Postgres                    |
 | `@riverqueue/driver-pg`      | Postgres through `node-postgres`                                    |
 | `@riverqueue/driver-prisma`  | Insert jobs inside Prisma transactions                              |
 | `@riverqueue/driver-sqlite`  | SQLite through Node's built-in `node:sqlite`                        |

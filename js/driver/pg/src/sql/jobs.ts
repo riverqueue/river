@@ -1,7 +1,7 @@
 /** Job insertion, claiming, completion, and administration queries. */
 import { Buffer } from "node:buffer";
 import { randomBytes } from "node:crypto";
-import type { ClientBase, QueryResult } from "pg";
+import type { QueryResult } from "pg";
 import type { JobRow, JobState, JsonObject } from "riverqueue";
 import { ValidationError } from "riverqueue";
 import type {
@@ -296,7 +296,7 @@ export async function jobGetCancelRequested(
 export async function jobClaim(
   db: PgDatabase,
   params: JobClaimParams,
-  options: { readonly signal?: AbortSignal; readonly tx?: ClientBase } = {}
+  options: { readonly signal?: AbortSignal; readonly tx?: unknown } = {}
 ): Promise<JobClaimResult> {
   if (params.queues.length === 0) return { jobs: [] };
   const names = new Set<string>();
@@ -311,7 +311,7 @@ export async function jobClaim(
   const query = (
     text: string,
     values: unknown[]
-  ): Promise<QueryResult<PgJobRow>> =>
+  ): Promise<Pick<QueryResult<PgJobRow>, "rowCount" | "rows">> =>
     options.tx === undefined
       ? db.queryAfterAcquire<PgJobRow>(options.signal, "jobClaim", text, values)
       : db.query<PgJobRow>("jobClaim", text, values, { tx: options.tx });
@@ -373,7 +373,7 @@ export async function jobClaim(
 export async function jobCompleteMany(
   db: PgDatabase,
   commands: readonly JobCompletionCommand[],
-  options?: { readonly signal?: AbortSignal; readonly tx?: ClientBase }
+  options?: { readonly signal?: AbortSignal; readonly tx?: unknown }
 ): Promise<readonly JobCompletionResult[]> {
   if (commands.length === 0) return [];
   validateCompletionCommands(commands);
@@ -629,7 +629,7 @@ export async function jobUpdate(
 export async function jobInsert(
   db: PgDatabase,
   params: JobInsertParams,
-  options?: InsertDriverOptions<ClientBase>
+  options?: InsertDriverOptions
 ): Promise<DriverInsertResult> {
   const results = await jobInsertMany(db, [params], options);
   const result = results[0];
@@ -646,7 +646,7 @@ export async function jobInsert(
 export async function jobInsertMany(
   db: PgDatabase,
   params: readonly JobInsertParams[],
-  options?: InsertDriverOptions<ClientBase>
+  options?: InsertDriverOptions
 ): Promise<readonly DriverInsertResult[]> {
   if (params.length === 0) return [];
 
@@ -861,7 +861,7 @@ function decodeClaimedJobs(rows: readonly PgJobRow[]): JobClaimResult {
 export async function jobLoadClaimed(
   db: PgDatabase,
   ids: readonly bigint[],
-  tx: ClientBase
+  tx: unknown
 ): Promise<JobClaimResult> {
   const unique = new Set<bigint>();
   for (const id of ids) {

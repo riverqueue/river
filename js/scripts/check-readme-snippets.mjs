@@ -13,6 +13,7 @@ const readmes = [
     .sort()
     .map((name) => `docs/${name}`),
   "cli/README.md",
+  "driver/knex/README.md",
   "driver/pg/README.md",
   "driver/prisma/README.md",
   "driver/sqlite/README.md",
@@ -93,6 +94,10 @@ function checkProgram(directory, virtualFiles, readme) {
     outDir: undefined,
     paths: {
       "@riverqueue/cli": [resolve(repositoryRoot, "cli/dist/index.d.ts")],
+      knex: [resolve(repositoryRoot, "node_modules/knex/types/index.d.ts")],
+      "@riverqueue/driver-knex": [
+        resolve(repositoryRoot, "driver/knex/dist/index.d.ts"),
+      ],
       "@riverqueue/driver-pg": [
         resolve(repositoryRoot, "driver/pg/dist/index.d.ts"),
       ],
