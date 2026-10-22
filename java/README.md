@@ -1,6 +1,6 @@
 # River for Java
 
-Prerelease Java 21 client and worker runtime for River's Postgres and SQLite
+Prerelease Java 21 client and worker runtime for River's MySQL, Postgres, and SQLite
 schemas. Jobs are ordinary River jobs: another language can insert, cancel,
 retry, or work them using the same database.
 
@@ -21,14 +21,14 @@ Java 21 or newer is required. Add `com.riverqueue:river:0.48.0-alpha.1` and a JD
 </dependency>
 ```
 
-For SQLite, replace the Postgres JDBC dependency with `org.xerial:sqlite-jdbc:3.53.4.0`. To install a local copy of River from source, see the [development guide](docs/development.md#building-from-source).
+For MySQL, use `com.mysql:mysql-connector-j:26.7.0`. For SQLite, replace the Postgres JDBC dependency with `org.xerial:sqlite-jdbc:3.53.4.0`. To install a local copy of River from source, see the [development guide](docs/development.md#building-from-source).
 
 ## Quick start
 
 Define job arguments as a record, give the job a stable kind, and register a
 worker lambda. This complete `Example.java` starts a client, inserts a job,
 waits for its completion, and stops the workers. Set `DATABASE_URL` to a
-Postgres URL or a file-backed SQLite JDBC URL.
+MySQL or Postgres URL, or a file-backed SQLite JDBC URL.
 
 ```java
 import com.riverqueue.*;
@@ -78,7 +78,7 @@ for each operation. River never closes an application-owned data source. An
 
 ## Migration CLI
 
-The `river-cli` executable JAR includes Postgres and SQLite JDBC drivers and
+The `river-cli` executable JAR includes MySQL, Postgres, and SQLite JDBC drivers and
 runs with Java 21 or newer. It needs no application classpath.
 For a local build, see the [development guide](docs/development.md#building-from-source). Set `RIVER_CLI` to the executable JAR, then run:
 
@@ -119,8 +119,8 @@ java -jar "$RIVER_CLI" migrate-get --version 3 --up > river_3.up.sql
 java -jar "$RIVER_CLI" migrate-get --driver sqlite --all --up > river_sqlite.up.sql
 ```
 
-SQL export defaults to Postgres without a database URL. Use `--driver sqlite`
-for SQLite, or select the dialect through the URL. Export accepts comma-separated
+SQL export defaults to Postgres without a database URL. Use `--driver mysql` or `--driver sqlite`
+for MySQL or SQLite, or select the dialect through the URL. Export accepts comma-separated
 `--version` values or `--all`; `--exclude-version 1` excludes migration history
 setup when exporting for another migration framework. Exit codes are `0` for
 success, `1` for an operation failure, and `2` for invalid arguments.
@@ -587,6 +587,23 @@ Workers.Handler<SendEmail> sendEmail = context ->
     mailer.send(context.args().address(), context.args().subject());
 workerConfig.add(email, sendEmail);
 ```
+
+## MySQL
+
+Use MySQL 8.0 or later with the latest patch release. `Database.connect` accepts
+`mysql://user:password@localhost/my_app` and `jdbc:mysql://localhost/my_app`.
+Applications with an existing pool can use `new Database(dataSource, Database.Dialect.MYSQL)`.
+`withSchema("background_jobs")` selects a separate MySQL database for River's tables.
+
+Workers claim jobs with `FOR UPDATE SKIP LOCKED` and receive notifications
+through the durable outbox, including cancellation and leadership resignation.
+River-owned transactions use READ COMMITTED; caller transactions keep their
+configured isolation level. Inserts and job completion participate in caller
+transactions through the same APIs as Postgres.
+
+MySQL DDL commits implicitly. Migration history is recorded after each successful
+version, but a failed version may leave partially applied DDL. Inspect and repair
+it before retrying. A named database lock prevents concurrent migration runners.
 
 ## SQLite
 

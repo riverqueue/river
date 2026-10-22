@@ -7,7 +7,7 @@ TEST_JOBS ?= 4
 generate/fixtures:
 	$(MAKE) -C .. generate/fixtures
 
-test/conformance: generate/fixtures ## Run the Go-generated fixture checks without Postgres
+test/conformance: generate/fixtures ## Run Go fixture checks (SQLite by default; TEST_DATABASE=mysql for MySQL)
 	bundle exec rspec spec/conformance_spec.rb
 
 .PHONY: test/yugabyte

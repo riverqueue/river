@@ -13,6 +13,8 @@ use tracing::{debug, error, warn};
 use crate::client::ClientInner;
 use crate::client::backoff::RestartBackoff;
 use crate::client::completer::run_completion_batcher;
+#[cfg(feature = "mysql")]
+use crate::client::notifier::run_mysql_notifications;
 #[cfg(feature = "postgres")]
 use crate::client::notifier::run_notifications;
 #[cfg(feature = "sqlite")]
@@ -28,8 +30,8 @@ type ShutdownSignal = std::pin::Pin<Box<dyn std::future::Future<Output = ()> + S
 impl Client {
     /// Starts configured queues and returns a lifecycle handle.
     ///
-    /// The client supervises its services: a notification listener, SQLite
-    /// outbox poller, maintenance, or extension service that fails is logged
+    /// The client supervises its services: a notification listener, MySQL or
+    /// SQLite outbox poller, maintenance, or extension service that fails is logged
     /// and restarted with backoff, and producers keep polling meanwhile, so a
     /// database outage never stops the client. Only a failure of the
     /// producers or the completer, which would leave jobs unworked or
@@ -393,6 +395,14 @@ impl Supervisor {
                     match inner.database.pool() {
                         #[cfg(feature = "postgres")]
                         DatabasePool::Postgres(pool) => Box::pin(run_notifications(
+                            Arc::clone(&inner),
+                            pool.clone(),
+                            cancel.clone(),
+                            inner.queue_notifications.clone(),
+                            ready,
+                        )),
+                        #[cfg(feature = "mysql")]
+                        DatabasePool::MySql(pool) => Box::pin(run_mysql_notifications(
                             Arc::clone(&inner),
                             pool.clone(),
                             cancel.clone(),

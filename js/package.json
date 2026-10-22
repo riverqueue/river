@@ -101,6 +101,7 @@
     "fast-check": "^4.10.2",
     "knip": "^6.38.0",
     "license-checker-rseidelsohn": "^5.0.1",
+    "mysql2": "^3.24.4",
     "pg": "^8.22.0",
     "pino": "^10.3.1",
     "prettier": "^3.9.6",

@@ -144,6 +144,23 @@ async fn run_term(
         |context| Box::pin(async move { cleaner::clean_queues(&context).await }),
     ));
     match inner.database.pool() {
+        #[cfg(feature = "mysql")]
+        DatabasePool::MySql(pool) => {
+            let pool = pool.clone();
+            services.spawn(run_periodically(
+                Arc::clone(&context),
+                "MySQL notification cleaner",
+                cleaner::NOTIFICATION_CLEANER_INTERVAL,
+                move |context| {
+                    let pool = pool.clone();
+                    Box::pin(async move {
+                        cleaner::clean_mysql_notifications(&context, &pool)
+                            .await
+                            .map(|_| ())
+                    })
+                },
+            ));
+        }
         #[cfg(feature = "sqlite")]
         DatabasePool::Sqlite(pool) => {
             let pool = pool.clone();

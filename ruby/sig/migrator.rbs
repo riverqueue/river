@@ -37,7 +37,9 @@ module River
     def execute: (String) -> untyped
     def existing_versions: () -> Array[Integer]
     def line_column?: () -> bool
+    def mysql_statements: (String) -> Array[String]
     def query: (String) -> untyped
+    def schema_prefix: () -> String
     def session: [A] (?lock: bool) { () -> A } -> A
     def table: () -> String
   end

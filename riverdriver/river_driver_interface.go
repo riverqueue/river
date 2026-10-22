@@ -25,6 +25,7 @@ import (
 const AllQueuesString = "*"
 
 const (
+	DatabaseNameMySQL    = "mysql"
 	DatabaseNamePostgres = "postgres"
 	DatabaseNameSQLite   = "sqlite"
 )
@@ -53,7 +54,7 @@ var (
 type Driver[TTx any] interface {
 	// ArgPlaceholder is the placeholder character used in query positional
 	// arguments, so "$" for "$1", "$2", "$3", etc. This is a "$" for Postgres
-	// and "?" for SQLite.
+	// and "?" for MySQL and SQLite.
 	//
 	// API is not stable. DO NOT USE.
 	ArgPlaceholder() string
@@ -128,6 +129,13 @@ type Driver[TTx any] interface {
 	// API is not stable. DO NOT USE.
 	PoolSet(dbPool any) error
 
+	// SafeIdentifier returns a safely quoted identifier (e.g. a table or
+	// schema name) for use in SQL queries. Each driver quotes using its
+	// native syntax: double quotes for Postgres/SQLite, backticks for MySQL.
+	//
+	// API is not stable. DO NOT USE.
+	SafeIdentifier(ident string) string
+
 	// SQLFragmentColumnContainsAll generates an SQL fragment to be included as
 	// a predicate in a `WHERE` query for a collection column containing all of
 	// the given values. Postgres uses array containment while SQLite compares
@@ -143,6 +151,12 @@ type Driver[TTx any] interface {
 	//
 	// API is not stable. DO NOT USE.
 	SQLFragmentColumnContainsAny(column, namedArg string, values []string) (string, any, error)
+
+	// SQLFragmentColumnContainsJSON generates a structural JSON containment
+	// predicate and its named arguments. Column and namedArg are trusted SQL identifiers.
+	//
+	// API is not stable. DO NOT USE.
+	SQLFragmentColumnContainsJSON(column, namedArg, fragment string) (string, map[string]any, error)
 
 	// SQLFragmentColumnIn generates an SQL fragment to be included as a
 	// predicate in a `WHERE` query for the existence of a set of values in a

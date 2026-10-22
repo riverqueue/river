@@ -11,6 +11,8 @@ use std::time::Duration;
 #[cfg(feature = "postgres")]
 use chrono::NaiveTime;
 pub use riverqueue_migrate::{SchemaName, SchemaNameError};
+#[cfg(feature = "mysql")]
+use sqlx::{MySql, MySqlConnection, MySqlPool};
 #[cfg(feature = "postgres")]
 use sqlx::{PgConnection, PgPool, Postgres};
 #[cfg(feature = "sqlite")]
@@ -58,6 +60,29 @@ pub async fn begin_postgres(pool: &PgPool) -> Result<Transaction<'static, Postgr
     run_to_completion(async move { pool.begin().await }).await
 }
 
+/// Begins a MySQL transaction at READ COMMITTED isolation.
+///
+/// River uses this isolation level for its own transactions to avoid gap-lock
+/// deadlocks between independent queue operations. The session's default
+/// isolation is unchanged. The begin runs to completion even if its caller
+/// stops waiting, so a connection cannot return to the pool half-started.
+///
+/// # Errors
+/// Returns errors acquiring the connection or beginning the transaction.
+///
+/// # Panics
+/// Resumes a panic from the task beginning the transaction.
+#[cfg(feature = "mysql")]
+pub async fn begin_mysql_write(
+    pool: &MySqlPool,
+) -> Result<Transaction<'static, MySql>, sqlx::Error> {
+    let pool = pool.clone();
+    run_to_completion(async move {
+        pool.begin_with("SET TRANSACTION ISOLATION LEVEL READ COMMITTED; BEGIN")
+            .await
+    })
+    .await
+}
 /// Begins a SQLite transaction that may write, protected like
 /// `begin_postgres` against being abandoned half-started.
 ///
@@ -111,6 +136,8 @@ async fn run_to_completion<T: Send + 'static>(
 }
 
 pub(crate) mod erased;
+#[cfg(feature = "mysql")]
+pub(crate) mod mysql;
 #[cfg(feature = "postgres")]
 pub(crate) mod postgres_capabilities;
 #[cfg(feature = "sqlite")]
@@ -130,6 +157,9 @@ pub enum ClientDatabase<'a> {
     /// A Postgres client's pool and options.
     #[cfg(feature = "postgres")]
     Postgres(&'a PostgresDatabase),
+    /// A MySQL client's pool.
+    #[cfg(feature = "mysql")]
+    MySql(&'a MySqlDatabase),
     /// A SQLite client's pool.
     #[cfg(feature = "sqlite")]
     Sqlite(&'a SqliteDatabase),
@@ -143,11 +173,25 @@ impl<'a> ClientDatabase<'a> {
     pub const fn as_postgres(&self) -> Option<&'a PostgresDatabase> {
         match self {
             Self::Postgres(database) => Some(database),
+            #[cfg(feature = "mysql")]
+            Self::MySql(_) => None,
             #[cfg(feature = "sqlite")]
             Self::Sqlite(_) => None,
         }
     }
 
+    /// Returns the MySQL pool, or `None` for another backend.
+    #[cfg(feature = "mysql")]
+    #[must_use]
+    pub const fn as_mysql(&self) -> Option<&'a MySqlDatabase> {
+        match self {
+            #[cfg(feature = "postgres")]
+            Self::Postgres(_) => None,
+            Self::MySql(database) => Some(database),
+            #[cfg(feature = "sqlite")]
+            Self::Sqlite(_) => None,
+        }
+    }
     /// Returns the SQLite pool, or `None` for another backend.
     #[cfg(feature = "sqlite")]
     #[must_use]
@@ -156,6 +200,8 @@ impl<'a> ClientDatabase<'a> {
             #[cfg(feature = "postgres")]
             Self::Postgres(_) => None,
             Self::Sqlite(database) => Some(database),
+            #[cfg(feature = "mysql")]
+            Self::MySql(_) => None,
         }
     }
 
@@ -165,6 +211,8 @@ impl<'a> ClientDatabase<'a> {
         match self {
             #[cfg(feature = "postgres")]
             Self::Postgres(_) => DatabaseKind::Postgres,
+            #[cfg(feature = "mysql")]
+            Self::MySql(_) => DatabaseKind::MySql,
             #[cfg(feature = "sqlite")]
             Self::Sqlite(_) => DatabaseKind::Sqlite,
         }
@@ -181,6 +229,10 @@ pub enum DatabaseKind {
     /// SQLite and compatible implementations.
     #[cfg(feature = "sqlite")]
     Sqlite,
+    // Append backends to preserve existing discriminants.
+    /// MySQL and compatible implementations.
+    #[cfg(feature = "mysql")]
+    MySql,
 }
 
 impl fmt::Display for DatabaseKind {
@@ -188,6 +240,8 @@ impl fmt::Display for DatabaseKind {
         formatter.write_str(match self {
             #[cfg(feature = "postgres")]
             Self::Postgres => "Postgres",
+            #[cfg(feature = "mysql")]
+            Self::MySql => "MySQL",
             #[cfg(feature = "sqlite")]
             Self::Sqlite => "SQLite",
         })
@@ -413,6 +467,12 @@ impl Default for PostgresReindexSchedule {
     }
 }
 
+/// A MySQL source and its backend-specific River options.
+#[cfg(feature = "mysql")]
+#[derive(Clone)]
+pub struct MySqlDatabase {
+    pool: MySqlPool,
+}
 /// A SQLite source and its backend-specific River options.
 #[cfg(feature = "sqlite")]
 #[derive(Clone)]
@@ -420,6 +480,20 @@ pub struct SqliteDatabase {
     pool: SqlitePool,
 }
 
+#[cfg(feature = "mysql")]
+impl MySqlDatabase {
+    /// Uses a MySQL pool.
+    #[must_use]
+    pub const fn new(pool: MySqlPool) -> Self {
+        Self { pool }
+    }
+
+    /// Returns the underlying SQLx pool.
+    #[must_use]
+    pub const fn pool(&self) -> &MySqlPool {
+        &self.pool
+    }
+}
 #[cfg(feature = "sqlite")]
 impl SqliteDatabase {
     /// Uses a SQLite pool.
@@ -435,6 +509,14 @@ impl SqliteDatabase {
     }
 }
 
+#[cfg(feature = "mysql")]
+impl fmt::Debug for MySqlDatabase {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("MySqlDatabase")
+            .finish_non_exhaustive()
+    }
+}
 #[cfg(feature = "sqlite")]
 impl fmt::Debug for SqliteDatabase {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -483,12 +565,20 @@ impl IntoDatabase for &PgPool {}
 impl IntoDatabase for PostgresDatabase {}
 #[cfg(feature = "postgres")]
 impl IntoDatabase for &PostgresDatabase {}
+#[cfg(feature = "mysql")]
+impl IntoDatabase for MySqlPool {}
 #[cfg(feature = "sqlite")]
 impl IntoDatabase for SqlitePool {}
+#[cfg(feature = "mysql")]
+impl IntoDatabase for &MySqlPool {}
 #[cfg(feature = "sqlite")]
 impl IntoDatabase for &SqlitePool {}
+#[cfg(feature = "mysql")]
+impl IntoDatabase for MySqlDatabase {}
 #[cfg(feature = "sqlite")]
 impl IntoDatabase for SqliteDatabase {}
+#[cfg(feature = "mysql")]
+impl IntoDatabase for &MySqlDatabase {}
 #[cfg(feature = "sqlite")]
 impl IntoDatabase for &SqliteDatabase {}
 
@@ -551,6 +641,11 @@ impl<'executor> DatabaseTransactionExecutor<'executor>
     for &'executor mut sqlx::Transaction<'_, sqlx::Postgres>
 {
 }
+#[cfg(feature = "mysql")]
+impl<'executor> DatabaseTransactionExecutor<'executor>
+    for &'executor mut sqlx::Transaction<'_, sqlx::MySql>
+{
+}
 #[cfg(feature = "sqlite")]
 impl<'executor> DatabaseTransactionExecutor<'executor>
     for &'executor mut sqlx::Transaction<'_, sqlx::Sqlite>
@@ -573,6 +668,8 @@ pub(crate) fn into_database<D: IntoDatabase>(database: D) -> Database {
 pub(crate) enum DatabasePool<'pool> {
     #[cfg(feature = "postgres")]
     Postgres(&'pool PgPool),
+    #[cfg(feature = "mysql")]
+    MySql(&'pool MySqlPool),
     #[cfg(feature = "sqlite")]
     Sqlite(&'pool SqlitePool),
 }
@@ -582,6 +679,8 @@ mod private {
         Database, DatabaseConnection, DatabaseInner, DatabaseKind, ErasedExecutor,
         ErasedTransaction, ExecutorInner, PoolConnection, Transaction,
     };
+    #[cfg(feature = "mysql")]
+    use super::{MySql, MySqlConnection, MySqlDatabase, MySqlPool};
     #[cfg(feature = "postgres")]
     use super::{PgConnection, PgPool, Postgres, PostgresDatabase};
     #[cfg(feature = "sqlite")]
@@ -652,6 +751,12 @@ mod private {
         }
     }
 
+    #[cfg(feature = "mysql")]
+    impl IntoDatabaseSealed for MySqlPool {
+        fn erase(self) -> Database {
+            MySqlDatabase::new(self).erase()
+        }
+    }
     #[cfg(feature = "sqlite")]
     impl IntoDatabaseSealed for SqlitePool {
         fn erase(self) -> Database {
@@ -659,6 +764,12 @@ mod private {
         }
     }
 
+    #[cfg(feature = "mysql")]
+    impl IntoDatabaseSealed for &MySqlPool {
+        fn erase(self) -> Database {
+            self.clone().erase()
+        }
+    }
     #[cfg(feature = "sqlite")]
     impl IntoDatabaseSealed for &SqlitePool {
         fn erase(self) -> Database {
@@ -666,6 +777,14 @@ mod private {
         }
     }
 
+    #[cfg(feature = "mysql")]
+    impl IntoDatabaseSealed for MySqlDatabase {
+        fn erase(self) -> Database {
+            Database {
+                inner: DatabaseInner::MySql(self),
+            }
+        }
+    }
     #[cfg(feature = "sqlite")]
     impl IntoDatabaseSealed for SqliteDatabase {
         fn erase(self) -> Database {
@@ -675,6 +794,12 @@ mod private {
         }
     }
 
+    #[cfg(feature = "mysql")]
+    impl IntoDatabaseSealed for &MySqlDatabase {
+        fn erase(self) -> Database {
+            self.clone().erase()
+        }
+    }
     #[cfg(feature = "sqlite")]
     impl IntoDatabaseSealed for &SqliteDatabase {
         fn erase(self) -> Database {
@@ -719,6 +844,12 @@ mod private {
         }
     }
 
+    #[cfg(feature = "mysql")]
+    impl<'executor> DatabaseExecutorSealed<'executor> for &'executor mut MySqlConnection {
+        fn erase(self) -> ErasedExecutor<'executor> {
+            connection_executor(DatabaseConnection::MySql(self))
+        }
+    }
     #[cfg(feature = "sqlite")]
     impl<'executor> DatabaseExecutorSealed<'executor> for &'executor mut SqliteConnection {
         fn erase(self) -> ErasedExecutor<'executor> {
@@ -726,6 +857,12 @@ mod private {
         }
     }
 
+    #[cfg(feature = "mysql")]
+    impl<'executor> DatabaseExecutorSealed<'executor> for &'executor mut PoolConnection<MySql> {
+        fn erase(self) -> ErasedExecutor<'executor> {
+            connection_executor(DatabaseConnection::MySql(self.as_mut()))
+        }
+    }
     #[cfg(feature = "sqlite")]
     impl<'executor> DatabaseExecutorSealed<'executor> for &'executor mut PoolConnection<Sqlite> {
         fn erase(self) -> ErasedExecutor<'executor> {
@@ -733,10 +870,32 @@ mod private {
         }
     }
 
+    #[cfg(feature = "mysql")]
+    impl<'executor> DatabaseExecutorSealed<'executor> for &'executor MySqlPool {
+        fn erase(self) -> ErasedExecutor<'executor> {
+            pool_executor(DatabaseKind::MySql)
+        }
+    }
     #[cfg(feature = "sqlite")]
     impl<'executor> DatabaseExecutorSealed<'executor> for &'executor SqlitePool {
         fn erase(self) -> ErasedExecutor<'executor> {
             pool_executor(DatabaseKind::Sqlite)
+        }
+    }
+
+    #[cfg(feature = "mysql")]
+    impl<'executor> DatabaseExecutorSealed<'executor> for &'executor mut Transaction<'_, MySql> {
+        fn erase(self) -> ErasedExecutor<'executor> {
+            connection_executor(DatabaseTransactionExecutorSealed::connection(self))
+        }
+    }
+
+    #[cfg(feature = "mysql")]
+    impl<'executor> DatabaseTransactionExecutorSealed<'executor>
+        for &'executor mut Transaction<'_, MySql>
+    {
+        fn connection(self) -> DatabaseConnection<'executor> {
+            DatabaseConnection::MySql(self.as_mut())
         }
     }
 

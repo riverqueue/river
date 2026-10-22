@@ -15,7 +15,7 @@ module River
     def initialize(driver, line: "main", migrations_path: File.expand_path("../migration", __dir__.to_s), schema: nil)
       @backend = driver.migration_backend
       @driver = driver
-      raise ArgumentError, "unsupported migration backend" unless [:postgresql, :sqlite].include?(@backend)
+      raise ArgumentError, "unsupported migration backend" unless [:mysql, :postgresql, :sqlite].include?(@backend)
       raise ArgumentError, "invalid migration line" unless line.match?(/\A[a-z][a-z0-9_]*\z/)
       raise ArgumentError, "SQLite does not support a migration schema option" if @backend == :sqlite && schema
 
@@ -61,7 +61,7 @@ module River
 
         unless dry_run
           plan.each do |migration|
-            execute((@backend == :sqlite) ? "BEGIN IMMEDIATE" : "BEGIN")
+            execute((@backend == :sqlite) ? "BEGIN IMMEDIATE" : "BEGIN") unless @backend == :mysql
             committed = false
             begin
               raise River::Error, "migration state changed concurrently; rerun migration" unless existing_versions == existing
@@ -71,7 +71,7 @@ module River
               end
 
               sql = (direction == :up) ? migration.sql_up : migration.sql_down
-              execute(sql.gsub("/* TEMPLATE: schema */", @schema ? %("#{@schema}".) : ""))
+              execute(sql.gsub("/* TEMPLATE: schema */", schema_prefix))
 
               if direction == :up
                 columns, values = line_column? ? ["line, version", "'#{@line}', #{migration.version}"] : ["version", migration.version.to_s]
@@ -86,10 +86,10 @@ module River
                 existing -= [migration.version]
               end
 
-              execute("COMMIT")
+              execute("COMMIT") unless @backend == :mysql
               committed = true
             ensure
-              execute("ROLLBACK") unless committed
+              execute("ROLLBACK") unless committed || @backend == :mysql
             end
           end
         end
@@ -109,6 +109,10 @@ module River
     private def execute(sql)
       if @backend == :postgresql
         @connection.exec(sql)
+      elsif @backend == :mysql
+        # MySQL DDL commits implicitly. Run statements separately without
+        # requiring MULTI_STATEMENTS on the application's connection pool.
+        mysql_statements(sql).each { |statement| @connection.query(statement) }
       else
         @connection.execute_batch(sql)
       end
@@ -117,6 +121,8 @@ module River
     private def existing_versions
       exists = if @backend == :postgresql
         query("SELECT to_regclass('#{table}') AS name").first.fetch("name")
+      elsif @backend == :mysql
+        query("SELECT table_name FROM information_schema.tables WHERE table_schema = '#{@schema}' AND table_name = 'river_migration'").any?
       else
         query("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'river_migration'").any?
       end
@@ -138,7 +144,7 @@ module River
     end
 
     private def line_column?
-      if @backend == :postgresql
+      if [:mysql, :postgresql].include?(@backend)
         query("SELECT column_name FROM information_schema.columns WHERE table_schema = '#{@schema}' AND table_name = 'river_migration' AND column_name = 'line'").any?
       else
         query("PRAGMA table_info(river_migration)").any? { |row| row.fetch("name") == "line" }
@@ -148,6 +154,8 @@ module River
     private def query(sql)
       if @backend == :postgresql
         @connection.exec(sql).to_a
+      elsif @backend == :mysql
+        @connection.query(sql, as: :hash, symbolize_keys: false).to_a
       else
         rows = @connection.execute2(sql)
         columns = rows.shift
@@ -161,6 +169,16 @@ module River
           @connection = connection
           @schema = if @backend == :postgresql
             @requested_schema || query("SELECT current_schema() AS name").first.fetch("name")
+          elsif @backend == :mysql
+            @requested_schema || query("SELECT DATABASE() AS name").first.fetch("name")
+          end
+          if @backend == :mysql
+            raise ArgumentError, "schema must be a simple SQL identifier" unless @schema&.match?(/\A[a-zA-Z_][a-zA-Z0-9_]{0,45}\z/)
+
+            if lock
+              locked = query("SELECT GET_LOCK('river_migrate:#{@schema}', 0) AS locked").first.fetch("locked")
+              raise River::Error, "another migrator holds the database lock" unless locked == 1
+            end
           end
           if @backend == :postgresql
             raise ArgumentError, "schema must be a simple SQL identifier" unless @schema&.match?(/\A[a-zA-Z_][a-zA-Z0-9_]*\z/)
@@ -176,6 +194,8 @@ module River
           ensure
             if @backend == :postgresql && lock
               query("SELECT pg_advisory_unlock(hashtext(current_database()), hashtext('river_migrate:#{@schema}'))")
+            elsif @backend == :mysql && lock
+              query("SELECT RELEASE_LOCK('river_migrate:#{@schema}')")
             end
           end
         end
@@ -183,7 +203,33 @@ module River
     end
 
     private def table
-      @schema ? %("#{@schema}".river_migration) : "river_migration"
+      "#{schema_prefix}river_migration"
+    end
+
+    private def schema_prefix
+      return "" unless @schema
+
+      (@backend == :mysql) ? "`#{@schema}`." : %("#{@schema}".)
+    end
+
+    private def mysql_statements(sql)
+      statements = [] #: Array[String]
+      buffer = +""
+      # Quoted text and comments are tokens so their semicolons cannot split
+      # statements. River migrations contain plain SQL, not DELIMITER commands.
+      sql.scan(/'(?:''|\\.|[^'\\])*'|"(?:""|\\.|[^"\\])*"|`(?:``|[^`])*`|--[^\n]*|\#[^\n]*|\/\*.*?\*\/|;|./m) do |token|
+        token = token.to_s
+        if token.start_with?("--", "#", "/*")
+          buffer << " "
+        elsif token == ";"
+          statements << buffer.strip unless buffer.strip.empty?
+          buffer = +""
+        else
+          buffer << token
+        end
+      end
+      statements << buffer.strip unless buffer.strip.empty?
+      statements
     end
   end
 end

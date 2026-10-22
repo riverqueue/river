@@ -25,6 +25,8 @@ GEM
     language_server-protocol (3.17.0.5)
     lint_roller (1.1.0)
     logger (1.7.0)
+    mysql2 (0.5.7)
+      bigdecimal
     optparse (0.8.1)
     parallel (1.27.0)
     parser (3.3.11.1)
@@ -97,6 +99,7 @@ PLATFORMS
   x86_64-linux
 
 DEPENDENCIES
+  mysql2 (~> 0.5)
   pg
   riverqueue!
   riverqueue-sequel!

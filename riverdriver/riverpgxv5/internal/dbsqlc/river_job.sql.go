@@ -1482,7 +1482,9 @@ WITH job_input AS (
         unnest($6::boolean[]) AS finalized_at_do_update,
         unnest($7::timestamptz[])       AS finalized_at,
         unnest($8::boolean[])      AS metadata_do_merge,
-        unnest($9::jsonb[])         AS metadata_updates,
+        -- Cast text elements on the server so database/sql drivers do not decode
+        -- JSON numbers through float64 while converting array parameters.
+        unnest($9::text[])::jsonb   AS metadata_updates,
         unnest($10::boolean[]) AS scheduled_at_do_update,
         unnest($11::timestamptz[])       AS scheduled_at,
         -- To avoid requiring pgx users to register the OID of the river_job_state[]
@@ -1562,7 +1564,7 @@ type JobSetStateIfRunningManyParams struct {
 	FinalizedAtDoUpdate []bool
 	FinalizedAt         []time.Time
 	MetadataDoMerge     []bool
-	MetadataUpdates     [][]byte
+	MetadataUpdates     []string
 	ScheduledAtDoUpdate []bool
 	ScheduledAt         []time.Time
 	State               []string

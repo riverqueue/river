@@ -15,6 +15,8 @@ use serde_json::{Map, Value, value::RawValue};
 #[cfg(feature = "postgres")]
 use crate::database::SchemaName;
 use crate::{AttemptError, InsertResult, Job, JobRow, JobState};
+#[cfg(feature = "mysql")]
+use sqlx::{MySqlConnection, MySqlPool};
 #[cfg(feature = "postgres")]
 use sqlx::{PgConnection, PgPool};
 #[cfg(feature = "sqlite")]
@@ -150,6 +152,15 @@ pub fn attempt_errors_from_json(json: &str) -> Result<Vec<AttemptError>, serde_j
     AttemptError::from_json_array_lenient(json)
 }
 
+/// Encodes a UTC timestamp in River's canonical MySQL wire format.
+///
+/// This keeps companion crates aligned with River and Go's
+/// microsecond-precision, timezone-free MySQL representation.
+#[cfg(feature = "mysql")]
+#[must_use]
+pub fn mysql_timestamp(time: DateTime<Utc>) -> String {
+    crate::database::mysql::mysql_time(time)
+}
 /// Encodes a UTC timestamp in River's canonical SQLite wire format.
 ///
 /// This keeps companion crates aligned with River and Go's
@@ -330,6 +341,17 @@ pub async fn notify_many(
             .await?;
             Ok(())
         }
+        #[cfg(feature = "mysql")]
+        (DatabaseConnection::MySql(connection), DatabaseConfig::MySql) => {
+            let mut query = sqlx::QueryBuilder::<sqlx::MySql>::new(
+                "INSERT INTO river_notification (payload, topic) ",
+            );
+            query.push_values(payloads, |mut row, payload| {
+                row.push_bind(payload).push_bind(topic.as_str());
+            });
+            query.build().execute(connection).await?;
+            Ok(())
+        }
         #[cfg(feature = "sqlite")]
         (DatabaseConnection::Sqlite(connection), DatabaseConfig::Sqlite) => {
             let mut query = sqlx::QueryBuilder::<sqlx::Sqlite>::new(
@@ -407,6 +429,10 @@ pub async fn delete_finalized_jobs(
         (DatabaseConnection::Postgres(connection), DatabaseConfig::Postgres { schema }) => Ok(
             crate::maintenance::postgres_delete_finalized_jobs(connection, schema, params).await?,
         ),
+        #[cfg(feature = "mysql")]
+        (DatabaseConnection::MySql(connection), DatabaseConfig::MySql) => {
+            Ok(crate::maintenance::mysql_delete_finalized_jobs(connection, params).await?)
+        }
         #[cfg(feature = "sqlite")]
         (DatabaseConnection::Sqlite(connection), DatabaseConfig::Sqlite) => {
             Ok(crate::maintenance::sqlite_delete_finalized_jobs(connection, params).await?)
@@ -434,6 +460,9 @@ pub enum DatabaseConfig {
     /// Postgres backend configuration.
     #[cfg(feature = "postgres")]
     Postgres { schema: SchemaName },
+    /// MySQL backend configuration.
+    #[cfg(feature = "mysql")]
+    MySql,
     /// SQLite backend configuration.
     #[cfg(feature = "sqlite")]
     Sqlite,
@@ -446,6 +475,8 @@ impl DatabaseConfig {
         match self {
             #[cfg(feature = "postgres")]
             Self::Postgres { .. } => DatabaseKind::Postgres,
+            #[cfg(feature = "mysql")]
+            Self::MySql => DatabaseKind::MySql,
             #[cfg(feature = "sqlite")]
             Self::Sqlite => DatabaseKind::Sqlite,
         }
@@ -457,6 +488,8 @@ impl DatabaseConfig {
     pub const fn postgres_schema(&self) -> Option<&SchemaName> {
         match self {
             Self::Postgres { schema } => Some(schema),
+            #[cfg(feature = "mysql")]
+            Self::MySql => None,
             #[cfg(feature = "sqlite")]
             Self::Sqlite => None,
         }
@@ -470,6 +503,9 @@ pub enum DatabaseConnection<'connection> {
     /// Postgres transaction connection.
     #[cfg(feature = "postgres")]
     Postgres(&'connection mut PgConnection),
+    /// MySQL transaction connection.
+    #[cfg(feature = "mysql")]
+    MySql(&'connection mut MySqlConnection),
     /// SQLite transaction connection.
     #[cfg(feature = "sqlite")]
     Sqlite(&'connection mut SqliteConnection),
@@ -482,6 +518,8 @@ impl<'connection> DatabaseConnection<'connection> {
         match self {
             #[cfg(feature = "postgres")]
             Self::Postgres(_) => DatabaseKind::Postgres,
+            #[cfg(feature = "mysql")]
+            Self::MySql(_) => DatabaseKind::MySql,
             #[cfg(feature = "sqlite")]
             Self::Sqlite(_) => DatabaseKind::Sqlite,
         }
@@ -494,6 +532,8 @@ impl<'connection> DatabaseConnection<'connection> {
         match self {
             #[cfg(feature = "postgres")]
             Self::Postgres(connection) => DatabaseConnection::Postgres(connection),
+            #[cfg(feature = "mysql")]
+            Self::MySql(connection) => DatabaseConnection::MySql(connection),
             #[cfg(feature = "sqlite")]
             Self::Sqlite(connection) => DatabaseConnection::Sqlite(connection),
         }
@@ -505,6 +545,8 @@ impl<'connection> DatabaseConnection<'connection> {
     pub fn into_postgres(self) -> Option<&'connection mut PgConnection> {
         match self {
             Self::Postgres(connection) => Some(connection),
+            #[cfg(feature = "mysql")]
+            Self::MySql(_) => None,
             #[cfg(feature = "sqlite")]
             Self::Sqlite(_) => None,
         }
@@ -512,12 +554,24 @@ impl<'connection> DatabaseConnection<'connection> {
 
     /// Returns the SQLite connection, if selected.
     #[must_use]
+    #[cfg(feature = "mysql")]
+    pub fn into_mysql(self) -> Option<&'connection mut MySqlConnection> {
+        match self {
+            #[cfg(feature = "postgres")]
+            Self::Postgres(_) => None,
+            Self::MySql(connection) => Some(connection),
+            #[cfg(feature = "sqlite")]
+            Self::Sqlite(_) => None,
+        }
+    }
     #[cfg(feature = "sqlite")]
     pub fn into_sqlite(self) -> Option<&'connection mut SqliteConnection> {
         match self {
             #[cfg(feature = "postgres")]
             Self::Postgres(_) => None,
             Self::Sqlite(connection) => Some(connection),
+            #[cfg(feature = "mysql")]
+            Self::MySql(_) => None,
         }
     }
 }
@@ -539,6 +593,9 @@ pub enum DatabasePool {
     /// Postgres pool.
     #[cfg(feature = "postgres")]
     Postgres(PgPool),
+    /// MySQL pool.
+    #[cfg(feature = "mysql")]
+    MySql(MySqlPool),
     /// SQLite pool.
     #[cfg(feature = "sqlite")]
     Sqlite(SqlitePool),
@@ -551,6 +608,8 @@ impl DatabasePool {
         match self {
             #[cfg(feature = "postgres")]
             Self::Postgres(_) => DatabaseKind::Postgres,
+            #[cfg(feature = "mysql")]
+            Self::MySql(_) => DatabaseKind::MySql,
             #[cfg(feature = "sqlite")]
             Self::Sqlite(_) => DatabaseKind::Sqlite,
         }
@@ -562,6 +621,8 @@ impl DatabasePool {
     pub const fn postgres(&self) -> Option<&PgPool> {
         match self {
             Self::Postgres(pool) => Some(pool),
+            #[cfg(feature = "mysql")]
+            Self::MySql(_) => None,
             #[cfg(feature = "sqlite")]
             Self::Sqlite(_) => None,
         }
@@ -569,12 +630,24 @@ impl DatabasePool {
 
     /// Returns the caller-owned SQLite pool, if selected.
     #[must_use]
+    #[cfg(feature = "mysql")]
+    pub const fn mysql(&self) -> Option<&MySqlPool> {
+        match self {
+            #[cfg(feature = "postgres")]
+            Self::Postgres(_) => None,
+            Self::MySql(pool) => Some(pool),
+            #[cfg(feature = "sqlite")]
+            Self::Sqlite(_) => None,
+        }
+    }
     #[cfg(feature = "sqlite")]
     pub const fn sqlite(&self) -> Option<&SqlitePool> {
         match self {
             #[cfg(feature = "postgres")]
             Self::Postgres(_) => None,
             Self::Sqlite(pool) => Some(pool),
+            #[cfg(feature = "mysql")]
+            Self::MySql(_) => None,
         }
     }
 }
@@ -1177,6 +1250,10 @@ pub fn claimed_postgres_job(row: &sqlx::postgres::PgRow) -> ClaimedJob {
     ClaimedJob::from_decoded(crate::client::decode_job_row(row))
 }
 
+/// Columns River selects to decode a MySQL job row, for use with
+/// [`decode_mysql_job_row`].
+#[cfg(feature = "mysql")]
+pub const MYSQL_JOB_COLUMNS: &str = crate::database::mysql::JOB_COLUMNS;
 /// Columns River selects to decode a SQLite job row, for use with
 /// [`decode_sqlite_job_row`].
 #[cfg(feature = "sqlite")]
@@ -1188,11 +1265,28 @@ pub const SQLITE_JOB_COLUMNS: &str = crate::database::sqlite::JOB_COLUMNS;
 /// # Errors
 ///
 /// Returns an error when the row can't be decoded.
+#[cfg(feature = "mysql")]
+pub fn decode_mysql_job_row(row: &sqlx::mysql::MySqlRow) -> Result<JobRow, PilotError> {
+    crate::database::mysql::decode_job_row(row).map_err(|undecodable| undecodable.error.into())
+}
+/// Decodes a row selected with [`SQLITE_JOB_COLUMNS`] exactly as River
+/// decodes its own rows.
+///
+/// # Errors
+///
+/// Returns an error when the row can't be decoded.
 #[cfg(feature = "sqlite")]
 pub fn decode_sqlite_job_row(row: &sqlx::sqlite::SqliteRow) -> Result<JobRow, PilotError> {
     crate::database::sqlite::decode_job_row(row).map_err(|undecodable| undecodable.error.into())
 }
 
+/// Decodes a claimed row selected with [`SQLITE_JOB_COLUMNS`] as far as
+/// River can, for [`PilotProducer::claim`].
+#[cfg(feature = "mysql")]
+#[must_use]
+pub fn claimed_mysql_job(row: &sqlx::mysql::MySqlRow) -> ClaimedJob {
+    ClaimedJob::from_decoded(crate::database::mysql::decode_job_row(row))
+}
 /// Decodes a claimed row selected with [`SQLITE_JOB_COLUMNS`] as far as
 /// River can, for [`PilotProducer::claim`].
 #[cfg(feature = "sqlite")]

@@ -174,3 +174,9 @@ repository. Follow its README; do not include it in the public release below.
     ```
 
 4. Cut a new GitHub release by visiting [new release](https://github.com/riverqueue/river/releases/new), selecting the new tag, and copying in the version's `CHANGELOG.md` content as the release body.
+
+For MySQL, set `TEST_DATABASE=mysql` and
+`TEST_MYSQL_URL=mysql2://root@127.0.0.1/`, then run `make spec/core` from `ruby/`.
+The test account must be able to create and drop disposable databases. CI runs
+the shared driver, worker, and migration contracts on MySQL 8.0 and 8.4 and
+includes their coverage in the combined report.

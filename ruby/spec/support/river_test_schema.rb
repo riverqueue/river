@@ -5,6 +5,8 @@
 # and advisory locks. Replay the same SQL, without maintaining a schema copy.
 module RiverTestSchema
   def self.load(driver)
+    return River::Migrator.new(driver).migrate if driver.migration_backend == :mysql
+
     migrations = River::Migrator.new(driver).migrations
     sql = migrations.map do |migration|
       # Postgres must commit new enum values before later migrations use them.

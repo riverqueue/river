@@ -44,6 +44,7 @@ public final class Database {
       String jdbc = url.startsWith("jdbc:") ? url : "jdbc:" + url;
       return new Database(() -> DriverManager.getConnection(jdbc), Dialect.SQLITE, "");
     }
+    boolean mysql = url.startsWith("mysql:") || url.startsWith("jdbc:mysql:");
     String jdbc;
     var properties = new Properties();
     properties.setProperty("ApplicationName", applicationName);
@@ -59,7 +60,7 @@ public final class Database {
           properties.setProperty("password", URLDecoder.decode(auth[1], StandardCharsets.UTF_8));
       }
       jdbc =
-          "jdbc:postgresql://"
+          (mysql ? "jdbc:mysql://" : "jdbc:postgresql://")
               + uri.getHost()
               + (uri.getPort() < 0 ? "" : ":" + uri.getPort())
               + uri.getRawPath()
@@ -67,7 +68,9 @@ public final class Database {
     }
     String target = jdbc;
     return new Database(
-        () -> DriverManager.getConnection(target, properties), Dialect.POSTGRES, "");
+        () -> DriverManager.getConnection(target, properties),
+        mysql ? Dialect.MYSQL : Dialect.POSTGRES,
+        "");
   }
 
   public Connection connection() throws SQLException {
@@ -117,11 +120,11 @@ public final class Database {
   }
 
   boolean supportsNotifications(Connection connection) throws SQLException {
-    return dialect == Dialect.SQLITE || capabilities(connection).notifications();
+    return dialect != Dialect.POSTGRES || capabilities(connection).notifications();
   }
 
   boolean usesUniqueNonce(Connection connection) throws SQLException {
-    return dialect == Dialect.SQLITE || capabilities(connection).uniqueNonce();
+    return dialect != Dialect.POSTGRES || capabilities(connection).uniqueNonce();
   }
 
   private Capabilities capabilities(Connection connection) throws SQLException {
@@ -143,6 +146,7 @@ public final class Database {
   }
 
   String prefix() {
+    if (dialect == Dialect.MYSQL) return schema.isEmpty() ? "" : "`" + schema + "`.";
     return schema.isEmpty() ? "" : '"' + schema + "\".";
   }
 
@@ -150,6 +154,10 @@ public final class Database {
     if (value == null) return null;
     if (dialect == Dialect.POSTGRES)
       return OffsetDateTime.ofInstant(value.truncatedTo(ChronoUnit.MICROS), ZoneOffset.UTC);
+    if (dialect == Dialect.MYSQL)
+      return DateTimeFormatter.ofPattern("uuuu-MM-dd HH:mm:ss.SSSSSS")
+          .withZone(ZoneOffset.UTC)
+          .format(value);
     value = value.plusNanos(500000).truncatedTo(ChronoUnit.MILLIS);
     return DateTimeFormatter.ofPattern("uuuu-MM-dd HH:mm:ss.SSS")
         .withZone(ZoneOffset.UTC)
@@ -174,6 +182,7 @@ public final class Database {
   }
 
   public enum Dialect {
+    MYSQL,
     POSTGRES,
     SQLITE
   }

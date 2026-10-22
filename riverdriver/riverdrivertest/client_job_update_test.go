@@ -11,6 +11,7 @@ import (
 	"github.com/riverqueue/river"
 	"github.com/riverqueue/river/riverdriver"
 	"github.com/riverqueue/river/rivershared/riversharedtest"
+	"github.com/riverqueue/river/rivershared/testfactory"
 	"github.com/riverqueue/river/rivertype"
 )
 
@@ -154,5 +155,107 @@ func exerciseClientJobUpdate[TTx any](ctx context.Context, t *testing.T,
 			"the loser of the race condition returned a stale pre-commit row; its fallback read must see the winner's commit")
 		require.Nil(t, loser.row.FinalizedAt,
 			"the loser of the race condition must observe the winner's finalization clear, not its own snapshot's")
+	})
+	t.Run("JobScheduleSkipsLockedJobs", func(t *testing.T) {
+		t.Parallel()
+
+		driver, schema := driverWithSchema(ctx, t)
+		if driver.DatabaseName() != riverdriver.DatabaseNameMySQL {
+			t.Skip("MySQL skips locked scheduler candidates; other drivers may wait for them")
+		}
+		exec := driver.GetExecutor()
+		job := testfactory.Job(ctx, t, exec, &testfactory.JobOpts{
+			ScheduledAt: new(time.Now().Add(-time.Minute)), Schema: schema, State: new(rivertype.JobStateScheduled),
+		})
+		tx, err := exec.Begin(ctx)
+		require.NoError(t, err)
+		t.Cleanup(func() { _ = tx.Rollback(ctx) })
+		_, err = tx.JobUpdateFull(ctx, &riverdriver.JobUpdateFullParams{ID: job.ID, Schema: schema})
+		require.NoError(t, err)
+
+		scheduleCtx, cancel := context.WithTimeout(ctx, riversharedtest.WaitTimeout())
+		defer cancel()
+		rows, err := exec.JobSchedule(scheduleCtx, &riverdriver.JobScheduleParams{Max: 10, Schema: schema})
+		require.NoError(t, err)
+		require.Empty(t, rows)
+		require.NoError(t, tx.Rollback(ctx))
+
+		rows, err = exec.JobSchedule(ctx, &riverdriver.JobScheduleParams{Max: 10, Schema: schema})
+		require.NoError(t, err)
+		require.Len(t, rows, 1)
+		require.Equal(t, job.ID, rows[0].Job.ID)
+	})
+
+	// A MySQL transaction can already have a REPEATABLE READ snapshot when it
+	// invokes a state change. No-op updates must still return the current row.
+	t.Run("JobUpdateWithExistingSnapshot", func(t *testing.T) {
+		t.Parallel()
+
+		for _, operation := range []string{"Cancel", "DeleteMany", "Retry", "SetStateIfRunning"} {
+			t.Run(operation, func(t *testing.T) {
+				t.Parallel()
+
+				driver, schema := driverWithSchema(ctx, t)
+				if driver.DatabaseName() == riverdriver.DatabaseNameSQLite {
+					t.Skip("SQLite does not permit a second writer with an open read transaction")
+				}
+				exec := driver.GetExecutor()
+				state := rivertype.JobStateScheduled
+				switch operation {
+				case "Retry":
+					state = rivertype.JobStateCancelled
+				case "SetStateIfRunning":
+					state = rivertype.JobStateRunning
+				}
+				job := testfactory.Job(ctx, t, exec, &testfactory.JobOpts{Schema: schema, State: &state})
+				tx, err := exec.Begin(ctx)
+				require.NoError(t, err)
+				t.Cleanup(func() { _ = tx.Rollback(ctx) })
+				_, err = tx.JobGetByID(ctx, &riverdriver.JobGetByIDParams{ID: job.ID, Schema: schema})
+				require.NoError(t, err)
+
+				var current *rivertype.JobRow
+				switch operation {
+				case "Cancel":
+					params := &riverdriver.JobCancelParams{ID: job.ID, CancelAttemptedAt: time.Now(), Schema: schema}
+					_, err = exec.JobCancel(ctx, params)
+					require.NoError(t, err)
+					current, err = tx.JobCancel(ctx, params)
+					require.NoError(t, err)
+					require.Equal(t, rivertype.JobStateCancelled, current.State)
+				case "DeleteMany":
+					_, err = exec.JobUpdateFull(ctx, &riverdriver.JobUpdateFullParams{
+						ID: job.ID, Schema: schema, State: rivertype.JobStateRunning, StateDoUpdate: true,
+					})
+					require.NoError(t, err)
+					rows, err := tx.JobDeleteMany(ctx, &riverdriver.JobDeleteManyParams{
+						Max: 10, OrderByClause: "id", Schema: schema, WhereClause: "true",
+					})
+					require.NoError(t, err)
+					require.Empty(t, rows, "jobs that are now running must not be deleted")
+				case "Retry":
+					params := &riverdriver.JobRetryParams{ID: job.ID, Schema: schema}
+					_, err = exec.JobRetry(ctx, params)
+					require.NoError(t, err)
+					current, err = tx.JobRetry(ctx, params)
+					require.NoError(t, err)
+					require.Equal(t, rivertype.JobStateAvailable, current.State)
+				case "SetStateIfRunning":
+					_, err = exec.JobUpdateFull(ctx, &riverdriver.JobUpdateFullParams{
+						ID: job.ID, FinalizedAt: new(time.Now()), FinalizedAtDoUpdate: true, Schema: schema,
+						State: rivertype.JobStateCompleted, StateDoUpdate: true,
+					})
+					require.NoError(t, err)
+					rows, err := tx.JobSetStateIfRunningMany(ctx, &riverdriver.JobSetStateIfRunningManyParams{
+						ID: []int64{job.ID}, Attempt: []*int{nil}, ErrData: [][]byte{nil}, FinalizedAt: []*time.Time{new(time.Now())},
+						MetadataDoMerge: []bool{false}, MetadataUpdates: [][]byte{nil}, ScheduledAt: []*time.Time{nil},
+						Schema: schema, State: []rivertype.JobState{rivertype.JobStateCancelled},
+					})
+					require.NoError(t, err)
+					require.Len(t, rows, 1)
+					require.Equal(t, rivertype.JobStateCompleted, rows[0].State)
+				}
+			})
+		}
 	})
 }

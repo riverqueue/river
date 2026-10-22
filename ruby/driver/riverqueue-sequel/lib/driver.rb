@@ -3,7 +3,7 @@
 require "securerandom"
 
 module River::Driver
-  # Provides a Sequel driver for River supporting Postgres, YugabyteDB, and SQLite.
+  # Provides a Sequel driver for River supporting Postgres, YugabyteDB, MySQL, and SQLite.
   #
   # Used in conjunction with a River client like:
   #
@@ -18,14 +18,16 @@ module River::Driver
   class Sequel
     include River::Driver::Runtime
 
-    # Creates a driver backed by a connected Sequel::Database for Postgres or
+    # Creates a driver backed by a connected Sequel::Database for Postgres, MySQL, or
     # SQLite.
     def initialize(db)
       @db = db
       @postgres_capabilities_cache = PostgresCapabilities::Cache.new
       @is_sqlite = (db.database_type == :sqlite)
+      @is_mysql = (db.database_type == :mysql)
+      extend River::Driver::MySQLRuntime if @is_mysql
 
-      unless @is_sqlite
+      unless @is_sqlite || @is_mysql
         db.extension(:pg_array)
         db.extension(:pg_json)
       end
@@ -68,7 +70,11 @@ module River::Driver
     end
 
     # Backend used by River::Migrator.
-    def migration_backend = @is_sqlite ? :sqlite : :postgresql
+    def migration_backend = if @is_mysql
+                              :mysql
+                            else
+                              (@is_sqlite ? :sqlite : :postgresql)
+                            end
 
     # Pins a raw connection for the complete migration operation.
     def migration_connection
@@ -210,7 +216,7 @@ module River::Driver
     end
 
     private def runtime_postgres?
-      !@is_sqlite
+      !@is_sqlite && !@is_mysql
     end
 
     private def runtime_query_rows(sql)

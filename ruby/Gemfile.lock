@@ -86,6 +86,8 @@ GEM
       drb (~> 2.0)
       prism (~> 1.5)
     mutex_m (0.3.0)
+    mysql2 (0.5.7)
+      bigdecimal
     optparse (0.8.1)
     parallel (1.27.0)
     parser (3.3.11.1)
@@ -202,6 +204,7 @@ DEPENDENCIES
   debug
   fugit (~> 1.13)
   minitest
+  mysql2 (~> 0.5)
   pg
   riverqueue!
   riverqueue-activerecord!

@@ -57,6 +57,7 @@ generate/rust-migrations: ## Sync database migrations to Rust
 .PHONY: generate/sqlc
 generate/sqlc: ## Generate sqlc
 	cd riverdriver/riverdatabasesql/internal/dbsqlc && $(SQLC) generate
+	cd riverdriver/rivermysql/internal/dbsqlc && $(SQLC) generate
 	cd riverdriver/riverpgxv5/internal/dbsqlc && $(SQLC) generate
 	cd riverdriver/riversqlite/internal/dbsqlc && $(SQLC) generate
 
@@ -79,19 +80,25 @@ TEST_DATABASE ?= all
 
 # Only filter the shared driver suite. Other packages have SQLite-named tests
 # that use Postgres or mocks and should stay in the regular test run.
+mysql_test_pattern := ^(Test.*MySQL|Example_mysql)
 sqlite_test_pattern := ^(Test.*(LibSQL|SQLite|Turso)|Example_(libSQL|sqlite|turso))
 test_submodules := $(submodules)
 legacy_driver_test_flags := -run '/WithTx$$'
-ifeq ($(TEST_DATABASE),postgres)
-    test_submodules := $(filter-out %/riverdriver/riversqlite,$(submodules))
-    driver_test_flags := -skip '$(sqlite_test_pattern)'
-    legacy_driver_test_flags += -skip '$(sqlite_test_pattern)'
+ifeq ($(TEST_DATABASE),mysql)
+    export RIVER_MYSQL_TESTS_ENABLED := 1
+    test_submodules := $(filter %/riverdriver/riverdrivertest %/riverdriver/rivermysql,$(submodules))
+    driver_test_flags := -run '$(mysql_test_pattern)'
+    legacy_driver_test_flags := -run '$(mysql_test_pattern)/WithTx$$'
+else ifeq ($(TEST_DATABASE),postgres)
+    test_submodules := $(filter-out %/riverdriver/rivermysql %/riverdriver/riversqlite,$(submodules))
+    driver_test_flags := -skip '$(mysql_test_pattern)|$(sqlite_test_pattern)'
+    legacy_driver_test_flags += -skip '$(mysql_test_pattern)|$(sqlite_test_pattern)'
 else ifeq ($(TEST_DATABASE),sqlite)
     test_submodules := $(filter %/riverdriver/riverdrivertest %/riverdriver/riversqlite,$(submodules))
     driver_test_flags := -run '$(sqlite_test_pattern)'
     legacy_driver_test_flags := -run '$(sqlite_test_pattern)/WithTx$$'
 else ifneq ($(TEST_DATABASE),all)
-    $(error TEST_DATABASE must be all, postgres, or sqlite)
+    $(error TEST_DATABASE must be all, mysql, postgres, or sqlite)
 endif
 
 # Definitions of following tasks look ugly, but they're done this way because to
@@ -111,6 +118,9 @@ lint/rust: ## Run Rust formatting and clippy checks, including single-backend bu
 	cd rust && cargo fmt --all -- --check
 	cd rust && cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
 	cd rust && cargo clippy -p riverqueue -p riverqueue-migrate -p riverqueue-cli -p riverqueue-test --no-default-features --features postgres --all-targets --locked -- -D warnings
+	cd rust && cargo clippy -p riverqueue -p riverqueue-migrate -p riverqueue-cli -p riverqueue-test --no-default-features --features mysql --all-targets --locked -- -D warnings
+	# Test dependencies enable other backends; also check MySQL libraries on their own.
+	cd rust && cargo clippy -p riverqueue -p riverqueue-migrate --lib --no-default-features --features mysql --locked -- -D warnings
 	cd rust && cargo clippy -p riverqueue -p riverqueue-migrate -p riverqueue-cli -p riverqueue-test --no-default-features --features sqlite --all-targets --locked -- -D warnings
 	cd rust && $(RUST_POSTGRES_TESTS_ENV) cargo clippy -p riverqueue -p riverqueue-migrate --all-targets --all-features --locked -- -D warnings
 
@@ -147,7 +157,7 @@ lint/js: build/js
 	pnpm -C js run typecheck:next
 
 .PHONY: test
-test:: ## Run tests (TEST_DATABASE=all, postgres, or sqlite)
+test:: ## Run tests (TEST_DATABASE=all, mysql, postgres, or sqlite)
 define test-target
     test:: ; cd $1 && go test ./... -timeout 2m $(if $(filter %/riverdriver/riverdrivertest,$1),$(driver_test_flags))
 endef
@@ -155,7 +165,7 @@ $(foreach mod,$(test_submodules),$(eval $(call test-target,$(mod))))
 
 # Exercise the temporary savepoint fallback as well as default transaction reuse.
 test:: ; cd ./riverdriver/riverdrivertest && RIVER_USE_LEGACY_SUBTRANSACTIONS=1 go test . $(legacy_driver_test_flags) -timeout 2m
-ifneq ($(TEST_DATABASE),sqlite)
+ifneq ($(filter all postgres,$(TEST_DATABASE)),)
 test:: ; cd ./riverdriver/riverdrivertest && RIVER_USE_LEGACY_SUBTRANSACTIONS=1 go test . -run '^TestDriverRiverPgxV5$$/.*/WithTx$$' -timeout 2m
 endif
 
@@ -179,6 +189,16 @@ test/java: test/java/tools
 test/java/conformance: ## Run Java tests that check Go-generated conformance fixtures
 test/java/conformance: generate/fixtures
 	$(MVN) --batch-mode --no-transfer-progress -f java/pom.xml -pl river test -Dgroups=conformance -Driver.test.database=sqlite
+
+.PHONY: test/java/conformance/mysql
+test/java/conformance/mysql: generate/fixtures ## Run Java's Go fixture checks on MySQL (requires RIVER_TEST_DATABASE_URL)
+	@test -n "$$RIVER_TEST_DATABASE_URL" || { echo "RIVER_TEST_DATABASE_URL is required" >&2; exit 1; }
+	$(MVN) --batch-mode --no-transfer-progress -f java/pom.xml -pl river test -Dgroups=conformance -Driver.test.database=mysql
+
+.PHONY: test/java/mysql
+test/java/mysql: generate/fixtures verify/java-migrations ## Run Java tests against MySQL (requires RIVER_TEST_DATABASE_URL)
+	@test -n "$$RIVER_TEST_DATABASE_URL" || { echo "RIVER_TEST_DATABASE_URL is required" >&2; exit 1; }
+	$(MVN) --batch-mode --no-transfer-progress -f java/pom.xml verify -Driver.test.database=mysql -DexcludedGroups=postgres
 
 .PHONY: test/java/postgres
 test/java/postgres: ## Run Java tests with Postgres client and worker coverage (requires RIVER_TEST_DATABASE_URL)
@@ -213,9 +233,19 @@ test/js/conformance: ## Run JavaScript tests that check Go-generated conformance
 test/js/conformance: generate/fixtures
 	pnpm -C js exec vitest run src/conformance.test.ts src/cron.test.ts src/runtime/completion-command.test.ts src/runtime/notification-pump.conformance.test.ts
 
+.PHONY: test/js/conformance/mysql
+test/js/conformance/mysql: generate/fixtures ## Run JavaScript's Go fixture checks on MySQL (requires TEST_MYSQL_URL)
+	@test -n "$$TEST_MYSQL_URL" || { echo "TEST_MYSQL_URL is required" >&2; exit 1; }
+	pnpm -C js exec vitest run --config vitest.integration.config.ts driver/mysql/src/driver.integration.test.ts -t 'Go conformance'
+
 # Integration tests use TEST_DATABASE_URL (default
 # postgres://localhost:5432/river_test), migrated with
 # `node js/cli/dist/bin.js migrate-up`.
+.PHONY: test/js/mysql
+test/js/mysql: build/js generate/fixtures ## Run JavaScript MySQL integration tests (requires TEST_MYSQL_URL)
+	@test -n "$$TEST_MYSQL_URL" || { echo "TEST_MYSQL_URL is required" >&2; exit 1; }
+	pnpm -C js exec vitest run --config vitest.integration.config.ts driver/mysql/src/driver.integration.test.ts
+
 .PHONY: test/js/integration
 test/js/integration: ## Run JavaScript integration tests against Postgres
 test/js/integration: build/js
@@ -240,6 +270,17 @@ test/rust/conformance: ## Run Rust tests that check Go-generated conformance fix
 test/rust/conformance: generate/fixtures
 	cd rust && cargo test -p riverqueue --features chrono-tz --lib --test protocol_fixtures --locked
 
+.PHONY: test/rust/conformance/mysql
+test/rust/conformance/mysql: generate/fixtures ## Run Rust's Go fixture checks on MySQL (requires RIVER_RUST_MYSQL_URL)
+	@test -n "$$RIVER_RUST_MYSQL_URL" || { echo "RIVER_RUST_MYSQL_URL is required" >&2; exit 1; }
+	cd rust && RUSTFLAGS="$$RUSTFLAGS --cfg river_mysql_tests" cargo test -p riverqueue --all-features --lib database::mysql::tests::conformance --locked
+
+.PHONY: test/rust/mysql
+test/rust/mysql: generate/fixtures verify/rust-migrations ## Run Rust MySQL integration tests (requires RIVER_RUST_MYSQL_URL)
+	@test -n "$$RIVER_RUST_MYSQL_URL" || { echo "RIVER_RUST_MYSQL_URL is required" >&2; exit 1; }
+	cd rust && RUSTFLAGS="$$RUSTFLAGS --cfg river_mysql_tests" cargo test -p riverqueue --all-features --lib database::mysql::tests --locked
+	cd rust && RUSTFLAGS="$$RUSTFLAGS --cfg river_mysql_tests" cargo clippy -p riverqueue --all-features --tests --locked -- -D warnings
+
 .PHONY: test/rust/postgres
 test/rust/postgres: ## Run all Rust tests, including Postgres integration tests (requires RIVER_RUST_DATABASE_URL)
 test/rust/postgres: generate/fixtures
@@ -263,6 +304,7 @@ doc/rust: ## Build Rust API documentation, compiled examples, and doctests for e
 	cd rust && RUSTDOCFLAGS="-D warnings" cargo doc --workspace --all-features --no-deps --locked
 	cd rust && RUSTDOCFLAGS="-D warnings" cargo test --workspace --all-features --doc --locked
 	cd rust && RUSTDOCFLAGS="-D warnings" cargo test -p riverqueue -p riverqueue-migrate -p riverqueue-cli -p riverqueue-test --no-default-features --features postgres --doc --locked
+	cd rust && RUSTDOCFLAGS="-D warnings" cargo test -p riverqueue -p riverqueue-migrate -p riverqueue-cli -p riverqueue-test --no-default-features --features mysql --doc --locked
 	cd rust && RUSTDOCFLAGS="-D warnings" cargo test -p riverqueue -p riverqueue-migrate -p riverqueue-cli -p riverqueue-test --no-default-features --features sqlite --doc --locked
 	cd rust && cargo check --workspace --examples --all-features --locked
 
@@ -322,14 +364,14 @@ check/rust/semver: ## Check Rust APIs against RUST_SEMVER_BASELINE_REV (default:
 	fi
 
 .PHONY: test/race
-test/race:: ## Run tests with race detector (TEST_DATABASE=all, postgres, or sqlite)
+test/race:: ## Run tests with race detector (TEST_DATABASE=all, mysql, postgres, or sqlite)
 define test-race-target
     test/race:: ; cd $1 && go test ./... -race -timeout 2m $(if $(filter %/riverdriver/riverdrivertest,$1),$(driver_test_flags))
 endef
 $(foreach mod,$(test_submodules),$(eval $(call test-race-target,$(mod))))
 
 test/race:: ; cd ./riverdriver/riverdrivertest && RIVER_USE_LEGACY_SUBTRANSACTIONS=1 go test . -race $(legacy_driver_test_flags) -timeout 2m
-ifneq ($(TEST_DATABASE),sqlite)
+ifneq ($(filter all postgres,$(TEST_DATABASE)),)
 test/race:: ; cd ./riverdriver/riverdrivertest && RIVER_USE_LEGACY_SUBTRANSACTIONS=1 go test . -race -run '^TestDriverRiverPgxV5$$/.*/WithTx$$' -timeout 2m
 endif
 
@@ -387,6 +429,7 @@ verify/rust-migrations: ## Verify Rust migrations match the canonical migrations
 .PHONY: verify/sqlc
 verify/sqlc: ## Verify generated sqlc
 	cd riverdriver/riverdatabasesql/internal/dbsqlc && $(SQLC) diff
+	cd riverdriver/rivermysql/internal/dbsqlc && $(SQLC) diff
 	cd riverdriver/riverpgxv5/internal/dbsqlc && $(SQLC) diff
 	cd riverdriver/riversqlite/internal/dbsqlc && $(SQLC) diff
 
@@ -404,6 +447,11 @@ test/ruby: ## Run Ruby core, Active Record, Sequel, and Rails tests
 
 test/ruby/conformance: ## Run Ruby tests that check Go-generated conformance fixtures
 	$(MAKE) -C ruby test/conformance
+
+.PHONY: test/ruby/conformance/mysql
+test/ruby/conformance/mysql: ## Run Ruby's Go fixture checks on MySQL (requires TEST_MYSQL_URL with mysql2://)
+	@test -n "$$TEST_MYSQL_URL" || { echo "TEST_MYSQL_URL is required" >&2; exit 1; }
+	TEST_DATABASE=mysql $(MAKE) -C ruby test/conformance
 
 typecheck/ruby: ## Check Ruby types with Steep
 	$(MAKE) -C ruby type-check

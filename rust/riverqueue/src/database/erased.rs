@@ -4,6 +4,8 @@
 
 use std::fmt;
 
+#[cfg(feature = "mysql")]
+use super::MySqlDatabase;
 #[cfg(feature = "sqlite")]
 use super::SqliteDatabase;
 use crate::__private::DatabaseConnection;
@@ -40,6 +42,8 @@ impl Database {
     ) {
         match &mut self.inner {
             DatabaseInner::Postgres(source) => source.extend_default_reindex_names(names),
+            #[cfg(feature = "mysql")]
+            DatabaseInner::MySql(_) => {}
             #[cfg(feature = "sqlite")]
             DatabaseInner::Sqlite(_) => {}
         }
@@ -50,6 +54,8 @@ impl Database {
         match &self.inner {
             #[cfg(feature = "postgres")]
             DatabaseInner::Postgres(source) => ClientDatabase::Postgres(source),
+            #[cfg(feature = "mysql")]
+            DatabaseInner::MySql(source) => ClientDatabase::MySql(source),
             #[cfg(feature = "sqlite")]
             DatabaseInner::Sqlite(source) => ClientDatabase::Sqlite(source),
         }
@@ -61,6 +67,8 @@ impl Database {
         match &self.inner {
             #[cfg(feature = "postgres")]
             DatabaseInner::Postgres(_) => DatabaseKind::Postgres,
+            #[cfg(feature = "mysql")]
+            DatabaseInner::MySql(_) => DatabaseKind::MySql,
             #[cfg(feature = "sqlite")]
             DatabaseInner::Sqlite(_) => DatabaseKind::Sqlite,
         }
@@ -76,6 +84,8 @@ impl Database {
         match &self.inner {
             #[cfg(feature = "postgres")]
             DatabaseInner::Postgres(source) => source.capabilities().supports_listen_notify(),
+            #[cfg(feature = "mysql")]
+            DatabaseInner::MySql(_) => false,
             #[cfg(feature = "sqlite")]
             DatabaseInner::Sqlite(_) => false,
         }
@@ -88,6 +98,8 @@ impl Database {
         match &self.inner {
             #[cfg(feature = "postgres")]
             DatabaseInner::Postgres(source) => source.capabilities().supports_listen_notify(),
+            #[cfg(feature = "mysql")]
+            DatabaseInner::MySql(_) => true,
             #[cfg(feature = "sqlite")]
             DatabaseInner::Sqlite(_) => true,
         }
@@ -97,7 +109,7 @@ impl Database {
     /// another backend.
     #[cfg(feature = "postgres")]
     #[cfg_attr(
-        not(feature = "sqlite"),
+        not(any(feature = "sqlite", feature = "mysql")),
         expect(
             clippy::unnecessary_wraps,
             reason = "another backend may be compiled in"
@@ -108,6 +120,8 @@ impl Database {
     ) -> Option<&super::postgres_capabilities::CapabilitiesCache> {
         match &self.inner {
             DatabaseInner::Postgres(source) => Some(source.capabilities()),
+            #[cfg(feature = "mysql")]
+            DatabaseInner::MySql(_) => None,
             #[cfg(feature = "sqlite")]
             DatabaseInner::Sqlite(_) => None,
         }
@@ -120,6 +134,8 @@ impl Database {
         match &self.inner {
             #[cfg(feature = "postgres")]
             DatabaseInner::Postgres(source) => Some(source.schema()),
+            #[cfg(feature = "mysql")]
+            DatabaseInner::MySql(_) => None,
             #[cfg(feature = "sqlite")]
             DatabaseInner::Sqlite(_) => None,
         }
@@ -127,7 +143,7 @@ impl Database {
 
     #[cfg(feature = "postgres")]
     #[cfg_attr(
-        not(feature = "sqlite"),
+        not(any(feature = "sqlite", feature = "mysql")),
         expect(
             clippy::unnecessary_wraps,
             reason = "another backend may be compiled in"
@@ -136,6 +152,8 @@ impl Database {
     pub(crate) fn postgres_reindex(&self) -> Option<&PostgresReindexConfig> {
         match &self.inner {
             DatabaseInner::Postgres(source) => Some(source.reindex()),
+            #[cfg(feature = "mysql")]
+            DatabaseInner::MySql(_) => None,
             #[cfg(feature = "sqlite")]
             DatabaseInner::Sqlite(_) => None,
         }
@@ -206,6 +224,8 @@ impl Database {
         match &self.inner {
             #[cfg(feature = "postgres")]
             DatabaseInner::Postgres(source) => DatabasePool::Postgres(source.pool()),
+            #[cfg(feature = "mysql")]
+            DatabaseInner::MySql(source) => DatabasePool::MySql(source.pool()),
             #[cfg(feature = "sqlite")]
             DatabaseInner::Sqlite(source) => DatabasePool::Sqlite(source.pool()),
         }
@@ -226,6 +246,8 @@ impl fmt::Debug for Database {
 pub(crate) enum DatabaseInner {
     #[cfg(feature = "postgres")]
     Postgres(PostgresDatabase),
+    #[cfg(feature = "mysql")]
+    MySql(MySqlDatabase),
     #[cfg(feature = "sqlite")]
     Sqlite(SqliteDatabase),
 }

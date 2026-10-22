@@ -52,7 +52,8 @@
     "@riverqueue/driver-pg": "workspace:0.2.0",
     "@riverqueue/migrate": "workspace:0.2.0",
     "pg": "^8.22.0",
-    "riverqueue": "workspace:0.2.0"
+    "riverqueue": "workspace:0.2.0",
+    "mysql2": "^3.24.4"
   },
   "peerDependencies": {
     "@types/node": ">=24",

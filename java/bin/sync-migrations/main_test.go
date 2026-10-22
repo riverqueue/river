@@ -24,7 +24,7 @@ func TestRun(t *testing.T) {
 			destination: filepath.Join(root, "java/river/src/main/resources/com/riverqueue/migration"),
 			root:        root,
 		}
-		for _, driver := range []string{"riverpgxv5", "riversqlite"} {
+		for _, driver := range []string{"rivermysql", "riverpgxv5", "riversqlite"} {
 			source := filepath.Join(root, "riverdriver", driver, "migration/main")
 			require.NoError(t, os.MkdirAll(source, 0o755))
 			for _, direction := range []string{"up", "down"} {
@@ -50,7 +50,7 @@ func TestRun(t *testing.T) {
 
 		missing := filepath.Join(bundle.destination, "postgres/001_first.down.sql")
 		stale := filepath.Join(bundle.destination, "sqlite/001_first.up.sql")
-		extra := filepath.Join(bundle.destination, "sqlite/999_extra.up.sql")
+		extra := filepath.Join(bundle.destination, "mysql/999_extra.up.sql")
 		require.NoError(t, os.Remove(missing))
 		require.NoError(t, os.WriteFile(stale, []byte("stale"), 0o600))
 		require.NoError(t, os.WriteFile(extra, []byte("extra"), 0o600))

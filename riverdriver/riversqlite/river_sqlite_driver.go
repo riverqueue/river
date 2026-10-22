@@ -73,8 +73,9 @@ func New(dbPool *sql.DB) *Driver {
 
 const argPlaceholder = "?"
 
-func (d *Driver) ArgPlaceholder() string { return argPlaceholder }
-func (d *Driver) DatabaseName() string   { return riverdriver.DatabaseNameSQLite }
+func (d *Driver) ArgPlaceholder() string             { return argPlaceholder }
+func (d *Driver) DatabaseName() string               { return riverdriver.DatabaseNameSQLite }
+func (d *Driver) SafeIdentifier(ident string) string { return dbutil.SafeIdentifier(ident) }
 
 func (d *Driver) GetExecutor() riverdriver.Executor {
 	return &Executor{d.dbPool, templateReplaceWrapper{d.dbPool, &d.replacer}, d, nil}
@@ -144,6 +145,10 @@ func (d *Driver) SQLFragmentColumnContainsAny(column, namedArg string, values []
     INNER JOIN json_each(cast(@%s AS blob)) AS filter_value
         ON column_value.value = filter_value.value
 )`, column, namedArg), arg, nil
+}
+
+func (d *Driver) SQLFragmentColumnContainsJSON(column, namedArg, fragment string) (string, map[string]any, error) {
+	return "", nil, errors.New("JSON containment is not supported on SQLite")
 }
 
 func (d *Driver) SQLFragmentColumnIn(column string, values any) (string, any, error) {

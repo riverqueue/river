@@ -65,8 +65,9 @@ func New(dbPool *pgxpool.Pool) *Driver {
 
 const argPlaceholder = "$"
 
-func (d *Driver) ArgPlaceholder() string { return argPlaceholder }
-func (d *Driver) DatabaseName() string   { return riverdriver.DatabaseNamePostgres }
+func (d *Driver) ArgPlaceholder() string             { return argPlaceholder }
+func (d *Driver) DatabaseName() string               { return riverdriver.DatabaseNamePostgres }
+func (d *Driver) SafeIdentifier(ident string) string { return dbutil.SafeIdentifier(ident) }
 
 func (d *Driver) GetExecutor() riverdriver.Executor {
 	return &Executor{templateReplaceWrapper{d.dbPool, &d.replacer}, d}
@@ -101,6 +102,10 @@ func (d *Driver) SQLFragmentColumnContainsAll(column, namedArg string, values []
 
 func (d *Driver) SQLFragmentColumnContainsAny(column, namedArg string, values []string) (string, any, error) {
 	return fmt.Sprintf("%s && @%s", column, namedArg), values, nil
+}
+
+func (d *Driver) SQLFragmentColumnContainsJSON(column, namedArg, fragment string) (string, map[string]any, error) {
+	return column + " @> @" + namedArg + "::jsonb", map[string]any{namedArg: fragment}, nil
 }
 
 func (d *Driver) SQLFragmentColumnIn(column string, values any) (string, any, error) {
@@ -687,7 +692,7 @@ func (e *Executor) JobSetStateIfRunningMany(ctx context.Context, params *riverdr
 		FinalizedAt:         make([]time.Time, len(params.ID)),
 		FinalizedAtDoUpdate: make([]bool, len(params.ID)),
 		MetadataDoMerge:     make([]bool, len(params.ID)),
-		MetadataUpdates:     make([][]byte, len(params.ID)),
+		MetadataUpdates:     make([]string, len(params.ID)),
 		Now:                 params.Now,
 		ScheduledAt:         make([]time.Time, len(params.ID)),
 		ScheduledAtDoUpdate: make([]bool, len(params.ID)),
@@ -708,7 +713,9 @@ func (e *Executor) JobSetStateIfRunningMany(ctx context.Context, params *riverdr
 		}
 		if params.MetadataDoMerge[i] {
 			setStateParams.MetadataDoMerge[i] = true
-			setStateParams.MetadataUpdates[i] = params.MetadataUpdates[i]
+			setStateParams.MetadataUpdates[i] = string(params.MetadataUpdates[i])
+		} else {
+			setStateParams.MetadataUpdates[i] = "{}"
 		}
 		if params.ScheduledAt[i] != nil {
 			setStateParams.ScheduledAtDoUpdate[i] = true

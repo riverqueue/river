@@ -37,8 +37,9 @@ fresh schema for each test that is removed afterward. Otherwise they use SQLite.
 and excludes Postgres-only tests, even if a URL is set in your environment.
 `test/java/conformance` needs no external database: it runs the JUnit tests tagged
 `conformance`, using temporary SQLite databases for storage checks even if a
-Postgres URL is set. The full SQLite and Postgres targets run these checks
-against their selected backend. These targets first generate fresh fixtures
+database URL is set. `test/java/conformance/mysql` runs the same tagged tests on
+MySQL using `RIVER_TEST_DATABASE_URL`. The full SQLite, Postgres, and MySQL targets
+run these checks against their selected backend. These targets first generate fresh fixtures
 directly from this checkout's Go implementation, just like
 `test/js/conformance` and `test/rust/conformance`.
 
@@ -80,7 +81,7 @@ matrix running client, worker, and migration tests on JDK 25. All jobs use the
 shared Java setup action and Maven dependency caching. The whole workflow is
 filtered to changes in Java, its build configuration, fixtures, and canonical
 migrations. Go changes run the smaller fixture suite in the shared Conformance
-workflow alongside Rust and JavaScript.
+workflow on SQLite and MySQL alongside Ruby, Rust, and JavaScript.
 
 ## Legacy cross-process harness
 
@@ -119,3 +120,10 @@ does not overwrite the current migrations or generated fixtures.
 
 See [validation results](../VALIDATION.md) for the tested revisions and remaining
 limitations.
+
+## MySQL tests
+
+Set `RIVER_TEST_DATABASE_URL=mysql://root@localhost/` and run
+`make test/java/mysql` from the repository root. Each test creates and drops its
+own database, so the test user needs permission to do both. CI exercises MySQL
+8.0 and 8.4 with the shared client, worker, and migration suites.

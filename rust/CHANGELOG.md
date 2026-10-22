@@ -12,6 +12,8 @@ Changes to River for Go are recorded in the [repository changelog](../CHANGELOG.
 
 ### Added
 
+- MySQL support through the `mysql` feature, including transactional job operations, workers, notification delivery, maintenance, test helpers, and CLI migrations using River for Go's canonical schema.
+
 - A worker cancels its job with a reason by returning `JobCancelError`, like River for Go's `JobCancel(err)`. Anywhere in the worker error's source chain, it cancels the job whatever attempts it has left, skips the error handler, and records `JobCancelError: <reason>` on the attempt as Go does. `WorkOutcome::Cancel` still cancels without a reason. [PR #1504](https://github.com/riverqueue/river/pull/1504).
 
 ### Changed

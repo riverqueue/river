@@ -5,6 +5,16 @@ require_relative "../../../spec/driver_shared_examples"
 require_relative "../../../spec/row_decoding_shared_examples"
 
 RSpec.describe River::Driver::ActiveRecord do
+  it "selects the MySQL runtime and migrations for mysql2 connections" do
+    connection_class = Class.new(ActiveRecord::Base) do
+      self.abstract_class = true
+      def self.connection = Struct.new(:adapter_name).new("Mysql2")
+    end
+    driver = described_class.new(connection_class: connection_class)
+    expect(driver).to be_a(River::Driver::MySQLRuntime)
+    expect(driver.migration_backend).to eq(:mysql)
+  end
+
   before do
     if ENV["RIVER_DEBUG"] == "1" || ENV["RIVER_DEBUG"] == "true"
       ActiveRecord::Base.logger = Logger.new($stdout)

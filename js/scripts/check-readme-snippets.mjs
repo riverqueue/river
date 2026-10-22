@@ -13,6 +13,7 @@ const readmes = [
     .sort()
     .map((name) => `docs/${name}`),
   "cli/README.md",
+  "driver/mysql/README.md",
   "driver/pg/README.md",
   "driver/prisma/README.md",
   "driver/sqlite/README.md",
@@ -93,6 +94,9 @@ function checkProgram(directory, virtualFiles, readme) {
     outDir: undefined,
     paths: {
       "@riverqueue/cli": [resolve(repositoryRoot, "cli/dist/index.d.ts")],
+      "@riverqueue/driver-mysql": [
+        resolve(repositoryRoot, "driver/mysql/dist/index.d.ts"),
+      ],
       "@riverqueue/driver-pg": [
         resolve(repositoryRoot, "driver/pg/dist/index.d.ts"),
       ],

@@ -12,6 +12,7 @@ use serde_json::{Map, Value};
 use sqlx::Postgres;
 #[cfg(feature = "sqlite")]
 use sqlx::Sqlite;
+#[cfg(any(feature = "postgres", feature = "sqlite"))]
 use sqlx::Transaction;
 use tokio_util::sync::CancellationToken;
 
@@ -52,6 +53,10 @@ impl PilotDatabase {
             DatabasePool::Postgres(pool) => {
                 PilotTransactionInner::Postgres(crate::database::begin_postgres(pool).await?)
             }
+            #[cfg(feature = "mysql")]
+            DatabasePool::MySql(pool) => PilotTransactionInner::MySql(
+                crate::database::mysql::Transaction::begin(pool).await?,
+            ),
             #[cfg(feature = "sqlite")]
             DatabasePool::Sqlite(pool) => {
                 PilotTransactionInner::Sqlite(crate::database::begin_sqlite_write(pool).await?)
@@ -95,6 +100,8 @@ pub struct PilotTransaction(PilotTransactionInner);
 enum PilotTransactionInner {
     #[cfg(feature = "postgres")]
     Postgres(Transaction<'static, Postgres>),
+    #[cfg(feature = "mysql")]
+    MySql(crate::database::mysql::Transaction),
     #[cfg(feature = "sqlite")]
     Sqlite(Transaction<'static, Sqlite>),
 }
@@ -109,6 +116,8 @@ impl PilotTransaction {
         match self.0 {
             #[cfg(feature = "postgres")]
             PilotTransactionInner::Postgres(transaction) => transaction.commit().await?,
+            #[cfg(feature = "mysql")]
+            PilotTransactionInner::MySql(transaction) => transaction.commit().await?,
             #[cfg(feature = "sqlite")]
             PilotTransactionInner::Sqlite(transaction) => transaction.commit().await?,
         }
@@ -122,6 +131,8 @@ impl PilotTransaction {
             PilotTransactionInner::Postgres(transaction) => {
                 DatabaseConnection::Postgres(transaction)
             }
+            #[cfg(feature = "mysql")]
+            PilotTransactionInner::MySql(transaction) => DatabaseConnection::MySql(transaction),
             #[cfg(feature = "sqlite")]
             PilotTransactionInner::Sqlite(transaction) => DatabaseConnection::Sqlite(transaction),
         }
@@ -133,6 +144,8 @@ impl fmt::Debug for PilotTransaction {
         let kind = match &self.0 {
             #[cfg(feature = "postgres")]
             PilotTransactionInner::Postgres(_) => DatabaseKind::Postgres,
+            #[cfg(feature = "mysql")]
+            PilotTransactionInner::MySql(_) => DatabaseKind::MySql,
             #[cfg(feature = "sqlite")]
             PilotTransactionInner::Sqlite(_) => DatabaseKind::Sqlite,
         };
