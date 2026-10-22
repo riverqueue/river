@@ -321,6 +321,10 @@ check/rust/semver: ## Check Rust APIs against RUST_SEMVER_BASELINE_REV (default:
 		cd rust && cargo semver-checks --workspace --baseline-rev "$(RUST_SEMVER_BASELINE_REV)"; \
 	fi
 
+.PHONY: test/pgrust
+test/pgrust: ## Run tests with race detector against the latest pgRust (requires Docker)
+	+MAKE="$(MAKE)" bash ./.github/test-pgrust.sh
+
 .PHONY: test/race
 test/race:: ## Run tests with race detector (TEST_DATABASE=all, postgres, or sqlite)
 define test-race-target
