@@ -32,7 +32,22 @@ env:
   CARGO_INCREMENTAL: "0"
 
 jobs:
+  advisories:
+    name: Rust advisories
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-deny@0.20.2
+      - name: Check security advisories
+        run: make check/rust/advisories
+
   quality:
+    name: Rust quality
     runs-on: ubuntu-latest
     timeout-minutes: 20
 

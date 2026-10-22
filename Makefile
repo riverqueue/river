@@ -289,9 +289,13 @@ check/js/package: build/js
 	pnpm -C js run migration:legacy
 	pnpm -C js run package:check
 
+.PHONY: check/rust/advisories
+check/rust/advisories: ## Audit Rust dependencies against the advisory database
+	cd rust && cargo deny check advisories
+
 .PHONY: check/rust/dependencies
-check/rust/dependencies: ## Audit Rust advisories, licenses, bans, and sources
-	cd rust && cargo deny check
+check/rust/dependencies: ## Check Rust dependency licenses, bans, and sources
+	cd rust && cargo deny check bans licenses sources
 
 # Cargo caches temporary registry dependencies by path and version. A fresh
 # build directory prevents stale sources and binaries after same-version edits.
