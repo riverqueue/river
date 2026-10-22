@@ -6,12 +6,20 @@ version: 2
 multi-ecosystem-groups:
   dependencies:
     schedule:
-      interval: "weekly"
-      day: "monday"
+      interval: "monthly"
       time: "09:00"
       timezone: "America/Chicago"
 
 updates:
+  - package-ecosystem: "bundler"
+    directories:
+      - "/ruby"
+      - "/ruby/**/*"
+    cooldown:
+      default-days: 7
+    multi-ecosystem-group: "dependencies"
+    patterns:
+      - "*"
   - package-ecosystem: "cargo"
     directory: "/rust"
     cooldown:
@@ -30,6 +38,13 @@ updates:
   - package-ecosystem: "gomod"
     directories:
       - "**/*"
+    multi-ecosystem-group: "dependencies"
+    patterns:
+      - "*"
+  - package-ecosystem: "maven"
+    directory: "/java"
+    cooldown:
+      default-days: 7
     multi-ecosystem-group: "dependencies"
     patterns:
       - "*"
