@@ -6,18 +6,40 @@ import { describe, expect, it } from "vitest";
 import type { JobRow } from "../job.js";
 import {
   isExactJsonNumber,
+  jsonNumberToBigInt,
   parseJson,
+  type ExactJsonNumber,
   type JsonObject,
   type JsonValue,
 } from "../json.js";
 import { snooze } from "../worker.js";
-import { completionCommand } from "./completion-command.js";
+import { completionCommand, defaultNextRetry } from "./completion-command.js";
+
+/**
+ * A retry delay case from River Go's protocol goldens: the bounds, in
+ * nanoseconds, of the delay its default retry policy schedules after
+ * `error_count` errors, jitter included.
+ */
+interface RetryCase {
+  readonly error_count: number;
+  readonly job_id: ExactJsonNumber | number;
+  readonly max_delay_ns: ExactJsonNumber | number;
+  readonly min_delay_ns: ExactJsonNumber | number;
+  readonly now: string;
+  readonly seed: ExactJsonNumber | number;
+}
 
 interface SnoozeCounterCase {
   readonly expected_snoozes: JsonValue;
   readonly metadata: JsonObject;
   readonly name: string;
 }
+
+/** River Go's protocol goldens, including its retry delay bounds. */
+const PROTOCOL_GOLDENS = new URL(
+  "../../../conformance/testdata/protocol_values.json",
+  import.meta.url
+);
 
 /** River Go's snooze counter goldens, generated from its executor. */
 const GOLDENS = new URL(
@@ -86,6 +108,53 @@ describe("completionCommand", () => {
     expect(command.kind).toBe("snooze");
     expect(command.scheduledAt).not.toBeNull();
     expect(BigInt(numberText(command.metadata?.snoozes))).toBeGreaterThan(0n);
+  });
+});
+
+describe("defaultNextRetry", () => {
+  // `conformance.test.ts` checks every Go retry case stays within its
+  // bounds across the jitter range. This also checks that no jitter gives
+  // exactly Go's lower bound, so the base delay matches Go's and isn't
+  // merely close to it.
+  it("schedules Go's minimum delay without jitter", async () => {
+    // Parse with River's exact JSON so nanosecond bounds beyond 2^53 stay
+    // exact.
+    const golden = parseJson(
+      await readFixture(PROTOCOL_GOLDENS)
+    ) as unknown as { readonly retry_cases: readonly RetryCase[] };
+    expect(golden.retry_cases.length).toBeGreaterThan(0);
+
+    const delays = golden.retry_cases.map((retryCase) => {
+      const now = Temporal.Instant.from(retryCase.now);
+      const errors = Array.from(
+        { length: retryCase.error_count - 1 },
+        (_, i) => ({
+          at: now,
+          attempt: i + 1,
+          error: "failed",
+          trace: "",
+        })
+      );
+      const retryJob = {
+        ...job({}),
+        attempt: retryCase.error_count,
+        errors,
+        id: jsonNumberToBigInt(retryCase.job_id),
+        maxAttempts: retryCase.error_count + 1,
+      };
+      return [
+        retryCase.error_count,
+        defaultNextRetry(retryJob, now, () => 0).epochNanoseconds -
+          now.epochNanoseconds,
+      ];
+    });
+
+    expect(delays).toEqual(
+      golden.retry_cases.map(({ error_count, min_delay_ns }) => [
+        error_count,
+        jsonNumberToBigInt(min_delay_ns),
+      ])
+    );
   });
 });
 

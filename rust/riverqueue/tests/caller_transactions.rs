@@ -519,6 +519,30 @@ mod postgres {
         fixture.cleanup().await;
     }
 
+    // Committing a transaction aborted by a failed statement rolls it back,
+    // so a job inserted in it before the failure is never visible.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn database_error_makes_caller_commit_roll_back() {
+        let fixture = Fixture::new().await;
+        let client = fixture.pilot_client(&Arc::new(AtomicBool::new(false)), true);
+        let plain = fixture.builder().build().unwrap();
+
+        let mut tx = fixture.begin().await;
+        let prior = plain.insert(args("prior")).tx(&mut tx).await.unwrap().id();
+        assert!(client.insert(args("failed")).tx(&mut tx).await.is_err());
+        assert_eq!(fixture.job_ids().await, Vec::<i64>::new());
+        // Postgres answers `COMMIT` in an aborted transaction with a
+        // rollback rather than an error.
+        tx.commit().await.unwrap();
+
+        assert_eq!(fixture.job_ids().await, Vec::<i64>::new());
+        assert!(matches!(
+            plain.jobs().get(prior).await,
+            Err(Error::NotFound(_))
+        ));
+        fixture.cleanup().await;
+    }
+
     // Every write River makes in a caller's transaction, including an
     // intercepting extension's, carries the caller's transaction ID. A
     // savepoint would give its writes their own subtransaction ID.
