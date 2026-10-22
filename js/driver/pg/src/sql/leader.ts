@@ -90,6 +90,7 @@ export async function leaderDeleteExpired(
     `
       DELETE FROM ${db.table("river_leader")}
       WHERE expires_at < coalesce($1::timestamptz, now())
+      RETURNING 1
     `,
     [instantParameter(now)],
     options
@@ -119,6 +120,7 @@ export async function leaderResign(
         ) END FROM held
       )
       DELETE FROM ${db.table("river_leader")} USING notified
+      RETURNING 1
     `,
     [
       instantParameter(params.electedAt),

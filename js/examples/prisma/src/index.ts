@@ -1,9 +1,15 @@
 import { randomUUID } from "node:crypto";
+import assert from "node:assert/strict";
 
 import { PrismaPg } from "@prisma/adapter-pg";
-import { PrismaDriver } from "@riverqueue/driver-prisma";
-import { Client, defineJob } from "riverqueue";
-import { PrismaClient } from "./generated/prisma/client.js";
+import { PgDriver } from "@riverqueue/driver-pg";
+import {
+  PrismaDriver,
+  prismaTransactionAdapter,
+} from "@riverqueue/driver-prisma";
+import { Pool } from "pg";
+import { Client, defineJob, Workers } from "riverqueue";
+import { PrismaClient, type Prisma } from "./generated/prisma/client.js";
 import { z } from "zod";
 
 const sort = defineJob<{ strings: string[] }>()({ kind: "sort" });
@@ -71,15 +77,70 @@ async function main() {
     )
   `;
   const accountId = `prisma_${randomUUID()}`;
-  await prisma.$transaction(async (tx) => {
+  const queue = `prisma_${randomUUID()}`;
+  const inserted = await prisma.$transaction(async (tx) => {
     await tx.$executeRaw`
       INSERT INTO riverqueue_example_account (id) VALUES (${accountId})
     `;
-    await client.insert(syncAccount, { accountId }, { tx });
+    return client.insert(syncAccount, { accountId }, { queue, tx });
   });
   console.log(`Committed account ${accountId} and its job atomically`);
 
-  await prisma.$disconnect();
+  await prisma.$executeRaw`
+    CREATE TABLE IF NOT EXISTS riverqueue_example_synced_account (
+      id text PRIMARY KEY
+    )
+  `;
+  const pool = new Pool({ connectionString });
+  const workers = new Workers<Prisma.TransactionClient>().add(
+    syncAccount,
+    async ({ completeTx, job }) => {
+      await prisma.$transaction(async (tx) => {
+        await tx.$executeRaw`
+        INSERT INTO riverqueue_example_synced_account (id)
+        VALUES (${job.args.accountId})
+      `;
+        await completeTx(tx);
+      });
+    }
+  );
+  const workerClient = new Client(
+    new PgDriver(pool, { transactionAdapters: [prismaTransactionAdapter] }),
+    { queues: { [queue]: { maxWorkers: 1 } }, workers }
+  );
+  const events = workerClient.subscribe({
+    kinds: ["job_completed", "job_failed"],
+    signal: AbortSignal.timeout(10_000),
+  });
+  try {
+    const run = await workerClient.start();
+    try {
+      for await (const event of events) {
+        if (
+          event.kind === "subscription_lag" ||
+          event.job.id !== inserted.job.id
+        )
+          continue;
+        assert.equal(event.kind, "job_completed");
+        break;
+      }
+      assert.equal(
+        (await workerClient.jobs.get(inserted.job.id))?.state,
+        "completed"
+      );
+      const rows = await prisma.$queryRaw<{ id: string }[]>`
+        SELECT id FROM riverqueue_example_synced_account WHERE id = ${accountId}
+      `;
+      assert.deepEqual(rows, [{ id: accountId }]);
+      console.log(`Committed account sync and job completion atomically`);
+    } finally {
+      await run.stop();
+    }
+  } finally {
+    events.close();
+    await prisma.$disconnect();
+    await pool.end();
+  }
 }
 
 main().catch((error: unknown) => {

@@ -10,9 +10,9 @@ import {
 export interface PrismaClientLike {
   $queryRawUnsafe<T = unknown>(query: string, ...values: unknown[]): Promise<T>;
   /**
-   * Prisma's interactive transaction, present on a root client (not on the
-   * transaction client it passes to the callback). River uses it to run an
-   * insertion without `{ tx }` in a transaction of its own.
+   * Prisma's interactive transaction, present on a root client and on
+   * transaction clients in versions supporting nested transactions. River
+   * uses it to run an insertion without `{ tx }` in a transaction of its own.
    */
   $transaction?<R>(
     callback: (tx: PrismaClientLike) => Promise<R>,

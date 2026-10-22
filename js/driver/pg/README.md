@@ -64,6 +64,13 @@ importing the adapter from `@riverqueue/driver-knex`. This enables both
 [Knex transaction example](../knex/README.md#complete-jobs-inside-knex-transactions).
 The adapter is optional; this package has no Knex dependency.
 
+To use native Prisma transactions, configure
+`new PgDriver(pool, { transactionAdapters: [prismaTransactionAdapter] })`,
+importing the adapter from `@riverqueue/driver-prisma`. This enables both
+`completeTx(tx)` in workers and `{ tx }` on client operations. See the
+[Prisma transaction example](../prisma/README.md#complete-jobs-inside-prisma-transactions).
+The adapter is optional; this package has no Prisma dependency.
+
 Apply migrations explicitly with `@riverqueue/migrate` or
 `@riverqueue/cli` before starting workers.
 

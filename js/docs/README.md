@@ -366,6 +366,11 @@ worker's `PgDriver` and use `new Workers<Knex.Transaction>()`. See the
 [Knex example](../driver/knex/README.md#complete-jobs-inside-knex-transactions).
 Installing the Knex driver alone does not enable its transactions on `PgDriver`.
 
+For native Prisma transactions, configure `prismaTransactionAdapter` on the
+worker's `PgDriver` and use `new Workers<Prisma.TransactionClient>()`. See the
+[Prisma example](../driver/prisma/README.md#complete-jobs-inside-prisma-transactions).
+Installing the Prisma driver alone does not enable its transactions on `PgDriver`.
+
 ## Run workers
 
 Configure queues and start the client. `maxWorkers` bounds concurrent

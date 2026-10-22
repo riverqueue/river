@@ -571,7 +571,7 @@ import { run as runCli } from "@riverqueue/cli";
 import { KnexDriver, knexTransactionAdapter } from "@riverqueue/driver-knex";
 import type { Knex } from "knex";
 import { PgDriver } from "@riverqueue/driver-pg";
-import { PrismaDriver, type PrismaClientLike } from "@riverqueue/driver-prisma";
+import { PrismaDriver, prismaTransactionAdapter, type PrismaClientLike, type PrismaTransactionClientLike } from "@riverqueue/driver-prisma";
 import {
   SqliteDriver,
   transaction,
@@ -621,6 +621,25 @@ void knexRuntimeClient.jobs.get(1n, { tx: pgTx });
 void knexRuntimeClient.jobs.get(1n, { tx: knex });
 // @ts-expect-error Knex transactions require a configured adapter.
 void pgClient.jobs.get(1n, { tx: knexTx });
+
+declare const prismaTx: PrismaTransactionClientLike;
+declare const prismaRoot: PrismaClientLike & { $disconnect(): Promise<void> };
+const prismaWorkers = new Workers<PrismaTransactionClientLike>().add(emailJob, async ({ completeTx, client }) => {
+  await completeTx(prismaTx);
+  await client.insert(emailJob, { address: "followup@example.com" }, { tx: prismaTx });
+  // @ts-expect-error A root PrismaClient is not a transaction.
+  await completeTx(prismaRoot);
+});
+const prismaRuntimeClient = new Client(
+  new PgDriver(pgPool, { transactionAdapters: [prismaTransactionAdapter] }),
+  { workers: prismaWorkers },
+);
+void prismaRuntimeClient.jobs.get(1n, { tx: prismaTx });
+void prismaRuntimeClient.jobs.get(1n, { tx: pgTx });
+// @ts-expect-error A root PrismaClient is not a transaction.
+void prismaRuntimeClient.jobs.get(1n, { tx: prismaRoot });
+// @ts-expect-error Prisma transactions require a configured adapter.
+void pgClient.jobs.get(1n, { tx: prismaTx });
 const sqliteDriver = new SqliteDriver(sqliteDatabase);
 const sqliteClient = new Client(sqliteDriver);
 const migrators: Migrator[] = [

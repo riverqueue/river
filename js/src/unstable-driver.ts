@@ -178,4 +178,5 @@ export type {
   PostgresTransactionAdapter,
   PostgresTransactionQuery,
   PostgresTransactionResult,
+  PostgresTransactionTextQuery,
 } from "./internal/postgres-transaction.js";
