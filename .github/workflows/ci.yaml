@@ -283,27 +283,15 @@ jobs:
 
       - run: river version
 
-      - name: river bench
-        run: |
-          if [ "$RUNNER_OS" == "Linux" ]; then
-            ( sleep 10 && killall -SIGTERM river ) &
-            river bench --database-url $DATABASE_URL
-          elif [ "$RUNNER_OS" == "Windows" ]; then
-            (sleep 10 && taskkill //F //IM river.exe //T ) &
-            river bench --database-url $DATABASE_URL || exit 0
-          fi
+      # Bound benchmarks in the CLI so a delayed kill cannot target a later
+      # CLI invocation after a benchmark finishes early.
+      - name: river bench (duration)
+        run: river bench --database-url "$DATABASE_URL" --duration 10s
         shell: bash
 
       # Bench again in fixed number of jobs mode.
-      - name: river bench
-        run: |
-          if [ "$RUNNER_OS" == "Linux" ]; then
-            ( sleep 10 && killall -SIGTERM river ) &
-            river bench --database-url $DATABASE_URL --num-total-jobs 1_234
-          elif [ "$RUNNER_OS" == "Windows" ]; then
-            (sleep 10 && taskkill //F //IM river.exe //T ) &
-            river bench --database-url $DATABASE_URL --num-total-jobs 1_234 || exit 0
-          fi
+      - name: river bench (fixed number of jobs)
+        run: river bench --database-url "$DATABASE_URL" --num-total-jobs 1_234
         shell: bash
 
       - run: river migrate-down --database-url $DATABASE_URL --max-steps 100
