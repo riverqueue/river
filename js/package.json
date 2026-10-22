@@ -110,7 +110,7 @@
     "typescript-eslint": "^8.65.0",
     "typescript-next": "npm:typescript@7.1.0-dev.20260830.1",
     "valibot": "^1.5.0",
-    "vite": "^8.0.16",
+    "vite": "^8.1.6",
     "vitest": "^4.1.11",
     "zod": "^4.6.5"
   },
