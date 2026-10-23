@@ -81,7 +81,7 @@ func TestJobSnooze(t *testing.T) {
 			-time.Second,
 		} {
 			require.PanicsWithValue(t, "JobSnooze: duration must be >= 0", func() {
-				river.JobSnooze(duration)
+				_ = river.JobSnooze(duration)
 			})
 		}
 	})
