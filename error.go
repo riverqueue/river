@@ -41,6 +41,9 @@ type JobSnoozeError = rivertype.JobSnoozeError
 //
 // Panics if duration is < 0.
 func JobSnooze(duration time.Duration) error {
+	if duration < 0 {
+		panic("JobSnooze: duration must be >= 0")
+	}
 	return &rivertype.JobSnoozeError{Duration: duration}
 }
 
