@@ -5,6 +5,7 @@ package river_test
 import (
 	"errors"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 
@@ -66,5 +67,38 @@ func TestJobCancel(t *testing.T) {
 		t.Parallel()
 		err1 := river.JobCancel(errors.New("some message"))
 		require.NotErrorIs(t, err1, &river.UnknownJobKindError{Kind: "MyJobArgs"})
+	})
+}
+
+func TestJobSnooze(t *testing.T) {
+	t.Parallel()
+
+	t.Run("PanicsForNegativeDuration", func(t *testing.T) {
+		t.Parallel()
+
+		for _, duration := range []time.Duration{
+			-time.Nanosecond,
+			-time.Second,
+		} {
+			require.PanicsWithValue(t, "JobSnooze: duration must be >= 0", func() {
+				river.JobSnooze(duration)
+			})
+		}
+	})
+
+	t.Run("AcceptsNonNegativeDuration", func(t *testing.T) {
+		t.Parallel()
+
+		for _, duration := range []time.Duration{
+			0,
+			time.Second,
+			5 * time.Minute,
+		} {
+			err := river.JobSnooze(duration)
+
+			var snoozeErr *river.JobSnoozeError
+			require.ErrorAs(t, err, &snoozeErr)
+			require.Equal(t, duration, snoozeErr.Duration)
+		}
 	})
 }
