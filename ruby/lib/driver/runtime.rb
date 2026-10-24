@@ -68,19 +68,23 @@ module River::Driver
     # The cancellation predicate must be part of the completion update so it is
     # checked against the row we lock, including concurrent cancellations.
     # :cancelled asks the runtime to apply its normal cancellation/error hooks.
-    def job_complete(id:, finalized_at:, metadata: nil, now: Time.now.utc)
+    def job_complete(id:, finalized_at:, expected_job: nil, metadata: nil, now: Time.now.utc)
       id = Integer(id)
+      predicate = "id = #{id}"
+      predicate += " AND #{runtime_job_attempt_predicate(expected_job)}" if expected_job
       assignments = ["state = 'completed'", "finalized_at = #{runtime_time(finalized_at)}"]
       assignments << "metadata = #{runtime_merge_metadata(metadata)}" unless metadata.nil? || metadata.empty?
 
-      updated_id = runtime_returning_ids(<<~SQL).first
-        UPDATE river_job SET #{assignments.join(", ")}
-        WHERE id = #{id} AND state = 'running' AND NOT (#{runtime_cancel_attempted})
-        RETURNING id
-      SQL
-      return runtime_read_job(updated_id) if updated_id
+      transaction do
+        updated_id = runtime_returning_ids(<<~SQL).first
+          UPDATE river_job SET #{assignments.join(", ")}
+          WHERE #{predicate} AND state = 'running' AND NOT (#{runtime_cancel_attempted})
+          RETURNING id
+        SQL
+        next runtime_read_job(updated_id) if updated_id
 
-      :cancelled if job_get_cancelled_ids([id]).include?(id)
+        :cancelled if runtime_returning_ids("SELECT id FROM river_job WHERE #{predicate} AND (#{runtime_cancel_attempted})").any?
+      end
     end
 
     def job_delete(id)
@@ -165,14 +169,24 @@ module River::Driver
       runtime_job_list(params)
     end
 
-    def job_metadata_merge(id, metadata)
-      updated_id = runtime_returning_ids(<<~SQL).first
-        UPDATE river_job
-        SET metadata = #{runtime_merge_metadata(metadata)}
-        WHERE id = #{Integer(id)}
-        RETURNING id
-      SQL
-      updated_id ? job_get_by_id(updated_id) : nil
+    # When supplied, expected_job prevents metadata from crossing into another
+    # attempt or state. Keep the update and returned snapshot in one transaction.
+    def job_metadata_merge(id, metadata, expected_job = nil)
+      predicate = "id = #{Integer(id)}"
+      if expected_job
+        predicate += " AND #{runtime_job_attempt_predicate(expected_job)}"
+        predicate += " AND state = #{runtime_quote(expected_job.state)}"
+      end
+
+      transaction do
+        updated_id = runtime_returning_ids(<<~SQL).first
+          UPDATE river_job
+          SET metadata = #{runtime_merge_metadata(metadata)}
+          WHERE #{predicate}
+          RETURNING id
+        SQL
+        updated_id ? job_get_by_id(updated_id) : nil
+      end
     end
 
     def job_rescue_stuck(horizon:, retry_policy:, now: Time.now.utc, max: 1_000, logger: nil, rescue_if: nil)
@@ -604,6 +618,10 @@ module River::Driver
 
       value = runtime_time(cursor.value)
       "(#{column} IS NULL OR #{column} #{comparison} #{value} OR (#{column} = #{value} AND #{id_clause}))"
+    end
+
+    private def runtime_job_attempt_predicate(job)
+      "attempt = #{Integer(job.attempt)} AND attempted_at IS NOT DISTINCT FROM #{runtime_nullable_time(job.attempted_at)}"
     end
 
     private def runtime_job_list(params, for_delete: false)

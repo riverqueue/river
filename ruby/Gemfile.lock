@@ -11,7 +11,7 @@ PATH
   remote: driver/riverqueue-activerecord
   specs:
     riverqueue-activerecord (0.13.0)
-      activerecord (> 0, < 1000)
+      activerecord (>= 7.2, < 1000)
       activesupport (> 0, < 1000)
       riverqueue (= 0.13.0)
 
@@ -20,7 +20,7 @@ PATH
   specs:
     riverqueue-sequel (0.13.0)
       riverqueue (= 0.13.0)
-      sequel (> 0, < 1000)
+      sequel (>= 5.20, < 1000)
 
 GEM
   remote: https://rubygems.org/

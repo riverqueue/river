@@ -1,6 +1,8 @@
 module River
   interface _Driver
+    def after_commit: () { () -> void } -> void
     def respond_to?: (Symbol, ?bool) -> bool
+    def in_transaction?: () -> bool
     def init_driver: () -> void
     def migration_backend: () -> Symbol
     def migration_connection: [A] () { (untyped) -> A } -> A
@@ -13,11 +15,11 @@ module River
     def job_get_available: (queue: String, max: Integer, attempted_by: String, ?kinds: Array[String]?, ?now: Time) -> Array[JobRow]
     def job_claim: (id: Integer, attempted_by: String, ?allow_scheduled: bool, ?now: Time) -> JobRow?
     def job_get_cancelled_ids: (Array[Integer]) -> Array[Integer]
-    def job_complete: (id: Integer, finalized_at: Time, ?metadata: Hash[untyped, untyped]?, ?now: Time) -> (JobRow | :cancelled)?
+    def job_complete: (id: Integer, finalized_at: Time, ?expected_job: JobRow?, ?metadata: Hash[untyped, untyped]?, ?now: Time) -> (JobRow | :cancelled)?
     def job_get_by_kind_and_unique_properties: (Driver::JobGetByKindAndUniquePropertiesParam) -> JobRow?
     def job_insert: (Driver::JobInsertParams) -> [JobRow, bool]
     def job_insert_many: (Array[Driver::JobInsertParams]) -> Array[[JobRow, bool]]
-    def job_metadata_merge: (Integer, Hash[untyped, untyped]) -> JobRow?
+    def job_metadata_merge: (Integer, Hash[untyped, untyped], ?JobRow?) -> JobRow?
     def job_rescue_stuck: (**untyped) -> Integer
     def job_retry: (Integer, ?now: Time) -> JobRow?
     def job_schedule: (?now: Time, ?max: Integer) -> Integer
@@ -127,7 +129,7 @@ module River
       def postgres_capabilities: () -> PostgresCapabilities
       def postgres_notify_insert: (Array[JobInsertParams]) -> void
       def job_get_cancelled_ids: (Array[Integer]) -> Array[Integer]
-      def job_complete: (id: untyped, finalized_at: untyped, ?metadata: untyped, ?now: untyped) -> untyped
+      def job_complete: (id: untyped, finalized_at: untyped, ?expected_job: untyped, ?metadata: untyped, ?now: untyped) -> untyped
       def job_cancel: (untyped, ?now: untyped) -> untyped
       def job_delete: (untyped) -> untyped
       def job_delete_finalized: (retention: untyped, ?now: untyped, ?max: untyped) -> untyped
@@ -137,7 +139,7 @@ module River
       def job_claim: (id: untyped, attempted_by: untyped, ?allow_scheduled: untyped, ?now: untyped) -> untyped
       private def runtime_claim_jobs: (untyped, untyped, untyped, untyped) -> untyped
       def job_list: (?untyped) -> untyped
-      def job_metadata_merge: (untyped, untyped) -> untyped
+      def job_metadata_merge: (untyped, untyped, ?untyped) -> untyped
       def job_rescue_stuck: (horizon: untyped, retry_policy: untyped, ?now: untyped, ?max: untyped, ?logger: untyped, ?rescue_if: untyped) -> untyped
       def job_retry: (untyped, ?now: untyped) -> untyped
       def job_schedule: (?now: untyped, ?max: untyped) -> untyped
@@ -165,6 +167,7 @@ module River
       def runtime_cursor_clause: (untyped) -> String
       def runtime_execute: (String) -> untyped
       def runtime_in_clause: (untyped, untyped) -> untyped
+      def runtime_job_attempt_predicate: (untyped) -> String
       def runtime_job_list_without_params: () -> untyped
       def runtime_job_list: (JobListParams, ?for_delete: bool) -> Array[JobRow]
       def runtime_job_rows: (String) -> untyped

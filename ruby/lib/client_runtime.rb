@@ -327,6 +327,8 @@ module River
           finish_work(row.id)
         end
 
+        return [:completed, nil] if finish_transactional_completion(job, timing)
+
         finalize_hooks = @config.plugins.any? { |plugin| plugin.respond_to?(:job_finalize) }
         if finalize_hooks
           raise JobCancelError if @driver.job_get_cancelled_ids([row.id]).include?(row.id)
@@ -346,19 +348,22 @@ module River
         end
 
         [:completed, nil]
-      rescue JobSnoozeError => error
-        job.__capture_resumable_metadata!
-        [finish_snoozed(row, job, error, timing), error]
-      rescue JobCancelError => error
-        job.__capture_resumable_metadata!
-        finish_failed(row, job, error, timing, cancelled: true)
-        [:cancelled, error]
-      rescue Interrupted => error
-        job.__capture_resumable_metadata!
-        [finish_interrupted(row, job, timing), error]
       rescue => error
+        return [:completed, nil] if finish_transactional_completion(job, timing)
+
         job.__capture_resumable_metadata!
-        [finish_failed(row, job, error, timing, worker: worker), error]
+        outcome = case error
+        when JobSnoozeError
+          finish_snoozed(row, job, error, timing)
+        when JobCancelError
+          finish_failed(row, job, error, timing, cancelled: true)
+          :cancelled
+        when Interrupted
+          finish_interrupted(row, job, timing)
+        else
+          finish_failed(row, job, error, timing, worker: worker)
+        end
+        [outcome, error]
       ensure
         @mutex.synchronize do
           @running.delete(row.id)
@@ -433,6 +438,35 @@ module River
       )
       publish(EVENT_JOB_SNOOZED, updated, timing) if updated
       (updated&.state == JOB_STATE_CANCELLED) ? :cancelled : :snoozed
+    end
+
+    private def finish_transactional_completion(job, timing)
+      return false unless job.__completion_attempted
+
+      completed = @driver.job_get_by_id(job.row.id)
+      unless completed
+        snapshot = job.__completion_snapshot
+        return false unless snapshot
+
+        publish(EVENT_JOB_COMPLETED, snapshot, timing)
+        return true
+      end
+
+      # A retry can replace a committed attempt before its worker or middleware
+      # returns. Only a still-running original attempt may have rolled back and
+      # need normal finalization; never finalize or publish a replacement.
+      return true unless completed.attempt == job.row.attempt && completed.attempted_at == job.row.attempted_at
+      return false if completed.state == JOB_STATE_RUNNING
+      return true unless completed.state == JOB_STATE_COMPLETED
+
+      # Work middleware (including persisted logging) can add metadata after the
+      # worker commits. Save it without changing the committed state or timestamp.
+      # Guard the write too: a retry can happen after the read above.
+      metadata = job.metadata_updates
+      completed = @driver.job_metadata_merge(job.row.id, metadata, completed) || completed unless metadata.empty?
+
+      publish(EVENT_JOB_COMPLETED, completed, timing)
+      true
     end
 
     private def finish_work(id)

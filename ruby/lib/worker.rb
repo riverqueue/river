@@ -81,6 +81,12 @@ module River
   # A job being worked, with access to its persisted row and attempt-local
   # metadata changes.
   class Job
+    # Internal runtime hint; persisted state determines whether completion committed.
+    attr_accessor :__completion_attempted
+
+    # Internal snapshot retained only after transactional completion commits.
+    attr_accessor :__completion_snapshot
+
     # Client working this job.
     attr_reader :client
 
@@ -89,6 +95,8 @@ module River
 
     def initialize(client, row)
       @client = client
+      @__completion_attempted = false
+      @__completion_snapshot = nil
       @logger = nil
       @metadata_updates = {}
       @row = row
