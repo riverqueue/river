@@ -1831,10 +1831,12 @@ async fn resumable_cursor_and_transactional_checkpoints() {
             .as_deref(),
         Some("tx_step")
     );
-    assert!(
-        !committed_step
+    assert_eq!(
+        committed_step
             .metadata
-            .contains_key("river:resumable_cursor")
+            .get::<serde_json::Value>("river:resumable_cursor")
+            .unwrap(),
+        Some(serde_json::Value::Null)
     );
 
     for mode in ["rollback_cursor", "rollback_step"] {

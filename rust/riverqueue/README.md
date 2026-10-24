@@ -260,7 +260,9 @@ results are persisted, and independent jobs have no global completion order.
   `Etc/GMT±N` names parse.
 - Resumable steps persist the last completed step and an optional cursor. Use
   the transactional checkpoint helpers when progress and business data must
-  commit together.
+  commit together. Commit inside the step callback and propagate transaction
+  and commit errors from it; returning `Ok(())` marks the step complete even if
+  an enclosing transaction later rolls back.
 - Insertion middleware wraps the insert-begin hooks, and work middleware wraps
   the work hooks, argument decoding, and the worker. See [`WorkMiddleware`]
   and [`Hook`].

@@ -218,8 +218,10 @@ where
             .map_err(TestWorkError::Worker),
         Err(error) => Err(TestWorkError::Resumable(error)),
     };
-    if let Some(error) = __private::work_context_resumable_finish(&context, result.is_err())
-        && result.is_ok()
+    if let Some(error) = __private::work_context_resumable_finish(
+        &context,
+        !matches!(result, Ok(WorkOutcome::Complete)),
+    ) && result.is_ok()
     {
         result = Err(TestWorkError::Resumable(error));
     }
@@ -243,6 +245,37 @@ mod tests {
     use serde::{Deserialize, Serialize};
 
     use super::*;
+
+    struct ResumableSnoozeWorker;
+
+    impl Worker<TestArgs> for ResumableSnoozeWorker {
+        type Error = Error;
+
+        async fn work(
+            &self,
+            context: WorkContext,
+            _job: Job<TestArgs>,
+        ) -> Result<WorkOutcome, Self::Error> {
+            context
+                .resumable_step("first", || async { Ok::<_, Error>(()) })
+                .await?;
+            Ok(WorkOutcome::Snooze(Duration::from_secs(60)))
+        }
+    }
+
+    #[tokio::test]
+    async fn resumable_progress_survives_snooze() {
+        let job = TestJobBuilder::new(TestArgs {
+            message: "snooze".to_owned(),
+        })
+        .build()
+        .unwrap();
+        let attempt = work_once(&ResumableSnoozeWorker, job).await;
+        assert_eq!(
+            serde_json::Value::Object(attempt.metadata_updates),
+            serde_json::json!({"river:resumable_step": "first"})
+        );
+    }
 
     struct ResumableWorker {
         calls: AtomicUsize,

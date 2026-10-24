@@ -130,12 +130,22 @@ public final class WorkContext<A> {
    * Persists the current resumable step in the caller's transaction. Call inside a step, after its
    * application writes. Let transaction failures escape the step so retries use committed progress.
    * The connection must have auto-commit disabled.
+   *
+   * <p>Commit the transaction before the step callback returns successfully, and propagate
+   * transaction and commit errors from that callback. A successful callback marks the step complete
+   * even if an enclosing transaction later rolls back.
    */
   public Job<A> checkpoint(Connection transaction) {
     return persistCheckpoint(transaction, cursors.deepCopy());
   }
 
-  /** Persists the current resumable step and JSON cursor alongside application writes. */
+  /**
+   * Persists the current resumable step and JSON cursor alongside application writes.
+   *
+   * <p>Commit the transaction before the step callback returns successfully, and propagate
+   * transaction and commit errors from that callback. A successful callback marks the step complete
+   * even if an enclosing transaction later rolls back.
+   */
   public Job<A> checkpoint(Connection transaction, Object cursor) {
     var updates = cursors.deepCopy();
     if (currentStep == null)

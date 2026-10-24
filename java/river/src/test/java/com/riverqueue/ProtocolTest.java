@@ -300,6 +300,65 @@ class ProtocolTest {
     return tests.stream();
   }
 
+  @TestFactory
+  Stream<DynamicTest> resumableConformance() throws Exception {
+    var tests = new ArrayList<DynamicTest>();
+    for (var fixture : Conformance.fixture("resumable.json").required("cases")) {
+      String name = fixture.required("name").asString();
+      // Transactional checkpoints have database coverage in ResumableTest.
+      if (name.startsWith("checkpoint_")) continue;
+      tests.add(
+          DynamicTest.dynamicTest(
+              name,
+              () -> {
+                var context = context(42);
+                Exception failure =
+                    assertThrows(
+                        Exception.class,
+                        () -> {
+                          if (name.equals("step_snooze")) {
+                            context.step("first", () -> {});
+                            context.snooze(java.time.Duration.ofSeconds(60));
+                          } else {
+                            context.stepWithCursor(
+                                "loop",
+                                cursor -> {
+                                  context.cursor(7);
+                                  throw new Exception("retry");
+                                });
+                          }
+                        });
+                context.finish(failure);
+                assertEquals(fixture.required("expected_metadata"), context.metadataUpdates());
+              }));
+    }
+    return tests.stream();
+  }
+
+  @Test
+  void resumableFirstStepCursor() throws Exception {
+    var context = context(42, Json.object());
+    var failure = new Exception("retry");
+    assertThrows(
+        Exception.class,
+        () ->
+            context.stepWithCursor(
+                "loop",
+                cursor -> {
+                  context.cursor(Map.of("n", 7));
+                  throw failure;
+                }));
+    assertSame(failure, context.finish(failure));
+    assertEquals(
+        Json.tree(Map.of(Protocol.METADATA_RESUMABLE_CURSOR, Map.of("loop", Map.of("n", 7)))),
+        context.metadataUpdates());
+    var retry = context(42, context.metadataUpdates());
+    retry.stepWithCursor("loop", cursor -> assertEquals(Json.tree(Map.of("n", 7)), cursor));
+    retry.finish(new Exception("later failure"));
+    assertEquals("loop", retry.metadataUpdates().path(Protocol.METADATA_RESUMABLE_STEP).asString());
+    assertTrue(retry.metadataUpdates().path(Protocol.METADATA_RESUMABLE_CURSOR).isNull());
+  }
+
   @Test
   void resumableMetadata() throws Exception {
     var keys = Conformance.fixture("protocol_values.json").required("metadata_keys");

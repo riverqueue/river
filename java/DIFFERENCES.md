@@ -39,18 +39,12 @@
   reproducing Go's nonterminating date loop.
 - SQL is kept in dialect-specific resource catalogs. The Go sqlc driver seam is
   not part of the Java API.
-- Resumable cursor updates are saved even when the first step fails before any
-  step completes. Go currently drops cursor updates in that case. Updating a
-  cursor never marks a step completed; a failed plain step still runs on retry.
 - Resumable steps cannot be nested in Java. Each attempt has one active step and
   checkpoint scope, so rejecting nesting avoids ambiguous resume order and
   checkpoint ownership. Go currently permits nested steps.
 - Transactional checkpoints require the job to still be running with the same
   `attempt` and `attempted_at`. Go updates by job ID alone. Java rejects a stale
   attempt's checkpoint to prevent it from changing a replacement attempt.
-- A transactional checkpoint with no cursors stores `river:resumable_cursor` as
-  JSON null, clearing any older cursor map. Go may omit that key; readers in both
-  languages accept null as an empty cursor map.
 - SQLite follows Go's JSONB storage and millisecond timestamp representation;
   Postgres uses microsecond timestamps. These are shared storage contracts,
   not configurable Java serialization choices.

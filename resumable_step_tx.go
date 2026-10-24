@@ -4,9 +4,9 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"maps"
 
 	"github.com/riverqueue/river/internal/execution"
-	"github.com/riverqueue/river/internal/jobexecutor"
 	"github.com/riverqueue/river/internal/rivercommon"
 	"github.com/riverqueue/river/riverdriver"
 	"github.com/riverqueue/river/rivertype"
@@ -14,7 +14,7 @@ import (
 
 // ResumableSetStepTx immediately persists the current resumable step as
 // part of transaction tx. If tx is rolled back, the step update will be as
-// well.
+// well. Earlier progress not already persisted may be replayed after rollback.
 //
 // Normally, a resumable job's step progress is recorded after it runs along
 // with its result status. This is normally sufficient, but because it happens
@@ -25,13 +25,18 @@ import (
 //
 // Must be called from within a ResumableStep or ResumableStepCursor callback.
 // The current step name to persist is read from context.
+//
+// Commit tx before the step callback returns successfully, and return any
+// transaction or commit error from that callback. A successful callback marks
+// the step complete even if an enclosing transaction later rolls back.
 func ResumableSetStepTx[TDriver riverdriver.Driver[TTx], TTx any, TArgs JobArgs](ctx context.Context, tx TTx, job *Job[TArgs]) (*Job[TArgs], error) {
 	return resumableSetStepTx(ctx, tx, job, nil)
 }
 
 // ResumableSetStepCursorTx immediately persists the current resumable step and
 // cursor as part of transaction tx. If tx is rolled back, the step and cursor
-// update will be as well.
+// update will be as well. Earlier progress not already persisted may be
+// replayed after rollback.
 //
 // Normally, a resumable job's step progress is recorded after it runs along
 // with its result status. This is normally sufficient, but because it happens
@@ -42,6 +47,10 @@ func ResumableSetStepTx[TDriver riverdriver.Driver[TTx], TTx any, TArgs JobArgs]
 //
 // Must be called from within a ResumableStepCursor callback. The current step
 // name to persist is read from context.
+//
+// Commit tx before the step callback returns successfully, and return any
+// transaction or commit error from that callback. A successful callback marks
+// the step complete even if an enclosing transaction later rolls back.
 func ResumableSetStepCursorTx[TDriver riverdriver.Driver[TTx], TTx any, TArgs JobArgs, TCursor any](ctx context.Context, tx TTx, job *Job[TArgs], cursor TCursor) (*Job[TArgs], error) {
 	cursorBytes, err := json.Marshal(cursor)
 	if err != nil {
@@ -75,23 +84,16 @@ func resumableSetStepTx[TTx any, TArgs JobArgs](ctx context.Context, tx TTx, job
 		rivercommon.MetadataKeyResumableStep: step,
 	}
 
-	state.CompletedStep = step
+	cursors := maps.Clone(state.Cursors)
+	if cursors == nil {
+		cursors = make(map[string]json.RawMessage)
+	}
 	if cursor != nil {
-		if state.Cursors == nil {
-			state.Cursors = make(map[string]json.RawMessage)
-		}
-		state.Cursors[step] = cursor
+		cursors[step] = cursor
 	}
-	if len(state.Cursors) > 0 {
-		metadataUpdates[rivercommon.MetadataKeyResumableCursor] = state.Cursors
-	}
-
-	workMetadataUpdates, hasWorkMetadataUpdates := jobexecutor.MetadataUpdatesFromWorkContext(ctx)
-	if hasWorkMetadataUpdates {
-		workMetadataUpdates[rivercommon.MetadataKeyResumableStep] = step
-		if resumableCursorMetadata, ok := metadataUpdates[rivercommon.MetadataKeyResumableCursor]; ok {
-			workMetadataUpdates[rivercommon.MetadataKeyResumableCursor] = resumableCursorMetadata
-		}
+	metadataUpdates[rivercommon.MetadataKeyResumableCursor] = nil
+	if len(cursors) > 0 {
+		metadataUpdates[rivercommon.MetadataKeyResumableCursor] = cursors
 	}
 
 	metadataUpdatesBytes, err := json.Marshal(metadataUpdates)
@@ -114,6 +116,13 @@ func resumableSetStepTx[TTx any, TArgs JobArgs](ctx context.Context, tx TTx, job
 
 		return nil, err
 	}
+
+	// The database owns this checkpoint, including rollback of the caller's
+	// transaction. Only progress recorded after this write belongs in deferred
+	// attempt metadata; replaying it could persist rolled-back application work.
+	state.CompletedStep = ""
+	state.Cursors = cursors
+	state.CursorsDirty = false
 
 	result := &Job[TArgs]{JobRow: updatedJob}
 	if err := json.Unmarshal(result.EncodedArgs, &result.Args); err != nil {

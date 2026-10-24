@@ -114,7 +114,7 @@ pub(super) async fn execute_job(
 
         let run_duration = work_started.elapsed();
         let mut result = result;
-        if let Some(resumable_failure) = context.resumable_finish(result.is_err())
+        if let Some(resumable_failure) = context.resumable_finish(!matches!(result, Ok(WorkOutcome::Complete)))
             && result.is_ok()
         {
             result = Err(WorkerFailure {

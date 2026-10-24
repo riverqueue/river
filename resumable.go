@@ -15,7 +15,8 @@ var (
 )
 
 // ResumableSetCursor records a cursor for the current resumable cursor step.
-// The cursor is stored only if the job attempt ends in an error, allowing a
+// The cursor is stored if the job attempt ends in an error, snooze, or
+// cooperative cancellation, allowing a
 // later retry to resume the same step from the recorded position.
 //
 // Alternatively, ResumableSetStepCursorTx is available to persist a step and
@@ -36,6 +37,7 @@ func ResumableSetCursor[TCursor any](ctx context.Context, cursor TCursor) error 
 		state.Cursors = make(map[string]json.RawMessage)
 	}
 	state.Cursors[state.StepName] = json.RawMessage(cursorBytes)
+	state.CursorsDirty = true
 	return nil
 }
 
@@ -85,7 +87,8 @@ func ResumableStep(ctx context.Context, name string, opts *StepOpts, stepFunc fu
 
 // ResumableStepCursor runs a resumable step that also receives a persisted
 // cursor value from an earlier failed attempt, if one was recorded with
-// ResumableSetCursor.
+// ResumableSetCursor. If no step has completed yet, the retry starts at the
+// beginning and supplies the saved cursor when it reaches its named step.
 // Step names must be unique across all ResumableStep and ResumableStepCursor
 // calls in the same Worker execution.
 //
@@ -147,7 +150,10 @@ func ResumableStepCursor[TCursor any](ctx context.Context, name string, opts *St
 	}
 
 	state.CompletedStep = name
-	delete(state.Cursors, name)
+	if _, ok := state.Cursors[name]; ok {
+		delete(state.Cursors, name)
+		state.CursorsDirty = true
+	}
 }
 
 func mustResumableState(ctx context.Context) *riverplugin.ResumableState {

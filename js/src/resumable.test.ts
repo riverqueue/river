@@ -22,6 +22,53 @@ describe("Resumable", () => {
     }
   );
 
+  it("persists and resumes a first-step cursor without a completed step", async () => {
+    const resumable = new Resumable(client(), job({}));
+    await expect(
+      resumable.stepWithCursor("loop", () => {
+        resumable.setCursor({ n: 7 });
+        throw new Error("retry");
+      })
+    ).rejects.toThrow("retry");
+    const metadata = resumable.finish(true).metadata;
+    expect(metadata).toEqual({ "river:resumable_cursor": { loop: { n: 7 } } });
+    const retry = new Resumable(client(), job(metadata));
+    await retry.stepWithCursor("loop", (cursor) => {
+      expect(cursor).toEqual({ n: 7 });
+    });
+    expect(retry.finish(true).metadata).toEqual({
+      "river:resumable_step": "loop",
+      "river:resumable_cursor": null,
+    });
+  });
+
+  it("leaves deferred progress unchanged when a checkpoint write fails", async () => {
+    const update = vi.fn().mockRejectedValue(new Error("write failed"));
+    const resumable = new Resumable(client(update), job({}));
+    await resumable.step("first", () => undefined);
+    await expect(
+      resumable.stepWithCursor("loop", async () => {
+        await resumable.checkpoint({ cursor: { n: 1 }, tx: {} });
+      })
+    ).rejects.toThrow("write failed");
+    expect(resumable.finish(true).metadata).toEqual({
+      "river:resumable_step": "first",
+    });
+  });
+
+  it("does not replay a rolled-back checkpoint on failure", async () => {
+    const update = vi.fn().mockResolvedValue(job({}));
+    const resumable = new Resumable(client(update), job({}));
+    await resumable.step("first", () => undefined);
+    await expect(
+      resumable.stepWithCursor("loop", async () => {
+        await resumable.checkpoint({ cursor: 1, tx: {} });
+        throw new Error("rollback");
+      })
+    ).rejects.toThrow("rollback");
+    expect(resumable.finish(true).metadata).toEqual({});
+  });
+
   it("treats an empty persisted step as no checkpoint", async () => {
     const resumable = new Resumable(
       client(),
@@ -131,10 +178,7 @@ describe("Resumable", () => {
       },
       { tx }
     );
-    expect(resumable.finish(true).metadata).toEqual({
-      "river:resumable_cursor": { process: { offset: 3 } },
-      "river:resumable_step": "process",
-    });
+    expect(resumable.finish(true).metadata).toEqual({});
   });
 });
 

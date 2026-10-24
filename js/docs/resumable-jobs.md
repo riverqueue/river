@@ -2,7 +2,7 @@
 
 A job that does several expensive steps can skip the steps an earlier attempt
 already finished. Wrap each step in `ctx.resumable.step`; when an attempt
-fails, River records the last completed step in the job's metadata, and the
+fails or snoozes, River records the last completed step in the job's metadata, and the
 next attempt skips every step up to and including it:
 
 <!-- ts-setup
@@ -66,7 +66,17 @@ const workers = new Workers().add(exportRows, async ({ resumable }) => {
 The cursor is any JSON value and is saved when the attempt ends. To save
 progress immediately, and atomically with the step's own writes, call
 `resumable.checkpoint({ cursor, tx })` inside the step with your database
-transaction.
+transaction. Once that write succeeds, the transaction owns the checkpoint:
+River does not replay it in the attempt's deferred metadata. If the transaction
+rolls back, earlier progress that was not already persisted may run again.
+A failed checkpoint write leaves the previous deferred progress intact.
+
+Open and commit the transaction inside the step callback, and let transaction
+and commit errors reject the callback. Resolving the callback marks the step
+complete, even if an enclosing transaction later rolls back.
+
+A cursor can be saved even when no step has completed. In that case a retry
+starts at the beginning and supplies the saved cursor at its named step.
 
 ## Across languages
 

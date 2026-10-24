@@ -403,6 +403,44 @@ class WorkersTest {
         });
   }
 
+  @ParameterizedTest
+  @ValueSource(strings = {"error", "shutdown", "snooze"})
+  void firstStepCursorSurvivesIncompleteAttempt(String outcome) throws Exception {
+    var client = client();
+    var entered = new CountDownLatch(1);
+    var finished = new CompletableFuture<Workers.Event>();
+    try (var workers =
+            workers(client)
+                .add(
+                    TYPE,
+                    context -> {
+                      context.stepWithCursor(
+                          "loop",
+                          cursor -> {
+                            context.cursor(7);
+                            entered.countDown();
+                            if (outcome.equals("snooze")) context.snooze(Duration.ofSeconds(60));
+                            if (outcome.equals("shutdown")) {
+                              context.awaitCancellation();
+                              context.checkCancelled();
+                            }
+                            throw new Exception("retry");
+                          });
+                    })
+                .start();
+        var subscription = workers.subscribe(finished::complete)) {
+      var job = client.insert(TYPE, "cursor", InsertOptions.builder().maxAttempts(1).build()).job();
+      assertTrue(entered.await(5, TimeUnit.SECONDS));
+      if (outcome.equals("shutdown")) workers.stopAndCancel();
+      var event = finished.get(5, TimeUnit.SECONDS);
+      assertEquals(job.id(), event.job().id());
+      assertFalse(event.job().metadata().has(Protocol.METADATA_RESUMABLE_STEP));
+      assertEquals(
+          Json.tree(java.util.Map.of("loop", 7)),
+          event.job().metadata().path(Protocol.METADATA_RESUMABLE_CURSOR));
+    }
+  }
+
   @Test
   void oversizedSnoozeFailsTheAttemptInsteadOfStrandingIt() throws Exception {
     var client = client();

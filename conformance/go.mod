@@ -13,8 +13,11 @@ require (
 	github.com/riverqueue/river/rivershared v0.49.0
 	github.com/riverqueue/river/rivertype v0.49.0
 	github.com/robfig/cron/v3 v3.0.1
+	github.com/stretchr/testify v1.12.1
 	golang.org/x/mod v0.42.0
 )
+
+require go.yaml.in/yaml/v3 v3.0.5 // indirect
 
 require (
 	github.com/jackc/puddle/v2 v2.2.3 // indirect

@@ -691,7 +691,8 @@ export class AttemptRunner {
     }
     if (decodedContext !== undefined) {
       const resumable = decodedContext.resumable.finish(
-        result.status !== "succeeded"
+        result.status !== "succeeded" ||
+          (result.outcome !== undefined && result.outcome.type !== "complete")
       );
       if (resumable.error !== null && result.status !== "failed") {
         result = { error: resumable.error, status: "failed" };

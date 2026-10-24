@@ -57,6 +57,11 @@ module River
     # Immediately checkpoints the current step and cursor progress. Wrap the
     # call in Driver#transaction alongside application writes when an atomic
     # checkpoint is needed.
+    #
+    # Commit the transaction before the step block returns
+    # successfully, and let transaction and commit errors propagate out of it.
+    # A successful block marks the step complete even if an enclosing transaction
+    # later rolls back.
     def resumable_checkpoint(cursor: RESUMABLE_CURSOR_UNSET)
       step_name = @resumable_state.step_name
       raise Error, "resumable step can only be persisted inside a resumable step" unless step_name

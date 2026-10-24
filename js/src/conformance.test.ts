@@ -96,6 +96,47 @@ const protocol = (await readFixture("protocol_values")) as unknown as {
   }[];
 };
 
+const resumableCases = (await readFixture("resumable")) as unknown as {
+  readonly cases: readonly { name: string; expected_metadata: JsonObject }[];
+};
+
+describe("Go resumable fixtures", () => {
+  it.each(resumableCases.cases)("$name", async (fixture) => {
+    let persisted: JsonObject = {};
+    const client = {
+      jobs: {
+        update: (_id: bigint, update: { metadata: JsonObject }) => {
+          if (fixture.name === "checkpoint_write_failure")
+            throw new Error("write failed");
+          if (
+            fixture.name === "checkpoint_commit_error" ||
+            fixture.name === "checkpoint_then_cursor_error"
+          )
+            persisted = update.metadata;
+          return Promise.resolve(job());
+        },
+      },
+    } as unknown as Client;
+    const resumable = new Resumable(client, job());
+    if (fixture.name !== "first_cursor_error")
+      await resumable.step("first", () => undefined);
+    if (fixture.name !== "step_snooze") {
+      await resumable
+        .stepWithCursor("loop", async () => {
+          if (fixture.name === "first_cursor_error") resumable.setCursor(7);
+          else await resumable.checkpoint({ cursor: 1, tx: {} });
+          if (fixture.name === "checkpoint_then_cursor_error")
+            resumable.setCursor(2);
+          throw new Error("retry");
+        })
+        .catch(() => undefined);
+    }
+    expect({ ...persisted, ...resumable.finish(true).metadata }).toEqual(
+      fixture.expected_metadata
+    );
+  });
+});
+
 describe("Go unique-key fixtures", () => {
   it.each(uniqueKeys.cases)("$name", (fixture) => {
     const now = Temporal.Instant.from(fixture.now);
