@@ -20,6 +20,7 @@ class TimeoutTest {
 
   @ParameterizedTest
   @ValueSource(strings = {"inherit", "override", "disabled", "longer", "zero", "overflow", "throw"})
+  @SuppressWarnings("try") // Resources intentionally scope background activity.
   void handlerTimeoutControlsTheAttempt(String mode) throws Exception {
     var client = new Client(databases.open(directory.resolve("river.db")));
     var calls = new AtomicInteger();

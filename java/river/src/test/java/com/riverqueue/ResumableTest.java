@@ -32,6 +32,7 @@ class ResumableTest {
     "true,true,false",
     "true,true,true"
   })
+  @SuppressWarnings("try") // Resources intentionally scope background activity.
   void checkpointCommitsWithApplicationWrites(
       boolean priorCheckpoint, boolean rollback, boolean withCursor) throws Exception {
     var client = new Client(databases.open(directory.resolve("river.db")));
@@ -238,6 +239,7 @@ class ResumableTest {
 
   @ParameterizedTest
   @ValueSource(strings = {"plain", "cursor", "null", "first", "first_null"})
+  @SuppressWarnings("try") // Resources intentionally scope background activity.
   void cursorDoesNotCompleteFailedSteps(String mode) throws Exception {
     var client = new Client(databases.open(directory.resolve("river.db")));
     var events = new LinkedBlockingQueue<Workers.Event>();
@@ -327,6 +329,7 @@ class ResumableTest {
   }
 
   @Test
+  @SuppressWarnings("try") // Resources intentionally scope background activity.
   void cursorMapsReplaceCompletedStepsAndPreserveNullValues() throws Exception {
     var client = new Client(databases.open(directory.resolve("river.db")));
     var events = new LinkedBlockingQueue<Workers.Event>();

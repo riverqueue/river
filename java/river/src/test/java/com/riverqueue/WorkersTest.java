@@ -73,6 +73,7 @@ class WorkersTest {
 
   @ParameterizedTest
   @CsvSource({"REMOTE,false", "REMOTE,true", "TIMEOUT,false", "TIMEOUT,true"})
+  @SuppressWarnings("try") // Resources intentionally scope background activity.
   void cancellationRespectsTheHandlersOutcome(WorkContext.Cancellation cause, boolean interrupted)
       throws Exception {
     var client = client();
@@ -119,6 +120,7 @@ class WorkersTest {
   @EnumSource(
       value = Job.State.class,
       names = {"AVAILABLE", "PENDING", "RETRYABLE", "RUNNING", "SCHEDULED"})
+  @SuppressWarnings("try") // Resources intentionally scope background activity.
   void completionEventsReflectPersistedState(Job.State state) throws Exception {
     var client = client();
     var database = client.database();
@@ -176,6 +178,7 @@ class WorkersTest {
   }
 
   @Test
+  @SuppressWarnings("try") // Resources intentionally scope background activity.
   void completionRetriesSurviveAnInterruptedHandler() throws Exception {
     var attempts = new AtomicInteger();
     var client =
@@ -215,6 +218,7 @@ class WorkersTest {
 
   @ParameterizedTest
   @ValueSource(strings = {"args", "kind", "row"})
+  @SuppressWarnings("try") // Resources intentionally scope background activity.
   void completionRetriesSurviveInvalidJobs(String invalid) throws Exception {
     var attempts = new AtomicInteger();
     var client =
@@ -288,6 +292,7 @@ class WorkersTest {
   }
 
   @Test
+  @SuppressWarnings("try") // Resources intentionally scope background activity.
   void completedHandlerIsNotCancelledWhileAcknowledging() throws Exception {
     var acknowledging = new CountDownLatch(1);
     var release = new CountDownLatch(1);
@@ -324,6 +329,7 @@ class WorkersTest {
   }
 
   @Test
+  @SuppressWarnings("try") // Resources intentionally scope background activity.
   void jobTimeoutDoesNotDependOnTheDispatcher() throws Exception {
     var blocked = new CountDownLatch(1);
     var release = new CountDownLatch(1);
@@ -405,6 +411,7 @@ class WorkersTest {
 
   @ParameterizedTest
   @ValueSource(strings = {"error", "shutdown", "snooze"})
+  @SuppressWarnings("try") // Resources intentionally scope background activity.
   void firstStepCursorSurvivesIncompleteAttempt(String outcome) throws Exception {
     var client = client();
     var entered = new CountDownLatch(1);
@@ -442,6 +449,7 @@ class WorkersTest {
   }
 
   @Test
+  @SuppressWarnings("try") // Resources intentionally scope background activity.
   void oversizedSnoozeFailsTheAttemptInsteadOfStrandingIt() throws Exception {
     var client = client();
     var failed = new CompletableFuture<Workers.Event>();
@@ -517,6 +525,7 @@ class WorkersTest {
 
   @ParameterizedTest
   @ValueSource(ints = {-1, 0, 120})
+  @SuppressWarnings("try") // Resources intentionally scope background activity.
   void rescueDefaultAccountsForTheJobTimeout(int timeoutMinutes) throws Exception {
     var rescue = new CompletableFuture<Pilot.Rescue>();
     var client =
@@ -540,6 +549,7 @@ class WorkersTest {
   }
 
   @Test
+  @SuppressWarnings("try") // Resources intentionally scope background activity.
   void goQueueNotificationsRespectTopicsAndSurviveMalformedPayloads() throws Exception {
     var client = client();
     var ready = new CountDownLatch(1);
@@ -682,6 +692,7 @@ class WorkersTest {
 
   @ParameterizedTest
   @ValueSource(strings = {"observer", "subscriber", "errorHandler"})
+  @SuppressWarnings("try") // Resources intentionally scope background activity.
   void callbackFailuresDoNotLoseWorkerSlots(String callback) throws Exception {
     var client = client();
     var completed = new LinkedBlockingQueue<Workers.Event>();
@@ -738,6 +749,7 @@ class WorkersTest {
         "nanosecond_overflow",
         "timestamp_overflow"
       })
+  @SuppressWarnings("try") // Resources intentionally scope background activity.
   void invalidRetryPoliciesFallBack(String policy) throws Exception {
     var client = client();
     var failed = new LinkedBlockingQueue<Workers.Event>();
@@ -777,6 +789,7 @@ class WorkersTest {
 
   @ParameterizedTest
   @CsvSource({"false,1,5000", "true,1,5000", "false,3600,1", "true,3600,1"})
+  @SuppressWarnings("try") // Resources intentionally scope background activity.
   void shortDelaysWakeFetchingBeforeThePollInterval(
       boolean snooze, long serviceSeconds, long maintenanceMillis) throws Exception {
     var client = client();
@@ -823,6 +836,7 @@ class WorkersTest {
 
   @ParameterizedTest
   @ValueSource(booleans = {false, true})
+  @SuppressWarnings("try") // Resources intentionally scope background activity.
   void shutdownRespectsTheHandlersOutcome(boolean interrupted) throws Exception {
     var client = client();
     var entered = new CompletableFuture<WorkContext<String>>();
@@ -864,6 +878,7 @@ class WorkersTest {
 
   @ParameterizedTest
   @ValueSource(booleans = {false, true})
+  @SuppressWarnings("try") // Resources intentionally scope background activity.
   void stoppingDuringAClaimPreservesCancellation(boolean cancel) throws Exception {
     var claimed = new CountDownLatch(1);
     var commit = new CountDownLatch(1);
@@ -932,6 +947,7 @@ class WorkersTest {
 
   @ParameterizedTest
   @ValueSource(booleans = {false, true})
+  @SuppressWarnings("try") // Resources intentionally scope background activity.
   void terminalFailuresDoNotConsultRetryPolicy(boolean cancel) throws Exception {
     var client = client();
     var failed = new LinkedBlockingQueue<Workers.Event>();

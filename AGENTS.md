@@ -40,6 +40,13 @@ This repo holds the Go reference implementation and its ports (`java/`, `js/`, `
 - **Same tests everywhere**: give each affected implementation an equivalent test for the behavior, on every database it supports.
 - **Document intended differences**: an API should be idiomatic for its language, but observable behavior should match Go. Record any difference that remains in the port's differences doc (for example `java/DIFFERENCES.md`).
 
+## Commit and PR Titles
+
+- When a change affects only a subset of the languages, prefix the PR title and commit subjects with the affected languages in lowercase brackets: `[java]`, `[go]`, or `[go, ruby]`.
+- Use `go`, `java`, `js`, `ruby`, and `rust` as the language names. List multiple languages alphabetically, separated by a comma and a space.
+- Avoid repeating the language names in the rest of the title when the prefix already makes the scope clear. For example, use `[java] Enforce warning-free builds` instead of `[java] Enforce warning-free Java builds`.
+- Omit the prefix for changes that affect all languages or are independent of any particular language, such as repository-wide contributor guidance.
+
 ## Package Naming and Organization
 
 - Package names are lowercase, short, and representative; avoid `common`, `util`, or overly broad names.

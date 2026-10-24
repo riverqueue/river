@@ -21,6 +21,7 @@ class NotificationTest {
   @TempDir Path directory;
 
   @Test
+  @SuppressWarnings("try") // Resources intentionally scope background activity.
   void sqliteListenerRecoversFromAnInitialDatabaseFailure() throws Exception {
     var database = TestDatabase.sqlite(directory.resolve("river.db"));
     var fail = new AtomicBoolean(true);

@@ -82,6 +82,25 @@ filtered to changes in Java, its build configuration, fixtures, and canonical
 migrations. Go changes run the smaller fixture suite in the shared Conformance
 workflow alongside Rust and JavaScript.
 
+## Warning policy
+
+Java builds keep `-Xlint:all` enabled and fail on unsuppressed compiler warnings,
+including test compilation. Tests that intentionally hold workers or subscriptions
+open for a block use a method-level `@SuppressWarnings("try")` with a short reason.
+Other compiler diagnostics remain enabled.
+
+The Make targets run Maven through `bin/check-maven-warnings.sh`. It streams the
+complete build output, preserves command failures, and rejects Maven warning
+messages from packaging and other plugins. Local checks and CI use these same
+targets. Direct Maven invocations also reject compiler warnings through the
+parent POM's `failOnWarning` setting.
+
+Executable JARs merge dependency `META-INF/LICENSE` and `META-INF/NOTICE` text,
+retain service registrations, and generate their own executable manifests.
+Dependency module descriptors and signatures are excluded from these combined
+archives. Other overlapping classes or resources still produce warnings and fail
+the checked Make targets. Library and source JARs keep their normal packaging.
+
 ## Legacy cross-process harness
 
 The original interoperability adapter remains available for broader storage,

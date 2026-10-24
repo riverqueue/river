@@ -61,6 +61,7 @@ class VirtualThreadTest {
   }
 
   public static final class Probe {
+    @SuppressWarnings("try") // Resources intentionally scope background activity.
     public static void main(String[] args) throws Exception {
       var entered = new CountDownLatch(1);
       var release = new CountDownLatch(1);

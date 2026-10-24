@@ -28,6 +28,7 @@ class RescueTest {
 
   @ParameterizedTest
   @ValueSource(strings = {"default", "disabled", "error", "override", "throw", "zero"})
+  @SuppressWarnings("try") // Resources intentionally scope background activity.
   void pilotReceivesWorkerTimeoutCallback(String mode) throws Exception {
     var request = new CompletableFuture<Pilot.Rescue>();
     var errors = new LinkedBlockingQueue<Throwable>();
@@ -198,6 +199,7 @@ class RescueTest {
 
   @ParameterizedTest
   @ValueSource(booleans = {false, true})
+  @SuppressWarnings("try") // Resources intentionally scope background activity.
   void rescueHonorsWorkerTimeouts(boolean defaultDisabled) throws Exception {
     var maintained = new CompletableFuture<Void>();
     var errors = new LinkedBlockingQueue<Throwable>();
@@ -293,6 +295,7 @@ class RescueTest {
 
   @ParameterizedTest
   @ValueSource(strings = {"local", "peer", "peer_claim_retry", "peer_notification_retry"})
+  @SuppressWarnings("try") // Resources intentionally scope background activity.
   void shortRescuedRetriesWakeFetchingBeforeMaintenance(String mode) throws Exception {
     boolean peer = !mode.equals("local");
     var database = databases.open(directory.resolve("river.db"));

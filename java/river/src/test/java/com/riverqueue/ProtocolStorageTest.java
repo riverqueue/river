@@ -27,6 +27,7 @@ class ProtocolStorageTest {
   }
 
   @Test
+  @SuppressWarnings("try") // Resources intentionally scope background activity.
   void periodicMetadata() throws Exception {
     var keys = Conformance.fixture("protocol_values.json").required("metadata_keys");
     var client = client();
@@ -59,6 +60,7 @@ class ProtocolStorageTest {
   }
 
   @Test
+  @SuppressWarnings("try") // Resources intentionally scope background activity.
   void rescueCountAndOutput() throws Exception {
     var fixture = Conformance.fixture("protocol_values.json");
     var keys = fixture.required("metadata_keys");

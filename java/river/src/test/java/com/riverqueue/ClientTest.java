@@ -288,6 +288,7 @@ class ClientTest {
   }
 
   @Test
+  @SuppressWarnings("try") // Resources intentionally scope background activity.
   void fetchOnlyKnownKindsLeavesPeerJobsAvailable() throws Exception {
     var river = database();
     var peer = JobType.of("peer_only", Email.class);
@@ -523,6 +524,7 @@ class ClientTest {
   }
 
   @Test
+  @SuppressWarnings("try") // Resources intentionally scope background activity.
   void sqliteQueueNotificationFailureRollsBackQueueMutation() throws Exception {
     var river =
         new Client(
@@ -555,6 +557,7 @@ class ClientTest {
   }
 
   @Test
+  @SuppressWarnings("try") // Resources intentionally scope background activity.
   void committedCompletionWinsOverSubsequentHandlerFailure() throws Exception {
     var river = database();
     var event = new CompletableFuture<Workers.Event>();
@@ -585,6 +588,7 @@ class ClientTest {
   }
 
   @Test
+  @SuppressWarnings("try") // Resources intentionally scope background activity.
   void retryPolicyReceivesFailedAttemptSnapshot() throws Exception {
     var river = database();
     var observed = new CompletableFuture<Job<?>>();
@@ -623,6 +627,7 @@ class ClientTest {
   }
 
   @Test
+  @SuppressWarnings("try") // Resources intentionally scope background activity.
   void jobKindLengthMatchesDatabaseConstraint() throws Exception {
     var client = database();
     var type = JobType.of("k".repeat(127), Email.class);
