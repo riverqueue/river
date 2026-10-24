@@ -162,14 +162,29 @@ WHERE id IN (SELECT id FROM river_job WHERE queue=? AND state='available' AND sc
 AND NOT EXISTS(SELECT 1 FROM river_queue q WHERE q.name=river_job.queue AND paused_at IS NOT NULL)
 AND kind IN (SELECT value FROM json_each(?))
 ORDER BY priority,scheduled_at,id LIMIT ?) RETURNING {columns}
+-- name: checkpoint
+UPDATE river_job SET metadata=jsonb_set(metadata,'$."river:resumable_step"',?,'$."river:resumable_cursor"',jsonb(?))
+WHERE id=? AND state='running' AND attempt=? AND attempted_at=? RETURNING {columns}
 -- name: complete
-WITH choice AS (SELECT ? AS target_state, ? AS now)
+WITH choice AS (SELECT ? AS target_state, ? AS now, ? AS checkpoint_step, jsonb(?) AS checkpoint_fallback, jsonb(?) AS metadata_updates)
 UPDATE river_job SET
 state=CASE WHEN state != 'running' THEN state WHEN (SELECT target_state FROM choice) IN ('available','retryable','scheduled') AND (CASE WHEN typeof(metadata)<>'text' OR json_valid(metadata) THEN json_extract(metadata,'$.cancel_attempted_at') END) IS NOT NULL THEN 'cancelled' ELSE ? END,
 finalized_at=CASE WHEN state != 'running' THEN finalized_at WHEN (SELECT target_state FROM choice) IN ('available','retryable','scheduled') AND (CASE WHEN typeof(metadata)<>'text' OR json_valid(metadata) THEN json_extract(metadata,'$.cancel_attempted_at') END) IS NOT NULL THEN (SELECT now FROM choice) ELSE ? END,
 scheduled_at=CASE WHEN state != 'running' THEN scheduled_at WHEN (SELECT target_state FROM choice) IN ('available','retryable','scheduled') AND (CASE WHEN typeof(metadata)<>'text' OR json_valid(metadata) THEN json_extract(metadata,'$.cancel_attempted_at') END) IS NOT NULL THEN scheduled_at ELSE ? END,
 attempt=CASE WHEN state != 'running' THEN attempt WHEN (SELECT target_state FROM choice) IN ('available','retryable','scheduled') AND (CASE WHEN typeof(metadata)<>'text' OR json_valid(metadata) THEN json_extract(metadata,'$.cancel_attempted_at') END) IS NOT NULL THEN attempt ELSE ? END,
-metadata=CASE WHEN typeof(metadata)='text' AND NOT json_valid(metadata) THEN metadata ELSE jsonb_patch(metadata,jsonb(?)) END,
+metadata=CASE WHEN typeof(metadata)='text' AND NOT json_valid(metadata) THEN metadata ELSE (
+  -- MergePatch recursively merges objects and deletes nulls; cursor maps must be replaced whole.
+  SELECT CASE
+    WHEN json_type(metadata_updates,'$."river:resumable_cursor"') IS NOT NULL
+      THEN jsonb_set(merged,'$."river:resumable_cursor"',jsonb_extract(metadata_updates,'$."river:resumable_cursor"'))
+    WHEN use_fallback AND json_type(checkpoint_fallback,'$."river:resumable_cursor"') IS NOT NULL
+      THEN jsonb_set(merged,'$."river:resumable_cursor"',jsonb_extract(checkpoint_fallback,'$."river:resumable_cursor"'))
+    ELSE merged END
+  FROM (
+    SELECT *, jsonb_patch(CASE WHEN use_fallback THEN jsonb_patch(metadata,checkpoint_fallback) ELSE metadata END,metadata_updates) AS merged
+    FROM (SELECT *, checkpoint_step IS NOT NULL AND json_extract(metadata,'$."river:resumable_step"') IS NOT checkpoint_step AS use_fallback FROM choice)
+  )
+) END,
 errors=CASE WHEN state != 'running' OR ? IS NULL THEN errors ELSE jsonb_insert(CASE WHEN typeof(errors)='text' AND NOT json_valid(errors) THEN jsonb_array(errors) WHEN coalesce(json_type(errors),'array') <> 'array' THEN jsonb_array(json(errors)) ELSE coalesce(errors,jsonb('[]')) END,'$[#]',jsonb(?)) END
 WHERE id=? AND attempt=? AND attempted_at=? RETURNING {columns}
 

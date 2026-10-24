@@ -12,17 +12,24 @@ import tools.jackson.databind.node.ObjectNode;
 /** Per-attempt arguments, cancellation, output, and resumable checkpoints. */
 public final class WorkContext<A> {
   private final CancellationState cancellation;
+  private ObjectNode checkpointFallback = Json.object();
+  private String checkpointStep;
+  private boolean checkpointed;
   private String completedStep;
   private String currentStep;
   private final ObjectNode cursors;
+  private boolean cursorsChanged;
   private Exception stepFailure;
   private final Job<A> job;
   private final ObjectNode metadata = Json.object();
   private final Client client;
   private Workers runtime;
   final java.util.Map<Long, Peer> peers;
+  private ObjectNode previousCursors;
+  private String previousStep;
   private final Set<String> steps = new HashSet<>();
   private boolean resumeMatched;
+  volatile Duration timeout;
 
   WorkContext(Client client, Job<A> job) {
     this(client, job, true);
@@ -51,7 +58,11 @@ public final class WorkContext<A> {
     return job.args();
   }
 
-  /** Internal companion-attempt seam used by River Pro's batch worker. */
+  /**
+   * Internal companion-attempt seam used by River Pro's batch worker. Peers use the runtime timeout
+   * during decoding, then their worker override. A peer that ignores cancellation beyond the stuck
+   * threshold interrupts the thread claiming and working the batch.
+   */
   public <T> java.util.List<WorkContext<T>> claimPeers(
       JobType<T> type, Client.Transaction<java.util.List<Client.Decoded>> claim) {
     if (runtime == null) throw new IllegalStateException("No worker runtime");
@@ -73,6 +84,7 @@ public final class WorkContext<A> {
     // Notifications and supervision may still hold the provisional context during decoding.
     var context = new WorkContext<>(client, decoded, true, cancellation);
     context.runtime = runtime;
+    context.timeout = timeout;
     return context;
   }
 
@@ -114,6 +126,32 @@ public final class WorkContext<A> {
     if (isCancelled()) throw new IllegalStateException("Batch attempt cancelled");
   }
 
+  /**
+   * Persists the current resumable step in the caller's transaction. Call inside a step, after its
+   * application writes. Let transaction failures escape the step so retries use committed progress.
+   * The connection must have auto-commit disabled.
+   */
+  public Job<A> checkpoint(Connection transaction) {
+    return persistCheckpoint(transaction, cursors.deepCopy());
+  }
+
+  /** Persists the current resumable step and JSON cursor alongside application writes. */
+  public Job<A> checkpoint(Connection transaction, Object cursor) {
+    var updates = cursors.deepCopy();
+    if (currentStep == null)
+      throw new IllegalStateException("Checkpoint requires an active resumable step");
+    updates.set(currentStep, Json.tree(cursor));
+    return persistCheckpoint(transaction, updates);
+  }
+
+  synchronized ObjectNode checkpointFallback() {
+    return checkpointFallback.deepCopy();
+  }
+
+  String checkpointStep() {
+    return checkpointStep;
+  }
+
   /** Completes this attempt atomically with application writes in the supplied transaction. */
   public Job<A> complete(Connection transaction) {
     return client.complete(transaction, job, metadataUpdates());
@@ -149,16 +187,63 @@ public final class WorkContext<A> {
     if (stepFailure != null) failure = stepFailure;
     if (failure == null && !resumeMatched)
       failure = new IllegalArgumentException("Saved resumable step was not found");
-    if (failure != null && completedStep != null) {
-      metadata(Protocol.METADATA_RESUMABLE_STEP, completedStep);
-      if (!cursors.isEmpty() || job.metadata().has(Protocol.METADATA_RESUMABLE_CURSOR))
-        metadata(Protocol.METADATA_RESUMABLE_CURSOR, cursors.isEmpty() ? null : cursors);
-    }
+    if (failure != null && (completedStep != null || cursorsChanged))
+      metadata.setAll(resumableMetadata(completedStep, cursors));
+    if (failure == null || completedStep != null || cursorsChanged)
+      checkpointFallback = Json.object();
     return failure;
   }
 
   public void output(Object value) {
     metadata(Protocol.METADATA_OUTPUT, value);
+  }
+
+  private Job<A> persistCheckpoint(Connection transaction, ObjectNode updates) {
+    if (currentStep == null)
+      throw new IllegalStateException("Checkpoint requires an active resumable step");
+    if (job.state() != Job.State.RUNNING) throw new IllegalStateException("Job must be running");
+    // Only this step's progress belongs to the caller's transaction. Completion restores the
+    // prior buffered progress if the checkpoint rolled back, without replacing a committed one.
+    checkpointStep = currentStep;
+    checkpointFallback = resumableMetadata(previousStep, previousCursors);
+    completedStep = null;
+    cursorsChanged = false;
+    var updated =
+        client.transaction(
+            transaction,
+            connection -> {
+              try (var statement =
+                      Sql.prepare(
+                          connection,
+                          Sql.query(client.database(), "checkpoint"),
+                          currentStep,
+                          Json.encode(updates.isEmpty() ? null : updates),
+                          job.id(),
+                          job.attempt(),
+                          client.database().timestamp(job.attemptedAt()));
+                  var rows = statement.executeQuery()) {
+                if (!rows.next())
+                  throw new RiverException(
+                      RiverException.Code.REJECTED, "Job attempt is no longer running");
+                return client.read(rows).mapArgs(ignored -> job.args());
+              }
+            });
+    checkpointed = true;
+    cursors.removeAll();
+    cursors.setAll(updates);
+    return updated;
+  }
+
+  private ObjectNode resumableMetadata(String step, ObjectNode cursors) {
+    var updates = Json.object();
+    if (step != null) updates.put(Protocol.METADATA_RESUMABLE_STEP, step);
+    if (!cursors.isEmpty()
+        || checkpointed
+        || job.metadata().has(Protocol.METADATA_RESUMABLE_CURSOR))
+      updates.set(
+          Protocol.METADATA_RESUMABLE_CURSOR,
+          cursors.isEmpty() ? Json.tree(null) : cursors.deepCopy());
+    return updates;
   }
 
   public Client client() {
@@ -211,10 +296,12 @@ public final class WorkContext<A> {
     if (currentStep == null)
       throw new IllegalStateException("Cursor requires an active resumable step");
     cursors.set(currentStep, Json.tree(value));
+    cursorsChanged = true;
   }
 
   private void executeStep(String name, boolean withCursor, CursorStep action) throws Exception {
     if (stepFailure != null) throw stepFailure;
+    if (currentStep != null) throw new IllegalStateException("Resumable steps cannot be nested");
     if (name.isEmpty() || !steps.add(name)) {
       stepFailure = new IllegalArgumentException("duplicate resumable step or empty name: " + name);
       throw stepFailure;
@@ -226,6 +313,8 @@ public final class WorkContext<A> {
       }
       if (!resumeMatched || !withCursor || !cursors.has(name)) return;
     }
+    previousStep = completedStep;
+    previousCursors = cursors.deepCopy();
     currentStep = name;
     try {
       action.run(cursors.path(name));

@@ -282,6 +282,31 @@ interruptible I/O. `context.awaitCancellation()` waits for the signal.
 A normal return reports success even if cancellation or a timeout was
 requested. Call `context.checkCancelled()` when abandoning unfinished work.
 
+### Worker timeouts
+
+`Workers.Builder.jobTimeout` sets the default attempt timeout. Override
+`Handler.timeout(job)` for a particular worker; the callback receives typed
+arguments and can choose a duration per job:
+
+```java
+workerConfig.add(email, new Workers.Handler<SendEmail>() {
+  @Override
+  public Duration timeout(Job<SendEmail> job) {
+    return Duration.ofMinutes(5);
+  }
+
+  @Override
+  public void work(WorkContext<SendEmail> context) {
+    mailer.send(context.args().address(), context.args().subject());
+  }
+});
+```
+
+Returning `null` or `Duration.ZERO` inherits the runtime default, as lambda
+handlers do. A negative duration disables the timeout. The callback also runs when
+the leader considers abandoned jobs for rescue, so keep it thread-safe and free of
+side effects. Rescue respects longer worker deadlines and disabled timeouts.
+
 ### Getting the client within workers
 
 [`context.client()`](https://riverqueue.com/docs/context-client) gives a handler
@@ -493,10 +518,39 @@ var workerConfig = client.workers()
 ```
 
 Periodic IDs use the same syntax as job kinds and must fit within 127 UTF-8 bytes.
+Use `null` for an anonymous registration. `workers.periodicJobs().add(...)`
+returns a handle for removing that registration. Builder registration returns no
+handle, so an anonymous definition added through the builder can only be removed
+with `workers.periodicJobs().clear()`.
 
 OSS schedules are kept in memory and can miss occurrences during downtime or
-leader changes. Periodic definitions are fixed when the Java runtime starts;
-restart it to change them.
+leader changes. Add or remove definitions on a running runtime:
+
+```java
+var periodicJobs = workers.periodicJobs(); // PeriodicJobBundle
+var handle = periodicJobs.add(new PeriodicJob<>(
+    "hourly-status", Schedule.every(Duration.ofHours(1)), email,
+    new SendEmail("ops@example.com", "Hourly status"), InsertOptions.defaults(), true));
+periodicJobs.remove(handle);
+// Or remove a named registration without its handle:
+periodicJobs.removeById("hourly-status");
+```
+
+Registrations belong to that runtime; configure them on every eligible leader.
+Only the leader inserts jobs. `runOnStart` also applies when adding a definition
+while leading. Removing a definition leaves previously inserted jobs in place,
+and an insertion already in progress may finish. An ID can be reused after removal.
+Periodic jobs require leader election to be enabled.
+
+Definitions without `runOnStart` are picked up on the next maintenance pass.
+After stopping a runtime, its bundle still accepts additions and removals, but
+those changes do not enqueue jobs or restart the runtime.
+
+The bundle also provides `addMany`, `removeMany`, `removeManyById`, and `clear`.
+`addMany` validates the entire batch before registering any jobs and returns
+handles in input order. Handles identify one registration, so removing an old
+handle cannot remove a replacement that reused the same ID. The same
+`PeriodicJob` definition can be passed to `Workers.Builder.periodic` before start.
 
 Interval schedules retain their planned cadence when maintenance runs late.
 Each job's `scheduled_at` defaults to its planned occurrence; an explicit
@@ -532,9 +586,29 @@ workerConfig.add(email, context -> {
 ```
 
 For loops, `context.stepWithCursor(name, cursor -> ...)` receives a saved JSON
-cursor, and `context.cursor(value)` updates it. Java buffers step progress until
-the attempt ends; it does not yet expose transactional checkpoint helpers.
-A process crash can lose buffered progress, so steps must remain idempotent.
+cursor, and `context.cursor(value)` updates it. Progress is normally buffered until
+the attempt ends. A process crash can lose buffered progress, so steps must
+remain idempotent.
+
+Use `context.checkpoint(connection)` inside a step to persist its progress in the
+same transaction as application writes:
+
+```java
+workerConfig.add(email, context -> {
+  context.step("record-delivery", () -> context.transaction(connection -> {
+    deliveries.record(connection, context.job().id());
+    context.checkpoint(connection);
+    return null;
+  }));
+});
+```
+
+Call `context.checkpoint(connection, cursorValue)` inside `stepWithCursor` to
+save cursor progress. A retry resumes that cursor step; a checkpoint without a
+cursor skips a completed ordinary step. The connection must have auto-commit
+disabled. Let transaction failures propagate out of the step so a rollback leaves
+the last committed checkpoint authoritative. Neither overload commits the caller's
+transaction.
 
 ### Scheduled jobs
 
@@ -743,8 +817,9 @@ reindexing configured Postgres indexes. Leadership is enabled by default.
 
 `rescueAfter` must not be shorter than `jobTimeout`, so another client does not
 rescue an attempt that is still allowed to run. Its default is one hour, plus an
-explicitly configured positive job timeout. Worker durations and snooze delays
-must fit in signed 64-bit nanoseconds, up to about 292 years.
+explicitly configured positive job timeout. Worker overrides are checked for each
+rescue candidate even when they exceed `rescueAfter`. Worker durations and snooze
+delays must fit in signed 64-bit nanoseconds, up to about 292 years.
 
 ```java
 var workerConfig = client.workers()

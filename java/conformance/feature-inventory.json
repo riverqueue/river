@@ -276,8 +276,7 @@
       "id": "client.PeriodicJobs",
       "rationale": "Language-native API to add or remove periodic jobs at runtime; the enqueue behavior itself is classified under config.PeriodicJobs.",
       "source": "client.go:river.Client.PeriodicJobs",
-      "java_surface": "Client, Workers, Queues, Database",
-      "java_difference": "OSS periodic definitions belong to a runtime configuration; change them by starting a new worker runtime. Pro durable definitions can be registered on Pro."
+      "java_surface": "Workers.periodicJobs, PeriodicJobBundle"
     },
     {
       "applicability": "not_applicable",

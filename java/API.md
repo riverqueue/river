@@ -16,10 +16,12 @@ Java exposes every Go helper. Stored values and protocol behavior still follow G
 | `JobCompleteTx` | `Client.complete(connection, job)`, `WorkContext.complete(connection)` | Completion keeps `Job<A>` and commits with application changes. Only a running attempt can be completed. A committed completion remains authoritative if the handler subsequently throws. |
 | Context client, cancellation, cancel/snooze errors | `WorkContext.client`, cancellation methods, `cancel`, `discard`, `snooze` | Java has no Go context parameter convention. Control methods end the attempt; virtual-thread interruption supplements cooperative cancellation. |
 | Plugins, hooks, and middleware | `Plugin`, `HookInsertBegin`, `HookPeriodicJobsStart`, `HookWorkBegin`, `HookWorkEnd`, `JobInsertMiddleware`, `WorkerMiddleware` | `withPlugins` activates every hook and middleware interface on a value. `withHooks` and `withMiddleware` restrict registration to that side. Plugins run first, as in Go. Functional interfaces support lambdas and checked exceptions. |
+| `ResumableSetStepTx`, `ResumableSetStepCursorTx` | `WorkContext.checkpoint(connection[, cursor])` | Checkpoints commit with application writes; failed transactions leave the last committed progress intact. |
+| Worker timeout | `Workers.Handler.timeout(job)` | A default method preserves lambda handlers; per-job overrides also govern rescue decisions. |
 | Retry policy | `RetryPolicy` | A lambda receives the full job and returns `Duration`; the default uses the same error-count backoff and jitter. |
 | `Queues`, queue CRUD/control APIs | `Workers.addQueue/removeQueue`, `Client.queues()` | Runtime concurrency and persisted queue state have separate owners. Reads and mutations support caller transactions. |
 | `Subscribe`, `EventKind`, `Event` | `Workers.subscribe`, `EventKind`, `Event`, `Subscription` | Enum filters and an `AutoCloseable` subscription replace channels. Callbacks are synchronous; queue events include their queue. |
-| Periodic jobs and schedules | `Workers.Builder.periodic`, `Schedule` | Java time types and a functional scheduling interface; cron implementation details are package-private. |
+| Periodic jobs and schedules | `Workers.Builder.periodic`, `Workers.periodicJobs()`, `PeriodicJobBundle`, `PeriodicJob`, `Schedule` | Java time types and a functional scheduling interface; cron implementation details are package-private. |
 | Leadership notifications and maintenance config | `requestResign`, worker builder settings | Coordination stays in the database; operational durations use `Duration`. |
 | `rivermigrate` | `Migrator`, `Direction`, `Options`, executable CLI | Named options replace booleans and sentinel target versions. Down defaults to one migration; explicit target zero removes the line. |
 | Driver, pool, transaction integration | `Database`, JDBC `DataSource`/`Connection` | Use existing Java database pools. Database drivers remain optional library dependencies. |
@@ -94,13 +96,12 @@ configuration code.
 These are implementation limits, not claims that Java conventions require a
 smaller feature set:
 
-- OSS periodic definitions cannot be added or removed on a running runtime and
-  currently carry fixed arguments rather than a constructor invoked each time.
+- OSS periodic definitions carry fixed arguments rather than a constructor
+  invoked each time.
 - Events do not yet include Go's per-job timing statistics. Java supplies callback
   delivery rather than a channel buffer and its associated subscription options.
-- Resumable progress is buffered until the attempt ends; transactional checkpoint
-  helpers are not exposed. The Go logging middleware and worker-test harness have
-  no packaged Java equivalents.
+- The Go logging middleware and worker-test harness have no packaged Java
+  equivalents.
 - Some maintenance configuration is coarser: reindexing accepts an interval,
   polling policy belongs to a runtime, and insert defaults belong to a job type.
 

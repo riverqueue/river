@@ -24,7 +24,6 @@ import java.util.concurrent.locks.ReentrantLock;
 import java.util.function.Consumer;
 import org.postgresql.PGConnection;
 import tools.jackson.databind.JsonNode;
-import tools.jackson.databind.node.ObjectNode;
 
 /** A bounded worker runtime using one virtual thread per active job. */
 public final class Workers implements AutoCloseable {
@@ -63,7 +62,8 @@ public final class Workers implements AutoCloseable {
   private long leaderEligibleAt = System.nanoTime();
   private volatile Connection listener;
   private final Map<String, Integer> queues = new ConcurrentHashMap<>();
-  private final Map<String, Instant> periodicNext = new ConcurrentHashMap<>();
+  private final PeriodicJobBundle periodic;
+  private final AtomicBoolean periodicChanged = new AtomicBoolean();
   private final java.util.Set<String> pausedQueues = ConcurrentHashMap.newKeySet();
   private final ReentrantLock queueLock = new ReentrantLock();
   private final Condition queueChanged = queueLock.newCondition();
@@ -83,6 +83,15 @@ public final class Workers implements AutoCloseable {
         new Protocol.Dispatcher(
             id, active, pendingCancellation, this::queueNotification, this::leadershipNotification);
     queues.putAll(config.queues);
+    periodic =
+        new PeriodicJobBundle(
+            config.periodic,
+            config.leadership,
+            running::get,
+            () -> {
+              if (periodicChanged.compareAndSet(false, true) && isLeader())
+                leadershipWake.release();
+            });
     if (queues.isEmpty() || config.handlers.isEmpty())
       throw new IllegalArgumentException("Workers require queues and handlers");
     if (config.reindexInterval != null) nextReindex = Instant.now().plus(config.reindexInterval);
@@ -126,6 +135,11 @@ public final class Workers implements AutoCloseable {
   boolean isLeader(long now) {
     var term = leaderTerm;
     return running.get() && term != null && term.active(now);
+  }
+
+  /** Returns this runtime's live, thread-safe periodic job bundle. */
+  public PeriodicJobBundle periodicJobs() {
+    return periodic;
   }
 
   public void removeQueue(String name) {
@@ -401,6 +415,7 @@ public final class Workers implements AutoCloseable {
         row,
         context,
         () -> {
+          context.timeout = timeout(registration.handler, context.job());
           workMiddleware(
               context,
               0,
@@ -506,7 +521,9 @@ public final class Workers implements AutoCloseable {
     // leave all claimed jobs owned by this attempt so its failure settles the entire batch.
     for (var decoded : rows) {
       var context = new WorkContext<>(river, decoded.job(), false);
+      context.timeout = config.jobTimeout;
       parent.peers.put(decoded.job().id(), new WorkContext.Peer(decoded.job(), context));
+      activeThreads.put(decoded.job().id(), Thread.currentThread());
       active.put(decoded.job().id(), context);
       // Publish before checking the parent so a concurrent cancellation cannot miss both.
       context.attach(this, parent);
@@ -515,7 +532,12 @@ public final class Workers implements AutoCloseable {
     for (var decoded : rows) {
       if (decoded.failure() != null) throw decoded.failure();
       var provisional = parent.peers.get(decoded.job().id()).context();
-      var context = provisional.withDecodedJob(river.typed(decoded.job(), type));
+      // Decode the plugin's wire representation once, including when evaluating the timeout.
+      var job = decoded.job().mapArgs(ignored -> river.pilot().decode(decoded.job()));
+      var context =
+          provisional.withDecodedJob(job.mapArgs(args -> Json.decode(args, type.argsType())));
+      var registration = config.handlers.get(job.kind());
+      context.timeout = registration == null ? config.jobTimeout : timeout(registration, job);
       parent.peers.put(decoded.job().id(), new WorkContext.Peer(decoded.job(), context));
       active.put(decoded.job().id(), context);
       contexts.add(context);
@@ -528,7 +550,9 @@ public final class Workers implements AutoCloseable {
     if (peer == null || peer.context() != context)
       throw new IllegalArgumentException("Peer is not owned by this batch attempt");
     if (parent.cancellation() != null) context.requestCancellation(parent.cancellation());
-    complete(peer.row(), context, context.finish(failure));
+    failure = context.finish(failure);
+    activeThreads.remove(context.job().id());
+    complete(peer.row(), context, failure);
     parent.peers.remove(context.job().id(), peer);
     queueLock.lock();
     try {
@@ -606,11 +630,13 @@ public final class Workers implements AutoCloseable {
             new Object[] {
               state.value(),
               river.database().timestamp(now),
+              context == null ? null : context.checkpointStep(),
+              context == null ? "{}" : Json.encode(context.checkpointFallback()),
+              Json.encode(updates),
               state.value(),
               river.database().timestamp(state.isFinalized() ? now : null),
               river.database().timestamp(scheduled),
               attempt,
-              Json.encode(updates),
               errors,
               errors,
               original.id(),
@@ -961,7 +987,6 @@ public final class Workers implements AutoCloseable {
       }
       if (!running.get()) return;
       if (!elected.equals(initializedTerm)) {
-        periodicNext.clear();
         river.pilot().leadershipStarted();
         for (var hook : river.hooks())
           if (hook instanceof HookPeriodicJobsStart periodicHook) periodicHook.start();
@@ -978,6 +1003,7 @@ public final class Workers implements AutoCloseable {
                   report(error);
                 } finally {
                   maintenanceBusy.set(false);
+                  if (periodicChanged.get()) leadershipWake.release();
                 }
               });
         } catch (java.util.concurrent.RejectedExecutionException error) {
@@ -991,32 +1017,35 @@ public final class Workers implements AutoCloseable {
   }
 
   private void services(Instant now, Instant term) throws SQLException {
-    for (var periodic : config.periodic) {
+    periodicChanged.set(false);
+    for (var state : periodic.snapshot()) {
+      var job = state.job;
       if (!ownsTerm(term)) return;
+      if (!periodic.contains(state)) continue;
       try {
-        Instant next = periodicNext.get(periodic.id);
+        Instant next = term.equals(state.term) ? state.next : null;
         if (next == null)
           next =
-              periodic.runOnStart
+              job.runOnStart()
                   ? now
-                  : periodic
-                      .schedule
+                  : job.schedule()
                       .next(now.atZone(java.time.ZoneId.systemDefault()))
                       .map(java.time.ZonedDateTime::toInstant)
                       .orElse(Instant.MAX);
         if (!next.isAfter(now)) {
           Instant following =
-              periodic
-                  .schedule
+              job.schedule()
                   .next(next.atZone(java.time.ZoneId.systemDefault()))
                   .map(java.time.ZonedDateTime::toInstant)
                   .orElse(Instant.MAX);
           if (!ownsTerm(term)) return;
-          periodic.insert(river, next);
+          if (!periodic.contains(state)) continue;
+          job.insert(river, next);
           next = following;
         }
         if (!ownsTerm(term)) return;
-        periodicNext.put(periodic.id, next);
+        state.next = next;
+        state.term = term;
       } catch (Exception error) {
         // One failing schedule or insertion must not block other jobs or leader maintenance.
         report(error);
@@ -1202,21 +1231,14 @@ public final class Workers implements AutoCloseable {
                 now.minus(config.rescueAfter),
                 java.util.Set.copyOf(active.keySet()),
                 java.util.Set.copyOf(config.handlers.keySet()),
-                config.jobTimeout.isNegative(),
+                this::rescueTimeout,
                 config.retryPolicy))) return;
     long after = 0;
     while (ownsTerm(term)) {
       final long cursor = after;
-      var ready = new ArrayList<FetchWakeup>();
       var batch =
           river.transaction(
               c -> {
-                // Reserve the SQLite writer before reading: another commit would make this
-                // snapshot impossible to upgrade when persisting the rescue.
-                if (river.database().dialect() == Database.Dialect.SQLITE)
-                  try (var statement = Sql.prepare(c, Sql.query(river.database(), "writer_lock"))) {
-                    statement.executeUpdate();
-                  }
                 var stuck = new ArrayList<Job<JsonNode>>();
                 try (var statement =
                         Sql.prepare(
@@ -1227,63 +1249,77 @@ public final class Workers implements AutoCloseable {
                     var rows = statement.executeQuery()) {
                   while (rows.next()) stuck.add(river.read(rows));
                 }
-                for (var job : stuck) {
-                  if (active.containsKey(job.id())
-                      || (config.jobTimeout.isNegative()
-                          && config.handlers.containsKey(job.kind()))) continue;
-                  boolean cancel = false;
-                  if (job.metadata().path("cancel_attempted_at").isString())
-                    try {
-                      cancel =
-                          !Instant.parse(job.metadata().path("cancel_attempted_at").asString())
-                              .equals(Instant.parse("0001-01-01T00:00:00Z"));
-                    } catch (RuntimeException ignored) {
-                    }
-                  Job.State state =
-                      cancel
-                          ? Job.State.CANCELLED
-                          : !config.handlers.containsKey(job.kind())
-                                  || job.attempt() >= job.maxAttempts()
-                              ? Job.State.DISCARDED
-                              : Job.State.RETRYABLE;
-                  Instant scheduled = job.scheduledAt();
-                  if (!state.isFinalized()) {
-                    Duration delay = retryDelay(job, now);
-                    scheduled = now.plus(delay);
-                    if (bypassScheduler(delay)) state = Job.State.AVAILABLE;
-                  }
-                  String error =
-                      Json.encode(
-                          new Job.AttemptError(
-                              now, job.attempt(), "Stuck job rescued by JobRescuer", ""));
-                  String metadata =
-                      Json.encode(
-                          Map.of(
-                              Protocol.METADATA_RESCUE_COUNT,
-                              job.metadata().path(Protocol.METADATA_RESCUE_COUNT).asLong(0) + 1));
-                  try (var statement =
-                          Sql.prepare(
-                              c,
-                              Sql.query(river.database(), "rescue_update"),
-                              state.value(),
-                              river.database().timestamp(state.isFinalized() ? now : null),
-                              river.database().timestamp(scheduled),
-                              job.attempt(),
-                              metadata,
-                              error,
-                              error,
-                              job.id(),
-                              job.attempt(),
-                              river.database().timestamp(job.attemptedAt()));
-                      var rows = statement.executeQuery()) {
-                    if (rows.next() && state == Job.State.AVAILABLE)
-                      ready.add(
-                          new FetchWakeup(
-                              Database.instant(rows.getString("scheduled_at")), job.queue()));
-                  }
-                }
                 return stuck;
               });
+      var rescues = new ArrayList<Rescue>();
+      for (var job : batch) {
+        if (active.containsKey(job.id())) continue;
+        boolean cancel = false;
+        if (job.metadata().path("cancel_attempted_at").isString())
+          try {
+            cancel =
+                !Instant.parse(job.metadata().path("cancel_attempted_at").asString())
+                    .equals(Instant.parse("0001-01-01T00:00:00Z"));
+          } catch (RuntimeException ignored) {
+          }
+        if (!cancel && config.handlers.containsKey(job.kind())) {
+          var timeout = rescueTimeout(job);
+          if (timeout.isNegative()
+              || Duration.between(job.attemptedAt(), now).compareTo(timeout) < 0) continue;
+        }
+        Job.State state =
+            cancel
+                ? Job.State.CANCELLED
+                : !config.handlers.containsKey(job.kind()) || job.attempt() >= job.maxAttempts()
+                    ? Job.State.DISCARDED
+                    : Job.State.RETRYABLE;
+        Instant scheduled = job.scheduledAt();
+        if (!state.isFinalized()) {
+          Duration delay = retryDelay(job, now);
+          scheduled = now.plus(delay);
+          if (bypassScheduler(delay)) state = Job.State.AVAILABLE;
+        }
+        String error =
+            Json.encode(
+                new Job.AttemptError(now, job.attempt(), "Stuck job rescued by JobRescuer", ""));
+        String metadata =
+            Json.encode(
+                Map.of(
+                    Protocol.METADATA_RESCUE_COUNT,
+                    job.metadata().path(Protocol.METADATA_RESCUE_COUNT).asLong(0) + 1));
+        rescues.add(new Rescue(error, job, metadata, scheduled, state));
+      }
+      if (!ownsTerm(term)) return;
+      var ready = new ArrayList<FetchWakeup>();
+      river.transaction(
+          c -> {
+            for (var rescue : rescues) {
+              var job = rescue.job();
+              if (active.containsKey(job.id())) continue;
+              var state = rescue.state();
+              try (var statement =
+                      Sql.prepare(
+                          c,
+                          Sql.query(river.database(), "rescue_update"),
+                          state.value(),
+                          river.database().timestamp(state.isFinalized() ? now : null),
+                          river.database().timestamp(rescue.scheduled()),
+                          job.attempt(),
+                          rescue.metadata(),
+                          rescue.error(),
+                          rescue.error(),
+                          job.id(),
+                          job.attempt(),
+                          river.database().timestamp(job.attemptedAt()));
+                  var rows = statement.executeQuery()) {
+                if (rows.next() && state == Job.State.AVAILABLE)
+                  ready.add(
+                      new FetchWakeup(
+                          Database.instant(rows.getString("scheduled_at")), job.queue()));
+              }
+            }
+            return null;
+          });
       // Only committed rescues may wake fetching; use the database's timestamp precision.
       fetchWakeups.addAll(ready);
       if (!ready.isEmpty()) wake.release();
@@ -1292,14 +1328,28 @@ public final class Workers implements AutoCloseable {
     }
   }
 
+  private record Rescue(
+      String error, Job<JsonNode> job, String metadata, Instant scheduled, Job.State state) {}
+
+  private Duration rescueTimeout(Job<JsonNode> job) {
+    try {
+      return timeout(job);
+    } catch (Throwable error) {
+      // Malformed arguments or timeout callbacks must not prevent abandoned jobs being rescued.
+      report(error);
+      return Duration.ZERO;
+    }
+  }
+
   private void supervise() {
     while (running.get() || dispatcherStopped.getCount() != 0 || !active.isEmpty()) {
       for (var context : active.values()) {
         // Attempts retain their deadlines while fetching is blocked or gracefully stopping.
-        if (!config.jobTimeout.isNegative()
-            && Duration.between(context.job().attemptedAt(), Instant.now())
-                    .compareTo(config.jobTimeout)
-                >= 0) context.requestCancellation(WorkContext.Cancellation.TIMEOUT);
+        var timeout = context.timeout;
+        if (timeout != null
+            && !timeout.isNegative()
+            && Duration.between(context.job().attemptedAt(), Instant.now()).compareTo(timeout) >= 0)
+          context.requestCancellation(WorkContext.Cancellation.TIMEOUT);
         if (context.forceIfStuck(config.stuckThreshold)) {
           observe("stuck_job");
           var thread = activeThreads.get(context.job().id());
@@ -1313,6 +1363,26 @@ public final class Workers implements AutoCloseable {
         return;
       }
     }
+  }
+
+  private Duration timeout(Job<JsonNode> job) {
+    var registration = config.handlers.get(job.kind());
+    return registration == null
+        ? config.jobTimeout
+        : timeout(registration, job.mapArgs(ignored -> river.pilot().decode(job)));
+  }
+
+  private <A> Duration timeout(Registration<A> registration, Job<JsonNode> decoded) {
+    return timeout(
+        registration.handler,
+        decoded.mapArgs(args -> Json.decode(args, registration.type.argsType())));
+  }
+
+  private <A> Duration timeout(Handler<A> handler, Job<A> job) {
+    var timeout = handler.timeout(job);
+    if (timeout == null || timeout.isZero()) return config.jobTimeout;
+    Builder.duration(timeout, "Worker timeout");
+    return timeout;
   }
 
   private void observe(String event) {
@@ -1428,7 +1498,7 @@ public final class Workers implements AutoCloseable {
     private boolean leadership = true;
     private Duration maintenanceInterval = Duration.ofSeconds(5);
     private final List<Consumer<String>> observers = new ArrayList<>();
-    private final List<Periodic<?>> periodic = new ArrayList<>();
+    private final List<PeriodicJob<?>> periodic = new ArrayList<>();
     private Duration pollInterval = Duration.ofSeconds(1);
     private boolean pollOnly;
     private final Map<String, Integer> queues = new java.util.LinkedHashMap<>();
@@ -1543,6 +1613,16 @@ public final class Workers implements AutoCloseable {
       return this;
     }
 
+    /** Registers a periodic definition before starting this runtime. */
+    public Builder periodic(PeriodicJob<?> job) {
+      Objects.requireNonNull(job, "job");
+      if (job.id() != null
+          && periodic.stream().anyMatch(existing -> job.id().equals(existing.id())))
+        throw new IllegalArgumentException("Duplicate periodic job ID: " + job.id());
+      periodic.add(job);
+      return this;
+    }
+
     public <A> Builder periodic(
         String id,
         Schedule schedule,
@@ -1550,21 +1630,7 @@ public final class Workers implements AutoCloseable {
         A args,
         InsertOptions options,
         boolean runOnStart) {
-      if (id == null
-          || id.getBytes(StandardCharsets.UTF_8).length > 127
-          || !Protocol.USER_SPECIFIED_ID_OR_KIND.matcher(id).matches())
-        throw new IllegalArgumentException("Invalid periodic job ID");
-      if (periodic.stream().anyMatch(job -> job.id().equals(id)))
-        throw new IllegalArgumentException("Duplicate periodic job ID: " + id);
-      periodic.add(
-          new Periodic<>(
-              id,
-              Objects.requireNonNull(schedule),
-              Objects.requireNonNull(type),
-              Objects.requireNonNull(args),
-              Objects.requireNonNull(options),
-              runOnStart));
-      return this;
+      return periodic(new PeriodicJob<>(id, schedule, type, args, options, runOnStart));
     }
 
     public Builder pollInterval(Duration value) {
@@ -1692,37 +1758,21 @@ public final class Workers implements AutoCloseable {
       Object[] params,
       java.util.concurrent.CompletableFuture<Job<JsonNode>> done) {}
 
+  /** A worker handler. Lambdas inherit the runtime's attempt timeout. */
   @FunctionalInterface
   public interface Handler<A> {
+    /**
+     * Overrides the timeout for this job. Null or zero inherits the runtime default; a negative
+     * duration disables timeouts. Positive values must fit in signed 64-bit nanoseconds. Called
+     * once before work and when evaluating an abandoned job for rescue, so implementations must be
+     * thread-safe and free of side effects.
+     */
+    default Duration timeout(Job<A> job) {
+      return null;
+    }
+
     void work(WorkContext<A> context) throws Exception;
   }
 
   private record Registration<A>(JobType<A> type, Handler<A> handler) {}
-
-  private record Periodic<A>(
-      String id,
-      Schedule schedule,
-      JobType<A> type,
-      A args,
-      InsertOptions options,
-      boolean runOnStart) {
-    void insert(Client river, Instant scheduledAt) {
-      var base = options.resolve(type.defaults());
-      var metadata = (ObjectNode) base.metadata().deepCopy();
-      metadata.put("periodic", true).put(Protocol.METADATA_PERIODIC_JOB_ID, id);
-      var options =
-          new InsertOptions(
-              base.maxAttempts(),
-              metadata,
-              base.pending(),
-              base.priority(),
-              base.queue(),
-              base.scheduledAt(),
-              base.tags(),
-              base.unique());
-      // A periodic occurrence supplies the default date without turning an available job into
-      // a scheduled one or overriding an explicitly configured date, matching Go's enqueuer.
-      river.transaction(c -> river.insert(c, type, args, options, scheduledAt));
-    }
-  }
 }
