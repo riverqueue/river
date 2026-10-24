@@ -69,41 +69,44 @@ export class Resumable {
 
   /**
    * Run a named step unless an earlier failed attempt completed it.
-   * Await steps sequentially; nested steps are supported, concurrent steps are not.
+   * Await steps sequentially. Steps cannot be nested inside other step callbacks.
    */
   async step(
     name: string,
     callback: () => PromiseLike<void> | void
   ): Promise<void> {
-    const previousStepName = this.#stepName;
     if (!this.#begin(name, false)) return;
     try {
       await callback();
+      if (this.#failure !== null) return;
       this.#completedStep = name;
     } catch (cause: unknown) {
       this.#failure = stepError(name, cause);
       throw cause;
     } finally {
-      this.#stepName = previousStepName;
+      this.#stepName = null;
     }
   }
 
-  /** Run a named cursor step with the last JSON cursor, or null initially. */
+  /**
+   * Run a named cursor step with the last JSON cursor, or null initially.
+   * Steps cannot be nested inside other step callbacks.
+   */
   async stepWithCursor(
     name: string,
     callback: (cursor: JsonValue | null) => PromiseLike<void> | void
   ): Promise<void> {
-    const previousStepName = this.#stepName;
     if (!this.#begin(name, true)) return;
     try {
       await callback(this.#cursors.get(name) ?? null);
+      if (this.#failure !== null) return;
       this.#completedStep = name;
       if (this.#cursors.delete(name)) this.#cursorsDirty = true;
     } catch (cause: unknown) {
       this.#failure = stepError(name, cause);
       throw cause;
     } finally {
-      this.#stepName = previousStepName;
+      this.#stepName = null;
     }
   }
 
@@ -181,6 +184,10 @@ export class Resumable {
       throw new ValidationError("resumable step name is empty");
     }
     if (this.#failure !== null) throw this.#failure;
+    if (this.#stepName !== null) {
+      this.#failure = new LifecycleError("resumable steps cannot be nested");
+      throw this.#failure;
+    }
     if (this.#allNames.has(name)) {
       this.#failure = new ValidationError(
         `duplicate resumable step name ${JSON.stringify(name)}`

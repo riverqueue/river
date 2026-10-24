@@ -16,8 +16,8 @@ order or sorted map keys. Select scalar leaf paths (for example, `byArgs:
 of identity. Missing selected fields and explicit `null` are distinct.
 
 Resumable step names and cursor shapes must also match between implementations.
-Keep names stable and await steps sequentially; nested steps are supported,
-but concurrent steps do not define a checkpoint order. Catching a step error
+Keep names stable and await steps sequentially. Steps cannot be nested inside
+other step callbacks. Catching a step error
 does not make the attempt successful: River retains the failure and checkpoint.
 The test helper returns updated metadata so a subsequent test attempt can
 resume with the same persisted state as a real worker.

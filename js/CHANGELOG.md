@@ -21,6 +21,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Reject nested resumable steps before running child callbacks, preventing unreachable resume points and rolled-back parent checkpoints from being saved again. [PR #1534](https://github.com/riverqueue/river/pull/1534).
+
 - Replace whole top-level metadata values on SQLite, including JSON null, matching Postgres. Completed resumable cursor steps no longer run again because of stale cursor entries. [PR #1533](https://github.com/riverqueue/river/pull/1533).
 
 - Preserve first-step resumable cursors on failure and step progress on snooze. Transactional checkpoints no longer leak into deferred updates after rollback or a failed write; rolling back a successful checkpoint write may replay earlier unpersisted steps.

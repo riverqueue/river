@@ -201,11 +201,11 @@ RSpec.describe "resumable job execution" do
   end
 
   it "rejects nested steps without recording an unreachable resume point" do
-    [:resumable_step, :resumable_step_cursor].each do |method|
+    [:resumable_step, :resumable_step_cursor].product([:resumable_step, :resumable_step_cursor]).each do |parent, child|
       job = build_job
       expect do
-        job.resumable_step :outer do
-          job.public_send(method, :inner) { raise "must not run" }
+        job.public_send(parent, :outer) do
+          job.public_send(child, :inner) { raise "must not run" }
         end
       end.to raise_error(River::Error, /cannot be nested/)
       job.__capture_resumable_metadata!

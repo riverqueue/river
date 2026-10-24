@@ -368,6 +368,62 @@ describe("SqliteDriver runtime", () => {
     }
   });
 
+  test.each([false, true])(
+    "rejects nested steps after a parent checkpoint (commit=%s)",
+    async (commit) => {
+      const { database, driver } = await setup();
+      const definition = defineJob({ kind: "sqlite_nested_resumable" });
+      const client = new Client(driver, {
+        completionBatchSize: 1,
+        leaderElectionDisabled: true,
+        queues: {
+          default: {
+            fetchCooldown: { milliseconds: 1 },
+            maxWorkers: 1,
+            pollInterval: { milliseconds: 5 },
+          },
+        },
+        workers: new Workers().add(definition, async ({ resumable }) => {
+          await resumable.stepWithCursor("parent", async () => {
+            database.exec("BEGIN IMMEDIATE");
+            try {
+              await resumable.checkpoint({ cursor: 1, tx: database });
+              await resumable.stepWithCursor("child", () => {
+                throw new Error("nested child must not run");
+              });
+            } finally {
+              database.exec(commit ? "COMMIT" : "ROLLBACK");
+            }
+          });
+        }),
+      });
+      const inserted = await client.insert(definition, {}, { maxAttempts: 1 });
+      const run = await client.start();
+      try {
+        const row = await waitForJob(client, inserted.job.id, "discarded");
+        expect(row.errors.at(-1)?.error).toBe(
+          "resumable steps cannot be nested"
+        );
+        expect(
+          Object.fromEntries(
+            Object.entries(row.metadata).filter(([key]) =>
+              key.startsWith("river:resumable_")
+            )
+          )
+        ).toEqual(
+          commit
+            ? {
+                "river:resumable_step": "parent",
+                "river:resumable_cursor": { parent: 1 },
+              }
+            : {}
+        );
+      } finally {
+        await run.stop();
+      }
+    }
+  );
+
   test("drops a finished cursor step's cursor on later SQLite attempts", async () => {
     const { driver } = await setup();
     const definition = defineJob({ kind: "sqlite_runtime_resumable_cursor" });

@@ -89,6 +89,7 @@ type ResumableState struct {
 	Err           error
 	ResumeMatched bool
 	ResumeStep    string
+	StepActive    bool
 	StepName      string
 }
 

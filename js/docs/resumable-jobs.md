@@ -28,8 +28,8 @@ const workers = new Workers().add(
 ```
 
 If `storage` fails, the retry skips `billing` and runs `storage` again. Steps
-must be awaited one at a time (nested steps are fine, concurrent ones are
-not), and names must stay stable across deploys because they are persisted.
+must be awaited one at a time and cannot be nested inside other step callbacks.
+Names must stay stable across deploys because they are persisted.
 Catching a step's error doesn't make the attempt succeed: River still fails
 the attempt and keeps the checkpoint.
 

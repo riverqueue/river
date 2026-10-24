@@ -159,15 +159,16 @@ impl WorkContext {
     /// Runs a named resumable step, skipping work completed by an earlier
     /// failed attempt.
     ///
-    /// Await steps sequentially. Nested steps are supported, but concurrent
-    /// steps do not define a checkpoint order. A step may fail with any error
-    /// convertible into [`BoxError`], including `anyhow::Error`; it is
+    /// Await steps sequentially. Steps cannot be nested inside other step
+    /// callbacks. A step may fail with any error convertible into [`BoxError`],
+    /// including `anyhow::Error`; it is
     /// returned as the source of [`Error::ResumableStep`].
     ///
     /// # Errors
     ///
     /// Returns [`Error::ResumableStep`] with the step's error, and a runtime
-    /// error when the context doesn't belong to a job being worked.
+    /// error when steps are nested or the context doesn't belong to a job
+    /// being worked.
     ///
     /// # Cancel safety
     ///
@@ -181,12 +182,19 @@ impl WorkContext {
         Fut: Future<Output = Result<(), E>>,
     {
         let guard = match self.begin_resumable_step(name, false)? {
-            StepAction::Run(previous) => RunningStep::new(self, name, previous),
+            StepAction::Run => RunningStep::new(self, name),
             StepAction::Skip => return Ok(()),
         };
 
         let result = step().await;
         let mut state = guard.finish();
+        if let Some(failure) = &state.failure {
+            return Err(Error::runtime_source(
+                "worker context",
+                failure.to_string(),
+                failure.clone(),
+            ));
+        }
         match result {
             Ok(()) => {
                 state.completed_step = Some(name.to_owned());
@@ -222,7 +230,7 @@ impl WorkContext {
         T: Default + DeserializeOwned,
     {
         let guard = match self.begin_resumable_step(name, true)? {
-            StepAction::Run(previous) => RunningStep::new(self, name, previous),
+            StepAction::Run => RunningStep::new(self, name),
             StepAction::Skip => return Ok(()),
         };
 
@@ -244,6 +252,13 @@ impl WorkContext {
         };
         let result = step(cursor).await;
         let mut state = guard.finish();
+        if let Some(failure) = &state.failure {
+            return Err(Error::runtime_source(
+                "worker context",
+                failure.to_string(),
+                failure.clone(),
+            ));
+        }
         match result {
             Ok(()) => {
                 state.completed_step = Some(name.to_owned());
@@ -413,6 +428,14 @@ impl WorkContext {
                 failure.clone(),
             ));
         }
+        if state.step_name.is_some() {
+            let message = "resumable steps cannot be nested".to_owned();
+            state.failure = Some(WorkError::new(Box::new(Error::runtime_context(
+                "worker context",
+                message.clone(),
+            ))));
+            return Err(Error::runtime_context("worker context", message));
+        }
         if !state.all_step_names.insert(name.to_owned()) {
             let message = format!("duplicate resumable step name {name:?}");
             state.failure = Some(WorkError::new(Box::new(Error::runtime_context(
@@ -432,8 +455,8 @@ impl WorkContext {
                 return Ok(StepAction::Skip);
             }
         }
-        let previous = state.step_name.replace(name.to_owned());
-        Ok(StepAction::Run(previous))
+        state.step_name = Some(name.to_owned());
+        Ok(StepAction::Run)
     }
 
     fn current_job(&self) -> Result<(&Client, i64), Error> {
@@ -616,36 +639,34 @@ impl ResumableState {
 }
 
 enum StepAction {
-    Run(Option<String>),
+    Run,
     Skip,
 }
 
-/// A resumable step that has started. Finishing it restores the enclosing
-/// step. Dropping it unfinished, when the step's future is dropped, also
+/// A resumable step that has started. Finishing it clears the active step.
+/// Dropping it unfinished, when the step's future is dropped, also
 /// forgets that the step started, so the step can run again in this attempt
 /// and no cursor can be set for it outside the step.
 struct RunningStep<'a> {
     context: &'a WorkContext,
     finished: bool,
     name: &'a str,
-    previous: Option<String>,
 }
 
 impl<'a> RunningStep<'a> {
-    const fn new(context: &'a WorkContext, name: &'a str, previous: Option<String>) -> Self {
+    const fn new(context: &'a WorkContext, name: &'a str) -> Self {
         Self {
             context,
             finished: false,
             name,
-            previous,
         }
     }
 
-    /// Restores the enclosing step and returns the locked state.
+    /// Clears the active step and returns the locked state.
     fn finish(mut self) -> MutexGuard<'a, ResumableState> {
         self.finished = true;
         let mut state = self.context.lock_resumable();
-        state.step_name = self.previous.take();
+        state.step_name = None;
         state
     }
 }
@@ -654,7 +675,7 @@ impl Drop for RunningStep<'_> {
     fn drop(&mut self) {
         if !self.finished {
             let mut state = self.context.lock_resumable();
-            state.step_name = self.previous.take();
+            state.step_name = None;
             state.all_step_names.remove(self.name);
         }
     }
@@ -1202,6 +1223,66 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn resumable_caught_nested_step_error_does_not_complete_parent() {
+        for cursor in [false, true] {
+            let context = WorkContext::new(CancellationToken::new());
+            context
+                .resumable_step("before", || async { Ok::<(), Error>(()) })
+                .await
+                .unwrap();
+            let parent = || async {
+                if cursor {
+                    context.resumable_set_cursor(&1)?;
+                }
+                let error = context
+                    .resumable_step("child", || async {
+                        Err::<(), Error>(Error::invalid_job("nested child must not run"))
+                    })
+                    .await
+                    .unwrap_err();
+                assert!(
+                    error
+                        .to_string()
+                        .contains("resumable steps cannot be nested")
+                );
+                Ok::<(), Error>(())
+            };
+            let result = if cursor {
+                context
+                    .resumable_step_with_cursor("parent", |_: i64| parent())
+                    .await
+            } else {
+                context.resumable_step("parent", parent).await
+            };
+            assert!(
+                result
+                    .unwrap_err()
+                    .to_string()
+                    .contains("resumable steps cannot be nested")
+            );
+            assert!(
+                context
+                    .resumable_step("after", || async {
+                        Err::<(), Error>(Error::invalid_job("later step must not run"))
+                    })
+                    .await
+                    .unwrap_err()
+                    .to_string()
+                    .contains("resumable steps cannot be nested")
+            );
+            assert!(context.resumable_finish(false).is_some());
+            assert_eq!(
+                Value::Object(context.metadata_updates()),
+                if cursor {
+                    json!({"river:resumable_step": "before", "river:resumable_cursor": {"parent": 1}})
+                } else {
+                    json!({"river:resumable_step": "before"})
+                }
+            );
+        }
+    }
+
+    #[tokio::test]
     async fn resumable_first_step_cursor_survives_failure() {
         let row = job_row(FunctionJobArgs::KIND, false);
         let context = WorkContext::for_test_job(&row);
@@ -1237,13 +1318,56 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn resumable_nested_steps_restore_parent_and_error_sources() {
+    async fn resumable_nested_steps_are_rejected() {
+        for parent_cursor in [false, true] {
+            for child_cursor in [false, true] {
+                let context = WorkContext::new(CancellationToken::new());
+                let parent = || async {
+                    if child_cursor {
+                        context
+                            .resumable_step_with_cursor("child", |_: i64| async {
+                                Err::<(), Error>(Error::invalid_job("nested child must not run"))
+                            })
+                            .await
+                    } else {
+                        context
+                            .resumable_step("child", || async {
+                                Err::<(), Error>(Error::invalid_job("nested child must not run"))
+                            })
+                            .await
+                    }
+                };
+                let result = if parent_cursor {
+                    context
+                        .resumable_step_with_cursor("parent", |_: i64| parent())
+                        .await
+                } else {
+                    context.resumable_step("parent", parent).await
+                };
+                assert!(
+                    result
+                        .unwrap_err()
+                        .to_string()
+                        .contains("resumable steps cannot be nested")
+                );
+                assert!(
+                    context
+                        .resumable_finish(false)
+                        .unwrap()
+                        .to_string()
+                        .contains("resumable steps cannot be nested")
+                );
+                assert!(context.metadata_updates().is_empty());
+                assert!(context.resumable_set_cursor(&1).is_err());
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn resumable_steps_preserve_error_sources() {
         let context = WorkContext::new(CancellationToken::new());
         let error = context
             .resumable_step_with_cursor("outer", |_: i64| async {
-                context
-                    .resumable_step("inner", || async { Ok::<_, Error>(()) })
-                    .await?;
                 context.resumable_set_cursor(&7)?;
                 Err::<(), _>(Error::ResumableStep {
                     name: "source".to_owned(),
@@ -1264,7 +1388,6 @@ mod tests {
         assert_eq!(
             context.metadata_updates(),
             json!({
-                "river:resumable_step": "inner",
                 "river:resumable_cursor": {"outer": 7}
             })
             .as_object()
