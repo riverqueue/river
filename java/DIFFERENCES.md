@@ -39,21 +39,34 @@
   reproducing Go's nonterminating date loop.
 - SQL is kept in dialect-specific resource catalogs. The Go sqlc driver seam is
   not part of the Java API.
+- Resumable cursor updates are saved even when the first step fails before any
+  step completes. Go currently drops cursor updates in that case. Updating a
+  cursor never marks a step completed; a failed plain step still runs on retry.
+- Resumable steps cannot be nested in Java. Each attempt has one active step and
+  checkpoint scope, so rejecting nesting avoids ambiguous resume order and
+  checkpoint ownership. Go currently permits nested steps.
+- Transactional checkpoints require the job to still be running with the same
+  `attempt` and `attempted_at`. Go updates by job ID alone. Java rejects a stale
+  attempt's checkpoint to prevent it from changing a replacement attempt.
+- A transactional checkpoint with no cursors stores `river:resumable_cursor` as
+  JSON null, clearing any older cursor map. Go may omit that key; readers in both
+  languages accept null as an empty cursor map.
 - SQLite follows Go's JSONB storage and millisecond timestamp representation;
   Postgres uses microsecond timestamps. These are shared storage contracts,
   not configurable Java serialization choices.
 
-No intentional differences in stored uniqueness hashes, job state values, reserved
-metadata, migration versions, or notification payloads are allowed. Any remaining
-conformance failure in these areas is a defect, not an API design choice.
+Stored uniqueness hashes, job state values, migration versions, and notification
+payloads must agree with Go. Reserved metadata uses the same shapes and encodings,
+with the resumable persistence differences documented above. Other conformance
+failures in these areas are defects, not API design choices.
 
 The following are current API limitations, not differences required by Java
 conventions. The [API review](API.md) maps the complete application surface.
 
-OSS periodic registrations and polling policies belong to a worker configuration;
-start a new runtime to change its periodic definitions, or use separate runtimes
-for queues with different polling intervals. Fetch wakeups are coalesced without
-a separate cooldown setting. Reindexing supports the daily UTC default or a
+OSS periodic registrations are local to a worker runtime and can be changed
+while it runs. Polling policies belong to a worker configuration; use separate
+runtimes for queues with different polling intervals. Fetch wakeups are coalesced
+without a separate cooldown setting. Reindexing supports the daily UTC default or a
 duration override, rather than an arbitrary cron expression. Job-type defaults
 replace process-wide insert defaults.
 
@@ -69,6 +82,5 @@ that are not application APIs.
 
 Java has no bundled `riverlog` middleware or `rivertest.Worker` harness. Applications
 can write the shared log metadata format explicitly and test with JUnit against
-an isolated database. Resumable steps buffer progress until the attempt ends;
-Go's transactional resumable checkpoint helpers are not yet exposed. See the
-[README examples](README.md#features) for these API limitations.
+an isolated database. See the [README examples](README.md#features) for the
+available APIs.

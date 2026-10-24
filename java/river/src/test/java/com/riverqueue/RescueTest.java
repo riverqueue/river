@@ -19,11 +19,277 @@ import org.junit.jupiter.api.extension.RegisterExtension;
 import org.junit.jupiter.api.io.TempDir;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
+import tools.jackson.databind.JsonNode;
 
 class RescueTest {
   private static final JobType<String> TYPE = JobType.of("rescue_test", String.class);
   @RegisterExtension final TestDatabase databases = new TestDatabase();
   @TempDir Path directory;
+
+  @ParameterizedTest
+  @ValueSource(strings = {"default", "disabled", "error", "override", "throw", "zero"})
+  void pilotReceivesWorkerTimeoutCallback(String mode) throws Exception {
+    var request = new CompletableFuture<Pilot.Rescue>();
+    var errors = new LinkedBlockingQueue<Throwable>();
+    var client =
+        new Client(databases.open(directory.resolve("river.db")))
+            .withPilot(
+                new Pilot() {
+                  @Override
+                  public boolean rescue(Client client, Rescue rescue) {
+                    request.complete(rescue);
+                    return true;
+                  }
+                });
+    var job = client.insert(TYPE, mode).job();
+    try (var workers =
+        client
+            .workers()
+            .queue("other", 1)
+            .pollOnly(true)
+            .jobTimeout(Duration.ofMinutes(5))
+            .stopTimeout(Duration.ofSeconds(5))
+            .errorHandler(errors::add)
+            .add(
+                TYPE,
+                new Workers.Handler<>() {
+                  @Override
+                  public Duration timeout(Job<String> job) {
+                    assertEquals(mode, job.args());
+                    return switch (mode) {
+                      case "disabled" -> Duration.ofNanos(-1);
+                      case "error" -> throw new AssertionError("timeout error");
+                      case "override" -> Duration.ofMinutes(2);
+                      case "throw" -> throw new IllegalStateException("bad timeout");
+                      case "zero" -> Duration.ZERO;
+                      default -> null;
+                    };
+                  }
+
+                  @Override
+                  public void work(WorkContext<String> context) {
+                    fail("Wrong queue");
+                  }
+                })
+            .start()) {
+      var rescue = request.get(5, TimeUnit.SECONDS);
+      var expected =
+          switch (mode) {
+            case "disabled" -> Duration.ofNanos(-1);
+            case "error", "throw" -> Duration.ZERO;
+            case "override" -> Duration.ofMinutes(2);
+            default -> Duration.ofMinutes(5);
+          };
+      assertEquals(expected, rescue.timeout().apply(job));
+    }
+    if (mode.equals("error")) assertInstanceOf(AssertionError.class, errors.remove());
+    if (mode.equals("throw")) assertInstanceOf(IllegalStateException.class, errors.remove());
+    assertTrue(errors.isEmpty(), () -> "Unexpected worker errors: " + errors);
+  }
+
+  @ParameterizedTest
+  @ValueSource(strings = {"decode", "retry", "timeout"})
+  void rescueCallbacksReleaseDatabaseLocksAndRejectStaleAttempts(String mode) throws Exception {
+    var entered = new CompletableFuture<Void>();
+    var release = new CompletableFuture<Void>();
+    var maintained = new CompletableFuture<Void>();
+    var errors = new LinkedBlockingQueue<Throwable>();
+    var database = databases.open(directory.resolve("river.db"));
+    var client =
+        new Client(database)
+            .withPilot(
+                new Pilot() {
+                  @Override
+                  public JsonNode decode(Job<JsonNode> job) {
+                    if (mode.equals("decode")) {
+                      entered.complete(null);
+                      release.join();
+                    }
+                    return job.args();
+                  }
+
+                  @Override
+                  public boolean clean(Client client, Instant now) {
+                    maintained.complete(null);
+                    return true;
+                  }
+                });
+    var job = client.insert(TYPE, "stuck").job();
+    client.transaction(
+        connection -> {
+          try (var statement =
+              Sql.prepare(
+                  connection,
+                  "UPDATE "
+                      + database.prefix()
+                      + "river_job SET state='running',attempt=1,attempted_at=? WHERE id=?",
+                  database.timestamp(Instant.EPOCH),
+                  job.id())) {
+            statement.executeUpdate();
+          }
+          return null;
+        });
+    var workers =
+        client
+            .workers()
+            .queue("other", 1)
+            .pollOnly(true)
+            .serviceInterval(Duration.ofHours(1))
+            .stopTimeout(Duration.ofSeconds(5))
+            .errorHandler(errors::add)
+            .retryPolicy(
+                ignored -> {
+                  if (mode.equals("retry")) {
+                    entered.complete(null);
+                    release.join();
+                  }
+                  return Duration.ofDays(1);
+                })
+            .add(
+                TYPE,
+                new Workers.Handler<>() {
+                  @Override
+                  public Duration timeout(Job<String> job) {
+                    if (mode.equals("timeout")) {
+                      entered.complete(null);
+                      release.join();
+                    }
+                    return Duration.ofNanos(1);
+                  }
+
+                  @Override
+                  public void work(WorkContext<String> context) {
+                    fail("Wrong queue");
+                  }
+                })
+            .start();
+    try {
+      entered.get(5, TimeUnit.SECONDS);
+      var write =
+          CompletableFuture.runAsync(
+              () ->
+                  client.transaction(
+                      connection -> {
+                        try (var statement =
+                            Sql.prepare(
+                                connection,
+                                "UPDATE "
+                                    + database.prefix()
+                                    + "river_job SET attempt=2,attempted_at=? WHERE id=?",
+                                database.timestamp(Instant.now()),
+                                job.id())) {
+                          statement.executeUpdate();
+                        }
+                        return null;
+                      }));
+      write.get(2, TimeUnit.SECONDS);
+      release.complete(null);
+      maintained.get(5, TimeUnit.SECONDS);
+      var updated = client.get(job.id());
+      assertEquals(Job.State.RUNNING, updated.state());
+      assertEquals(2, updated.attempt());
+      assertTrue(updated.errors().isEmpty());
+    } finally {
+      release.complete(null);
+      workers.stop();
+    }
+    assertTrue(errors.isEmpty(), () -> "Unexpected worker errors: " + errors);
+  }
+
+  @ParameterizedTest
+  @ValueSource(booleans = {false, true})
+  void rescueHonorsWorkerTimeouts(boolean defaultDisabled) throws Exception {
+    var maintained = new CompletableFuture<Void>();
+    var errors = new LinkedBlockingQueue<Throwable>();
+    var client =
+        new Client(databases.open(directory.resolve("river.db")))
+            .withPilot(
+                new Pilot() {
+                  @Override
+                  public boolean clean(Client client, Instant now) {
+                    maintained.complete(null);
+                    return true;
+                  }
+                });
+    var jobs = new java.util.LinkedHashMap<String, Long>();
+    for (var args :
+        List.of("cancelled", "default", "disabled", "error", "invalid", "long", "short", "zero")) {
+      var job =
+          client
+              .insert(
+                  TYPE,
+                  args,
+                  InsertOptions.builder()
+                      .maxAttempts(1)
+                      .metadata(
+                          args.equals("cancelled")
+                              ? java.util.Map.of("cancel_attempted_at", Instant.now().toString())
+                              : java.util.Map.of())
+                      .build())
+              .job();
+      jobs.put(args, job.id());
+      client.transaction(
+          connection -> {
+            try (var statement =
+                Sql.prepare(
+                    connection,
+                    "UPDATE "
+                        + client.database().prefix()
+                        + "river_job SET state='running',attempt=1,attempted_at=? WHERE id=?",
+                    client.database().timestamp(Instant.now().minus(Duration.ofHours(2))),
+                    job.id())) {
+              statement.executeUpdate();
+            }
+            return null;
+          });
+    }
+    try (var workers =
+        client
+            .workers()
+            .queue("other", 1)
+            .pollOnly(true)
+            .jobTimeout(Duration.ofNanos(defaultDisabled ? -1 : 1))
+            .rescueAfter(Duration.ofHours(1))
+            .stopTimeout(Duration.ofSeconds(5))
+            .errorHandler(errors::add)
+            .add(
+                TYPE,
+                new Workers.Handler<>() {
+                  @Override
+                  public Duration timeout(Job<String> job) {
+                    return switch (job.args()) {
+                      case "cancelled", "disabled" -> Duration.ofNanos(-1);
+                      case "error" -> throw new AssertionError("timeout error");
+                      case "invalid" -> throw new IllegalStateException("bad timeout");
+                      case "zero" -> Duration.ZERO;
+                      case "long" -> Duration.ofHours(3);
+                      case "short" -> Duration.ofMinutes(1);
+                      default -> null;
+                    };
+                  }
+
+                  @Override
+                  public void work(WorkContext<String> context) {
+                    fail("Wrong queue");
+                  }
+                })
+            .start()) {
+      maintained.get(5, TimeUnit.SECONDS);
+      for (var entry : jobs.entrySet()) {
+        var expected =
+            switch (entry.getKey()) {
+              case "cancelled" -> Job.State.CANCELLED;
+              case "default", "zero" -> defaultDisabled ? Job.State.RUNNING : Job.State.DISCARDED;
+              case "disabled", "long" -> Job.State.RUNNING;
+              default -> Job.State.DISCARDED;
+            };
+        assertEquals(expected, client.get(entry.getValue()).state(), entry.getKey());
+      }
+    }
+    assertEquals("timeout error", errors.remove().getMessage());
+    assertEquals("bad timeout", errors.remove().getMessage());
+    assertTrue(errors.isEmpty(), () -> "Unexpected worker errors: " + errors);
+  }
 
   @ParameterizedTest
   @ValueSource(strings = {"local", "peer", "peer_claim_retry", "peer_notification_retry"})

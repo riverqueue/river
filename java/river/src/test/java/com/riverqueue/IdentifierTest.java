@@ -5,13 +5,19 @@ import static org.junit.jupiter.api.Assertions.*;
 import java.time.Duration;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
-import org.junit.jupiter.params.provider.NullAndEmptySource;
+import org.junit.jupiter.params.provider.EmptySource;
 import org.junit.jupiter.params.provider.ValueSource;
 
 class IdentifierTest {
   private static final JobType<String> TYPE = JobType.of("identifier_test", String.class);
   private final Workers.Builder workers =
       new Client(Database.connect("jdbc:sqlite::memory:")).workers();
+
+  @Test
+  void acceptsAnonymousPeriodicJobs() {
+    assertDoesNotThrow(() -> periodic(null));
+    assertDoesNotThrow(() -> periodic(null));
+  }
 
   @ParameterizedTest
   @ValueSource(
@@ -68,7 +74,7 @@ class IdentifierTest {
   }
 
   @ParameterizedTest
-  @NullAndEmptySource
+  @EmptySource
   @ValueSource(
       strings = {
         "a",
@@ -87,8 +93,7 @@ class IdentifierTest {
         "daily😀"
       })
   void rejectsInvalidKindAndPeriodicIdSyntax(String value) {
-    if (value != null)
-      assertThrows(IllegalArgumentException.class, () -> JobType.of(value, String.class));
+    assertThrows(IllegalArgumentException.class, () -> JobType.of(value, String.class));
     assertThrows(IllegalArgumentException.class, () -> periodic(value));
   }
 

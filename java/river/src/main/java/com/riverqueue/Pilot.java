@@ -82,12 +82,18 @@ public interface Pilot {
     return false;
   }
 
+  /**
+   * Rescue parameters. Evaluate timeout for each known job: negative disables rescue, zero permits
+   * it immediately, and positive durations protect attempts until their deadline. Cancellation and
+   * unknown-kind handling take precedence over the timeout. Evaluate the callback outside database
+   * transactions: it decodes arguments and invokes the worker's timeout method.
+   */
   record Rescue(
       Instant now,
       Instant horizon,
       Set<Long> activeIds,
       Set<String> kinds,
-      boolean timeoutDisabled,
+      java.util.function.Function<Job<JsonNode>, java.time.Duration> timeout,
       RetryPolicy retryPolicy) {}
 
   record Claim(

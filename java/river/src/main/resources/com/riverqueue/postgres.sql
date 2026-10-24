@@ -151,14 +151,17 @@ WHERE id IN (SELECT id FROM {schema}river_job WHERE queue=? AND state='available
 AND NOT EXISTS(SELECT 1 FROM {schema}river_queue q WHERE q.name=river_job.queue AND paused_at IS NOT NULL)
 AND kind IN (SELECT jsonb_array_elements_text(?::jsonb))
 ORDER BY priority,scheduled_at,id LIMIT ? FOR UPDATE SKIP LOCKED) RETURNING {columns}
+-- name: checkpoint
+UPDATE {schema}river_job SET metadata=metadata || jsonb_build_object('river:resumable_step',?::text,'river:resumable_cursor',?::jsonb)
+WHERE id=? AND state='running' AND attempt=? AND attempted_at=? RETURNING {columns}
 -- name: complete
-WITH choice AS (SELECT ?::text AS target_state, ?::timestamptz AS now)
+WITH choice AS (SELECT ?::text AS target_state, ?::timestamptz AS now, ?::text AS checkpoint_step, ?::jsonb AS checkpoint_fallback, ?::jsonb AS metadata_updates)
 UPDATE {schema}river_job SET
 state=CASE WHEN state != 'running' THEN state WHEN (SELECT target_state FROM choice) IN ('available','retryable','scheduled') AND metadata->>'cancel_attempted_at' IS NOT NULL THEN 'cancelled' ELSE ?::{schema}river_job_state END,
 finalized_at=CASE WHEN state != 'running' THEN finalized_at WHEN (SELECT target_state FROM choice) IN ('available','retryable','scheduled') AND metadata->>'cancel_attempted_at' IS NOT NULL THEN (SELECT now FROM choice) ELSE ? END,
 scheduled_at=CASE WHEN state != 'running' THEN scheduled_at WHEN (SELECT target_state FROM choice) IN ('available','retryable','scheduled') AND metadata->>'cancel_attempted_at' IS NOT NULL THEN scheduled_at ELSE ? END,
 attempt=CASE WHEN state != 'running' THEN attempt WHEN (SELECT target_state FROM choice) IN ('available','retryable','scheduled') AND metadata->>'cancel_attempted_at' IS NOT NULL THEN attempt ELSE ? END,
-metadata=coalesce(metadata || nullif(?::jsonb,'{}'::jsonb),metadata),
+metadata=coalesce(metadata || nullif(CASE WHEN (SELECT checkpoint_step FROM choice) IS NOT NULL AND metadata->>'river:resumable_step' IS DISTINCT FROM (SELECT checkpoint_step FROM choice) THEN (SELECT checkpoint_fallback FROM choice) ELSE '{}'::jsonb END || (SELECT metadata_updates FROM choice),'{}'::jsonb),metadata),
 errors=CASE WHEN state != 'running' OR ?::text IS NULL THEN errors ELSE array_append(errors,?::jsonb) END
 WHERE id=? AND attempt=? AND attempted_at=? RETURNING {columns}
 
@@ -170,7 +173,7 @@ DELETE FROM {schema}river_job WHERE id IN (SELECT id FROM {schema}river_job
 WHERE state IN ('cancelled','completed','discarded') AND finalized_at < ?
 AND queue NOT IN (SELECT jsonb_array_elements_text(?::jsonb)) AND (? OR queue IN (SELECT jsonb_array_elements_text(?::jsonb))) ORDER BY id LIMIT ?)
 -- name: rescue_select
-SELECT {columns} FROM {schema}river_job WHERE state='running' AND attempted_at<? AND id>? ORDER BY id LIMIT 1000 FOR UPDATE SKIP LOCKED
+SELECT {columns} FROM {schema}river_job WHERE state='running' AND attempted_at<? AND id>? ORDER BY id LIMIT 1000
 
 -- name: database_version
 SELECT version(), coalesce(current_setting('yb_enable_listen_notify', true), 'off')::boolean

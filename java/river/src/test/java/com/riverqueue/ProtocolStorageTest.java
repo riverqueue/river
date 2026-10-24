@@ -109,7 +109,7 @@ class ProtocolStorageTest {
         Json.tree(client.get(inserted.id()).errors().getFirst()));
 
     var completed = new CompletableFuture<Workers.Event>();
-    var writeConflict = new CompletableFuture<java.sql.SQLException>();
+    var writeFailure = new CompletableFuture<java.sql.SQLException>();
     var errors = new LinkedBlockingQueue<Throwable>();
     try (var workers =
             client
@@ -120,16 +120,16 @@ class ProtocolStorageTest {
                 .retryPolicy(
                     job -> {
                       if (!postgres) {
-                        // Retry selection is between rescue's read and update. A second writer
-                        // must already be excluded, or its commit would invalidate that snapshot.
+                        // Retry selection runs after the read transaction closes, so another
+                        // writer can commit without invalidating rescue's update transaction.
                         try (var connection = database.connection();
                             var statement = connection.createStatement()) {
                           statement.execute("PRAGMA busy_timeout=0");
                           statement.executeUpdate(
                               "UPDATE river_job SET priority = 2 WHERE id = " + job.id());
-                          writeConflict.complete(null);
+                          writeFailure.complete(null);
                         } catch (java.sql.SQLException error) {
-                          writeConflict.complete(error);
+                          writeFailure.complete(error);
                         }
                       }
                       return Duration.ofDays(1);
@@ -138,14 +138,13 @@ class ProtocolStorageTest {
                 .start();
         var subscription =
             workers.subscribe(completed::complete, Workers.EventKind.JOB_COMPLETED)) {
-      if (!postgres) {
-        var conflict = writeConflict.get(5, TimeUnit.SECONDS);
-        assertNotNull(conflict, "Rescue must reserve the writer before selecting jobs");
-        assertEquals(5, conflict.getErrorCode(), "Expected SQLITE_BUSY for the competing writer");
-      }
+      if (!postgres)
+        assertNull(
+            writeFailure.get(5, TimeUnit.SECONDS), "Rescue callbacks must not hold the writer");
       maintained.get(5, TimeUnit.SECONDS);
       var rescued = client.get(inserted.id());
       assertEquals(Job.State.RETRYABLE, rescued.state());
+      if (!postgres) assertEquals(2, rescued.priority());
       assertEquals(3, rescued.metadata().required(rescueKey).asInt());
       assertEquals(2, rescued.errors().size());
       assertEquals(fixture.required("attempt_error"), Json.tree(rescued.errors().getFirst()));

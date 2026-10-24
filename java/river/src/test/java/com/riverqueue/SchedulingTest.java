@@ -30,6 +30,202 @@ class SchedulingTest {
   @RegisterExtension final TestDatabase databases = new TestDatabase();
   @TempDir Path directory;
 
+  @Test
+  void anonymousPeriodicJobsOmitTheIdMetadata() throws Exception {
+    var client = new Client(databases.open(directory.resolve("river.db")));
+    var worked = new CompletableFuture<Job<String>>();
+    var errors = new LinkedBlockingQueue<Throwable>();
+    try (var workers =
+        client
+            .workers()
+            .queue("default", 1)
+            .pollOnly(true)
+            .stopTimeout(Duration.ofSeconds(5))
+            .errorHandler(errors::add)
+            .add(TYPE, context -> worked.complete(context.job()))
+            .periodic(
+                new PeriodicJob<>(
+                    null,
+                    Schedule.every(Duration.ofDays(1)),
+                    TYPE,
+                    "args",
+                    InsertOptions.defaults(),
+                    true))
+            .start()) {
+      var job = worked.get(5, TimeUnit.SECONDS);
+      assertTrue(job.metadata().path("periodic").asBoolean());
+      assertFalse(job.metadata().has(Protocol.METADATA_PERIODIC_JOB_ID));
+    }
+    assertTrue(errors.isEmpty(), () -> "Unexpected worker errors: " + errors);
+  }
+
+  @Test
+  void dynamicPeriodicJobsRequireLeadershipAndValidIds() throws Exception {
+    var client = new Client(databases.open(directory.resolve("river.db")));
+    try (var workers =
+        client
+            .workers()
+            .queue("default", 1)
+            .pollOnly(true)
+            .leadership(false)
+            .add(TYPE, context -> {})
+            .start()) {
+      assertThrows(
+          IllegalStateException.class,
+          () ->
+              workers
+                  .periodicJobs()
+                  .add(
+                      "dynamic",
+                      Schedule.every(Duration.ofDays(1)),
+                      TYPE,
+                      "args",
+                      InsertOptions.defaults(),
+                      true));
+    }
+    try (var workers =
+        client.workers().queue("default", 1).pollOnly(true).add(TYPE, context -> {}).start()) {
+      for (var id : java.util.List.of("", "invalid id", "x".repeat(128)))
+        assertThrows(
+            IllegalArgumentException.class,
+            () ->
+                workers
+                    .periodicJobs()
+                    .add(
+                        id,
+                        Schedule.every(Duration.ofDays(1)),
+                        TYPE,
+                        "args",
+                        InsertOptions.defaults(),
+                        true));
+    }
+  }
+
+  @Test
+  void dynamicPeriodicJobsWaitForLeadership() throws Exception {
+    var checks = new LinkedBlockingQueue<String>();
+    var errors = new LinkedBlockingQueue<Throwable>();
+    var worked = new LinkedBlockingQueue<String>();
+    var client = new Client(databases.open(directory.resolve("river.db")));
+    var builder =
+        client
+            .workers()
+            .queue("default", 1)
+            .pollOnly(true)
+            .serviceInterval(Duration.ofMillis(20))
+            .stopTimeout(Duration.ofSeconds(5))
+            .errorHandler(errors::add)
+            .add(TYPE, context -> worked.add(context.args()));
+    var first = builder.observe(checks::add).start();
+    try {
+      assertEquals("leadership_check", checks.poll(5, TimeUnit.SECONDS));
+      assertTrue(first.isLeader());
+      try (var second = builder.start()) {
+        second
+            .periodicJobs()
+            .add(
+                "dynamic",
+                Schedule.every(Duration.ofDays(1)),
+                TYPE,
+                "args",
+                InsertOptions.defaults(),
+                true);
+        // The leader's builder snapshot and the follower's local registration are independent.
+        assertNull(worked.poll(100, TimeUnit.MILLISECONDS));
+        assertFalse(second.isLeader());
+        first.stop();
+        assertEquals("args", worked.poll(5, TimeUnit.SECONDS));
+        assertTrue(second.isLeader());
+      }
+    } finally {
+      first.stop();
+    }
+    assertTrue(errors.isEmpty(), () -> "Unexpected worker errors: " + errors);
+  }
+
+  @Test
+  void dynamicPeriodicJobsWakeMaintenanceAndCanBeReplaced() throws Exception {
+    var entered = new CompletableFuture<Void>();
+    var release = new CompletableFuture<Void>();
+    var worked = new LinkedBlockingQueue<String>();
+    var errors = new LinkedBlockingQueue<Throwable>();
+    var client =
+        new Client(databases.open(directory.resolve("river.db")))
+            .withPilot(
+                new Pilot() {
+                  @Override
+                  public void maintain(Client client, Instant now) {
+                    if (entered.complete(null)) release.join();
+                  }
+                });
+    var workers =
+        client
+            .workers()
+            .queue("default", 1)
+            .pollOnly(true)
+            .serviceInterval(Duration.ofHours(1))
+            .stopTimeout(Duration.ofSeconds(5))
+            .errorHandler(errors::add)
+            .add(TYPE, context -> worked.add(context.args()))
+            .start();
+    try {
+      entered.get(5, TimeUnit.SECONDS);
+      workers
+          .periodicJobs()
+          .add(
+              "dynamic",
+              Schedule.every(Duration.ofDays(1)),
+              TYPE,
+              "first",
+              InsertOptions.defaults(),
+              true);
+      assertThrows(
+          IllegalArgumentException.class,
+          () ->
+              workers
+                  .periodicJobs()
+                  .add(
+                      "dynamic",
+                      Schedule.every(Duration.ofDays(1)),
+                      TYPE,
+                      "duplicate",
+                      InsertOptions.defaults(),
+                      true));
+      release.complete(null);
+      assertEquals("first", worked.poll(5, TimeUnit.SECONDS));
+      assertTrue(workers.periodicJobs().removeById("dynamic"));
+      assertFalse(workers.periodicJobs().removeById("dynamic"));
+      workers
+          .periodicJobs()
+          .add(
+              "dynamic",
+              Schedule.every(Duration.ofDays(1)),
+              TYPE,
+              "replacement",
+              InsertOptions.defaults(),
+              true);
+      assertEquals("replacement", worked.poll(5, TimeUnit.SECONDS));
+      assertTrue(workers.periodicJobs().removeById("dynamic"));
+    } finally {
+      release.complete(null);
+      workers.stop();
+    }
+    var stopped =
+        workers
+            .periodicJobs()
+            .add(
+                "stopped",
+                Schedule.every(Duration.ofDays(1)),
+                TYPE,
+                "args",
+                InsertOptions.defaults(),
+                true);
+    assertTrue(workers.periodicJobs().remove(stopped));
+    workers.periodicJobs().clear();
+    assertTrue(worked.isEmpty());
+    assertTrue(errors.isEmpty(), () -> "Unexpected worker errors: " + errors);
+  }
+
   @ParameterizedTest
   @ValueSource(strings = {"initial schedule", "following schedule", "insertion"})
   void failedPeriodicJobDoesNotBlockMaintenanceOrOtherJobs(String failurePoint) throws Exception {
@@ -225,6 +421,65 @@ class SchedulingTest {
       }
     } finally {
       TimeZone.setDefault(original);
+    }
+    assertTrue(errors.isEmpty(), () -> "Unexpected worker errors: " + errors);
+  }
+
+  @ParameterizedTest
+  @ValueSource(strings = {"handle", "id", "handles", "ids", "clear"})
+  void removedPeriodicJobIsNotInsertedAfterItsScheduleReturns(String removal) throws Exception {
+    var entered = new CompletableFuture<Void>();
+    var release = new CompletableFuture<Void>();
+    var maintained = new CompletableFuture<Void>();
+    var errors = new LinkedBlockingQueue<Throwable>();
+    var client =
+        new Client(databases.open(directory.resolve("river.db")))
+            .withPilot(
+                new Pilot() {
+                  @Override
+                  public void maintain(Client client, Instant now) {
+                    if (entered.isDone()) maintained.complete(null);
+                  }
+                });
+    var workers =
+        client
+            .workers()
+            .queue("default", 1)
+            .pollOnly(true)
+            .stopTimeout(Duration.ofSeconds(5))
+            .errorHandler(errors::add)
+            .add(TYPE, context -> {})
+            .start();
+    try {
+      var handle =
+          workers
+              .periodicJobs()
+              .add(
+                  "removed",
+                  after -> {
+                    entered.complete(null);
+                    release.join();
+                    return Optional.of(after.plusDays(1));
+                  },
+                  TYPE,
+                  "args",
+                  InsertOptions.defaults(),
+                  true);
+      entered.get(5, TimeUnit.SECONDS);
+      switch (removal) {
+        case "handle" -> assertTrue(workers.periodicJobs().remove(handle));
+        case "id" -> assertTrue(workers.periodicJobs().removeById("removed"));
+        case "handles" -> workers.periodicJobs().removeMany(java.util.List.of(handle));
+        case "ids" -> workers.periodicJobs().removeManyById(java.util.List.of("removed"));
+        case "clear" -> workers.periodicJobs().clear();
+        default -> fail("Unknown removal mode");
+      }
+      release.complete(null);
+      maintained.get(5, TimeUnit.SECONDS);
+      assertTrue(client.list(JobQuery.all()).jobs().isEmpty());
+    } finally {
+      release.complete(null);
+      workers.stop();
     }
     assertTrue(errors.isEmpty(), () -> "Unexpected worker errors: " + errors);
   }
