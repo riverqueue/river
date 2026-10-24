@@ -108,10 +108,15 @@ const CANCEL_POLL_TIMEOUT_MS = 10_000;
 export class AttemptRunner {
   readonly #attemptExecutor = new AttemptExecutor();
   /** In-flight attempts by `attemptKey`. */
-  readonly #attempts = new Map<string, AbortController>();
+  readonly #attempts = new Map<
+    string,
+    { readonly controller: AbortController; readonly row: JobRow }
+  >();
+  #cancellationCheck: Promise<void> | undefined;
+  #cancellationCheckPending = false;
   /**
    * For each claim in flight, the `attemptKey`s of cancellations that
-   * found no attempt running here.
+   * need a durable check once the claim registers its attempts.
    */
   readonly #claimCancellations = new Set<Set<string>>();
   readonly #completions: CompletionPipeline;
@@ -153,18 +158,15 @@ export class AttemptRunner {
 
   /** Abort every in-flight attempt with `reason`. */
   abortAttempts(reason: unknown): void {
-    for (const controller of this.#attempts.values()) controller.abort(reason);
+    for (const { controller } of this.#attempts.values())
+      controller.abort(reason);
   }
 
-  /** Cancel the attempt of job `id` that `attemptedBy` owns, if it runs here. */
+  /** Check a cancellation hint against durable state before aborting work. */
   cancelAttempt(id: bigint, attemptedBy: string): void {
     const key = attemptKey(id, attemptedBy);
-    const attempt = this.#attempts.get(key);
-    if (attempt !== undefined) {
-      attempt.abort(new JobCancelledError(id));
-      return;
-    }
     for (const pending of this.#claimCancellations) pending.add(key);
+    if (this.#attempts.has(key)) void this.#checkCancellations();
   }
 
   /**
@@ -178,30 +180,40 @@ export class AttemptRunner {
     const clientId = this.#context.clientId;
     const driver = this.#context.driver;
     const requested = driver.jobGetCancelRequested?.bind(driver);
-    const ids = this.#ownAttemptIds();
+    const attempts = this.#ownAttempts();
     if (requested === undefined) {
       // A backend without the batched read checks each job's row.
-      for (const id of ids) {
+      for (const [id, controller] of attempts) {
         signal.throwIfAborted();
-        const job = await raceWithAbort(driver.jobGet(id), signal);
-        if (
-          job?.state === "running" &&
-          job.attemptedBy.at(-1) === clientId &&
-          job.metadata.cancel_attempted_at !== undefined
-        ) {
-          this.cancelAttempt(id, clientId);
+        const timeout = this.#context.timer.timeout(
+          CANCEL_POLL_TIMEOUT_MS,
+          () => new Error("River's cancellation check timed out")
+        );
+        const link = new LinkedAbortSignal([signal, timeout.signal]);
+        try {
+          const job = await raceWithAbort(driver.jobGet(id), link.signal);
+          if (
+            job?.state === "running" &&
+            job.attemptedBy.at(-1) === clientId &&
+            Object.hasOwn(job.metadata, "cancel_attempted_at")
+          ) {
+            controller.abort(new JobCancelledError(id));
+          }
+        } finally {
+          link[Symbol.dispose]();
+          timeout.dispose();
         }
       }
       return;
     }
-    await this.#cancelRequested(requested, ids, signal);
+    await this.#cancelRequested(requested, attempts, signal);
   }
 
   /**
    * Cancel this client's running attempts whose jobs have a cancellation
-   * request, checking every `intervalMs` until `signal` aborts, like River
-   * for Go's producers without a notifier. Each check reads the attempts'
-   * jobs in batches of 1,000 IDs, each bounded by ten seconds, and reads
+   * request, checking every `intervalMs` until `signal` aborts. Each check
+   * reads the attempts' jobs in batches of 1,000 IDs (or one row at a time
+   * without a batched read), each bounded by ten seconds, and reads
    * nothing while no attempt runs. A failed check is logged and the next
    * one tries again.
    */
@@ -209,9 +221,6 @@ export class AttemptRunner {
     intervalMs: number,
     signal: AbortSignal
   ): Promise<void> {
-    const driver = this.#context.driver;
-    const requested = driver.jobGetCancelRequested?.bind(driver);
-    if (requested === undefined) return;
     for (;;) {
       try {
         await this.#context.timer.delay(intervalMs, signal);
@@ -219,7 +228,7 @@ export class AttemptRunner {
         return;
       }
       try {
-        await this.#cancelRequested(requested, this.#ownAttemptIds(), signal);
+        await this.recoverCancellations(signal);
       } catch (error: unknown) {
         if (signal.aborted) return;
         this.#context.logger.error(
@@ -232,17 +241,19 @@ export class AttemptRunner {
 
   /** Cancel this process's attempts of a job just cancelled through this client. */
   cancelLocal(job: JobRow): void {
-    const keyPrefix = `${job.id.toString(10)}:`;
-    for (const [key, controller] of this.#attempts) {
-      if (key.startsWith(keyPrefix)) {
-        controller.abort(new JobCancelledError(job.id));
-      }
+    const attempt = this.#attempts.get(
+      attemptKey(job.id, this.#context.clientId)
+    );
+    if (
+      attempt !== undefined &&
+      attempt.row.attempt === job.attempt &&
+      attempt.row.attemptedAt?.epochNanoseconds ===
+        job.attemptedAt?.epochNanoseconds
+    ) {
+      attempt.controller.abort(new JobCancelledError(job.id));
+      return;
     }
-    // The job may be in a claim still in flight here.
-    const key = attemptKey(job.id, this.#context.clientId);
-    if (!this.#attempts.has(key)) {
-      for (const pending of this.#claimCancellations) pending.add(key);
-    }
+    this.cancelAttempt(job.id, this.#context.clientId);
   }
 
   /** Diagnostics reported by each work executor in use. */
@@ -348,21 +359,21 @@ export class AttemptRunner {
    * an unknown kind, its attempt fails before hooks or middleware run, so the
    * error handler sees it and the retry policy retries or discards it.
    *
-   * `cancelled` starts the attempt already cancelled, for a job whose
-   * cancellation arrived while the claim that took it was in flight.
+   * `checkCancellation` confirms a notice received while the claim was in flight
+   * before starting work. A stale notice cannot cancel a retried attempt.
    */
   async run(
     row: JobRow,
     releaseCapacity: () => void,
     decodeError?: Error,
-    cancelled = false
+    checkCancellation = false
   ): Promise<void> {
     const registration = workerRegistration(this.#workers, row.kind);
     const attemptController = new AbortController();
     const timeoutController = new AbortController();
     const key = attemptKey(row.id, this.#context.clientId);
-    this.#attempts.set(key, attemptController);
-    if (cancelled) attemptController.abort(new JobCancelledError(row.id));
+    this.#attempts.set(key, { controller: attemptController, row });
+    if (checkCancellation) await this.#checkCancellations();
     // Like Go, a remote cancellation or shutdown is tracked apart from the
     // attempt's own timeout: a remote cancellation that arrives after the
     // timeout still decides how the attempt ends.
@@ -479,7 +490,8 @@ export class AttemptRunner {
       timers.dispose();
       this.#peers?.abandon(metadataState);
       metadataState.active = false;
-      this.#attempts.delete(key);
+      if (this.#attempts.get(key)?.controller === attemptController)
+        this.#attempts.delete(key);
     }
   }
 
@@ -495,9 +507,8 @@ export class AttemptRunner {
 
   /**
    * Keep cancellations of jobs not worked here that arrive until `end()`,
-   * for one claim, like River for Go's producer does for one fetch: an
-   * attempt the claim starts for such a job starts cancelled. Other
-   * cancellations are discarded when the claim ends.
+   * for one claim. Confirm them against durable state before starting work.
+   * Other hints are discarded when the claim ends.
    */
   watchCancellations(): {
     cancelled(id: bigint): boolean;
@@ -871,15 +882,15 @@ export class AttemptRunner {
   }
 
   /**
-   * Cancel the attempts among `ids` whose jobs have a cancellation request,
+   * Cancel the snapshotted attempts whose jobs have a cancellation request,
    * reading them in batches of 1,000 IDs, each bounded by ten seconds.
    */
   async #cancelRequested(
     requested: NonNullable<RuntimeDriver["jobGetCancelRequested"]>,
-    ids: readonly bigint[],
+    attempts: ReadonlyMap<bigint, AbortController>,
     signal: AbortSignal
   ): Promise<void> {
-    const clientId = this.#context.clientId;
+    const ids = [...attempts.keys()];
     for (let start = 0; start < ids.length; start += CANCEL_POLL_BATCH_SIZE) {
       const timeout = this.#context.timer.timeout(
         CANCEL_POLL_TIMEOUT_MS,
@@ -893,7 +904,11 @@ export class AttemptRunner {
           }),
           link.signal
         );
-        for (const id of cancelled) this.cancelAttempt(id, clientId);
+        // Never look up a fresh attempt by ID after the query: a retry may
+        // already be running with the same ID and client owner.
+        for (const id of cancelled) {
+          attempts.get(id)?.abort(new JobCancelledError(id));
+        }
       } finally {
         link[Symbol.dispose]();
         timeout.dispose();
@@ -901,12 +916,44 @@ export class AttemptRunner {
     }
   }
 
-  /** The job IDs of the attempts this client runs itself. */
-  #ownAttemptIds(): bigint[] {
+  /** Coalesce notification checks while preserving notices received during a read. */
+  #checkCancellations(): Promise<void> {
+    this.#cancellationCheckPending = true;
+    if (this.#cancellationCheck !== undefined) return this.#cancellationCheck;
+    const check = (async () => {
+      try {
+        while (this.#cancellationCheckPending) {
+          this.#cancellationCheckPending = false;
+          try {
+            await this.recoverCancellations(this.#runSignal);
+          } catch (error: unknown) {
+            if (this.#runSignal.aborted) return;
+            this.#context.logger.warn(
+              "River could not confirm a cancellation notification",
+              { error: describeError(error) }
+            );
+          }
+        }
+      } finally {
+        this.#cancellationCheck = undefined;
+      }
+    })();
+    this.#cancellationCheck = check;
+    this.#context.trackTask(check);
+    return check;
+  }
+
+  /** Snapshot the executions themselves, so late results cannot cancel retries. */
+  #ownAttempts(): Map<bigint, AbortController> {
     const suffix = `:${this.#context.clientId}`;
-    return [...this.#attempts.keys()]
-      .filter((key) => key.endsWith(suffix))
-      .map((key) => BigInt(key.slice(0, -suffix.length)));
+    return new Map(
+      [...this.#attempts]
+        .filter(([key]) => key.endsWith(suffix))
+        .map(([key, { controller }]) => [
+          BigInt(key.slice(0, -suffix.length)),
+          controller,
+        ])
+    );
   }
 
   async #reportStuck(

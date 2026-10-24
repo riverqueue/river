@@ -531,11 +531,23 @@ describe("PgDriver integration", () => {
     await expect(driver.jobGetCancelRequested([])).resolves.toEqual([]);
   });
 
+  it("ignores cancellation names stored in non-object metadata", async () => {
+    const { job } = await driver.jobInsert(
+      insertParams(`${filePrefix}_cancel_array`)
+    );
+    await pool.query(
+      "UPDATE river_job SET state = 'running', metadata = $1::jsonb WHERE id = $2",
+      ['["cancel_attempted_at"]', job.id.toString()]
+    );
+    await expect(driver.jobGetCancelRequested([job.id])).resolves.toEqual([]);
+  });
+
   it("retries non-running jobs but leaves running jobs unchanged", async () => {
     const scheduledAt = Temporal.Instant.from("2026-08-30T15:00:00Z");
     const now = Temporal.Instant.from("2026-08-30T12:00:00.123456Z");
     const retryable = await driver.jobInsert(
       insertParams(`${filePrefix}_retry`, {
+        metadata: { cancel_attempted_at: now.toString(), preserved: true },
         scheduledAt,
         state: "retryable",
       })
@@ -558,8 +570,31 @@ describe("PgDriver integration", () => {
     });
 
     expect(retried!.state).toBe("available");
+    expect(retried!.metadata).toEqual({ preserved: true });
     expect(retried!.scheduledAt.toString()).toBe("2026-08-30T12:00:00.123456Z");
     expect(unchanged!.state).toBe("running");
+  });
+
+  it("clears cancellation without reordering an already available retry", async () => {
+    const now = Temporal.Instant.from("2026-08-30T12:00:00Z");
+    const { job } = await driver.jobInsert(
+      insertParams(`${filePrefix}_retry_available`, {
+        metadata: { cancel_attempted_at: now.toString(), preserved: true },
+        scheduledAt: now.subtract({ hours: 1 }),
+        state: "available",
+      })
+    );
+    await pool.query(
+      "UPDATE river_job SET attempt = max_attempts WHERE id = $1",
+      [job.id.toString()]
+    );
+    const expectedMetadata = { ...job.metadata };
+    delete expectedMetadata.cancel_attempted_at;
+    const retried = await driver.jobRetryWithOptions({ id: job.id, now });
+    expect(retried?.metadata).toEqual(expectedMetadata);
+    expect(retried?.scheduledAt.toString()).toBe(job.scheduledAt.toString());
+    expect(retried?.maxAttempts).toBe(job.maxAttempts);
+    expect((await driver.jobGet(job.id))?.metadata).toEqual(expectedMetadata);
   });
 
   it("returns the committed row to the loser of a cancel or retry race", async () => {
@@ -632,6 +667,29 @@ describe("PgDriver integration", () => {
       }
     );
   });
+
+  it.each(["null", "42", '"cancel_attempted_at"', '["cancel_attempted_at"]'])(
+    "retries jobs without changing non-object metadata: %s",
+    async (metadata) => {
+      const { job } = await driver.jobInsert(
+        insertParams(`${filePrefix}_retry_metadata`, { state: "retryable" })
+      );
+      await pool.query(
+        "UPDATE river_job SET metadata = $1::jsonb WHERE id = $2::bigint",
+        [metadata, job.id.toString()]
+      );
+
+      expect(await driver.jobRetry(job.id)).toMatchObject({
+        id: job.id,
+        state: "available",
+      });
+      const persisted = await pool.query<{ metadata: unknown }>(
+        "SELECT metadata FROM river_job WHERE id = $1::bigint",
+        [job.id.toString()]
+      );
+      expect(persisted.rows[0]?.metadata).toEqual(JSON.parse(metadata));
+    }
+  );
 
   it("acts on rows River can't fully read by ID and lists them like Go", async () => {
     const kind = `${filePrefix}_poison`;

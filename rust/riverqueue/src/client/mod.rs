@@ -57,7 +57,7 @@ use std::{
 };
 
 use chrono::{DateTime, Utc};
-use tokio::sync::{broadcast, mpsc, watch};
+use tokio::sync::{Notify, broadcast, mpsc, watch};
 use tokio_util::sync::CancellationToken;
 
 use self::completer::CompletionUpdate;
@@ -79,8 +79,6 @@ use crate::{
 
 pub(crate) const ATTEMPTED_BY_MAX: i32 = 100;
 const EVENT_BUFFER_CAPACITY: usize = 10_000;
-const PENDING_CANCELLATION_LIMIT: usize = 10_000;
-const PENDING_CANCELLATION_RETENTION: Duration = Duration::from_mins(1);
 // Large queues otherwise become limited by a single Postgres claim round trip.
 // Concurrent `SKIP LOCKED` claims safely divide the available worker slots.
 const PARALLEL_FETCH_MINIMUM: usize = 1_000;
@@ -103,6 +101,7 @@ const PRODUCER_STALE_RETENTION: Duration = Duration::from_mins(5);
 pub(crate) struct ClientInner {
     allow_legacy_job_kinds: bool,
     allow_unregistered_job_kinds: bool,
+    cancellation_wakeup: Notify,
     completion_sender: Mutex<Option<mpsc::WeakSender<CompletionUpdate>>>,
     pub(crate) database: Database,
     default_max_attempts: i32,
@@ -115,7 +114,6 @@ pub(crate) struct ClientInner {
     /// Kinds claims are restricted to, including aliases, or `None` to claim
     /// every kind.
     pub(crate) fetch_kinds: Option<Arc<[String]>>,
-    fetch_registration_windows: AtomicU64,
     pub(crate) hooks: Vec<Arc<dyn crate::extension::DynHook>>,
     pub(crate) id: String,
     insert_middleware: Vec<Arc<dyn crate::extension::DynInsertMiddleware>>,
@@ -139,7 +137,6 @@ pub(crate) struct ClientInner {
     notifier_start_panics: AtomicU64,
     /// Peer jobs owned by running attempts, mapped to their ledger.
     peer_owners: Mutex<HashMap<i64, u64>>,
-    pending_cancellations: Mutex<HashMap<i64, std::time::Instant>>,
     pub(crate) periodic_jobs: PeriodicJobs,
     pub(crate) pilot: Arc<dyn Pilot>,
     poll_only: bool,

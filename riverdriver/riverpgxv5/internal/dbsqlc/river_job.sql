@@ -262,6 +262,7 @@ ORDER BY id;
 SELECT id
 FROM /* TEMPLATE: schema */river_job
 WHERE id = any(@id::bigint[])
+    AND jsonb_typeof(metadata) = 'object'
     AND metadata ? 'cancel_attempted_at'
     AND state = 'running'
 ORDER BY id;
@@ -531,19 +532,20 @@ updated_job AS (
     UPDATE /* TEMPLATE: schema */river_job
     SET
         state = 'available',
-        max_attempts = CASE WHEN attempt = max_attempts THEN max_attempts + 1 ELSE max_attempts END,
-        finalized_at = NULL,
-        metadata = metadata - 'cancel_attempted_at',
-        scheduled_at = coalesce(sqlc.narg('now')::timestamptz, now())
+        max_attempts = CASE WHEN river_job.state = 'available' AND river_job.scheduled_at < coalesce(sqlc.narg('now')::timestamptz, now()) THEN max_attempts WHEN attempt = max_attempts THEN max_attempts + 1 ELSE max_attempts END,
+        finalized_at = CASE WHEN river_job.state = 'available' AND river_job.scheduled_at < coalesce(sqlc.narg('now')::timestamptz, now()) THEN finalized_at ELSE NULL END,
+        metadata = CASE WHEN jsonb_typeof(metadata) = 'object'
+            THEN metadata - 'cancel_attempted_at' ELSE metadata END,
+        scheduled_at = CASE WHEN river_job.state = 'available' AND river_job.scheduled_at < coalesce(sqlc.narg('now')::timestamptz, now()) THEN scheduled_at ELSE coalesce(sqlc.narg('now')::timestamptz, now()) END
     FROM job_to_update
     WHERE river_job.id = job_to_update.id
         -- Do not touch running jobs:
         AND river_job.state != 'running'
-        -- If the job is already available with a prior scheduled_at, leave it alone.
-        AND NOT (
+        -- Already available jobs only need stale cancellation metadata cleared.
+        AND ((jsonb_typeof(metadata) = 'object' AND metadata ? 'cancel_attempted_at') OR NOT (
             river_job.state = 'available'
             AND river_job.scheduled_at < coalesce(sqlc.narg('now')::timestamptz, now())
-        )
+        ))
     RETURNING river_job.*
 )
 SELECT * FROM (

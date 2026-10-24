@@ -9,7 +9,6 @@ use std::{
 use serde_json::Map;
 
 use crate::__private::DatabaseConnection as PilotDatabaseConnection;
-use crate::client::attempts::signal_running_attempt;
 use crate::client::request::{Target, request_type};
 use crate::database::DatabaseTransactionExecutor;
 use crate::storage::Access;
@@ -257,17 +256,10 @@ impl JobCancelRequest<'_> {
         let row = session.storage(inner).job_cancel(self.id).await?;
         session.commit().await?;
         // Without a listener (no backend listener, or a poll-only client),
-        // wake this client's running attempt directly, like Go's
-        // `notifyProducerWithoutListenerQueueControlEvent`. Other clients
-        // observe the committed notification through their own listener or
-        // outbox poll.
+        // wake the durable check. The post-commit signal can be delayed until
+        // a retry is running, so it must not cancel by job ID alone.
         if own_transaction && !inner.listens_for_notifications() {
-            signal_running_attempt(
-                &inner.running,
-                &inner.pending_cancellations,
-                &inner.fetch_registration_windows,
-                self.id,
-            );
+            inner.cancellation_wakeup.notify_one();
         }
         Ok(row)
     }

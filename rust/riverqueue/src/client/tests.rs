@@ -1,7 +1,7 @@
 use serde::Deserialize;
 use serde_json::Map;
 
-use super::attempts::{register_running_attempt, remove_running_attempt, signal_running_attempt};
+use super::attempts::{register_running_attempt, remove_running_attempt};
 #[cfg(feature = "postgres")]
 use super::completer::CompletionBatcher;
 #[cfg(feature = "sqlite")]
@@ -171,12 +171,7 @@ async fn go_notification_fixtures_dispatch_correctly() {
             let cancellation = CancellationToken::new();
             let unrelated = CancellationToken::new();
             for (job_id, token) in [(42, &cancellation), (43, &unrelated)] {
-                register_running_attempt(
-                    &inner.running,
-                    &inner.pending_cancellations,
-                    job_id,
-                    token,
-                );
+                inner.running.lock().unwrap().insert(job_id, token.clone());
             }
 
             dispatch_notification(
@@ -209,11 +204,18 @@ async fn go_notification_fixtures_dispatch_correctly() {
                 ),
                 _ => unreachable!(),
             }
-            assert_eq!(cancellation.is_cancelled(), name == "cancel", "{name}");
             assert!(
-                !unrelated.is_cancelled(),
-                "{name}: cancelled an unrelated job"
+                !cancellation.is_cancelled(),
+                "{name}: notice cancelled without a durable check"
             );
+            assert_eq!(
+                tokio::time::timeout(Duration::ZERO, inner.cancellation_wakeup.notified())
+                    .await
+                    .is_ok(),
+                name == "cancel",
+                "{name}"
+            );
+            assert!(!unrelated.is_cancelled(), "{name}");
             assert!(
                 matches!(
                     producer.try_recv(),
@@ -233,50 +235,73 @@ async fn go_notification_fixtures_dispatch_correctly() {
     pool.close().await;
 }
 
-#[test]
-fn pending_cancellation_reaches_fetched_attempt() {
-    let job_id = 42;
+#[tokio::test]
+async fn registration_wakes_cancellation_check() {
+    #[cfg(feature = "postgres")]
+    let pool = sqlx::PgPool::connect_lazy("postgres://localhost/unused").unwrap();
+    #[cfg(not(feature = "postgres"))]
+    let pool = sqlx::SqlitePool::connect_lazy("sqlite::memory:").unwrap();
+    let client = Client::builder(pool).build().unwrap();
     let cancellation = CancellationToken::new();
-    let fetch_registration_windows = AtomicU64::new(1);
-    let pending_cancellations = Mutex::new(HashMap::new());
-    let running = Mutex::new(HashMap::new());
-
-    signal_running_attempt(
-        &running,
-        &pending_cancellations,
-        &fetch_registration_windows,
-        job_id,
-    );
-    register_running_attempt(&running, &pending_cancellations, job_id, &cancellation);
-
-    assert!(cancellation.is_cancelled());
-    assert!(
-        pending_cancellations
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .is_empty()
-    );
+    register_running_attempt(&client.inner, 42, &cancellation);
+    tokio::time::timeout(
+        Duration::from_secs(1),
+        client.inner.cancellation_wakeup.notified(),
+    )
+    .await
+    .unwrap();
+    assert!(!cancellation.is_cancelled());
 }
 
-#[test]
-fn unmatched_cancellation_is_not_retained_without_fetch() {
-    let fetch_registration_windows = AtomicU64::new(0);
-    let pending_cancellations = Mutex::new(HashMap::new());
-    let running = Mutex::new(HashMap::new());
-
-    signal_running_attempt(
-        &running,
-        &pending_cancellations,
-        &fetch_registration_windows,
-        42,
+#[cfg(feature = "sqlite")]
+#[tokio::test]
+async fn delayed_cancellation_signals_recheck_retry_marker() {
+    let pool = sqlx::sqlite::SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect("sqlite::memory:")
+        .await
+        .unwrap();
+    riverqueue_migrate::SqliteMigrator::new(pool.clone())
+        .migrate_up()
+        .await
+        .unwrap();
+    let client = Client::builder(pool.clone())
+        .without_notifications()
+        .build()
+        .unwrap();
+    let id: i64 = sqlx::query_scalar("INSERT INTO river_job (kind, args, state, attempt, max_attempts, metadata) VALUES ('test', jsonb('{}'), 'running', 1, 2, jsonb('{}')) RETURNING id")
+        .fetch_one(&pool).await.unwrap();
+    let original = CancellationToken::new();
+    register_running_attempt(&client.inner, id, &original);
+    client.jobs().cancel(id).await.unwrap();
+    sqlx::query("UPDATE river_job SET state = 'cancelled', finalized_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now') WHERE id = ?").bind(id).execute(&pool).await.unwrap();
+    client.jobs().retry(id).await.unwrap();
+    sqlx::query("UPDATE river_job SET state = 'running', attempt = 2 WHERE id = ?")
+        .bind(id)
+        .execute(&pool)
+        .await
+        .unwrap();
+    let replacement = CancellationToken::new();
+    register_running_attempt(&client.inner, id, &replacement);
+    dispatch_notification(
+        &client.inner,
+        &client.inner.queue_notifications,
+        crate::NOTIFICATION_TOPIC_CONTROL,
+        &format!(r#"{{"action":"cancel","job_id":{id},"queue":"default"}}"#),
     );
-
-    assert!(
-        pending_cancellations
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .is_empty()
-    );
+    super::producer::check_job_cancellations(&client.inner)
+        .await
+        .unwrap();
+    assert!(!replacement.is_cancelled());
+    // The local post-commit signal is also only a hint, and remains useful
+    // when the current attempt actually has a durable cancellation request.
+    client.jobs().cancel(id).await.unwrap();
+    assert!(!replacement.is_cancelled());
+    super::producer::check_job_cancellations(&client.inner)
+        .await
+        .unwrap();
+    assert!(replacement.is_cancelled());
+    pool.close().await;
 }
 
 fn retry_row(error_count: usize) -> JobRow {

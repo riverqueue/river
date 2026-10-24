@@ -16,9 +16,7 @@ use tokio_util::sync::CancellationToken;
 use tracing::{debug, error, warn};
 
 use crate::__private::DatabaseConnection as PilotDatabaseConnection;
-use crate::client::attempts::{
-    FetchRegistrationGuard, register_running_attempt, signal_running_attempt,
-};
+use crate::client::attempts::register_running_attempt;
 use crate::client::backoff::{RestartBackoff, exponential_backoff};
 use crate::client::completer::CompletionUpdate;
 use crate::client::executor::{AbortOnDrop, execute_job};
@@ -56,10 +54,8 @@ pub(super) async fn run_dynamic_queues(
     mut changes: watch::Receiver<u64>,
     queues_ready: oneshot::Sender<()>,
 ) -> Result<(), Error> {
-    // Without a notifier, running jobs learn of cancellation requests by
-    // polling until every producer has drained. Whether the client has one is
-    // known only once a Postgres server's capabilities are detected, so the
-    // poll checks each time.
+    // Recover lost cancellation notices, including after the notifier stops
+    // during graceful shutdown, until every producer has drained.
     let _cancellation_poll = AbortOnDrop(tokio::spawn(poll_job_cancellations(
         Arc::clone(&inner),
         fetch_cancel.clone(),
@@ -143,10 +139,9 @@ fn jittered_fetch_poll_interval(interval: Duration) -> Duration {
 }
 
 /// Cancels this client's running attempts whose jobs have a cancellation
-/// request, checking every [`QUEUE_CONFIG_POLL_INTERVAL`] while the client
-/// has no notifier, like River Go's producers without one. That's checked
-/// each time, since a Postgres server's lack of `LISTEN`/`NOTIFY` is
-/// detected only once the client runs.
+/// request, checking every [`QUEUE_CONFIG_POLL_INTERVAL`]. Notifications
+/// deliver cancellations promptly; polling also recovers notices lost during
+/// reconnects or while a fetched attempt was still being registered.
 /// It keeps checking after `stopping` fires, so jobs can still be cancelled
 /// while producers drain; the caller aborts it once they have.
 async fn poll_job_cancellations(inner: Arc<ClientInner>, stopping: CancellationToken) {
@@ -155,46 +150,42 @@ async fn poll_job_cancellations(inner: Arc<ClientInner>, stopping: CancellationT
     // The first tick completes at once; running jobs start later.
     poll.tick().await;
     loop {
-        poll.tick().await;
-        if inner.has_notifier() {
-            continue;
+        tokio::select! {
+            _ = poll.tick() => {},
+            () = inner.cancellation_wakeup.notified() => {},
         }
-        let mut ids = inner
-            .running
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .keys()
-            .copied()
-            .collect::<Vec<_>>();
-        ids.sort_unstable();
-        for batch in ids.chunks(JOB_CANCEL_POLL_BATCH_SIZE) {
-            let requested = tokio::time::timeout(
-                JOB_CANCEL_POLL_TIMEOUT,
-                crate::storage::job_cancel_requested(&inner, batch),
-            )
-            .await
-            .map_err(|_| Error::runtime_context("job cancellation poll", "timed out"))
-            .and_then(|requested| requested);
-            match requested {
-                Ok(requested) => {
-                    for id in requested {
-                        signal_running_attempt(
-                            &inner.running,
-                            &inner.pending_cancellations,
-                            &inner.fetch_registration_windows,
-                            id,
-                        );
-                    }
-                }
-                Err(poll_error) => {
-                    if !stopping.is_cancelled() {
-                        error!(error = %crate::error::Chain(&poll_error), "River failed to check for job cancellation requests");
-                    }
-                    break;
-                }
+        if let Err(poll_error) = check_job_cancellations(&inner).await
+            && !stopping.is_cancelled()
+        {
+            error!(error = %crate::error::Chain(&poll_error), "River failed to check for job cancellation requests");
+        }
+    }
+}
+
+pub(super) async fn check_job_cancellations(inner: &ClientInner) -> Result<(), Error> {
+    let attempts = inner
+        .running
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .clone();
+    let mut ids = attempts.keys().copied().collect::<Vec<_>>();
+    ids.sort_unstable();
+    for batch in ids.chunks(JOB_CANCEL_POLL_BATCH_SIZE) {
+        let requested = tokio::time::timeout(
+            JOB_CANCEL_POLL_TIMEOUT,
+            crate::storage::job_cancel_requested(inner, batch),
+        )
+        .await
+        .map_err(|_| Error::runtime_context("job cancellation poll", "timed out"))??;
+        for id in requested {
+            // A query can outlive an attempt and its retry. Only signal the
+            // execution that was present in its snapshot.
+            if let Some(cancellation) = attempts.get(&id) {
+                cancellation.cancel();
             }
         }
     }
+    Ok(())
 }
 
 type ProducerOutcome = (String, u64, CancellationToken, Result<(), Error>);
@@ -858,7 +849,6 @@ pub(super) async fn run_queue(
         if available == 0 {
             continue;
         }
-        let registration_guard = FetchRegistrationGuard::new(&inner);
         let fetched = match (&session, claims_through_session) {
             (Some(session), true) => {
                 match claim_through_session(
@@ -907,12 +897,7 @@ pub(super) async fn run_queue(
         for (row, decode_error) in claimed {
             let hard_cancel = work_cancel.child_token();
             let cancellation = hard_cancel.child_token();
-            register_running_attempt(
-                &inner.running,
-                &inner.pending_cancellations,
-                row.id,
-                &cancellation,
-            );
+            register_running_attempt(&inner, row.id, &cancellation);
             let task_inner = Arc::clone(&inner);
             let completion_sender = completion_sender.clone();
             let session_row = attempts.session.is_some().then(|| row.clone());
@@ -928,7 +913,6 @@ pub(super) async fn run_queue(
                 .await;
             });
         }
-        drop(registration_guard);
         while let Some(joined) = attempts.tasks.try_join_next_with_id() {
             attempts.exited(joined.map(|(task_id, ())| task_id), false);
         }

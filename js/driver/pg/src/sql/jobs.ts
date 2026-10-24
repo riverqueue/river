@@ -294,6 +294,7 @@ export async function jobGetCancelRequested(
       SELECT id::text AS id
       FROM ${db.table("river_job")}
       WHERE id = any($1::bigint[])
+        AND jsonb_typeof(metadata) = 'object'
         AND metadata ? 'cancel_attempted_at'
         AND state = 'running'
       ORDER BY id
@@ -822,19 +823,25 @@ export async function jobRetryWithOptions(
       SET
         state = 'available',
         max_attempts = CASE
+          WHEN river_job.state = 'available' AND river_job.scheduled_at < coalesce($2::timestamptz, now()) THEN river_job.max_attempts
           WHEN river_job.attempt = river_job.max_attempts
             THEN river_job.max_attempts + 1
           ELSE river_job.max_attempts
         END,
-        finalized_at = NULL,
-        scheduled_at = coalesce($2::timestamptz, now())
+        finalized_at = CASE WHEN river_job.state = 'available' AND river_job.scheduled_at < coalesce($2::timestamptz, now()) THEN river_job.finalized_at ELSE NULL END,
+        metadata = CASE
+          WHEN jsonb_typeof(river_job.metadata) = 'object'
+          THEN river_job.metadata - 'cancel_attempted_at'
+          ELSE river_job.metadata
+        END,
+        scheduled_at = CASE WHEN river_job.state = 'available' AND river_job.scheduled_at < coalesce($2::timestamptz, now()) THEN river_job.scheduled_at ELSE coalesce($2::timestamptz, now()) END
       FROM job_to_update
       WHERE river_job.id = job_to_update.id
         AND river_job.state != 'running'
-        AND NOT (
+        AND ((jsonb_typeof(river_job.metadata) = 'object' AND river_job.metadata ? 'cancel_attempted_at') OR NOT (
           river_job.state = 'available'
           AND river_job.scheduled_at < coalesce($2::timestamptz, now())
-        )
+        ))
       RETURNING river_job.*
     )
     `,

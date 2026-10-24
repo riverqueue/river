@@ -1,5 +1,5 @@
-//! Cancellation of running jobs in clients without notifications, on every
-//! backend.
+//! Durable cancellation of running jobs, including when notifications are
+//! disabled or a cancellation notice is lost, on every backend.
 //!
 //! Postgres tests run in a unique schema and fail rather than skip when
 //! `RIVER_RUST_DATABASE_URL` is unset; SQLite tests use a temporary file.
@@ -11,8 +11,8 @@ mod support;
 use std::{convert::Infallible, sync::Arc, time::Duration};
 
 use riverqueue::{
-    __private::Database, Client, EventKind, Job, JobArgs, JobState, QueueConfig, WorkContext,
-    WorkOutcome, Workers,
+    __private::Database, Client, EventKind, Job, JobArgs, JobState, JobUpdateParams, QueueConfig,
+    WorkContext, WorkOutcome, Workers,
 };
 use serde::{Deserialize, Serialize};
 use tokio::sync::Semaphore;
@@ -56,11 +56,11 @@ impl Backend {
     }
 }
 
-/// A client without notifications cancels its running job once it polls the
-/// cancellation another client requested, including while it's stopping and
-/// waiting for that job.
+/// Durable cancellation survives lost notifications and graceful shutdown.
 async fn polls_for_remote_cancellation(backend: Backend) {
-    for while_stopping in [false, true] {
+    for (notifications, while_stopping) in
+        [(false, false), (false, true), (true, false), (true, true)]
+    {
         let started = Arc::new(Semaphore::new(0));
         let mut workers = Workers::new();
         let worker_started = Arc::clone(&started);
@@ -75,13 +75,17 @@ async fn polls_for_remote_cancellation(backend: Backend) {
                 }
             })
             .unwrap();
-        let client = Client::builder(backend.database())
+        let builder = Client::builder(backend.database())
             .queue(riverqueue::QUEUE_DEFAULT, QueueConfig::new(1))
             .without_leader_election()
-            .without_notifications()
-            .workers(workers)
-            .build()
-            .unwrap();
+            .workers(workers);
+        let client = if notifications {
+            builder
+        } else {
+            builder.without_notifications()
+        }
+        .build()
+        .unwrap();
         let other = Client::builder(backend.database()).build().unwrap();
         let mut events = client.subscribe(&[EventKind::JobCancelled]).unwrap();
         let mut run = client.start().unwrap();
@@ -96,7 +100,27 @@ async fn polls_for_remote_cancellation(backend: Backend) {
         if while_stopping {
             run.stopper().stop();
         }
-        other.jobs().cancel(id).await.unwrap();
+        if notifications {
+            // Persist a cancellation without its notification, as though that
+            // notice was lost while the listener reconnected.
+            other
+                .jobs()
+                .update(
+                    id,
+                    JobUpdateParams::default().metadata(
+                        [(
+                            "cancel_attempted_at".to_owned(),
+                            chrono::Utc::now().to_rfc3339().into(),
+                        )]
+                        .into_iter()
+                        .collect(),
+                    ),
+                )
+                .await
+                .unwrap();
+        } else {
+            other.jobs().cancel(id).await.unwrap();
+        }
 
         let event = tokio::time::timeout(TIMEOUT, events.recv())
             .await

@@ -781,11 +781,7 @@ public final class Client {
           var before = locked(c, id);
           try (var statement =
                   Sql.prepare(
-                      c,
-                      Sql.query(database, "retry"),
-                      database.timestamp(clock.instant()),
-                      id,
-                      database.timestamp(clock.instant()));
+                      c, Sql.query(database, "retry"), database.timestamp(clock.instant()), id);
               var rows = statement.executeQuery()) {
             boolean updated = rows.next();
             var job = updated ? read(rows) : before;

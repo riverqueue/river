@@ -242,27 +242,29 @@ module River::Driver
     end
 
     def job_retry(id, now: Time.now.utc)
+      already_available = "state = 'available' AND scheduled_at < #{runtime_time(now)}"
+      cancellation_requested = runtime_postgres? ? "(jsonb_typeof(metadata) = 'object' AND metadata ? 'cancel_attempted_at')" : "(CASE WHEN typeof(metadata) = 'text' AND NOT json_valid(metadata) THEN NULL ELSE json_type(metadata, '$.cancel_attempted_at') END) IS NOT NULL"
       updated_id, job = transaction do
         # Check the counter in the write itself so a concurrent claim cannot
         # advance it between validation and the update.
         updated_id = runtime_returning_ids(<<~SQL).first
           UPDATE river_job
           SET state = 'available',
-              max_attempts = CASE WHEN attempt = max_attempts THEN max_attempts + 1 ELSE max_attempts END,
-              metadata = #{runtime_postgres? ? "metadata - 'cancel_attempted_at'" : "jsonb_remove(metadata, '$.cancel_attempted_at')"},
-              finalized_at = NULL,
-              scheduled_at = #{runtime_time(now)}
+              max_attempts = CASE WHEN #{already_available} THEN max_attempts WHEN attempt = max_attempts THEN max_attempts + 1 ELSE max_attempts END,
+              metadata = #{runtime_postgres? ? "CASE WHEN jsonb_typeof(metadata) = 'object' THEN metadata - 'cancel_attempted_at' ELSE metadata END" : "CASE WHEN typeof(metadata) = 'text' AND NOT json_valid(metadata) THEN metadata ELSE jsonb_remove(metadata, '$.cancel_attempted_at') END"},
+              finalized_at = CASE WHEN #{already_available} THEN finalized_at ELSE NULL END,
+              scheduled_at = CASE WHEN #{already_available} THEN scheduled_at ELSE #{runtime_time(now)} END
           WHERE id = #{Integer(id)}
             AND state != 'running'
-            AND (state != 'available' OR scheduled_at > #{runtime_time(now)})
-            AND attempt < #{River::MAX_ATTEMPTS_LIMIT}
+            AND (#{cancellation_requested} OR NOT (#{already_available}))
+            AND ((#{already_available}) OR attempt < #{River::MAX_ATTEMPTS_LIMIT})
           RETURNING id
         SQL
         job = job_get_by_id(updated_id || id)
         runtime_notify("river_insert", queue: job.queue) if updated_id && job
         [updated_id, job]
       end
-      if !updated_id && job && job.state != "running" && (job.state != "available" || job.scheduled_at > now) && job.attempt >= River::MAX_ATTEMPTS_LIMIT
+      if !updated_id && job && job.state != "running" && (job.state != "available" || job.scheduled_at >= now) && job.attempt >= River::MAX_ATTEMPTS_LIMIT
         raise ArgumentError, "cannot retry a job with #{River::MAX_ATTEMPTS_LIMIT} or more attempts"
       end
       job
@@ -489,7 +491,7 @@ module River::Driver
     end
 
     private def runtime_cancel_attempted
-      runtime_postgres? ? "metadata ? 'cancel_attempted_at'" : "(CASE WHEN json_valid(metadata, 10) THEN metadata -> 'cancel_attempted_at' END) IS NOT NULL"
+      runtime_postgres? ? "(jsonb_typeof(metadata) = 'object' AND metadata ? 'cancel_attempted_at')" : "(CASE WHEN json_valid(metadata, 10) THEN metadata -> 'cancel_attempted_at' END) IS NOT NULL"
     end
 
     private def runtime_claim_jobs(predicate, max, attempted_by, now)

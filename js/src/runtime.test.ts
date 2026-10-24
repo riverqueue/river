@@ -618,6 +618,7 @@ describe("Client runtime", () => {
       clientId: "runtime-test",
       completionBatchSize: 1,
       leaderElectionDisabled: true,
+      queueControlPollInterval: { milliseconds: 1234 },
       queues: {
         default: { maxWorkers: 1, pollInterval: { milliseconds: 10_000 } },
       },
@@ -633,7 +634,9 @@ describe("Client runtime", () => {
     expect(driver.completionFailures).toBe(0);
     expect(driver.completionCalls).toBe(3);
     expect(driver.completions[0]?.kind).toBe("complete");
-    expect(timer.delays.slice(-2)).toEqual([1_000, 2_000]);
+    expect(timer.delays.filter((delay) => delay !== 1234).slice(-2)).toEqual([
+      1_000, 2_000,
+    ]);
     expect(timer.activeTimeouts).toBe(0);
     expect(run.state).toBe("stopped");
   });
@@ -858,6 +861,7 @@ describe("Client runtime", () => {
         onMetric: (metric) => void metrics.push(metric),
       },
       leaderElectionDisabled: true,
+      queueControlPollInterval: { milliseconds: 1234 },
       queues: {
         default: { maxWorkers: 1, pollInterval: { milliseconds: 10_000 } },
       },
@@ -875,7 +879,9 @@ describe("Client runtime", () => {
       name: "job_completion_requeued",
     });
     // Every failed attempt backs off, including the last before a requeue.
-    expect(timer.delays).toEqual([1_000, 2_000, 4_000, 1_000, 2_000]);
+    expect(timer.delays.filter((delay) => delay !== 1234)).toEqual([
+      1_000, 2_000, 4_000, 1_000, 2_000,
+    ]);
     expect(events).toEqual(["job_started", "job_completed"]);
   });
 
@@ -4330,7 +4336,9 @@ describe("Client runtime database faults", () => {
     await run.stop();
 
     expect(run.state).toBe("stopped");
-    expect(timer.delays).toEqual([250, 500, 1_000]);
+    expect(timer.delays.filter((delay) => delay !== 2_000)).toEqual([
+      250, 500, 1_000,
+    ]);
     expect(
       logs.map(({ attributes, level }) => [
         level,
@@ -4377,7 +4385,7 @@ describe("Client runtime database faults", () => {
     await waitUntil(() => events.includes("queue_paused"));
     expect(run.diagnostics.queues.default?.paused).toBe(true);
     expect(run.state).toBe("running");
-    expect(timer.delays).toEqual([250, 500]);
+    expect(timer.delays.filter((delay) => delay !== 1)).toEqual([250, 500]);
     expect(logs.map(({ message }) => message)).toEqual([
       "River queue control poll failed; retrying after backoff",
       "River queue control poll failed; retrying after backoff",
@@ -4388,6 +4396,14 @@ describe("Client runtime database faults", () => {
   it("cancels a job whose cancellation arrived while its claim was in flight", async () => {
     const driver = new FakeRuntimeDriver();
     driver.claim = [fakeJob()];
+    driver.listRows = [
+      {
+        ...fakeJob(),
+        state: "running",
+        attemptedBy: ["runtime-test"],
+        metadata: { cancel_attempted_at: null },
+      },
+    ];
     const release = Promise.withResolvers<undefined>();
     driver.claimGate = release.promise;
     const handled = Promise.withResolvers<undefined>();
@@ -4516,7 +4532,7 @@ describe("Client runtime database faults", () => {
       () => driver.completions.length === 1 && subscriptions === 3
     );
     expect(run.state).toBe("running");
-    expect(timer.delays).toEqual([250, 250]);
+    expect(timer.delays.filter((delay) => delay !== 2_000)).toEqual([250, 250]);
     expect(logs.map(({ level, message }) => [level, message])).toEqual([
       [
         "warn",
@@ -4551,6 +4567,14 @@ describe("Client runtime database faults", () => {
       },
     });
     driver.claim = [fakeJob()];
+    driver.listRows = [
+      {
+        ...fakeJob(),
+        state: "running",
+        attemptedBy: ["runtime-test"],
+        metadata: { cancel_attempted_at: null },
+      },
+    ];
     const logs: LogEntry[] = [];
     const timer = new FakeTimer();
     const definition = defineJob({ kind: "test" });
@@ -4581,6 +4605,264 @@ describe("Client runtime database faults", () => {
     expect(logs).toHaveLength(1);
     await run.stop();
   });
+
+  for (const stream of ["runtime", "remote", "local"] as const) {
+    for (const duringClaim of [false, true]) {
+      it(`revalidates a delayed ${stream} cancellation ${duringClaim ? "during a retry claim" : "against a running retry"}`, async () => {
+        const driver = new FakeRuntimeDriver();
+        const deliver = Promise.withResolvers<undefined>();
+        const handled = Promise.withResolvers<undefined>();
+        const releaseClaim = Promise.withResolvers<undefined>();
+        const finish = Promise.withResolvers<undefined>();
+        const started = Promise.withResolvers<AbortSignal>();
+        let checks = 0;
+        Object.assign(driver, {
+          jobGetCancelRequested: () => {
+            checks++;
+            return [];
+          },
+        });
+        driver.claim = [{ ...fakeJob(), attempt: 2 }];
+        if (duringClaim) driver.claimGate = releaseClaim.promise;
+        if (stream === "runtime") {
+          driver.notificationStream = async function* (_topics, signal, ready) {
+            ready();
+            await deliver.promise;
+            yield {
+              topic: "control",
+              payload: '{"action":"cancel","job_id":101,"queue":"default"}',
+            };
+            handled.resolve(undefined);
+            await new Promise<void>((resolve) =>
+              signal.addEventListener("abort", () => resolve(), { once: true })
+            );
+          };
+        } else if (stream === "remote") {
+          Object.defineProperty(driver, "runtimeNotificationSubscribe", {
+            value: undefined,
+          });
+          Object.defineProperty(driver, "jobCancellationSubscribe", {
+            value: async function* (attemptedBy: string, signal: AbortSignal) {
+              await deliver.promise;
+              yield { attemptedBy, id: 101n };
+              handled.resolve(undefined);
+              await new Promise<void>((resolve) =>
+                signal.addEventListener("abort", () => resolve(), {
+                  once: true,
+                })
+              );
+            },
+          });
+        }
+        const client = new Client(driver, {
+          clientId: "runtime-test",
+          completionBatchSize: 1,
+          leaderElectionDisabled: true,
+          queues: {
+            default: { maxWorkers: 1, pollInterval: { milliseconds: 10_000 } },
+          },
+          workers: new Workers().add(
+            defineJob({ kind: "test" }),
+            async ({ signal }) => {
+              started.resolve(signal);
+              await finish.promise;
+              signal.throwIfAborted();
+            }
+          ),
+        });
+        const run = await client.start();
+        try {
+          await waitUntil(() => driver.claimed.length === 1);
+          if (!duringClaim) await started.promise;
+          if (stream === "local") {
+            // The cancelled row returned by a delayed commit belongs to attempt A.
+            driver.cancelled = { ...fakeJob(), attempt: 1, state: "running" };
+            await client.jobs.cancel(101n);
+          } else {
+            deliver.resolve(undefined);
+            await handled.promise;
+          }
+          releaseClaim.resolve(undefined);
+          const signal = await started.promise;
+          await waitUntil(() => checks > 0);
+          expect(signal.aborted).toBe(false);
+          finish.resolve(undefined);
+          await waitUntil(() => driver.completions.length === 1);
+          expect(driver.completions[0]?.kind).toBe("complete");
+        } finally {
+          deliver.resolve(undefined);
+          releaseClaim.resolve(undefined);
+          finish.resolve(undefined);
+          await run.stop({ mode: "cancel" });
+        }
+      });
+    }
+  }
+
+  for (const batched of [false, true]) {
+    for (const phase of ["running", "claim", "draining"] as const) {
+      it(`recovers a lost cancellation while ${phase}, using ${batched ? "batches" : "rows"}`, async () => {
+        const driver = new FakeRuntimeDriver();
+        const claim = Promise.withResolvers<undefined>();
+        const started = Promise.withResolvers<undefined>();
+        let marked = false;
+        let failures = 0;
+        const read = (ids: readonly bigint[]) => {
+          if (!marked) return [];
+          if (failures++ === 0)
+            throw new Error("temporary cancellation read failure");
+          return ids;
+        };
+        if (batched) {
+          Object.assign(driver, { jobGetCancelRequested: read });
+        } else {
+          Object.assign(driver, {
+            jobGet: (id: bigint) =>
+              read([id]).length === 0
+                ? null
+                : {
+                    ...fakeJob(),
+                    id,
+                    attemptedBy: ["runtime-test"],
+                    state: "running",
+                    metadata: { cancel_attempted_at: null },
+                  },
+          });
+        }
+        driver.claim = [fakeJob()];
+        if (phase === "claim") driver.claimGate = claim.promise;
+        let handlerSignal: AbortSignal | undefined;
+        const client = new Client(driver, {
+          clientId: "runtime-test",
+          completionBatchSize: 1,
+          leaderElectionDisabled: true,
+          logger: recordingLogger([]),
+          queues: { default: { maxWorkers: 1 } },
+          workers: new Workers().add(
+            defineJob({ kind: "test" }),
+            async ({ signal }) => {
+              handlerSignal = signal;
+              started.resolve(undefined);
+              await new Promise<void>((resolve) => {
+                if (signal.aborted) resolve();
+                else
+                  signal.addEventListener("abort", () => resolve(), {
+                    once: true,
+                  });
+              });
+              signal.throwIfAborted();
+            }
+          ),
+        });
+        overrideRuntimeTiming(client, {
+          random: () => 0.5,
+          timer: new FakeTimer(),
+        });
+        const run = await client.start();
+        try {
+          if (phase === "claim") {
+            await waitUntil(() => driver.claimRequests.length > 0);
+            marked = true;
+            claim.resolve(undefined);
+          }
+          await started.promise;
+          const stopping = phase === "draining" ? run.stop() : undefined;
+          marked = true;
+          await waitUntil(() => driver.completions.length === 1);
+          expect(handlerSignal?.reason).toMatchObject({
+            name: "JobCancelledError",
+          });
+          expect(driver.completions[0]?.kind).toBe("cancel");
+          expect(failures).toBeGreaterThanOrEqual(2);
+          await stopping;
+          await run.stop();
+        } finally {
+          claim.resolve(undefined);
+          await run.stop({ mode: "cancel" });
+        }
+      });
+    }
+  }
+
+  for (const batched of [false, true]) {
+    it(`does not apply a stale ${batched ? "batch" : "row"} cancellation result to a new attempt`, async () => {
+      const driver = new FakeRuntimeDriver();
+      const firstRead = Promise.withResolvers<undefined>();
+      const readStarted = Promise.withResolvers<undefined>();
+      const finishFirst = Promise.withResolvers<undefined>();
+      const finishSecond = Promise.withResolvers<undefined>();
+      const signals: AbortSignal[] = [];
+      let reads = 0;
+      const read = async () => {
+        reads++;
+        if (reads !== 1) return false;
+        readStarted.resolve(undefined);
+        await firstRead.promise;
+        return true;
+      };
+      if (batched) {
+        Object.assign(driver, {
+          jobGetCancelRequested: async () => ((await read()) ? [7n] : []),
+        });
+      } else {
+        Object.assign(driver, {
+          jobGet: async () =>
+            (await read())
+              ? {
+                  ...fakeJob(),
+                  attemptedBy: ["runtime-test"],
+                  state: "running",
+                  metadata: { cancel_attempted_at: null },
+                }
+              : null,
+        });
+      }
+      driver.claim = [fakeJob()];
+      const client = new Client(driver, {
+        clientId: "runtime-test",
+        completionBatchSize: 1,
+        leaderElectionDisabled: true,
+        queues: {
+          default: {
+            fetchCooldown: { milliseconds: 1 },
+            maxWorkers: 1,
+            pollInterval: { milliseconds: 1 },
+          },
+        },
+        workers: new Workers().add(
+          defineJob({ kind: "test" }),
+          async ({ signal }) => {
+            signals.push(signal);
+            await (signals.length === 1
+              ? finishFirst.promise
+              : finishSecond.promise);
+          }
+        ),
+      });
+      overrideRuntimeTiming(client, {
+        random: () => 0.5,
+        timer: new FakeTimer(),
+      });
+      const run = await client.start();
+      try {
+        await readStarted.promise;
+        finishFirst.resolve(undefined);
+        await waitUntil(() => driver.completions.length === 1);
+        driver.claim = [fakeJob()];
+        await waitUntil(() => signals.length === 2);
+        firstRead.resolve(undefined);
+        await waitUntil(() => reads >= 2);
+        expect(signals[1]?.aborted).toBe(false);
+        finishSecond.resolve(undefined);
+        await run.stop();
+      } finally {
+        firstRead.resolve(undefined);
+        finishFirst.resolve(undefined);
+        finishSecond.resolve(undefined);
+        await run.stop({ mode: "cancel" });
+      }
+    });
+  }
 
   for (const [stream, read] of [
     ["remote cancellation", "each row"],

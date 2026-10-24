@@ -22,7 +22,6 @@ use tracing::{debug, error, warn};
 
 use crate::Error;
 use crate::client::ClientInner;
-use crate::client::attempts::signal_running_attempt;
 use crate::client::backoff::exponential_backoff;
 #[cfg(feature = "sqlite")]
 use crate::client::sqlite_backend_error;
@@ -125,13 +124,8 @@ pub(super) fn dispatch_notification(
             };
             match payload.action.as_str() {
                 "cancel" => {
-                    if let Some(job_id) = payload.job_id {
-                        signal_running_attempt(
-                            &inner.running,
-                            &inner.pending_cancellations,
-                            &inner.fetch_registration_windows,
-                            job_id,
-                        );
+                    if payload.job_id.is_some() {
+                        inner.cancellation_wakeup.notify_one();
                     }
                 }
                 // Like Go's producer, a metadata change is handled at once

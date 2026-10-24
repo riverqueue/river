@@ -71,6 +71,120 @@ class WorkersTest {
               .getMessage());
   }
 
+  @Test
+  void cancellationContinuesWhileFetchingIsBlocked() throws Exception {
+    var entered = new CompletableFuture<Void>();
+    var fetching = new CompletableFuture<Void>();
+    var release = new CompletableFuture<Void>();
+    var cancelled = new CompletableFuture<WorkContext.Cancellation>();
+    var client =
+        client()
+            .withPilot(
+                new Pilot() {
+                  @Override
+                  public int workerLimit(String queue, int configured) {
+                    if (entered.isDone()) {
+                      fetching.complete(null);
+                      release.join();
+                    }
+                    return configured;
+                  }
+                });
+    var workers =
+        workers(client)
+            .pollInterval(Duration.ofMillis(10))
+            .add(
+                TYPE,
+                context -> {
+                  entered.complete(null);
+                  context.awaitCancellation();
+                  cancelled.complete(context.cancellation());
+                  context.checkCancelled();
+                })
+            .start();
+    try {
+      var inserted = client.insert(TYPE, "cancel while fetching").job();
+      fetching.get(5, TimeUnit.SECONDS);
+      client.cancel(inserted.id());
+      assertEquals(WorkContext.Cancellation.REMOTE, cancelled.get(5, TimeUnit.SECONDS));
+    } finally {
+      release.complete(null);
+      workers.stopAndCancel();
+    }
+  }
+
+  @ParameterizedTest
+  @ValueSource(booleans = {false, true})
+  void cancellationContinuesAfterGracefulStop(boolean pollOnly) throws Exception {
+    var client = client();
+    var entered = new CompletableFuture<WorkContext<String>>();
+    var outcome = new CompletableFuture<Workers.Event>();
+    var workers =
+        workers(client)
+            .pollOnly(pollOnly)
+            .add(
+                TYPE,
+                context -> {
+                  entered.complete(context);
+                  context.awaitCancellation();
+                  context.checkCancelled();
+                })
+            .start();
+    try (var subscription = workers.subscribe(outcome::complete)) {
+      var inserted = client.insert(TYPE, "cancel while draining").job();
+      entered.get(5, TimeUnit.SECONDS);
+      // The timeout leaves active work draining after the dispatcher and
+      // listener have stopped. A peer can still cancel that work.
+      assertThrows(RiverException.class, workers::stop);
+      client.cancel(inserted.id());
+      assertEquals(Job.State.CANCELLED, outcome.get(5, TimeUnit.SECONDS).job().state());
+      workers.stop();
+    } finally {
+      workers.stopAndCancel();
+    }
+  }
+
+  @ParameterizedTest
+  @ValueSource(booleans = {false, true})
+  void cancellationDuringArgumentDecodingIsReconciled(boolean pollOnly) throws Exception {
+    var decoding = new CompletableFuture<Void>();
+    var release = new CompletableFuture<Void>();
+    var client =
+        client()
+            .withPilot(
+                new Pilot() {
+                  @Override
+                  public tools.jackson.databind.JsonNode decode(
+                      Job<tools.jackson.databind.JsonNode> job) {
+                    decoding.complete(null);
+                    release.join();
+                    return job.args();
+                  }
+                });
+    var outcome = new CompletableFuture<Workers.Event>();
+    var workers =
+        workers(client)
+            .pollOnly(pollOnly)
+            .add(
+                TYPE,
+                context -> {
+                  context.awaitCancellation();
+                  context.checkCancelled();
+                })
+            .start();
+    try (var subscription = workers.subscribe(outcome::complete)) {
+      var inserted = client.insert(TYPE, "cancel before registration").job();
+      decoding.get(5, TimeUnit.SECONDS);
+      client.cancel(inserted.id());
+      release.complete(null);
+      assertEquals(Job.State.CANCELLED, outcome.get(5, TimeUnit.SECONDS).job().state());
+      workers.stop();
+    } finally {
+      release.complete(null);
+      workers.stopAndCancel();
+    }
+  }
+
   @ParameterizedTest
   @CsvSource({"REMOTE,false", "REMOTE,true", "TIMEOUT,false", "TIMEOUT,true"})
   void cancellationRespectsTheHandlersOutcome(WorkContext.Cancellation cause, boolean interrupted)
@@ -692,6 +806,71 @@ class WorkersTest {
       assertEquals("worker failed", event.job().errors().getFirst().error());
       assertEquals(1, reported.size());
     }
+  }
+
+  @ParameterizedTest
+  @ValueSource(booleans = {false, true})
+  void retriedJobIgnoresStaleCancellation(boolean delayedUntilRunning) throws Exception {
+    var client = client();
+    var ready = new CompletableFuture<Void>();
+    var paused = new LinkedBlockingQueue<Workers.Event>();
+    var entered = new CompletableFuture<Void>();
+    var finish = new CompletableFuture<Void>();
+    if (!delayedUntilRunning) finish.complete(null);
+    var outcome = new CompletableFuture<Workers.Event>();
+    var errors = new LinkedBlockingQueue<Throwable>();
+    var workers =
+        workers(client)
+            .pollOnly(false)
+            .errorHandler(errors::add)
+            .observe(
+                event -> {
+                  if (event.equals("listen_ready")) ready.complete(null);
+                })
+            .add(
+                TYPE,
+                context -> {
+                  entered.complete(null);
+                  finish.join();
+                  context.checkCancelled();
+                })
+            .start();
+    try (var pauseSubscription = workers.subscribe(paused::add, Workers.EventKind.QUEUE_PAUSED);
+        var outcomeSubscription =
+            workers.subscribe(outcome::complete, Workers.EventKind.JOB_COMPLETED)) {
+      ready.get(5, TimeUnit.SECONDS);
+      var inserted =
+          client
+              .insert(
+                  TYPE,
+                  "retry after an idle cancellation",
+                  InsertOptions.builder().scheduledAt(Instant.now().plusSeconds(3600)).build())
+              .job();
+      client.cancel(inserted.id());
+      client.queues().pause("default");
+      // The pause follows cancellation on the same listener, so receiving it
+      // proves the unmatched cancellation was dispatched before retry.
+      assertNotNull(paused.poll(5, TimeUnit.SECONDS));
+      client.retry(inserted.id());
+      client.queues().resume("default");
+      if (delayedUntilRunning) {
+        entered.get(5, TimeUnit.SECONDS);
+        client.transaction(
+            connection -> {
+              client.notify(connection, Protocol.cancel(inserted.id(), "default"));
+              return null;
+            });
+        client.queues().pause("default");
+        assertNotNull(paused.poll(5, TimeUnit.SECONDS));
+        finish.complete(null);
+      }
+      assertEquals(inserted.id(), outcome.get(5, TimeUnit.SECONDS).job().id());
+      workers.stop();
+    } finally {
+      finish.complete(null);
+      workers.stopAndCancel();
+    }
+    assertTrue(errors.isEmpty(), () -> "Unexpected worker errors: " + errors);
   }
 
   @ParameterizedTest
