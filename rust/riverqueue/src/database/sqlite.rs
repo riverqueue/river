@@ -95,6 +95,20 @@ const ERRORS_APPENDED: &str = concat!(
      ELSE jsonb(json_insert(json(coalesce(errors, jsonb('[]'))), '$[#]', json(?))) END"
 );
 
+/// Replace whole top-level values, including JSON null, like Postgres's `||`.
+/// A single JSON object is bound; `->` preserves boolean and numeric tokens.
+const METADATA_MERGED: &str = r#"(WITH updates(doc) AS (SELECT jsonb(?))
+    SELECT CASE WHEN json_type(metadata) = 'object' THEN (
+        SELECT jsonb_group_object(key, jsonb(doc -> fullkey))
+        FROM (
+            SELECT key, fullkey, metadata AS doc FROM json_each(metadata)
+            WHERE key NOT IN (SELECT key FROM updates, json_each(doc))
+            UNION ALL
+            SELECT key, fullkey, doc FROM updates, json_each(doc)
+        )
+    ) WHEN json_type(metadata) = 'array' THEN jsonb_insert(metadata, '$[#]', doc)
+    ELSE jsonb_array(json(metadata), doc) END FROM updates)"#;
+
 const QUEUE_COLUMNS: &str = r#"
     created_at,
     json(metadata) AS metadata,
@@ -1006,7 +1020,7 @@ pub(crate) async fn complete_decoded(
             END,
             -- Like River Go, metadata that isn't valid JSON is left in place.
             metadata = CASE
-                WHEN ? AND {metadata_valid} THEN jsonb_patch(json(metadata), json(?))
+                WHEN ? AND {metadata_valid} THEN {METADATA_MERGED}
                 ELSE metadata
             END,
             scheduled_at = CASE
@@ -1058,7 +1072,7 @@ pub(crate) async fn merge_metadata_if_not_running(
         r#"
         UPDATE river_job
         SET metadata = CASE
-            WHEN {metadata_valid} THEN jsonb_patch(json(metadata), json(?))
+            WHEN {metadata_valid} THEN {METADATA_MERGED}
             ELSE metadata
         END
         WHERE id = ? AND state != 'running'
@@ -1082,7 +1096,7 @@ pub(crate) async fn update(
     let sql = format!(
         r#"
         UPDATE river_job
-        SET metadata = jsonb_patch(json(metadata), json(?))
+        SET metadata = {METADATA_MERGED}
         WHERE id = ?
         RETURNING {JOB_COLUMNS}
         "#

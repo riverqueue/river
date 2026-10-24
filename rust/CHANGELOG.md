@@ -20,6 +20,8 @@ Changes to River for Go are recorded in the [repository changelog](../CHANGELOG.
 
 ### Fixed
 
+- Replace whole top-level metadata values on SQLite, including JSON null, matching Postgres. Completed resumable cursor steps no longer run again because of stale cursor entries. [PR #1533](https://github.com/riverqueue/river/pull/1533).
+
 - Preserve first-step resumable cursors on failure and step progress on snooze. Transactional checkpoints no longer leak into deferred updates after rollback or a failed write; rolling back a successful checkpoint write may replay earlier unpersisted steps.
 
 ## [0.3.0] - 2026-10-07

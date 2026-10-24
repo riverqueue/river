@@ -670,12 +670,21 @@ module River::Driver
       if runtime_postgres?
         "metadata || #{runtime_json(metadata)}"
       else
-        # Postgres's || replaces top-level values, including JSON null.
-        # JSON Merge Patch would recursively merge objects and delete nulls.
-        merged = metadata.reduce("metadata") do |expression, (key, value)|
-          path = runtime_quote("$.#{JSON.generate(key.to_s)}")
-          "jsonb_set(#{expression}, #{path}, jsonb(#{runtime_quote(JSON.generate(value))}))"
-        end
+        # Keep the SQL shape fixed regardless of the number of updated keys.
+        # -> preserves JSON booleans and large numeric tokens during aggregation.
+        merged = <<~SQL.strip
+          (WITH updates(doc) AS (SELECT #{runtime_json(metadata)})
+              SELECT CASE WHEN json_type(metadata) = 'object' THEN (
+                  SELECT jsonb_group_object(key, jsonb(doc -> fullkey))
+                  FROM (
+                      SELECT key, fullkey, metadata AS doc FROM json_each(metadata)
+                      WHERE key NOT IN (SELECT key FROM updates, json_each(doc))
+                      UNION ALL
+                      SELECT key, fullkey, doc FROM updates, json_each(doc)
+                  )
+              ) WHEN json_type(metadata) = 'array' THEN jsonb_insert(metadata, '$[#]', doc)
+              ELSE jsonb_array(json(metadata), doc) END FROM updates)
+        SQL
         "CASE WHEN json_valid(metadata, 10) THEN #{merged} ELSE metadata END"
       end
     end
