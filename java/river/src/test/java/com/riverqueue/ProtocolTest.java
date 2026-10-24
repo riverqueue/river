@@ -300,6 +300,27 @@ class ProtocolTest {
     return tests.stream();
   }
 
+  @Test
+  void nestedStepsAreRejectedBeforeRecordingProgress() {
+    for (boolean cursor : new boolean[] {false, true}) {
+      var work = context(42);
+      var failure =
+          assertThrows(
+              IllegalStateException.class,
+              () ->
+                  work.step(
+                      "parent",
+                      () -> {
+                        if (cursor)
+                          work.stepWithCursor("child", ignored -> fail("child must not run"));
+                        else work.step("child", () -> fail("child must not run"));
+                      }));
+      assertEquals("Resumable steps cannot be nested", failure.getMessage());
+      assertSame(failure, work.finish(failure));
+      assertTrue(work.metadataUpdates().isEmpty());
+    }
+  }
+
   @TestFactory
   Stream<DynamicTest> resumableConformance() throws Exception {
     var tests = new ArrayList<DynamicTest>();
