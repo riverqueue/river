@@ -1308,6 +1308,61 @@ describe("PgDriver integration", () => {
     expect(raced[0]!.job!.metadata).not.toHaveProperty("stale_checkpoint");
   });
 
+  it("replaces top-level metadata keys on merge", async () => {
+    const kind = `${filePrefix}_merge`;
+    const queue = `${filePrefix}_merge`;
+    const worker = `${filePrefix}_merge_worker`;
+    const stored = {
+      gone: 5,
+      keep: { x: 1 },
+      "river:resumable_cursor": { c: 1 },
+      "river:resumable_step": "a",
+    };
+    const updates = {
+      gone: null,
+      "river:resumable_cursor": { d: 7, n: null },
+      "river:resumable_step": "c",
+    };
+    // The SQLite driver's tests expect this same result.
+    const merged = {
+      gone: null,
+      keep: { x: 1 },
+      "river:resumable_cursor": { d: 7, n: null },
+      "river:resumable_step": "c",
+    };
+    const completed = await driver.jobInsert(
+      insertParams(kind, { metadata: stored, queue })
+    );
+    await driver.jobClaim({
+      attemptedBy: worker,
+      kinds: [kind],
+      queues: [{ limit: 1, name: queue }],
+    });
+    const updated = await driver.jobInsert(
+      insertParams(kind, { metadata: stored, queue })
+    );
+
+    const [applied] = await driver.jobCompleteMany([
+      {
+        attempt: 1,
+        attemptedBy: worker,
+        error: null,
+        finalizedAt: Temporal.Now.instant(),
+        id: completed.job.id,
+        kind: "complete",
+        metadata: updates,
+        output: null,
+        outputSet: false,
+        scheduledAt: null,
+      },
+    ]);
+    expect(applied!.status).toBe("applied");
+    expect(applied!.job!.metadata).toEqual(merged);
+    expect(
+      (await driver.jobUpdate(updated.job.id, { metadata: updates }))!.metadata
+    ).toEqual(merged);
+  });
+
   it("merges a rescued attempt's output without changing its state", async () => {
     const queue = `${filePrefix}_rescued_output`;
     const worker = `${filePrefix}_rescued_worker`;

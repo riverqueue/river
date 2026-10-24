@@ -49,6 +49,48 @@ class ClientTest {
   }
 
   @Test
+  void completionMetadataReplacesTopLevelKeys() {
+    var client = database();
+    var database = client.database();
+    var stored =
+        Json.parse(
+            """
+            {"keep":{"x":1},"river:resumable_step":"a","river:resumable_cursor":{"c":1},"gone":5}""");
+    var updates =
+        Json.parse(
+            """
+            {"river:resumable_step":"c","river:resumable_cursor":{"d":7,"n":null},"gone":null}""");
+    var options = InsertOptions.builder().metadata(stored).build();
+    client.insert(EMAIL, new Email("merge@example.com"), options);
+    var claimed =
+        client.transaction(
+            connection -> {
+              try (var statement =
+                      Sql.prepare(
+                          connection,
+                          Sql.query(database, "claim"),
+                          database.timestamp(NOW),
+                          "worker",
+                          "default",
+                          database.timestamp(NOW),
+                          1);
+                  var rows = statement.executeQuery()) {
+                assertTrue(rows.next());
+                return client.read(rows);
+              }
+            });
+    client.transaction(connection -> client.complete(connection, claimed, updates));
+    var expected =
+        Json.parse(
+            """
+            {"keep":{"x":1},"river:resumable_step":"c","river:resumable_cursor":{"d":7,"n":null},"gone":null}""");
+    // Each updated key replaces the stored value whole, and a null value stays as a null. SQLite
+    // also stores a unique nonce in metadata, so compare only the keys under test.
+    var metadata = (tools.jackson.databind.node.ObjectNode) client.get(claimed.id()).metadata();
+    assertEquals(expected, metadata.retain(expected.propertyNames()));
+  }
+
+  @Test
   void crossKindUniqueConflictsPreserveTheIncumbent() {
     var client = database();
     var firstType = JobType.of("original_kind", tools.jackson.databind.JsonNode.class);

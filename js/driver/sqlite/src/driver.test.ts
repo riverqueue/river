@@ -1313,6 +1313,81 @@ describe("SqliteDriver", () => {
     ]);
   });
 
+  test("replaces top-level metadata keys on merge, like Postgres", async () => {
+    const { driver } = await setup();
+    const stored = {
+      gone: 5,
+      keep: { x: 1 },
+      "river:resumable_cursor": { c: 1 },
+      "river:resumable_step": "a",
+    };
+    const updates = {
+      gone: null,
+      "river:resumable_cursor": { d: 7, n: null },
+      "river:resumable_step": "c",
+    };
+    const merged = {
+      gone: null,
+      keep: { x: 1 },
+      "river:resumable_cursor": { d: 7, n: null },
+      "river:resumable_step": "c",
+    };
+    const insert = async () =>
+      (
+        await driver.jobInsert({
+          args: {},
+          kind: "merge_job",
+          metadata: stored,
+        })
+      ).job;
+    // Inserts add a unique nonce that every merge has to keep too.
+    const mergedFor = (job: SqliteJobRow) => ({
+      ...merged,
+      "river:unique_nonce": job.metadata["river:unique_nonce"],
+    });
+    const completion = (id: bigint) => ({
+      attempt: 1,
+      attemptedBy: "merge-worker",
+      error: null,
+      finalizedAt: Temporal.Now.instant(),
+      id,
+      kind: "complete" as const,
+      metadata: updates,
+      output: null,
+      outputSet: false,
+      scheduledAt: null,
+    });
+
+    const completed = await insert();
+    const stale = await insert();
+    const updated = await insert();
+    await driver.jobClaim({
+      attemptedBy: "merge-worker",
+      kinds: ["merge_job"],
+      queues: [{ limit: 2, name: "default" }],
+    });
+    // A second completion of the same attempt is stale but still merges.
+    await driver.jobCompleteMany([{ ...completion(stale.id), metadata: {} }]);
+
+    const [applied, late] = await driver.jobCompleteMany([
+      completion(completed.id),
+      completion(stale.id),
+    ]);
+    expect(applied!.status).toBe("applied");
+    expect(applied!.job!.metadata).toEqual(mergedFor(completed));
+    expect(late!.status).toBe("stale");
+    expect(late!.job!.metadata).toEqual(mergedFor(stale));
+    expect(
+      (await driver.jobUpdate(updated.id, { metadata: updates }))!.metadata
+    ).toEqual(mergedFor(updated));
+
+    // Key names are data, never JSON path syntax.
+    const odd = { "": 1, 'a"b': { new: 1 }, "a.b": [2], "a\\b": null };
+    expect(
+      (await driver.jobUpdate(updated.id, { metadata: odd }))!.metadata
+    ).toEqual({ ...mergedFor(updated), ...odd });
+  });
+
   test("polls the durable outbox and publishes cancellation IDs exactly", async () => {
     const { driver } = await setup();
     const exactID = 9_007_199_254_740_999n;
