@@ -71,6 +71,15 @@ describe("testJob", () => {
 });
 
 describe("workOnce", () => {
+  test("preserves completed steps when the worker snoozes", async () => {
+    const job = await testJob(emailJob, { message: "snooze" });
+    const result = await workOnce(job, async ({ resumable }) => {
+      await resumable.step("first", () => undefined);
+      return snooze({ seconds: 60 });
+    });
+    expect(result.metadata).toEqual({ "river:resumable_step": "first" });
+  });
+
   test("persists metadata and suppressed resumable errors like the runtime", async () => {
     const job = await testJob(emailJob, { message: "resume" });
     let firstRuns = 0;

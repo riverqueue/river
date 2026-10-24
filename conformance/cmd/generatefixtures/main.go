@@ -49,12 +49,18 @@ func run() error {
 		return err
 	}
 
+	resumable, err := makeResumableCases()
+	if err != nil {
+		return err
+	}
+
 	for _, fixture := range []struct {
 		name  string
 		value any
 	}{
 		{"cron_schedules.json", cronSchedules},
 		{"protocol_values.json", protocolValues},
+		{"resumable.json", resumable},
 		{"snooze_counters.json", makeSnoozeCounters()},
 		{"unique_keys.json", uniqueKeys},
 	} {

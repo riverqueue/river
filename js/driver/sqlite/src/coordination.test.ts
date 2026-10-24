@@ -328,18 +328,17 @@ describe("SqliteDriver connection coordination", () => {
     });
   });
 
-  test("keeps River's background work waiting asynchronously during a long application transaction", async () => {
-    const { database, driver } = await fileSetup();
+  test("keeps River's background work waiting asynchronously during an application transaction", async () => {
+    const busy = busyWaits();
+    const { database, driver } = await fileSetup({
+      [SQLITE_DRIVER_TEST_HOOKS]: { sleep: busy.sleep },
+    } as SqliteDriverOptions);
     await driver.jobInsert({ args: {}, kind: "background_waits" });
-    let maxLagMs = 0;
-    let last = performance.now();
-    const interval = setInterval(() => {
-      const now = performance.now();
-      maxLagMs = Math.max(maxLagMs, now - last);
-      last = now;
-    }, 1);
-    onTestFinished(() => clearInterval(interval));
 
+    let releaseTransaction!: () => void;
+    const released = new Promise<void>((resolve) => {
+      releaseTransaction = resolve;
+    });
     let started!: () => void;
     const open = new Promise<void>((resolve) => {
       started = resolve;
@@ -347,23 +346,29 @@ describe("SqliteDriver connection coordination", () => {
     const pending = transaction(database, async (tx) => {
       await driver.jobInsert({ args: {}, kind: "application_tx" }, { tx });
       started();
-      await new Promise((resolve) => setTimeout(resolve, 300));
+      await released;
     });
     await open;
-    const claim = driver.jobClaim(claimParams());
-    await pending;
+    let claimed = false;
+    const claim = driver.jobClaim(claimParams()).then((result) => {
+      claimed = true;
+      return result;
+    });
+    try {
+      // Observe an actual asynchronous busy retry while the application still
+      // holds the transaction, without depending on elapsed time under CI load.
+      await expect.poll(() => busy.count).toBeGreaterThan(0);
+      expect(claimed).toBe(false);
+    } finally {
+      releaseTransaction();
+      await pending;
+    }
     expect((await claim).jobs).toHaveLength(2);
-
-    // River's connection never lets SQLite wait for a lock synchronously; it
-    // retries between turns of the event loop. Blocking instead would have
-    // frozen timers for the whole 300 ms transaction (or deadlocked it), so
-    // a bound well below that is generous even on a loaded machine.
     expect(
       await driver.execute("busy_timeout", {}, (db) =>
         db.prepare("PRAGMA busy_timeout").get()
       )
     ).toEqual({ timeout: 0 });
-    expect(maxLagMs).toBeLessThan(250);
   });
 
   test("stops a River call waiting behind the transaction it runs inside", async () => {

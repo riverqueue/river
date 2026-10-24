@@ -2363,7 +2363,13 @@ export declare class Resumable {
   ): Promise<void>;
   /** Record the JSON cursor for the currently running cursor step. */
   setCursor(cursor: JsonValue): void;
-  /** Persist the current step and optional cursor in a caller transaction. */
+  /**
+   * Persist the current step and optional cursor in a caller transaction.
+   *
+   * Commit the transaction before the step callback resolves, and let transaction
+   * and commit errors reject the callback. Resolving it marks the step complete
+   * even if an enclosing transaction later rolls back.
+   */
   checkpoint<Transaction>(
     options: ResumableCheckpointOptions<Transaction>
   ): Promise<JobRow>;
@@ -2375,7 +2381,11 @@ export declare class Resumable {
 ```ts
 /**
  * Save resumable progress now, atomically with `tx`, instead of when the
- * attempt ends.
+ * attempt ends. If it rolls back, earlier unpersisted progress may be replayed.
+ *
+ * Commit the transaction before the step callback resolves, and let transaction
+ * and commit errors reject the callback. Resolving it marks the step complete
+ * even if an enclosing transaction later rolls back.
  */
 export interface ResumableCheckpointOptions<Transaction = unknown> {
   readonly cursor?: JsonValue;

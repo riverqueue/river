@@ -487,7 +487,10 @@ export async function workOnce<
     if (outcome?.type === "complete" && outcome.output !== undefined) {
       context.recordOutput(outcome.output);
     }
-    const finished = finishResumable(context.resumable, false);
+    const finished = finishResumable(
+      context.resumable,
+      outcome !== undefined && outcome.type !== "complete"
+    );
     Object.assign(metadata, finished.metadata);
     if (finished.error !== null) throw finished.error;
     return {
