@@ -1067,11 +1067,15 @@ describe("pilot services and teardown", () => {
     });
 
     const run = await client.start();
-    const first = await timer.waitFor(({ kind }) => kind === "delay");
+    const first = await timer.waitFor(
+      ({ kind, ms }) => kind === "delay" && ms !== 2_000
+    );
     expect(runs).toBe(1);
     await timer.advance(first.ms);
     await waitUntil(() => runs === 2);
-    const second = await timer.waitFor(({ kind }) => kind === "delay");
+    const second = await timer.waitFor(
+      ({ kind, ms }) => kind === "delay" && ms !== 2_000
+    );
     // Backoff grows while the service keeps failing quickly.
     expect(second.ms).toBeGreaterThan(first.ms);
     await timer.advance(second.ms);
@@ -1079,7 +1083,9 @@ describe("pilot services and teardown", () => {
     // A failure after a healthy minute starts backoff over.
     await timer.advance(60_000);
     longRun.reject(new Error("service failed after a while"));
-    const third = await timer.waitFor(({ kind }) => kind === "delay");
+    const third = await timer.waitFor(
+      ({ kind, ms }) => kind === "delay" && ms !== 2_000
+    );
     expect(third.ms).toBe(first.ms);
     await timer.advance(third.ms);
     await waitUntil(() => runs === 4);

@@ -33,7 +33,6 @@ public final class RunHandle implements AutoCloseable {
 
   private final Map<Long, WorkContext<?>> active = new ConcurrentHashMap<>();
   private final Map<Long, Thread> activeThreads = new ConcurrentHashMap<>();
-  private final Map<Long, Long> pendingCancellation = new ConcurrentHashMap<>();
   private final AtomicBoolean maintenanceBusy = new AtomicBoolean();
   private volatile Instant nextReindex =
       Instant.now()
@@ -42,6 +41,7 @@ public final class RunHandle implements AutoCloseable {
           .plusDays(1)
           .atStartOfDay()
           .toInstant(java.time.ZoneOffset.UTC);
+  private final Semaphore cancellationWake = new Semaphore(0);
   private final Client.Builder config;
   private final RetryPolicy defaultRetryPolicy = RetryPolicy.defaults();
   private final java.util.concurrent.BlockingQueue<Completion> completions =
@@ -83,7 +83,10 @@ public final class RunHandle implements AutoCloseable {
     id = river.id();
     notifications =
         new Protocol.Dispatcher(
-            id, active, pendingCancellation, this::queueNotification, this::leadershipNotification);
+            id,
+            ignored -> cancellationWake.release(),
+            this::queueNotification,
+            this::leadershipNotification);
     queues.putAll(config.queues);
     periodic =
         new PeriodicJobBundle(
@@ -164,6 +167,7 @@ public final class RunHandle implements AutoCloseable {
     unsubscribeInsert = river.onInsertCommit(wake::release);
     if (!config.pollOnly) executor.submit(this::listen);
     executor.submit(this::completeBatches);
+    executor.submit(this::pollCancellations);
     executor.submit(this::supervise);
     executor.submit(this::dispatch);
     dispatcherStarted = true;
@@ -267,7 +271,6 @@ public final class RunHandle implements AutoCloseable {
   private void dispatch() {
     long nextPoll = 0;
     long nextMaintenance = 0;
-    long nextCancelPoll = 0;
     while (running.get()) {
       try {
         long now = System.nanoTime();
@@ -294,25 +297,6 @@ public final class RunHandle implements AutoCloseable {
         if (now >= nextMaintenance) {
           queues.keySet().forEach(this::heartbeat);
           nextMaintenance = now + config.serviceInterval.toNanos();
-        }
-        if (now >= nextCancelPoll) {
-          river.transaction(
-              c -> {
-                try (var statement =
-                        Sql.prepare(c, Sql.query(river.database(), "cancel_requested"));
-                    var rows = statement.executeQuery()) {
-                  while (rows.next()) {
-                    var context = active.get(rows.getLong(1));
-                    if (context != null)
-                      context.requestCancellation(WorkContext.Cancellation.REMOTE);
-                  }
-                }
-                return null;
-              });
-          pendingCancellation
-              .entrySet()
-              .removeIf(entry -> now - entry.getValue() > Duration.ofMinutes(1).toNanos());
-          nextCancelPoll = now + TimeUnit.MILLISECONDS.toNanos(50);
         }
         if (wake.tryAcquire(10, TimeUnit.MILLISECONDS)) wake.release();
       } catch (InterruptedException e) {
@@ -465,8 +449,6 @@ public final class RunHandle implements AutoCloseable {
     context.attach(this, null);
     active.put(row.id(), context);
     if (row.metadata().has("cancel_attempted_at"))
-      context.requestCancellation(WorkContext.Cancellation.REMOTE);
-    if (pendingCancellation.remove(row.id()) != null)
       context.requestCancellation(WorkContext.Cancellation.REMOTE);
     if (cancelOnStop) context.requestCancellation(WorkContext.Cancellation.SHUTDOWN);
     executor.submit(
@@ -1415,6 +1397,41 @@ public final class RunHandle implements AutoCloseable {
       } catch (Throwable error) {
         report(error);
       }
+  }
+
+  private void pollCancellations() {
+    // Fetches may block, and graceful stop ends dispatch before active work.
+    // Keep cancellation checks independent until every claimed attempt drains.
+    while (running.get() || dispatcherStopped.getCount() > 0 || !active.isEmpty()) {
+      try {
+        cancellationWake.drainPermits();
+        var attempts = Map.copyOf(active);
+        if (!attempts.isEmpty()) {
+          river.transaction(
+              c -> {
+                try (var statement =
+                        Sql.prepare(c, Sql.query(river.database(), "cancel_requested"));
+                    var rows = statement.executeQuery()) {
+                  while (rows.next()) {
+                    // A late query result must not cancel a subsequent attempt.
+                    var context = attempts.get(rows.getLong(1));
+                    if (context != null)
+                      context.requestCancellation(WorkContext.Cancellation.REMOTE);
+                  }
+                }
+                return null;
+              });
+        }
+      } catch (Exception e) {
+        report(e);
+      }
+      try {
+        cancellationWake.tryAcquire(50, TimeUnit.MILLISECONDS);
+      } catch (InterruptedException e) {
+        Thread.currentThread().interrupt();
+        return;
+      }
+    }
   }
 
   private void publish(Event event) {

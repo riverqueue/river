@@ -5,7 +5,6 @@ import static org.junit.jupiter.api.Assertions.*;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Collections;
-import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Random;
@@ -79,27 +78,17 @@ class ProtocolTest {
             DynamicTest.dynamicTest(
                 name + " received by " + clientId,
                 () -> {
-                  var target = context(42);
-                  var unrelated = context(43);
+                  var cancellations = new ArrayList<Long>();
                   var queues = new ArrayList<Protocol.QueueNotice>();
                   var leadership = new ArrayList<Protocol.LeadershipNotice>();
-                  var pending = new HashMap<Long, Long>();
                   var dispatcher =
                       new Protocol.Dispatcher(
-                          clientId,
-                          Map.of(42L, target, 43L, unrelated),
-                          pending,
-                          queues::add,
-                          leadership::add);
+                          clientId, cancellations::add, queues::add, leadership::add);
                   dispatcher.dispatch(
                       fixture.required("topic").asString(),
                       Json.encode(fixture.required("payload")));
 
-                  assertEquals(
-                      name.equals("cancel") ? WorkContext.Cancellation.REMOTE : null,
-                      target.cancellation());
-                  assertNull(unrelated.cancellation(), "Notification must not cancel another job");
-                  assertTrue(pending.isEmpty(), "A registered attempt consumes its cancellation");
+                  assertEquals(name.equals("cancel") ? List.of(42L) : List.of(), cancellations);
                   switch (name) {
                     case "insert", "metadata_changed", "pause", "resume" -> {
                       assertEquals(List.of(new Protocol.QueueNotice("priority", name)), queues);
@@ -130,36 +119,31 @@ class ProtocolTest {
   }
 
   @Test
-  void notificationTopicsAndPendingCancellation() throws Exception {
+  void notificationTopicsRouteCancellationChecks() throws Exception {
     var fixture = Conformance.fixture("protocol_values.json").required("notifications");
     var cancel =
         java.util.stream.StreamSupport.stream(fixture.spliterator(), false)
             .filter(value -> value.required("name").asString().equals("cancel"))
             .findFirst()
             .orElseThrow();
-    var unrelated = context(43);
-    var pending = new HashMap<Long, Long>();
+    var cancellations = new ArrayList<Long>();
     var queues = new ArrayList<Protocol.QueueNotice>();
     var leadership = new ArrayList<Protocol.LeadershipNotice>();
     var dispatcher =
-        new Protocol.Dispatcher(
-            "observer", Map.of(43L, unrelated), pending, queues::add, leadership::add);
+        new Protocol.Dispatcher("observer", cancellations::add, queues::add, leadership::add);
     String payload = Json.encode(cancel.required("payload"));
     dispatcher.dispatch("unrelated", payload);
     dispatcher.dispatch(Protocol.TOPIC_LEADERSHIP, payload);
-    assertTrue(pending.isEmpty());
     assertTrue(queues.isEmpty());
     assertTrue(leadership.isEmpty());
 
     dispatcher.dispatch(Protocol.TOPIC_INSERT, payload);
     assertEquals(List.of(new Protocol.QueueNotice("priority", "insert")), queues);
-    assertTrue(
-        pending.isEmpty(), "A control payload on the insert topic must not cancel an attempt");
     queues.clear();
+    assertTrue(cancellations.isEmpty());
 
     dispatcher.dispatch(cancel.required("topic").asString(), payload);
-    assertEquals(java.util.Set.of(42L), pending.keySet());
-    assertNull(unrelated.cancellation());
+    assertEquals(List.of(42L), cancellations);
     assertTrue(queues.isEmpty());
     assertTrue(leadership.isEmpty());
   }

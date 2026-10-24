@@ -859,7 +859,7 @@ func (e *Executor) JobRetry(ctx context.Context, params *riverdriver.JobRetryPar
 
 			return nil, interpretError(err)
 		}
-		return jobRowFromInternal(job)
+		return jobRowFromInternal(jobFromReturningRow((*dbsqlc.JobGetAvailableRow)(job)))
 	})
 }
 

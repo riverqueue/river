@@ -56,9 +56,11 @@ DELETE FROM {schema}river_job WHERE id=? AND state != 'running' RETURNING {colum
 -- name: delete_filtered
 DELETE FROM {schema}river_job WHERE {where} AND id=? AND state != 'running' RETURNING {columns}
 -- name: retry
-UPDATE {schema}river_job SET state='available', finalized_at=NULL,
-max_attempts=CASE WHEN attempt=max_attempts THEN max_attempts+1 ELSE max_attempts END, scheduled_at=?
-WHERE id=? AND state != 'running' AND NOT (state='available' AND scheduled_at < ?) RETURNING {columns}
+WITH retry_params AS (SELECT CAST(? AS timestamptz) AS now)
+UPDATE {schema}river_job SET state='available', finalized_at=CASE WHEN state='available' AND scheduled_at < (SELECT now FROM retry_params) THEN finalized_at ELSE NULL END,
+metadata=CASE WHEN jsonb_typeof(metadata)='object' THEN metadata - 'cancel_attempted_at' ELSE metadata END,
+max_attempts=CASE WHEN state='available' AND scheduled_at < (SELECT now FROM retry_params) THEN max_attempts WHEN attempt=max_attempts THEN max_attempts+1 ELSE max_attempts END, scheduled_at=CASE WHEN state='available' AND scheduled_at < (SELECT now FROM retry_params) THEN scheduled_at ELSE (SELECT now FROM retry_params) END
+WHERE id=? AND state != 'running' AND ((jsonb_typeof(metadata)='object' AND jsonb_exists(metadata, 'cancel_attempted_at')) OR NOT (state='available' AND scheduled_at < (SELECT now FROM retry_params))) RETURNING {columns}
 -- name: reset_jobs
 DELETE FROM {schema}river_job
 -- name: reset_queues

@@ -1438,21 +1438,29 @@ export class SqliteRuntime implements RuntimeDriver<
       const raw = resultStatement(
         database,
         `
+        WITH retry_params AS (SELECT ? AS now)
         UPDATE river_job
         SET
           state = 'available',
           max_attempts = CASE
+            WHEN state = 'available' AND scheduled_at < (SELECT now FROM retry_params) THEN max_attempts
             WHEN attempt = max_attempts THEN max_attempts + 1
             ELSE max_attempts
           END,
-          finalized_at = NULL,
-          scheduled_at = ?
+          finalized_at = CASE WHEN state = 'available' AND scheduled_at < (SELECT now FROM retry_params) THEN finalized_at ELSE NULL END,
+          metadata = CASE
+            WHEN ${invalidJsonTextSql("metadata")} THEN metadata
+            ELSE jsonb_remove(metadata, '$.cancel_attempted_at')
+          END,
+          scheduled_at = CASE WHEN state = 'available' AND scheduled_at < (SELECT now FROM retry_params) THEN scheduled_at ELSE (SELECT now FROM retry_params) END
         WHERE id = ?
           AND state != 'running'
-          AND (state != 'available' OR scheduled_at > ?)
+          AND ((CASE WHEN ${invalidJsonTextSql("metadata")} THEN NULL
+                     ELSE json_type(metadata, '$.cancel_attempted_at') END) IS NOT NULL
+               OR NOT (state = 'available' AND scheduled_at < (SELECT now FROM retry_params)))
         RETURNING ${JOB_COLUMNS}
         `
-      ).get(timestamp, id, timestamp);
+      ).get(timestamp, id);
       const updated = raw === undefined ? null : decodeJobRowPartial(raw).job;
       const job = updated ?? getJob(database, id, { partial: true });
       if (job === null) return { status: "not_found" };

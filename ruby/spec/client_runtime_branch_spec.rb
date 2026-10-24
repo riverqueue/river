@@ -243,7 +243,7 @@ RSpec.describe River::ClientRuntime do
 
     value.periodic_jobs.add(periodic)
 
-    expect(value.instance_variable_get(:@threads)).to eq([thread])
+    expect(value.instance_variable_get(:@threads)).to eq([value.instance_variable_get(:@cancellation_thread), thread])
     expect(entered).to be_empty
   ensure
     release << true if release
@@ -329,7 +329,10 @@ RSpec.describe River::ClientRuntime do
 
     value.start
 
-    expect(value.instance_variable_get(:@threads)).to be_empty
+    expect(value.instance_variable_get(:@producer_threads)).to be_empty
+  ensure
+    driver.define_singleton_method(:leader_release) { |_| }
+    value&.stop
   end
 
   it "allows queue changes during startup without launching a producer twice" do
@@ -344,9 +347,12 @@ RSpec.describe River::ClientRuntime do
 
     value.start
     value.send(:start_producer, "dynamic", River::QueueConfig.new(max_workers: 1))
-    expect(value.instance_variable_get(:@threads).length).to eq(2)
+    expect(value.instance_variable_get(:@producer_threads).length).to eq(2)
     value.queue_remove("branch")
     value.queue_remove("dynamic")
+  ensure
+    driver.define_singleton_method(:leader_release) { |_| }
+    value&.stop
   end
 
   it "joins only work belonging to a queue as it is removed" do
@@ -471,15 +477,10 @@ RSpec.describe River::ClientRuntime do
     expect(fetched_at).to eq([100.0])
   end
 
-  it "keeps observing active jobs when shutdown interrupts the fetch cooldown" do
-    checked = []
+  it "drains active jobs when shutdown interrupts the fetch cooldown" do
     fetched = 0
     job = row
     driver = Object.new
-    driver.define_singleton_method(:job_get_cancelled_ids) { |ids|
-      checked << ids
-      []
-    }
     driver.define_singleton_method(:queue_get) { |_| nil }
     driver.define_singleton_method(:job_get_available) { |**|
       fetched += 1
@@ -496,7 +497,22 @@ RSpec.describe River::ClientRuntime do
     value.send(:producer_loop, "branch", River::QueueConfig.new(max_workers: 2, fetch_cooldown: 1, fetch_poll_interval: 1))
 
     expect(fetched).to eq(1)
-    expect(checked).to eq([[1], [1]])
+    expect(value.instance_variable_get(:@running)).to be_empty
+  end
+
+  it "drains active jobs when a fetch fails during shutdown" do
+    driver = Object.new
+    value = runtime(driver: driver)
+    value.instance_variable_set(:@running, {1 => {queue: "branch", working: true}})
+    driver.define_singleton_method(:queue_get) do |_queue|
+      value.instance_variable_set(:@stop_requested, true)
+      raise "fetch failed during shutdown"
+    end
+    value.define_singleton_method(:wait_for_running_jobs) { |_, _| @running.clear }
+
+    value.send(:producer_loop, "branch", River::QueueConfig.new(max_workers: 2))
+
+    expect(value.instance_variable_get(:@running)).to be_empty
   end
 
   it "rechecks queue pause state after waiting for its fetch cooldown" do
@@ -746,7 +762,58 @@ RSpec.describe River::ClientRuntime do
     expect { execute(value, row) }.not_to raise_error
   end
 
-  it "checks cancellation in one batch, excluding inactive work and other queues" do
+  [false, true].each do |stopping|
+    it "cancels work during a blocked fetch#{" and graceful stop" if stopping}" do
+      started, fetching, release = Queue.new, Queue.new, Queue.new
+      worker = Object.new
+      worker.define_singleton_method(:work) do |_job|
+        started << true
+        Queue.new.pop
+      end
+      job = row
+      marked = false
+      claims = 0
+      driver = Object.new
+      driver.define_singleton_method(:queue_upsert) { |_name| }
+      driver.define_singleton_method(:queue_get) { |_name| nil }
+      driver.define_singleton_method(:job_get_available) do |**|
+        claims += 1
+        if claims == 1
+          [job]
+        else
+          fetching << true
+          release.pop
+          []
+        end
+      end
+      driver.define_singleton_method(:job_get_cancelled_ids) { |ids| marked ? ids : [] }
+      driver.define_singleton_method(:job_set_state_if_running) do |**attributes|
+        job.state = attributes.fetch(:state)
+        job
+      end
+      value = described_class.new(Object.new, driver,
+        config(worker: worker, queues: {branch: 2}).with(
+          fetch_cooldown: 0.001, fetch_poll_interval: 0.01, leader_election_disabled: true
+        ))
+      subscription = value.subscribe([:job_cancelled])
+      value.start
+      Timeout.timeout(2) {
+        started.pop
+        fetching.pop
+      }
+      value.stop(wait: false) if stopping
+      marked = true
+
+      event = Timeout.timeout(2) { subscription.pop }
+      expect(event.job.state).to eq(River::JOB_STATE_CANCELLED)
+    ensure
+      value&.stop(cancel: true, wait: false)
+      release << true
+      value&.stop
+    end
+  end
+
+  it "checks cancellation across queues in one batch, excluding inactive work" do
     raised = []
     fake_thread = Object.new
     fake_thread.define_singleton_method(:raise) { |error| raised << error }
@@ -766,10 +833,10 @@ RSpec.describe River::ClientRuntime do
       }
     )
 
-    value.send(:check_remote_cancellations, "branch")
+    value.send(:check_remote_cancellations)
 
     expect(raised).to eq([River::JobCancelError])
-    expect(checked).to eq([[3]])
+    expect(checked).to eq([[1, 3]])
   end
 
   it "interrupts work that begins after stop was requested" do

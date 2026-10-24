@@ -586,23 +586,44 @@ WHERE id = @id
 UPDATE /* TEMPLATE: schema */river_job
 SET
     state = 'available',
-    max_attempts = CASE WHEN attempt = max_attempts THEN max_attempts + 1 ELSE max_attempts END,
-    finalized_at = NULL,
-    metadata = jsonb_remove(metadata, '$.cancel_attempted_at'),
-    scheduled_at = coalesce(cast(sqlc.narg('now') AS text), datetime('now', 'subsec'))
+    max_attempts = CASE WHEN state = 'available' AND scheduled_at < coalesce(cast(sqlc.narg('now') AS text), datetime('now', 'subsec')) THEN max_attempts WHEN attempt = max_attempts THEN max_attempts + 1 ELSE max_attempts END,
+    finalized_at = CASE WHEN state = 'available' AND scheduled_at < coalesce(cast(sqlc.narg('now') AS text), datetime('now', 'subsec')) THEN finalized_at ELSE NULL END,
+    metadata = CASE WHEN typeof(metadata) = 'text' AND NOT json_valid(metadata)
+        THEN metadata ELSE jsonb_remove(metadata, '$.cancel_attempted_at') END,
+    scheduled_at = CASE WHEN state = 'available' AND scheduled_at < coalesce(cast(sqlc.narg('now') AS text), datetime('now', 'subsec')) THEN scheduled_at ELSE coalesce(cast(sqlc.narg('now') AS text), datetime('now', 'subsec')) END
 WHERE id = @id
     -- Do not touch running jobs:
     AND state != 'running'
-    -- If the job is already available with a prior scheduled_at, leave it alone.
+    -- Preserve the position of already available jobs while clearing stale cancellation metadata.
     --
     -- I had to invert the original 'AND NOT' to 'AND'. Something about
     -- sqlc's SQLite parser cannot detect a parameter inside an `AND NOT`. An
     -- unfortunate bug that will hopefully be fixed in the future ...
     AND (
-        state <> 'available'
-        OR scheduled_at > coalesce(cast(sqlc.narg('now') AS text), datetime('now', 'subsec'))
+        (CASE WHEN typeof(metadata) = 'text' AND NOT json_valid(metadata) THEN NULL
+              ELSE json_type(metadata, '$.cancel_attempted_at') END) IS NOT NULL
+        OR state <> 'available'
+        OR scheduled_at >= coalesce(cast(sqlc.narg('now') AS text), datetime('now', 'subsec'))
     )
-RETURNING *;
+RETURNING
+    id,
+    cast(CASE WHEN typeof(args) = 'text' AND NOT json_valid(args) THEN args ELSE json(args) END AS blob) AS args,
+    attempt,
+    attempted_at,
+    cast(CASE WHEN typeof(attempted_by) = 'text' AND NOT json_valid(attempted_by) THEN attempted_by ELSE json(attempted_by) END AS blob) AS attempted_by,
+    created_at,
+    cast(CASE WHEN typeof(errors) = 'text' AND NOT json_valid(errors) THEN errors ELSE json(errors) END AS blob) AS errors,
+    finalized_at,
+    kind,
+    max_attempts,
+    cast(CASE WHEN typeof(metadata) = 'text' AND NOT json_valid(metadata) THEN metadata ELSE json(metadata) END AS blob) AS metadata,
+    priority,
+    queue,
+    state,
+    scheduled_at,
+    cast(CASE WHEN typeof(tags) = 'text' AND NOT json_valid(tags) THEN tags ELSE json(tags) END AS blob) AS tags,
+    unique_key,
+    unique_states;
 
 -- Selects only the columns needed to schedule jobs so that a job with a JSON
 -- column that isn't valid JSON doesn't fail scheduling. See JobGetAvailable.

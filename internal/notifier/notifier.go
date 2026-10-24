@@ -135,6 +135,12 @@ func (n *Notifier) RegisterListenerReadyFunc(listenerReadyFunc ListenerReadyFunc
 }
 
 func (n *Notifier) Start(ctx context.Context) error {
+	return n.StartWithConnectContext(ctx, ctx)
+}
+
+// StartWithConnectContext starts the notifier with a separate context for its
+// initial connection, allowing startup to be canceled independently of draining.
+func (n *Notifier) StartWithConnectContext(ctx, connectCtx context.Context) error {
 	ctx, shouldStart, started, stopped := n.StartInit(ctx)
 	if !shouldStart {
 		return nil
@@ -142,7 +148,12 @@ func (n *Notifier) Start(ctx context.Context) error {
 
 	// The loop below will connect/close on every iteration, but do one initial
 	// connect so the notifier fails fast in case of an obvious problem.
-	if err := n.listenerConnect(ctx, false); err != nil {
+	connectCtx, cancelConnect := context.WithCancel(connectCtx)
+	stopCancelConnect := context.AfterFunc(ctx, cancelConnect)
+	err := n.listenerConnect(connectCtx, false)
+	stopCancelConnect()
+	cancelConnect()
+	if err != nil {
 		stopped()
 		if errors.Is(err, context.Canceled) {
 			return nil

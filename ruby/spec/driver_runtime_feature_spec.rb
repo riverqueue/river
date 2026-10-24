@@ -137,7 +137,7 @@ RSpec.describe "River shared driver runtime edge cases", database: :sqlite do
     expect(postgres_driver.send(:runtime_state, River::JOB_STATE_AVAILABLE)).to end_with("::river_job_state")
     expect(postgres_driver.send(:runtime_time, Time.utc(2026, 1, 2))).to end_with("::timestamptz")
     expect(postgres_driver.send(:runtime_merge_metadata, {"ready" => true})).to include("metadata ||")
-    expect(postgres_driver.send(:runtime_cancel_attempted)).to eq("metadata ? 'cancel_attempted_at'")
+    expect(postgres_driver.send(:runtime_cancel_attempted)).to eq("(jsonb_typeof(metadata) = 'object' AND metadata ? 'cancel_attempted_at')")
     expect(postgres_driver.send(:runtime_update_value, :attempted_by, ["one"])).to include("ARRAY[", "::text[]")
     expect(postgres_driver.send(:runtime_update_value, :errors, [7])).to include("ARRAY[", "::jsonb[]")
     expect(postgres_driver.send(:runtime_queue_columns)).to eq("name, created_at, metadata, paused_at, updated_at")

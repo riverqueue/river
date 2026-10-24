@@ -546,6 +546,7 @@ macro_rules! scenarios {
             .unwrap();
             let retried = jobs.retry(cancelled).tx(&mut tx).await.unwrap();
             assert_eq!(retried.state, JobState::Available);
+            assert!(!retried.metadata.contains_key("cancel_attempted_at"));
             tx.commit().await.unwrap();
 
             assert_eq!(
@@ -554,6 +555,35 @@ macro_rules! scenarios {
             );
             assert!(matches!(jobs.get(deleted).await, Err(Error::NotFound(_))));
 
+            fixture.cleanup().await;
+        }
+
+        #[tokio::test(flavor = "multi_thread")]
+        async fn retry_clears_cancellation_without_reordering_an_available_job() {
+            let fixture = Fixture::new().await;
+            let metadata: riverqueue::JobMetadata =
+                r#"{"cancel_attempted_at":"2026-01-01T00:00:00Z","preserved":true}"#
+                    .parse()
+                    .unwrap();
+            let id = fixture
+                .client
+                .insert(args("already available"))
+                .opts(InsertOpts::default().with_metadata(metadata))
+                .await
+                .unwrap()
+                .id();
+            let jobs = fixture.client.jobs();
+            let before = jobs.get(id).await.unwrap();
+            assert_eq!(before.state, JobState::Available);
+
+            let retried = jobs.retry(id).await.unwrap();
+            assert!(!retried.metadata.contains_key("cancel_attempted_at"));
+            assert_eq!(retried.metadata.get::<bool>("preserved").unwrap(), Some(true));
+            assert_eq!(retried.scheduled_at, before.scheduled_at);
+            assert_eq!(retried.max_attempts, before.max_attempts);
+            assert!(
+                !jobs.get(id).await.unwrap().metadata.contains_key("cancel_attempted_at")
+            );
             fixture.cleanup().await;
         }
 

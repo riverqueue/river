@@ -215,7 +215,7 @@ export class RuntimeController {
    * still be cancelled while its queue drains.
    */
   readonly #cancellationPollAbort = new AbortController();
-  /** How often a runtime without notifications checks for cancellations. */
+  /** How often the runtime checks for durable cancellation requests. */
   readonly #cancellationPollIntervalMs: number;
   readonly #claimAbort = new AbortController();
   readonly #client: Client;
@@ -664,18 +664,15 @@ export class RuntimeController {
   }
 
   async #initialize(): Promise<void> {
-    // Like River for Go's client, learn whether the database delivers
-    // notifications before anything starts. Without them, running jobs
-    // learn of cancellations by polling until every producer has drained.
+    // Notifications deliver cancellations promptly. Keep a durable fallback
+    // until every producer drains, including during reconnects and shutdown.
     const listen = await this.#listens();
-    if (!listen) {
-      this.#trackTask(
-        this.#runner.pollCancellations(
-          this.#cancellationPollIntervalMs,
-          this.#cancellationPollAbort.signal
-        )
-      );
-    }
+    this.#trackTask(
+      this.#runner.pollCancellations(
+        this.#cancellationPollIntervalMs,
+        this.#cancellationPollAbort.signal
+      )
+    );
     // Like River for Go's notifier, notifications are listening before any
     // queue claims, and a failure to listen fails the start.
     await this.#notifications.start(listen);

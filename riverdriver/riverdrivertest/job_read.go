@@ -810,6 +810,24 @@ func exerciseJobRead[TTx any](ctx context.Context, t *testing.T, executorWithTx 
 			require.Equal(t, []int64{cancelRequestedJob.ID}, ids)
 			require.Equal(t, sqliteMalformedValue, sqliteJobColumnText(ctx, t, exec, invalidJob.ID, "metadata"))
 		})
+
+		t.Run("NonObjectMetadataIgnored", func(t *testing.T) {
+			t.Parallel()
+
+			exec, _ := setup(ctx, t)
+			ids := make([]int64, 0, 4)
+			for _, metadata := range []string{`["cancel_attempted_at"]`, `"cancel_attempted_at"`, `42`, `null`} {
+				job := testfactory.Job(ctx, t, exec, &testfactory.JobOpts{
+					Metadata: []byte(metadata),
+					State:    new(rivertype.JobStateRunning),
+				})
+				ids = append(ids, job.ID)
+			}
+
+			requested, err := exec.JobGetCancelRequested(ctx, &riverdriver.JobGetCancelRequestedParams{ID: ids})
+			require.NoError(t, err)
+			require.Empty(t, requested)
+		})
 	})
 
 	t.Run("JobGetStuck", func(t *testing.T) {

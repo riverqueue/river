@@ -422,6 +422,13 @@ RSpec.shared_examples "driver job state machine" do
     expect(driver.job_get_by_id(row.id).state).to eq("running")
   end
 
+  it "ignores cancellation names stored in non-object metadata" do
+    job = insert_job(1)
+    metadata = driver.send(:runtime_json, ["cancel_attempted_at"])
+    driver.send(:runtime_execute, "UPDATE river_job SET metadata = #{metadata} WHERE id = #{job.id}")
+    expect(driver.job_get_cancelled_ids([job.id])).to eq([])
+  end
+
   it "looks up cancellation markers for a batch, excluding missing and uncancelled jobs" do
     cancelled = insert_job(1)
     unmarked = insert_job(2)
@@ -610,6 +617,51 @@ RSpec.shared_examples "driver job state machine" do
       scheduled_at: be_within(0.001).of(now + 10), state: River::JOB_STATE_AVAILABLE
     )
     expect(driver.job_retry(-1)).to be_nil
+  end
+
+  it "increments exhausted attempts at the exact retry timestamp" do
+    job = insert_job(1, scheduled_at: now, max_attempts: 1)
+    driver.send(:runtime_execute, "UPDATE river_job SET attempt = max_attempts WHERE id = #{job.id}")
+    expect(driver.job_retry(job.id, now: now)).to have_attributes(max_attempts: 2, scheduled_at: job.scheduled_at)
+  end
+
+  it "clears cancellation metadata without reordering an already available retry" do
+    job = insert_job(1, scheduled_at: now - 60, max_attempts: 1,
+      metadata: {"cancel_attempted_at" => now.iso8601, "preserved" => true})
+    driver.send(:runtime_execute, "UPDATE river_job SET attempt = max_attempts WHERE id = #{job.id}")
+
+    retried = driver.job_retry(job.id, now: now)
+    expect(retried).to have_attributes(state: "available", attempt: 1, max_attempts: 1,
+      scheduled_at: job.scheduled_at, metadata: job.metadata.except("cancel_attempted_at"))
+    expect(driver.job_get_by_id(job.id).metadata).to eq(retried.metadata)
+  end
+
+  it "preserves malformed SQLite metadata and reports its decoding error", database: :sqlite do
+    skip "requires SQLite" if driver.send(:runtime_postgres?)
+
+    job = insert_job(1, scheduled_at: now + 60)
+    driver.send(:runtime_execute, "UPDATE river_job SET metadata = '[not json' WHERE id = #{job.id}")
+
+    expect { driver.job_retry(job.id, now: now) }.to raise_error(River::JobRowDecodeError, /metadata/)
+    row = driver.send(:runtime_query_rows, "SELECT metadata FROM river_job WHERE id = #{job.id}").first
+    expect(driver.send(:runtime_value, row, :metadata)).to eq("[not json")
+  end
+
+  [nil, 42, false, "cancel_attempted_at", ["cancel_attempted_at"]].each do |metadata|
+    it "preserves non-object metadata #{metadata.inspect} when retrying" do
+      job = insert_job(1, scheduled_at: now + 60)
+      encoded = driver.send(:runtime_json, JSON.generate(metadata))
+      driver.send(:runtime_execute, "UPDATE river_job SET metadata = #{encoded} WHERE id = #{job.id}")
+
+      if metadata.nil?
+        expect(driver.job_retry(job.id, now: now)).to have_attributes(state: "available")
+      else
+        expect { driver.job_retry(job.id, now: now) }.to raise_error(River::JobRowDecodeError)
+      end
+      column = driver.send(:runtime_postgres?) ? "metadata::text" : "json(metadata)"
+      row = driver.send(:runtime_query_rows, "SELECT #{column} AS metadata FROM river_job WHERE id = #{job.id}").first
+      expect(JSON.parse(driver.send(:runtime_value, row, :metadata))).to eq(metadata)
+    end
   end
 
   it "rejects manual retries after the last representable attempt without changing the job" do

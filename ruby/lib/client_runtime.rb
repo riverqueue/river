@@ -120,7 +120,8 @@ module River
       @mutex.synchronize do
         @stop_requested || (@producer_threads.all? { |name, thread| @removed_queues[name] || thread.alive? } &&
           (!@maintenance_thread || @maintenance_thread.alive?) &&
-          (!@notification_thread || @notifications_disabled || @notification_thread.alive?))
+          (!@notification_thread || @notifications_disabled || @notification_thread.alive?) &&
+          (!@cancellation_thread || @cancellation_thread.alive?))
       end
     end
 
@@ -197,6 +198,9 @@ module River
         @started = true
         @stop_requested = false
         @stopped = false
+        thread = Thread.new { cancellation_loop }
+        @cancellation_thread = thread
+        @threads << thread
       end
 
       begin
@@ -243,6 +247,7 @@ module River
         @stopped = true
         @threads.clear
         @producer_threads.clear
+        @cancellation_thread = nil
         @maintenance_thread = nil
         @notification_thread = nil
         @leader = false
@@ -271,6 +276,15 @@ module River
     end
 
     private def begin_work(id)
+      entry = @mutex.synchronize { @running.fetch(id) }
+      if entry[:check_before_work]
+        begin
+          check_remote_cancellations(entries: {id => entry})
+        rescue => error
+          @config.logger.error("River cancellation check failed: #{error.full_message}")
+        end
+      end
+
       interruption = @mutex.synchronize do
         entry = @running.fetch(id)
         if @stop_requested
@@ -286,12 +300,45 @@ module River
       raise interruption if interruption
     end
 
-    private def check_remote_cancellations(queue)
-      entries = @mutex.synchronize { @running.select { |_id, entry| entry[:queue] == queue && entry[:working] } }
+    private def cancellation_loop
+      loop do
+        begin
+          check_remote_cancellations
+        rescue => error
+          @config.logger.error("River cancellation check failed: #{error.full_message}")
+        end
+
+        finished = @mutex.synchronize do
+          if @stop_requested && @running.empty?
+            true
+          else
+            interval = @queue_configs.values.map { |config| config.resolved_fetch_poll_interval(@config) }.min || @config.fetch_poll_interval
+            # Continue polling while producers drain, independently of fetches
+            # and their cooldowns. Completions and queue changes wake us early.
+            @condition.wait(@mutex, interval) unless @running.any? { |_id, entry| entry[:check_cancellation] }
+            false
+          end
+        end
+        break if finished
+      end
+    end
+
+    private def check_remote_cancellations(entries: nil)
+      entries ||= @mutex.synchronize do
+        @running.select { |_id, entry| entry[:working] || entry[:check_cancellation] }.tap do |snapshot|
+          snapshot.each_value { |entry| entry[:check_cancellation] = false }
+        end
+      end
       return if entries.empty?
 
       @driver.job_get_cancelled_ids(entries.keys).each do |id|
-        entries.fetch(id)[:thread].raise(JobCancelError)
+        @mutex.synchronize do
+          entry = entries.fetch(id)
+          next unless @running[id].equal?(entry)
+
+          entry[:cancelled] = true
+          entry[:thread].raise(JobCancelError) if entry[:working]
+        end
       end
     end
 
@@ -524,7 +571,7 @@ module River
       end
 
       @mutex.synchronize do
-        @running[row.id] = {cancelled: @fetching_queues.fetch(row.queue).include?(row.id), queue: row.queue, thread: thread, working: false}
+        @running[row.id] = {check_before_work: @fetching_queues.fetch(row.queue).include?(row.id), queue: row.queue, thread: thread, working: false}
       end
       gate.push(true)
     end
@@ -698,7 +745,6 @@ module River
         draining = queue_stopping?(queue)
         break if draining && running_count(queue).zero?
 
-        check_remote_cancellations(queue)
         if draining
           wait_for_running_jobs(queue, poll_interval)
           next
@@ -779,8 +825,9 @@ module River
           @mutex.synchronize do
             entry = @running[message["job_id"]]
             if entry && entry[:queue] == queue
-              entry[:cancelled] = true
-              entry[:thread].raise(JobCancelError) if entry[:working]
+              entry[:check_before_work] = true unless entry[:working]
+              entry[:check_cancellation] = true
+              @condition.broadcast
             elsif (pending = @fetching_queues[queue])
               # A claim may have committed before its workers are registered.
               pending << message["job_id"]

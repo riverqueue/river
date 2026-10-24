@@ -633,7 +633,7 @@ describe("SqliteDriver compatibility with Go's riversqlite", () => {
       errors: null,
       errors_null: 1n,
       finalized_at: null,
-      metadata: cancelled,
+      metadata: { m: "x" },
       scheduled_at: "2026-01-02 06:06:07.123",
       state: "available",
     });

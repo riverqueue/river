@@ -949,25 +949,30 @@ pub(crate) async fn retry(
 ) -> Result<Option<JobRow>, BackendError> {
     let sql = format!(
         r#"
+        WITH retry_params AS (SELECT ? AS now)
         UPDATE river_job
         SET
             state = 'available',
             max_attempts = CASE
+                WHEN state = 'available' AND scheduled_at < (SELECT now FROM retry_params) THEN max_attempts
                 WHEN attempt = max_attempts THEN max_attempts + 1
                 ELSE max_attempts
             END,
-            finalized_at = NULL,
-            scheduled_at = ?
+            finalized_at = CASE WHEN state = 'available' AND scheduled_at < (SELECT now FROM retry_params) THEN finalized_at ELSE NULL END,
+            metadata = CASE WHEN typeof(metadata) = 'text' AND NOT json_valid(metadata)
+                THEN metadata ELSE jsonb_remove(metadata, '$.cancel_attempted_at') END,
+            scheduled_at = CASE WHEN state = 'available' AND scheduled_at < (SELECT now FROM retry_params) THEN scheduled_at ELSE (SELECT now FROM retry_params) END
         WHERE id = ?
           AND state != 'running'
-          AND (state != 'available' OR scheduled_at > ?)
+          AND ((CASE WHEN typeof(metadata) = 'text' AND NOT json_valid(metadata) THEN NULL
+                    ELSE json_type(metadata, '$.cancel_attempted_at') END) IS NOT NULL
+               OR NOT (state = 'available' AND scheduled_at < (SELECT now FROM retry_params)))
         RETURNING {JOB_COLUMNS}
         "#
     );
     sqlx::query_as::<_, JobRecord>(AssertSqlSafe(sql))
         .bind(sqlite_time(now))
         .bind(id)
-        .bind(sqlite_time(now))
         .fetch_optional(&mut *connection)
         .await?
         .map(JobRecord::into_job)
@@ -2535,6 +2540,46 @@ mod tests {
         }
         let row = get(&mut connection, inserted.id).await.unwrap().unwrap();
         assert_eq!(row.attempted_by, ["three", "four", "five"]);
+    }
+
+    #[tokio::test]
+    async fn retry_at_exact_schedule_increments_max_attempts() {
+        let pool = setup().await;
+        let mut connection = pool.acquire().await.unwrap();
+        let now = Utc.with_ymd_and_hms(2026, 1, 2, 3, 4, 5).unwrap();
+        let job = insert_test_job(&mut connection, JobState::Available, now).await;
+        sqlx::query("UPDATE river_job SET attempt = max_attempts WHERE id = ?")
+            .bind(job.id)
+            .execute(&mut *connection)
+            .await
+            .unwrap();
+        let retried = retry(&mut connection, job.id, now).await.unwrap().unwrap();
+        assert_eq!(retried.max_attempts, job.max_attempts + 1);
+        assert_eq!(retried.scheduled_at, job.scheduled_at);
+    }
+
+    #[tokio::test]
+    async fn retry_preserves_malformed_metadata_for_row_validation() {
+        let pool = setup().await;
+        let mut connection = pool.acquire().await.unwrap();
+        let now = Utc.with_ymd_and_hms(2026, 1, 2, 3, 4, 5).unwrap();
+        let job = insert_test_job(&mut connection, JobState::Retryable, now).await;
+        sqlx::query("UPDATE river_job SET metadata = '[not json' WHERE id = ?")
+            .bind(job.id)
+            .execute(&mut *connection)
+            .await
+            .unwrap();
+
+        let error = retry(&mut connection, job.id, now).await.unwrap_err();
+        assert!(
+            matches!(error, BackendError::InvalidRow(ref message) if message.contains("metadata"))
+        );
+        let metadata: String = sqlx::query_scalar("SELECT metadata FROM river_job WHERE id = ?")
+            .bind(job.id)
+            .fetch_one(&mut *connection)
+            .await
+            .unwrap();
+        assert_eq!(metadata, "[not json");
     }
 
     /// Inserts a job for the undecodable row tests.

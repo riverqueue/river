@@ -45,12 +45,12 @@ const (
 
 // Test-only properties.
 type producerTestSignals struct {
-	CancelHandledDuringFetch   testsignal.TestSignal[int64]                // notifies when a cancellation is handled during a fetch
 	DeletedExpiredQueueRecords testsignal.TestSignal[struct{}]             // notifies when the producer deletes expired queue records
 	ExecutorShutdownStarted    testsignal.TestSignal[struct{}]             // notifies when the producer starts draining active jobs
 	JobFetchTriggered          testsignal.TestSignal[struct{}]             // notifies when the producer's fetch limiter is triggered via triggerJobFetch
 	MetadataChanged            testsignal.TestSignal[struct{}]             // notifies when the producer detects a metadata change
 	Paused                     testsignal.TestSignal[struct{}]             // notifies when the producer is paused
+	PolledJobCancellations     testsignal.TestSignal[struct{}]             // notifies when a cancellation check completed
 	PolledQueueConfig          testsignal.TestSignal[struct{}]             // notifies when the producer polls for queue settings
 	QueueControlEventTriggered testsignal.TestSignal[*controlEventPayload] // notifies when a queue control event is triggered via triggerQueueControlEvent
 	ReportedProducerStatus     testsignal.TestSignal[struct{}]             // notifies when the producer reports its own status
@@ -198,8 +198,8 @@ type producer struct {
 	baseservice.BaseService
 	startstop.BaseStartStop
 
-	// Jobs which are currently being worked. The polling goroutine snapshots
-	// their IDs; only the main goroutine accesses the executors themselves.
+	// Jobs currently being worked. Cancellation checks snapshot the executors
+	// so delayed results cannot affect a newer attempt of the same job.
 	activeJobsMu sync.Mutex
 	activeJobs   map[int64]*jobexecutor.JobExecutor
 
@@ -215,10 +215,10 @@ type producer struct {
 	pilot           riverpilot.Pilot
 	workers         *Workers
 
-	// Receives job IDs from notifier, polling, and local cancellation calls.
-	// Only the main goroutine reads it.
-	cancelCh    chan int64
-	cancelState atomic.Pointer[producerCancelState]
+	// Coalesce cancellation hints. The generation catches hints received while
+	// a fetch has claimed jobs but hasn't registered their executors yet.
+	cancelGeneration atomic.Uint64
+	cancelPollCh     chan struct{}
 
 	// Set to true when the producer thinks it should trigger another fetch as
 	// soon as slots are available. This is written and read by the main
@@ -242,10 +242,8 @@ type producer struct {
 	// goroutine, only read from main goroutine.
 	queueControlCh chan *controlEventPayload
 
-	// Coalesces reconnect notifications for reconciliation on the main goroutine.
-	reconnectCh chan struct{}
-
 	retryPolicy ClientRetryPolicy
+	runState    atomic.Pointer[producerRunState]
 	testSignals producerTestSignals
 }
 
@@ -264,7 +262,7 @@ func newProducer(archetype *baseservice.Archetype, exec riverdriver.Executor, pi
 
 	producer := baseservice.Init(archetype, &producer{
 		activeJobs:     make(map[int64]*jobexecutor.JobExecutor),
-		cancelCh:       make(chan int64, 1000),
+		cancelPollCh:   make(chan struct{}, 1),
 		completer:      config.Completer,
 		config:         config.mustValidate(),
 		exec:           exec,
@@ -273,7 +271,6 @@ func newProducer(archetype *baseservice.Archetype, exec riverdriver.Executor, pi
 		jobTimeout:     config.JobTimeout,
 		pilot:          pilot,
 		queueControlCh: make(chan *controlEventPayload, 100),
-		reconnectCh:    make(chan struct{}, 1),
 		retryPolicy:    config.RetryPolicy,
 		workers:        config.Workers,
 	})
@@ -311,6 +308,17 @@ func (p *producer) StartWorkContext(fetchCtx, workCtx context.Context) error {
 	fetchCtx, shouldStart, started, stopped := p.StartInit(fetchCtx)
 	if !shouldStart {
 		return nil
+	}
+
+	// Queue controls delivered during shutdown must not override settings
+	// loaded when the producer restarts.
+drainControls:
+	for {
+		select {
+		case <-p.queueControlCh:
+		default:
+			break drainControls
+		}
 	}
 
 	// Workers can be registered after the client is constructed, so capture
@@ -407,7 +415,7 @@ func (p *producer) StartWorkContext(fetchCtx, workCtx context.Context) error {
 			return err
 		}
 
-		controlSub, err = p.config.Notifier.Listen(fetchCtx, notifier.NotificationTopicControl, p.handleControlNotification(workCtx))
+		controlSub, err = p.config.Notifier.Listen(fetchCtx, notifier.NotificationTopicControl, p.handleControlNotification(fetchCtx, workCtx))
 		if err != nil {
 			stopped()
 			if strings.HasSuffix(err.Error(), "conn closed") || errors.Is(err, context.Canceled) {
@@ -417,21 +425,16 @@ func (p *producer) StartWorkContext(fetchCtx, workCtx context.Context) error {
 		}
 
 		// Recover cancellations whose NOTIFY was lost while disconnected.
-		reconnectSub = p.config.Notifier.RegisterListenerReadyFunc(func() {
-			select {
-			case p.reconnectCh <- struct{}{}:
-			default:
-			}
-		})
+		reconnectSub = p.config.Notifier.RegisterListenerReadyFunc(p.TriggerCancelCheck)
 	}
 
 	subroutineCtx, cancelSubroutines := context.WithCancelCause(context.WithoutCancel(fetchCtx))
-	p.cancelState.Store(&producerCancelState{done: subroutineCtx.Done()})
+	p.runState.Store(&producerRunState{done: subroutineCtx.Done(), fetchDone: fetchCtx.Done()})
 
 	go func() {
 		started()
 		defer stopped() // this defer should come first so it's last out
-		defer p.cancelState.Store(nil)
+		defer p.runState.Store(nil)
 
 		p.Logger.DebugContext(fetchCtx, p.Name+": Run loop started", slog.String("queue", p.config.Queue), slog.Bool("paused", p.paused))
 		defer func() {
@@ -469,14 +472,14 @@ func (p *producer) StartWorkContext(fetchCtx, workCtx context.Context) error {
 
 			subroutineWG.Add(1)
 			go p.pollForSettingChanges(subroutineCtx, &subroutineWG, initiallyPaused, initialMetadata)
-
-			subroutineWG.Add(1)
-			go p.pollForJobCancellations(subroutineCtx, &subroutineWG)
 		}
+
+		subroutineWG.Add(1)
+		go p.pollForJobCancellations(subroutineCtx, &subroutineWG)
 
 		p.fetchAndRunLoop(fetchCtx, workCtx)
 		p.Logger.DebugContext(workCtx, p.Name+": Entering shutdown loop", slog.String("queue", p.config.Queue), slog.Int64("id", p.id.Load()))
-		p.executorShutdownLoop(workCtx)
+		p.executorShutdownLoop()
 
 		p.Logger.DebugContext(workCtx, p.Name+": Shutdown loop exited, awaiting subroutines", slog.String("queue", p.config.Queue), slog.Int64("id", p.id.Load()))
 		cancelSubroutines(fmt.Errorf("producer stopped: %w", startstop.ErrStop))
@@ -487,6 +490,15 @@ func (p *producer) StartWorkContext(fetchCtx, workCtx context.Context) error {
 	}()
 
 	return nil
+}
+
+// TriggerCancelCheck wakes the cancellation poller without blocking notification delivery.
+func (p *producer) TriggerCancelCheck() {
+	p.cancelGeneration.Add(1)
+	select {
+	case p.cancelPollCh <- struct{}{}:
+	default:
+	}
 }
 
 // TriggerJobFetch manually triggers the producer to perform a job fetch
@@ -506,9 +518,25 @@ func (p *producer) TriggerJobFetch() {
 // listen/notify. This is used by clients using drivers that don't support
 // listeners to wake a producer immediately after a queue control event was
 // known to be performed so the producer doesn't have to wait on polling.
-func (p *producer) TriggerQueueControlEvent(controlEvent *controlEventPayload) {
-	p.queueControlCh <- controlEvent
-	p.testSignals.QueueControlEventTriggered.Signal(controlEvent)
+func (p *producer) TriggerQueueControlEvent(ctx context.Context, controlEvent *controlEventPayload) {
+	state := p.runState.Load()
+	if state == nil || controlEvent == nil {
+		return
+	}
+
+	// Queue controls are only consumed while fetching. Unlike cancellations,
+	// they must stop being delivered as soon as the producer starts draining.
+	select {
+	case <-state.fetchDone:
+		return
+	default:
+	}
+	select {
+	case p.queueControlCh <- controlEvent:
+		p.testSignals.QueueControlEventTriggered.Signal(controlEvent)
+	case <-ctx.Done():
+	case <-state.fetchDone:
+	}
 }
 
 type controlAction string
@@ -531,7 +559,7 @@ type insertPayload struct {
 	Queue string `json:"queue"`
 }
 
-func (p *producer) handleControlNotification(workCtx context.Context) func(notifier.NotificationTopic, string) {
+func (p *producer) handleControlNotification(fetchCtx, workCtx context.Context) func(notifier.NotificationTopic, string) {
 	return func(topic notifier.NotificationTopic, payload string) {
 		var decoded controlEventPayload
 		if err := json.Unmarshal([]byte(payload), &decoded); err != nil {
@@ -541,12 +569,15 @@ func (p *producer) handleControlNotification(workCtx context.Context) func(notif
 
 		switch decoded.Action {
 		case controlActionMetadataChanged, controlActionPause, controlActionResume:
+			if fetchCtx.Err() != nil {
+				return
+			}
 			if decoded.Queue != rivercommon.AllQueuesString && decoded.Queue != p.config.Queue {
 				p.Logger.DebugContext(workCtx, p.Name+": Queue control notification for other queue", slog.String("action", string(decoded.Action)))
 				return
 			}
 			select {
-			case <-workCtx.Done():
+			case <-fetchCtx.Done():
 			case p.queueControlCh <- &decoded:
 			default:
 				p.Logger.WarnContext(workCtx, p.Name+": Queue control notification dropped due to full buffer", slog.String("action", string(decoded.Action)))
@@ -560,12 +591,7 @@ func (p *producer) handleControlNotification(workCtx context.Context) func(notif
 				)
 				return
 			}
-			select {
-			case <-workCtx.Done():
-			case p.cancelCh <- decoded.JobID:
-			default:
-				p.Logger.WarnContext(workCtx, p.Name+": Job cancel notification dropped due to full buffer", slog.Int64("job_id", decoded.JobID))
-			}
+			p.TriggerCancelCheck()
 		default:
 			p.Logger.DebugContext(workCtx, p.Name+": Received job control notification with unknown action",
 				slog.String("action", string(decoded.Action)),
@@ -582,63 +608,6 @@ func (p *producer) fetchAndRunLoop(fetchCtx, workCtx context.Context) {
 	p.fetchLimiter.Call()
 
 	fetchResultCh := make(chan producerFetchResult)
-	reconcileCtx, cancelReconcile := context.WithCancel(fetchCtx)
-	var reconcileWG sync.WaitGroup
-	defer func() {
-		cancelReconcile()
-		reconcileWG.Wait()
-	}()
-
-	reconcileResultCh := make(chan producerReconcileResult)
-	var (
-		reconcileAttempt int
-		reconcilePending bool
-		reconciling      bool
-		retryTimer       *time.Timer
-	)
-	defer func() {
-		if retryTimer != nil {
-			retryTimer.Stop()
-		}
-	}()
-	startReconcile := func() {
-		if reconciling {
-			reconcilePending = true
-			return
-		}
-		if retryTimer != nil {
-			retryTimer.Stop()
-			retryTimer = nil
-		}
-		p.activeJobsMu.Lock()
-		numActiveJobs := len(p.activeJobs)
-		p.activeJobsMu.Unlock()
-		if numActiveJobs == 0 {
-			reconcileAttempt = 0
-			return
-		}
-		reconciling = true
-		reconcileWG.Add(1)
-		p.handleNotifierReconnect(reconcileCtx, reconcileResultCh, &reconcileWG)
-	}
-	handleReconcileResult := func(result producerReconcileResult) {
-		reconciling = false
-		if result.err != nil {
-			p.Logger.ErrorContext(workCtx, p.Name+": Error reconciling cancellations; will retry", slog.String("err", result.err.Error()))
-			if retryTimer != nil {
-				retryTimer.Stop()
-			}
-			retryTimer = p.scheduleReconnectRetry(reconcileCtx, reconcileAttempt)
-			reconcileAttempt++
-		} else {
-			reconcileAttempt = 0
-			p.applyReconcileResult(workCtx, result)
-		}
-		if reconcilePending {
-			reconcilePending = false
-			startReconcile()
-		}
-	}
 
 	for {
 		select {
@@ -647,10 +616,7 @@ func (p *producer) fetchAndRunLoop(fetchCtx, workCtx context.Context) {
 		case msg := <-p.queueControlCh:
 			switch msg.Action {
 			case controlActionCancel:
-				// This path is only expected to take effect in poll-only mode, and
-				// only works for the case of a single process. Multi-process setups
-				// will have to wait for the next poll event for a cancel to take effect.
-				p.maybeCancelJob(workCtx, msg.JobID)
+				p.TriggerCancelCheck()
 			case controlActionMetadataChanged:
 				p.Logger.DebugContext(workCtx, p.Name+": Queue metadata changed", slog.String("queue", p.config.Queue), slog.String("queue_in_message", msg.Queue))
 				p.testSignals.MetadataChanged.Signal(struct{}{})
@@ -684,14 +650,8 @@ func (p *producer) fetchAndRunLoop(fetchCtx, workCtx context.Context) {
 			default:
 				p.Logger.DebugContext(workCtx, p.Name+": Unknown queue control action", "action", msg.Action)
 			}
-		case jobID := <-p.cancelCh:
-			p.maybeCancelJob(workCtx, jobID)
-		case <-p.reconnectCh:
-			startReconcile()
-		case result := <-reconcileResultCh:
-			handleReconcileResult(result)
 		case <-p.fetchLimiter.C():
-			p.innerFetchLoop(workCtx, fetchResultCh, reconcileResultCh, handleReconcileResult, startReconcile)
+			p.innerFetchLoop(workCtx, fetchResultCh)
 			// Ensure we can't start another fetch when fetchCtx is done, even if
 			// the fetchLimiter is also ready to fire:
 			select {
@@ -745,7 +705,7 @@ func (p *producer) jitteredFetchPollInterval() time.Duration {
 	return randutil.DurationBetween(p.config.FetchPollInterval, p.config.FetchPollInterval+jitterRange)
 }
 
-func (p *producer) innerFetchLoop(workCtx context.Context, fetchResultCh chan producerFetchResult, reconcileResultCh <-chan producerReconcileResult, handleReconcileResult func(producerReconcileResult), startReconcile func()) {
+func (p *producer) innerFetchLoop(workCtx context.Context, fetchResultCh chan producerFetchResult) {
 	var limit int
 	if p.paused {
 		limit = 0
@@ -760,9 +720,7 @@ func (p *producer) innerFetchLoop(workCtx context.Context, fetchResultCh chan pr
 		}
 	}
 
-	// A fetched job may not have an executor yet. Keep unmatched cancellations
-	// only for this fetch so unrelated IDs cannot affect later fetches.
-	pendingCancelJobs := make(map[int64]struct{})
+	cancelGeneration := p.cancelGeneration.Load()
 	go p.dispatchWork(workCtx, limit, fetchResultCh)
 
 	for {
@@ -771,7 +729,10 @@ func (p *producer) innerFetchLoop(workCtx context.Context, fetchResultCh chan pr
 			if result.err != nil {
 				p.Logger.ErrorContext(workCtx, p.Name+": Error fetching jobs", slog.String("err", result.err.Error()), slog.String("queue", p.config.Queue))
 			} else if numLocked := len(result.jobs); numLocked > 0 {
-				p.startNewExecutors(workCtx, result.jobs, result.decodeErrors, pendingCancelJobs)
+				p.startNewExecutors(workCtx, result.jobs, result.decodeErrors)
+				if p.cancelGeneration.Load() != cancelGeneration {
+					p.TriggerCancelCheck()
+				}
 
 				if numLocked == limit {
 					// Fetch returned the maximum number of jobs that were requested,
@@ -781,26 +742,16 @@ func (p *producer) innerFetchLoop(workCtx context.Context, fetchResultCh chan pr
 				}
 			}
 			return
-		case <-p.reconnectCh:
-			startReconcile()
-		case result := <-reconcileResultCh:
-			handleReconcileResult(result)
 		case result := <-p.jobResultCh:
 			p.removeActiveJob(result)
-		case jobID := <-p.cancelCh:
-			if !p.maybeCancelJob(workCtx, jobID) {
-				pendingCancelJobs[jobID] = struct{}{}
-			}
-			p.testSignals.CancelHandledDuringFetch.Signal(jobID)
 		}
 	}
 }
 
-func (p *producer) executorShutdownLoop(ctx context.Context) {
+func (p *producer) executorShutdownLoop() {
 	p.testSignals.ExecutorShutdownStarted.Signal(struct{}{})
 
-	// No more jobs will be fetched or executed. However, we must wait for all
-	// in-progress jobs to complete.
+	// Cancellation polling stays live until every execution has finished.
 	for {
 		p.activeJobsMu.Lock()
 		numActiveJobs := len(p.activeJobs)
@@ -808,13 +759,7 @@ func (p *producer) executorShutdownLoop(ctx context.Context) {
 		if numActiveJobs == 0 {
 			return
 		}
-
-		select {
-		case jobID := <-p.cancelCh:
-			p.maybeCancelJob(ctx, jobID)
-		case result := <-p.jobResultCh:
-			p.removeActiveJob(result)
-		}
+		p.removeActiveJob(<-p.jobResultCh)
 	}
 }
 
@@ -875,30 +820,6 @@ func (p *producer) addActiveJob(id int64, executor *jobexecutor.JobExecutor) {
 	p.activeJobsMu.Unlock()
 }
 
-// applyReconcileResult runs on the producer goroutine and ignores replaced executions.
-func (p *producer) applyReconcileResult(ctx context.Context, result producerReconcileResult) {
-	for _, job := range result.jobs {
-		p.activeJobsMu.Lock()
-		executor := p.activeJobs[job.ID]
-		p.activeJobsMu.Unlock()
-		if executor == nil || executor != result.executors[job.ID] || executor.JobRow.Attempt != job.Attempt {
-			continue
-		}
-
-		var metadata struct {
-			CancelAttemptedAt time.Time `json:"cancel_attempted_at"`
-		}
-		if err := json.Unmarshal(job.Metadata, &metadata); err != nil {
-			p.Logger.ErrorContext(ctx, p.Name+": Error unmarshaling cancellation metadata",
-				slog.Int64("job_id", job.ID), slog.String("err", err.Error()))
-			continue
-		}
-		if !metadata.CancelAttemptedAt.IsZero() {
-			p.maybeCancelJob(ctx, job.ID)
-		}
-	}
-}
-
 func (p *producer) removeActiveJob(job *rivertype.JobRow) {
 	p.activeJobsMu.Lock()
 	executor := p.activeJobs[job.ID]
@@ -938,59 +859,6 @@ func (p *producer) handleWorkerStuck(ctx context.Context, executor *jobexecutor.
 func (p *producer) handleWorkerUnstuck() {
 	p.numJobsStuck.Add(-1)
 	p.config.JobStuckCount.Add(-1)
-}
-
-func (p *producer) maybeCancelJob(ctx context.Context, id int64) bool {
-	p.activeJobsMu.Lock()
-	executor, ok := p.activeJobs[id]
-	p.activeJobsMu.Unlock()
-	if !ok {
-		return false
-	}
-	executor.Cancel(ctx)
-	return true
-}
-
-// handleNotifierReconnect snapshots active executions before querying asynchronously.
-func (p *producer) handleNotifierReconnect(ctx context.Context, resultCh chan<- producerReconcileResult, wg *sync.WaitGroup) {
-	p.activeJobsMu.Lock()
-	executors := make(map[int64]*jobexecutor.JobExecutor, len(p.activeJobs))
-	ids := make([]int64, 0, len(p.activeJobs))
-	for id, executor := range p.activeJobs {
-		executors[id] = executor
-		ids = append(ids, id)
-	}
-
-	p.activeJobsMu.Unlock()
-
-	go func() {
-		defer wg.Done()
-
-		jobs, err := timeoututil.WithTimeoutV(ctx, 10*time.Second, p.Name+".handleNotifierReconnect", func(ctx context.Context) ([]*rivertype.JobRow, error) {
-			return p.exec.JobGetByIDMany(ctx, &riverdriver.JobGetByIDManyParams{
-				ID:     ids,
-				Schema: p.config.Schema,
-			})
-		})
-		select {
-		case <-ctx.Done():
-		case resultCh <- producerReconcileResult{err: err, executors: executors, jobs: jobs}:
-		}
-	}()
-}
-
-// scheduleReconnectRetry retries a failed lookup without blocking the producer.
-func (p *producer) scheduleReconnectRetry(ctx context.Context, attempt int) *time.Timer {
-	sleepDuration := serviceutil.ExponentialBackoff(attempt, serviceutil.MaxAttemptsBeforeResetDefault)
-	return time.AfterFunc(sleepDuration, func() {
-		if ctx.Err() != nil {
-			return
-		}
-		select {
-		case p.reconnectCh <- struct{}{}:
-		default:
-		}
-	})
 }
 
 func (p *producer) metricEmitHooksFromLookup() []rivertype.HookMetricEmit {
@@ -1120,7 +988,7 @@ func (p *producer) heartbeatLogLoop(ctx context.Context, wg *sync.WaitGroup) {
 // couldn't be decoded isn't worked, but it still gets an executor that fails
 // its attempt with the decode error, so that it's retried or discarded
 // through the normal error handling path instead of being left running.
-func (p *producer) startNewExecutors(workCtx context.Context, jobs []*rivertype.JobRow, decodeErrors map[int64]error, pendingCancelJobs map[int64]struct{}) {
+func (p *producer) startNewExecutors(workCtx context.Context, jobs []*rivertype.JobRow, decodeErrors map[int64]error) {
 	defaultClientRetryPolicy := retrypolicy.NewDefault(p.Time)
 
 	for _, job := range jobs {
@@ -1161,10 +1029,6 @@ func (p *producer) startNewExecutors(workCtx context.Context, jobs []*rivertype.
 			WorkUnit:               workUnit,
 		})
 		p.addActiveJob(job.ID, executor)
-		if _, ok := pendingCancelJobs[job.ID]; ok {
-			// Cancel before execution so the worker starts with a cancelled context.
-			executor.Cancel(workCtx)
-		}
 
 		go executor.Execute(jobCtx)
 	}
@@ -1194,20 +1058,23 @@ func (p *producer) pollForJobCancellations(ctx context.Context, wg *sync.WaitGro
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			if err := p.pollForJobCancellationsOnce(ctx); err != nil {
-				if !errors.Is(context.Cause(ctx), startstop.ErrStop) {
-					p.Logger.ErrorContext(ctx, p.Name+": Error fetching job cancellation requests", slog.String("err", err.Error()))
-				}
-				continue
-			}
+		case <-p.cancelPollCh:
 		}
+		if err := p.pollForJobCancellationsOnce(ctx); err != nil {
+			if !errors.Is(context.Cause(ctx), startstop.ErrStop) {
+				p.Logger.ErrorContext(ctx, p.Name+": Error fetching job cancellation requests", slog.String("err", err.Error()))
+			}
+			continue
+		}
+		p.testSignals.PolledJobCancellations.Signal(struct{}{})
 	}
 }
 
 func (p *producer) pollForJobCancellationsOnce(ctx context.Context) error {
 	p.activeJobsMu.Lock()
-	jobIDs := slices.Collect(maps.Keys(p.activeJobs))
+	executors := maps.Clone(p.activeJobs)
 	p.activeJobsMu.Unlock()
+	jobIDs := slices.Collect(maps.Keys(executors))
 
 	// Bound query size (including SQLite's parameter count) and skip database
 	// access entirely when there are no active jobs.
@@ -1223,10 +1090,10 @@ func (p *producer) pollForJobCancellationsOnce(ctx context.Context) error {
 		}
 
 		for _, id := range cancelIDs {
-			select {
-			case <-ctx.Done():
-				return ctx.Err()
-			case p.cancelCh <- id:
+			// Signal the snapshotted execution: a retry may already be running
+			// with the same ID by the time the query returns.
+			if executor := executors[id]; executor != nil {
+				executor.Cancel(ctx)
 			}
 		}
 	}
@@ -1387,20 +1254,15 @@ func (p *producer) reportQueueStatusOnce(ctx context.Context) {
 	p.testSignals.ReportedQueueStatus.Signal(struct{}{})
 }
 
-type producerCancelState struct {
-	done <-chan struct{}
-}
-
 type producerFetchResult struct {
 	decodeErrors map[int64]error
 	err          error
 	jobs         []*rivertype.JobRow
 }
 
-type producerReconcileResult struct {
-	err       error
-	executors map[int64]*jobexecutor.JobExecutor
-	jobs      []*rivertype.JobRow
+type producerRunState struct {
+	done      <-chan struct{}
+	fetchDone <-chan struct{}
 }
 
 type errorHandlerAdapter struct {
