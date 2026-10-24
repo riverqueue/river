@@ -69,6 +69,7 @@ class RetryTest {
 
   @ParameterizedTest
   @ValueSource(strings = {"local", "peer", "transaction"})
+  @SuppressWarnings("try") // Resources intentionally scope background activity.
   void retryWakesWorkersAfterCommit(String mode) throws Exception {
     var database = databases.open(directory.resolve("river.db"));
     var warmed = new CompletableFuture<Void>();

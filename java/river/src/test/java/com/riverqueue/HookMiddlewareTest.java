@@ -176,6 +176,7 @@ class HookMiddlewareTest {
   }
 
   @Test
+  @SuppressWarnings("try") // Resources intentionally scope background activity.
   void workBeginFailureSkipsHandlerAndEndHooks() throws Exception {
     var trace = new ArrayList<String>();
     var river =
@@ -222,6 +223,7 @@ class HookMiddlewareTest {
     "failure,replace",
     "success,throw"
   })
+  @SuppressWarnings("try") // Resources intentionally scope background activity.
   void workEndHooksChainOutcomesInsideMiddleware(String outcome, String action) throws Exception {
     var trace = new ArrayList<String>();
     var failure = new IOException("handler failed");

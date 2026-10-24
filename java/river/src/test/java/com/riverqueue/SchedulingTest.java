@@ -31,6 +31,7 @@ class SchedulingTest {
   @TempDir Path directory;
 
   @Test
+  @SuppressWarnings("try") // Resources intentionally scope background activity.
   void anonymousPeriodicJobsOmitTheIdMetadata() throws Exception {
     var client = new Client(databases.open(directory.resolve("river.db")));
     var worked = new CompletableFuture<Job<String>>();
@@ -228,6 +229,7 @@ class SchedulingTest {
 
   @ParameterizedTest
   @ValueSource(strings = {"initial schedule", "following schedule", "insertion"})
+  @SuppressWarnings("try") // Resources intentionally scope background activity.
   void failedPeriodicJobDoesNotBlockMaintenanceOrOtherJobs(String failurePoint) throws Exception {
     var errors = new LinkedBlockingQueue<Throwable>();
     var worked = new LinkedBlockingQueue<String>();
@@ -285,6 +287,7 @@ class SchedulingTest {
   }
 
   @Test
+  @SuppressWarnings("try") // Resources intentionally scope background activity.
   void failedScheduleDoesNotInsertTheOccurrenceTwice() throws Exception {
     var calls = new AtomicInteger();
     var maintained = new CompletableFuture<Void>();
@@ -330,6 +333,7 @@ class SchedulingTest {
   }
 
   @Test
+  @SuppressWarnings("try") // Resources intentionally scope background activity.
   void periodicSchedulesKeepTheirPlannedCadence() throws Exception {
     var inserted = new AtomicReference<Job<JsonNode>>();
     var client =
@@ -377,6 +381,7 @@ class SchedulingTest {
 
   @ParameterizedTest
   @ValueSource(booleans = {false, true})
+  @SuppressWarnings("try") // Resources intentionally scope background activity.
   void periodicSchedulesUseTheSystemTimeZone(boolean runOnStart) throws Exception {
     var original = TimeZone.getDefault();
     var zone = ZoneId.of("Asia/Kolkata");

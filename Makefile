@@ -2,6 +2,7 @@
 
 SQLC ?= sqlc
 MVN ?= mvn
+java_mvn = ./java/bin/check-maven-warnings.sh $(MVN) --batch-mode --no-transfer-progress -Dstyle.color=never
 
 .PHONY: check/modzip
 check/modzip: ## Check that no Go module zip includes fixtures, testdata, or another language's port
@@ -117,12 +118,12 @@ lint/rust: ## Run Rust formatting and clippy checks, including single-backend bu
 # Java targets stay separate so Go-only contributors do not need a JDK or Maven.
 .PHONY: build/java
 build/java: ## Build the Java library, CLI, and development adapter (JDK 21+)
-	$(MVN) --batch-mode --no-transfer-progress -f java/pom.xml package -DskipTests
+	$(java_mvn) -f java/pom.xml package -DskipTests
 
 .PHONY: lint/java
 lint/java: ## Compile Java, check formatting, and lint Go maintenance tools
 lint/java: lint/java/tools
-	$(MVN) --batch-mode --no-transfer-progress -f java/pom.xml verify -DskipTests
+	$(java_mvn) -f java/pom.xml verify -DskipTests
 
 # Java's module boundary excludes it from Go package discovery. Pass the tool
 # files explicitly so they use this workspace's Go version and test dependencies.
@@ -172,27 +173,28 @@ RUST_POSTGRES_TESTS_ENV = RUSTFLAGS="$$RUSTFLAGS --cfg river_postgres_tests" \
 test/java: ## Run Java tests, executable CLI tests, and formatting checks
 test/java: generate/fixtures verify/java-migrations
 test/java: test/java/tools
-	$(MVN) --batch-mode --no-transfer-progress -f java/pom.xml verify
+	$(java_mvn) -f java/pom.xml verify
 
 # Fixture comparisons use temporary SQLite databases, with no Postgres or legacy adapter.
 .PHONY: test/java/conformance
 test/java/conformance: ## Run Java tests that check Go-generated conformance fixtures
 test/java/conformance: generate/fixtures
-	$(MVN) --batch-mode --no-transfer-progress -f java/pom.xml -pl river test -Dgroups=conformance -Driver.test.database=sqlite
+	$(java_mvn) -f java/pom.xml -pl river test -Dgroups=conformance -Driver.test.database=sqlite
 
 .PHONY: test/java/postgres
 test/java/postgres: ## Run Java tests with Postgres client and worker coverage (requires RIVER_TEST_DATABASE_URL)
 test/java/postgres: generate/fixtures verify/java-migrations
 	@test -n "$$RIVER_TEST_DATABASE_URL" || { echo "RIVER_TEST_DATABASE_URL is required" >&2; exit 1; }
-	$(MVN) --batch-mode --no-transfer-progress -f java/pom.xml verify -Driver.test.database=postgres
+	$(java_mvn) -f java/pom.xml verify -Driver.test.database=postgres
 
 .PHONY: test/java/sqlite
 test/java/sqlite: ## Run Java unit, SQLite, and executable CLI tests without Postgres
 test/java/sqlite: generate/fixtures verify/java-migrations
-	$(MVN) --batch-mode --no-transfer-progress -f java/pom.xml verify -Driver.test.database=sqlite -DexcludedGroups=postgres
+	$(java_mvn) -f java/pom.xml verify -Driver.test.database=sqlite -DexcludedGroups=postgres
 
 .PHONY: test/java/tools
-test/java/tools: ## Test Java's Go maintenance tools
+test/java/tools: ## Test Java maintenance tools and Maven warning enforcement
+	bash java/bin/check-maven-warnings_test.sh
 	go test ./java/bin/check-packages/*.go
 	go test ./java/bin/sync-migrations/*.go
 

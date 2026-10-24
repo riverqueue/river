@@ -20,7 +20,15 @@
   <build><plugins>
     <!-- Shade replaces the thin adapter jar; always recreate it before adding dependencies. -->
     <plugin><groupId>org.apache.maven.plugins</groupId><artifactId>maven-jar-plugin</artifactId><version>3.5.1</version><configuration><forceCreation>true</forceCreation></configuration></plugin>
-    <plugin><groupId>org.apache.maven.plugins</groupId><artifactId>maven-compiler-plugin</artifactId><version>3.14.1</version><configuration><parameters>true</parameters><showWarnings>true</showWarnings><compilerArgs><arg>-Xlint:all</arg></compilerArgs></configuration></plugin>
+    <plugin>
+      <groupId>org.apache.maven.plugins</groupId><artifactId>maven-compiler-plugin</artifactId><version>3.14.1</version>
+      <configuration>
+        <parameters>true</parameters>
+        <showWarnings>true</showWarnings>
+        <failOnWarning>true</failOnWarning>
+        <compilerArgs><arg>-Xlint:all</arg></compilerArgs>
+      </configuration>
+    </plugin>
     <plugin><groupId>org.apache.maven.plugins</groupId><artifactId>maven-surefire-plugin</artifactId><version>3.5.4</version><configuration><argLine>--enable-native-access=ALL-UNNAMED</argLine></configuration></plugin>
     <plugin><groupId>org.apache.maven.plugins</groupId><artifactId>maven-source-plugin</artifactId><version>3.3.1</version><executions><execution><goals><goal>jar-no-fork</goal></goals></execution></executions></plugin>
     <plugin><groupId>com.diffplug.spotless</groupId><artifactId>spotless-maven-plugin</artifactId><version>2.44.3</version><configuration><java><googleJavaFormat><version>1.28.0</version></googleJavaFormat></java></configuration><executions><execution><phase>verify</phase><goals><goal>check</goal></goals></execution></executions></plugin>

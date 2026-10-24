@@ -138,6 +138,7 @@ class PeerCancellationTest {
 
   @ParameterizedTest
   @ValueSource(strings = {"decode", "work"})
+  @SuppressWarnings("try") // Resources intentionally scope background activity.
   void peerTimeoutInterruptsTheOwningWorker(String phase) throws Exception {
     var entered = new CompletableFuture<Void>();
     var interrupted = new CompletableFuture<Void>();

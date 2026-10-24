@@ -94,6 +94,7 @@ class PluginTest {
 
   @ParameterizedTest
   @ValueSource(booleans = {false, true})
+  @SuppressWarnings("try") // Resources intentionally scope background activity.
   void pluginsActivateAllJobInterfacesBeforeExplicitRegistrations(boolean pluginsFirst)
       throws Exception {
     var trace = new CopyOnWriteArrayList<String>();
