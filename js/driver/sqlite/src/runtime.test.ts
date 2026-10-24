@@ -368,6 +368,64 @@ describe("SqliteDriver runtime", () => {
     }
   });
 
+  test("drops a finished cursor step's cursor on later SQLite attempts", async () => {
+    const { driver } = await setup();
+    const definition = defineJob({ kind: "sqlite_runtime_resumable_cursor" });
+    const order: string[] = [];
+    const client = new Client(driver, {
+      clientId: "sqlite-runtime-resumable-cursor-test",
+      completionBatchSize: 1,
+      leaderElectionDisabled: true,
+      queues: {
+        default: {
+          fetchCooldown: { milliseconds: 1 },
+          maxWorkers: 1,
+          pollInterval: { milliseconds: 5 },
+        },
+      },
+      retryPolicy: (_job, now) => now.add({ hours: 1 }),
+      workers: new Workers().add(definition, async ({ job, resumable }) => {
+        await resumable.step("a", () => {
+          order.push("a");
+        });
+        await resumable.stepWithCursor("c", (cursor) => {
+          order.push(`c:${JSON.stringify(cursor)}`);
+          if (job.attempt === 1) {
+            resumable.setCursor(1);
+            throw new Error("retry inside c");
+          }
+        });
+        await resumable.stepWithCursor("d", (cursor) => {
+          order.push(`d:${JSON.stringify(cursor)}`);
+          if (job.attempt === 2) {
+            resumable.setCursor(7);
+            throw new Error("retry inside d");
+          }
+        });
+      }),
+    });
+    const inserted = await client.insert(definition, {});
+    const run = await client.start();
+    try {
+      const first = await waitForJob(client, inserted.job.id, "retryable");
+      expect(first.metadata["river:resumable_step"]).toBe("a");
+      expect(first.metadata["river:resumable_cursor"]).toEqual({ c: 1 });
+      await client.jobs.retry(inserted.job.id);
+
+      const second = await waitForJob(client, inserted.job.id, "retryable");
+      expect(second.metadata["river:resumable_step"]).toBe("c");
+      await client.jobs.retry(inserted.job.id);
+
+      await waitForJob(client, inserted.job.id, "completed");
+      // The third attempt skips the finished `c` and resumes `d` at 7.
+      expect(order).toEqual(["a", "c:null", "c:1", "d:null", "d:7"]);
+      const done = await client.jobs.get(inserted.job.id);
+      expect(done?.metadata["river:resumable_cursor"]).toEqual({ d: 7 });
+    } finally {
+      await run.stop();
+    }
+  });
+
   test("fails jobs with invalid JSON columns without stalling the queue, like Go", async () => {
     const { database, driver } = await setup();
     const job = defineJob({ kind: "sqlite_runtime_invalid_json" });

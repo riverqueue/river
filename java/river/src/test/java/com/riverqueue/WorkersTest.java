@@ -421,6 +421,47 @@ class WorkersTest {
   }
 
   @Test
+  void resumableCursorUpdatesReplaceStoredCursors() throws Exception {
+    var client = client();
+    var steps = new LinkedBlockingQueue<String>();
+    var completed = new CompletableFuture<Workers.Event>();
+    try (var workers =
+            workers(client)
+                .retryPolicy(job -> Duration.ZERO)
+                .add(
+                    TYPE,
+                    context -> {
+                      int attempt = context.job().attempt();
+                      context.step("a", () -> steps.add(attempt + ":a"));
+                      context.stepWithCursor(
+                          "c",
+                          cursor -> {
+                            steps.add(attempt + ":c");
+                            if (attempt > 1) return;
+                            context.cursor(1);
+                            throw new IllegalStateException("retry c");
+                          });
+                      context.stepWithCursor(
+                          "d",
+                          cursor -> {
+                            steps.add(attempt + ":d:" + cursor.asInt(0));
+                            if (attempt > 2) return;
+                            context.cursor(7);
+                            throw new IllegalStateException("retry d");
+                          });
+                    })
+                .start();
+        var subscription =
+            workers.subscribe(completed::complete, Workers.EventKind.JOB_COMPLETED)) {
+      client.insert(TYPE, "resumable");
+      assertEquals(3, completed.get(10, TimeUnit.SECONDS).job().attempt());
+    }
+    // The third attempt resumes after "c"; a cursor left over from attempt one must not rerun it.
+    assertEquals(
+        java.util.List.of("1:a", "1:c", "2:c", "2:d:0", "3:d:7"), java.util.List.copyOf(steps));
+  }
+
+  @Test
   void rescueCannotPreemptAConfiguredTimeout() {
     var builder =
         new Client(Database.connect("jdbc:postgresql://127.0.0.1:1/unused"))

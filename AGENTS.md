@@ -31,6 +31,15 @@
 - **Terminology**: prefer "Postgres" over "PostgreSQL".
 - **Naming**: use idiomatic Go names; see `.golangci.yaml` for allowed short variable names.
 
+## Cross-Language Parity
+
+This repo holds the Go reference implementation and its ports (`java/`, `js/`, `ruby/`, `rust/`). The ports aim for full compatibility with Go and with each other.
+
+- **One PR for all languages**: when adding a feature or fixing a bug in shared behavior, change Go and every affected port in the same PR. Splitting the work by language makes it hard to verify that the implementations still agree.
+- **Check every port, even when the report names one**: a bug found in one port often exists in the others, and in the Go reference. Confirm which implementations are affected before scoping the fix.
+- **Same tests everywhere**: give each affected implementation an equivalent test for the behavior, on every database it supports.
+- **Document intended differences**: an API should be idiomatic for its language, but observable behavior should match Go. Record any difference that remains in the port's differences doc (for example `java/DIFFERENCES.md`).
+
 ## Package Naming and Organization
 
 - Package names are lowercase, short, and representative; avoid `common`, `util`, or overly broad names.

@@ -1282,6 +1282,42 @@ func exerciseJobUpdate[TTx any](ctx context.Context, t *testing.T, executorWithT
 			require.ErrorContains(t, err, "error unmarshaling `tags`")
 		})
 
+		// A metadata merge replaces each top-level value outright instead of
+		// merging into it, and stores a JSON null instead of removing the key.
+		// A resumable job relies on this to drop the cursors of completed steps.
+		t.Run("MetadataUpdatesReplaceTopLevelValues", func(t *testing.T) {
+			t.Parallel()
+
+			exec, _ := setup(ctx, t)
+
+			now := time.Now().UTC()
+
+			const (
+				metadataBefore  = `{"gone":5, "keep":{"x":1}, "river:resumable_cursor":{"c":1}, "river:resumable_step":"a"}`
+				metadataUpdates = `{"gone":null, "river:resumable_cursor":{"d":7, "n":null}, "river:resumable_step":"c"}`
+				metadataAfter   = `{"gone":null, "keep":{"x":1}, "river:resumable_cursor":{"d":7, "n":null}, "river:resumable_step":"c"}`
+			)
+
+			runningJob := testfactory.Job(ctx, t, exec, &testfactory.JobOpts{
+				Metadata: []byte(metadataBefore),
+				State:    new(rivertype.JobStateRunning),
+			})
+			retryableJob := testfactory.Job(ctx, t, exec, &testfactory.JobOpts{
+				Metadata:    []byte(metadataBefore),
+				ScheduledAt: new(now.Add(10 * time.Second)),
+				State:       new(rivertype.JobStateRetryable),
+			})
+
+			jobsAfter, err := exec.JobSetStateIfRunningMany(ctx, setStateManyParams(
+				riverdriver.JobSetStateErrorRetryable(runningJob.ID, now, makeErrPayload(t, now), []byte(metadataUpdates)),
+				riverdriver.JobSetStateErrorRetryable(retryableJob.ID, now, makeErrPayload(t, now), []byte(metadataUpdates)),
+			))
+			require.NoError(t, err)
+			require.Len(t, jobsAfter, 2)
+			require.JSONEq(t, metadataAfter, string(jobsAfter[0].Metadata))
+			require.JSONEq(t, metadataAfter, string(jobsAfter[1].Metadata))
+		})
+
 		t.Run("UpdatesOnlyMetadataForAlreadyRetryableJobs", func(t *testing.T) {
 			t.Parallel()
 
@@ -1548,6 +1584,27 @@ func exerciseJobUpdate[TTx any](ctx context.Context, t *testing.T, executorWithT
 			})
 			require.NoError(t, err)
 			require.JSONEq(t, `{"key1":"val1","key2":"val2"}`, string(updatedJob.Metadata))
+		})
+
+		t.Run("MetadataMergeReplacesTopLevelValues", func(t *testing.T) {
+			t.Parallel()
+
+			exec, _ := setup(ctx, t)
+
+			job := testfactory.Job(ctx, t, exec, &testfactory.JobOpts{
+				Metadata: []byte(`{"gone":5, "keep":{"x":1}, "river:resumable_cursor":{"c":1}, "river:resumable_step":"a"}`),
+			})
+
+			updatedJob, err := exec.JobUpdate(ctx, &riverdriver.JobUpdateParams{
+				ID:              job.ID,
+				MetadataDoMerge: true,
+				Metadata:        []byte(`{"gone":null, "river:resumable_cursor":{"d":7, "n":null}, "river:resumable_step":"c"}`),
+			})
+			require.NoError(t, err)
+			require.JSONEq(t,
+				`{"gone":null, "keep":{"x":1}, "river:resumable_cursor":{"d":7, "n":null}, "river:resumable_step":"c"}`,
+				string(updatedJob.Metadata),
+			)
 		})
 
 		t.Run("NoArgs", func(t *testing.T) {

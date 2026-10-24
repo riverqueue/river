@@ -88,6 +88,27 @@ const PREFILTER_METADATA_SQL = `(CASE WHEN ${invalidJsonTextSql("metadata")} THE
 const VALID_METADATA_SQL = `NOT ${invalidJsonTextSql("metadata")}`;
 
 /**
+ * SQL that merges `updates` into `metadata`, with the parameters it binds.
+ * Like Postgres's `||`, each top-level key is replaced whole and a JSON null
+ * is stored as null. A JSON merge patch (`jsonb_patch`) would instead merge
+ * nested objects and delete keys set to null.
+ */
+function mergeMetadataSql(updates: JsonObject): {
+  params: string[];
+  sql: string;
+} {
+  const params: string[] = [];
+  let sql = "metadata";
+  for (const [key, value] of Object.entries(updates)) {
+    sql = `jsonb_set(${sql}, ?, jsonb(?))`;
+    // A quoted path label keeps `.`, `"`, and `[` in the key from being
+    // read as path syntax.
+    params.push(`$.${JSON.stringify(key)}`, encodeJson(value, "metadata"));
+  }
+  return { params, sql };
+}
+
+/**
  * Append the bound client ID to `attempted_by`, keeping the newest
  * `MAX_ATTEMPTED_BY - 1` (bound first) existing entries. Matches Go's
  * statement, except that a non-array value (Go may write JSON `null`) starts a
@@ -258,7 +279,7 @@ export function completeJobs(
       ...(item.metadata ?? {}),
       ...(item.outputSet ? { output: item.output } : {}),
     };
-    const metadata = encodeJson(metadataUpdates, "metadata");
+    const metadataMerge = mergeMetadataSql(metadataUpdates);
     const updatesMetadata = Object.keys(metadataUpdates).length > 0;
     // Like Go, a present `cancel_attempted_at` key requests cancellation even
     // when its value is JSON null (`->` yields the text 'null', not SQL NULL).
@@ -286,7 +307,7 @@ export function completeJobs(
         END,
         metadata = CASE
           WHEN ? AND ${VALID_METADATA_SQL}
-          THEN jsonb_patch(json(metadata), json(?))
+          THEN ${metadataMerge.sql}
           ELSE metadata
         END,
         scheduled_at = CASE
@@ -316,7 +337,7 @@ export function completeJobs(
       transition.finalizedAt === null ? 0 : 1,
       finalizedAt,
       updatesMetadata ? 1 : 0,
-      metadata,
+      ...metadataMerge.params,
       transition.state,
       transition.scheduledAt === null ? 0 : 1,
       scheduledAt,
@@ -332,13 +353,18 @@ export function completeJobs(
             database,
             `UPDATE river_job
              SET metadata = CASE WHEN ${VALID_METADATA_SQL}
-               THEN jsonb_patch(json(metadata), json(?)) ELSE metadata END
+               THEN ${metadataMerge.sql} ELSE metadata END
              WHERE id = ?
                AND state != 'running'
                AND attempt = ?
                AND ${ATTEMPTED_BY_FENCE_SQL}
              RETURNING ${JOB_COLUMNS}`
-          ).get(metadata, item.id, item.attempt, item.attemptedBy)
+          ).get(
+            ...metadataMerge.params,
+            item.id,
+            item.attempt,
+            item.attemptedBy
+          )
         : undefined;
     const key = jobCompletionKey(item);
     results.push(
@@ -550,8 +576,8 @@ function jsonContains(actual: JsonValue, expected: JsonValue): boolean {
 }
 
 /**
- * Merge metadata and set output on a job with a JSON merge patch, like River
- * for Go's SQLite `JobUpdate`.
+ * Merge metadata and set output on a job, replacing each top-level key like
+ * the Postgres driver.
  */
 export function updateJob(
   database: DatabaseSync,
@@ -566,15 +592,13 @@ export function updateJob(
   if (Object.hasOwn(params, "output")) {
     metadataPatch.output = params.output as JsonValue;
   }
-  const hasMetadataPatch = Object.keys(metadataPatch).length > 0;
+  const metadataMerge = mergeMetadataSql(metadataPatch);
   const raw = resultStatement(
     database,
-    `UPDATE river_job SET
-       metadata = CASE
-         WHEN ? THEN jsonb_patch(json(metadata), json(?)) ELSE metadata END
+    `UPDATE river_job SET metadata = ${metadataMerge.sql}
      WHERE id = ?
      RETURNING ${JOB_COLUMNS}`
-  ).get(hasMetadataPatch ? 1 : 0, encodeJson(metadataPatch, "metadata"), id);
+  ).get(...metadataMerge.params, id);
   return raw === undefined ? null : decodeJobRow(raw);
 }
 

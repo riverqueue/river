@@ -4,9 +4,12 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"maps"
 	"math"
 	"slices"
+	"sync"
 	"testing"
 	"time"
 
@@ -1664,6 +1667,85 @@ func ExerciseClient[TTx any](ctx context.Context, t *testing.T,
 		require.Zero(t, event.Job.Errors[0].At)
 		require.Equal(t, 1, event.Job.Errors[0].Attempt)
 		require.JSONEq(t, `{"message":"boom"}`, event.Job.Errors[0].Error)
+	})
+
+	// A cursor step that completed on an earlier attempt isn't run again, even
+	// after a later cursor step stores its own cursor and fails.
+	t.Run("ResumableCursorStepNotRerunAfterCompletion", func(t *testing.T) {
+		t.Parallel()
+
+		client, bundle := setup(t)
+
+		type JobArgs struct {
+			testutil.JobArgsReflectKind[JobArgs]
+		}
+
+		var (
+			ranByAttempt   = make(map[int][]string)
+			ranByAttemptMu sync.Mutex
+		)
+
+		river.AddWorker(bundle.config.Workers, river.WorkFunc(func(ctx context.Context, job *river.Job[JobArgs]) error {
+			ran := func(step string) {
+				ranByAttemptMu.Lock()
+				defer ranByAttemptMu.Unlock()
+				ranByAttempt[job.Attempt] = append(ranByAttempt[job.Attempt], step)
+			}
+
+			river.ResumableStep(ctx, "a", nil, func(ctx context.Context) error {
+				ran("a")
+				return nil
+			})
+
+			river.ResumableStepCursor(ctx, "c", nil, func(ctx context.Context, cursor int) error {
+				ran(fmt.Sprintf("c:%d", cursor))
+				if job.Attempt == 1 {
+					if err := river.ResumableSetCursor(ctx, 1); err != nil {
+						return err
+					}
+					return errors.New("step c failed")
+				}
+				return nil
+			})
+
+			river.ResumableStepCursor(ctx, "d", nil, func(ctx context.Context, cursor int) error {
+				ran(fmt.Sprintf("d:%d", cursor))
+				if job.Attempt == 2 {
+					if err := river.ResumableSetCursor(ctx, 7); err != nil {
+						return err
+					}
+					return errors.New("step d failed")
+				}
+				return nil
+			})
+
+			return nil
+		}))
+
+		subscribeChan := subscribe(t, client)
+		startClient(ctx, t, client)
+
+		insertRes, err := client.Insert(ctx, &JobArgs{}, nil)
+		require.NoError(t, err)
+
+		for range 2 {
+			event := riversharedtest.WaitOrTimeout(t, subscribeChan)
+			require.Equal(t, river.EventKindJobFailed, event.Kind)
+
+			_, err := client.JobRetry(ctx, insertRes.Job.ID)
+			require.NoError(t, err)
+		}
+
+		event := riversharedtest.WaitOrTimeout(t, subscribeChan)
+		require.Equal(t, river.EventKindJobCompleted, event.Kind)
+
+		ranByAttemptMu.Lock()
+		defer ranByAttemptMu.Unlock()
+		require.Equal(t, map[int][]string{
+			1: {"a", "c:0"},
+			2: {"c:1", "d:0"},
+			3: {"d:7"},
+		}, ranByAttempt)
 	})
 
 	t.Run("QueueGet", func(t *testing.T) {
