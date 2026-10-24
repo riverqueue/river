@@ -44,6 +44,7 @@ import (
 	"github.com/riverqueue/river/rivershared/sqlctemplate"
 	"github.com/riverqueue/river/rivershared/uniquestates"
 	"github.com/riverqueue/river/rivershared/util/dbutil"
+	"github.com/riverqueue/river/rivershared/util/maputil"
 	"github.com/riverqueue/river/rivershared/util/randutil"
 	"github.com/riverqueue/river/rivershared/util/savepointutil"
 	"github.com/riverqueue/river/rivershared/util/sliceutil"
@@ -974,17 +975,22 @@ func (e *Executor) JobSetStateIfRunningMany(ctx context.Context, params *riverdr
 	setRes := make([]*rivertype.JobRow, 0, len(params.ID))
 
 	if err := dbutil.WithTx(ctx, e.executor(), func(ctx context.Context, execTx riverdriver.ExecutorTx) error {
-		ctx = schemaTemplateParam(ctx, params.Schema)
 		dbtx := templateReplaceWrapper{dbtx: e.driver.UnwrapTx(execTx), replacer: &e.driver.replacer}
 
 		// Should be a batch update, but that's currently impossible with SQLite/sqlc. https://github.com/sqlc-dev/sqlc/issues/3802
 		for i := range params.ID {
+			// Template params are specific to each job because the metadata
+			// merge clause depends on the job's metadata updates.
+			ctx, err := metadataMergeTemplateParam(schemaTemplateParam(ctx, params.Schema), params.MetadataUpdates[i])
+			if err != nil {
+				return err
+			}
+
 			setStateParams := &dbsqlc.JobSetStateIfRunningParams{
-				ID:              params.ID[i],
-				Error:           []byte("{}"), // even if not used, must be valid JSON because it's bed into the `json` function
-				MetadataUpdates: []byte("{}"), // even if not used, must be valid JSON because it's bed into the `json` function
-				Now:             timeStringNullable(params.Now),
-				State:           string(params.State[i]),
+				ID:    params.ID[i],
+				Error: []byte("{}"), // even if not used, must be valid JSON because it's bed into the `json` function
+				Now:   timeStringNullable(params.Now),
+				State: string(params.State[i]),
 			}
 
 			if params.Attempt[i] != nil {
@@ -1001,7 +1007,6 @@ func (e *Executor) JobSetStateIfRunningMany(ctx context.Context, params *riverdr
 			}
 			if params.MetadataDoMerge[i] {
 				setStateParams.MetadataDoMerge = true
-				setStateParams.MetadataUpdates = params.MetadataUpdates[i]
 			}
 			if params.ScheduledAt[i] != nil {
 				setStateParams.ScheduledAtDoUpdate = true
@@ -1012,10 +1017,7 @@ func (e *Executor) JobSetStateIfRunningMany(ctx context.Context, params *riverdr
 			if err != nil {
 				if errors.Is(err, sql.ErrNoRows) {
 					var metadataRow *dbsqlc.JobSetMetadataIfNotRunningRow
-					metadataRow, err = dbsqlc.New().JobSetMetadataIfNotRunning(ctx, dbtx, &dbsqlc.JobSetMetadataIfNotRunningParams{
-						ID:              params.ID[i],
-						MetadataUpdates: sliceutil.FirstNonEmpty(params.MetadataUpdates[i], []byte("{}")),
-					})
+					metadataRow, err = dbsqlc.New().JobSetMetadataIfNotRunning(ctx, dbtx, params.ID[i])
 					if err != nil {
 						if errors.Is(err, sql.ErrNoRows) {
 							continue
@@ -1044,15 +1046,14 @@ func (e *Executor) JobSetStateIfRunningMany(ctx context.Context, params *riverdr
 }
 
 func (e *Executor) JobUpdate(ctx context.Context, params *riverdriver.JobUpdateParams) (*rivertype.JobRow, error) {
-	metadata := params.Metadata
-	if metadata == nil {
-		metadata = []byte("{}")
+	ctx, err := metadataMergeTemplateParam(schemaTemplateParam(ctx, params.Schema), params.Metadata)
+	if err != nil {
+		return nil, err
 	}
 
-	job, err := dbsqlc.New().JobUpdate(schemaTemplateParam(ctx, params.Schema), e.dbtx, &dbsqlc.JobUpdateParams{
+	job, err := dbsqlc.New().JobUpdate(ctx, e.dbtx, &dbsqlc.JobUpdateParams{
 		ID:              params.ID,
 		MetadataDoMerge: params.MetadataDoMerge,
-		Metadata:        metadata,
 	})
 	if err != nil {
 		return nil, interpretError(err)
@@ -1882,6 +1883,65 @@ func migrationFromInternal(internal *dbsqlc.RiverMigration) *riverdriver.Migrati
 		Line:      internal.Line,
 		Version:   int(internal.Version),
 	}
+}
+
+// metadataMergeTemplateParam adds a template param that merges the top-level
+// keys of metadataUpdates into a job's metadata, producing SQL like:
+//
+//	jsonb_set(jsonb_set(json(metadata), @path_0, jsonb(@value_0)), @path_1, jsonb(@value_1))
+//
+// Each key's value is replaced outright and a JSON null is stored as null,
+// which is how Postgres' `metadata || @metadata_updates` behaves. SQLite's own
+// `jsonb_patch` isn't equivalent: it merges nested objects recursively and
+// removes a key whose value is null, so a resumable job's cursors for completed
+// steps would never be dropped.
+//
+// The clause is built here instead of in SQL because it needs one `jsonb_set`
+// per key, and the number of keys isn't known until the updates are in hand.
+func metadataMergeTemplateParam(ctx context.Context, metadataUpdates []byte) (context.Context, error) {
+	var updates map[string]json.RawMessage
+	if len(metadataUpdates) > 0 {
+		if err := json.Unmarshal(metadataUpdates, &updates); err != nil {
+			return nil, fmt.Errorf("error unmarshaling metadata updates: %w", err)
+		}
+	}
+
+	if len(updates) < 1 {
+		return sqlctemplate.WithReplacements(ctx, map[string]sqlctemplate.Replacement{
+			"metadata_merge_clause": {Value: "metadata", Stable: true},
+		}, nil), nil
+	}
+
+	var (
+		clause    = "json(metadata)"
+		keys      = maputil.Keys(updates)
+		namedArgs = make(map[string]any, 2*len(keys))
+	)
+
+	// Sorted so that the same updates always produce the same SQL.
+	slices.Sort(keys)
+
+	for i, key := range keys {
+		quotedKey, err := json.Marshal(key)
+		if err != nil {
+			return nil, fmt.Errorf("error marshaling metadata key: %w", err)
+		}
+
+		// Zero padded so that no arg name is a prefix of another, which named
+		// arg replacement doesn't tolerate.
+		var (
+			pathArg  = fmt.Sprintf("metadata_merge_path_%04d", i)
+			valueArg = fmt.Sprintf("metadata_merge_value_%04d", i)
+		)
+
+		clause = "jsonb_set(" + clause + ", @" + pathArg + ", jsonb(@" + valueArg + "))"
+		namedArgs[pathArg] = "$." + string(quotedKey)
+		namedArgs[valueArg] = string(updates[key])
+	}
+
+	return sqlctemplate.WithReplacements(ctx, map[string]sqlctemplate.Replacement{
+		"metadata_merge_clause": {Value: clause},
+	}, namedArgs), nil
 }
 
 func schemaTemplateParam(ctx context.Context, schema string) context.Context {

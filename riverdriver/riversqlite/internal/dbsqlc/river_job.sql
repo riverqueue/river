@@ -696,10 +696,12 @@ RETURNING
 -- for JobSetStateIfRunning to use when falling back to non-running jobs.
 -- Metadata that isn't valid JSON is left in place, and columns are listed out
 -- to tolerate values that aren't valid JSON. See JobGetAvailable.
+--
+-- The metadata merge is replaced in the driver. See comments there for details.
 -- name: JobSetMetadataIfNotRunning :one
 UPDATE /* TEMPLATE: schema */river_job
 SET metadata = CASE WHEN typeof(metadata) <> 'text' OR json_valid(metadata)
-                    THEN jsonb_patch(json(metadata), json(@metadata_updates))
+                    THEN /* TEMPLATE_BEGIN: metadata_merge_clause */ metadata /* TEMPLATE_END */
                     ELSE metadata END
 WHERE id = @id
     AND state != 'running'
@@ -756,7 +758,7 @@ SET
                         THEN cast(sqlc.narg('finalized_at') AS text)
                         ELSE finalized_at END,
     metadata     = CASE WHEN cast(@metadata_do_merge AS boolean) AND (typeof(metadata) <> 'text' OR json_valid(metadata))
-                        THEN jsonb_patch(json(metadata), json(@metadata_updates))
+                        THEN /* TEMPLATE_BEGIN: metadata_merge_clause */ metadata /* TEMPLATE_END */
                         ELSE metadata END,
     scheduled_at = CASE WHEN /* NOT should_cancel */(cast(@state AS text) <> 'available' AND @state <> 'retryable' AND @state <> 'scheduled' OR (CASE WHEN typeof(metadata) <> 'text' OR json_valid(metadata) THEN metadata -> 'cancel_attempted_at' END) IS NULL) AND cast(@scheduled_at_do_update AS boolean)
                         THEN cast(@scheduled_at AS text)
@@ -789,7 +791,7 @@ RETURNING
 -- name: JobUpdate :one
 UPDATE /* TEMPLATE: schema */river_job
 SET
-    metadata = CASE WHEN cast(@metadata_do_merge AS boolean) THEN jsonb_patch(json(metadata), json(@metadata)) ELSE metadata END
+    metadata = CASE WHEN cast(@metadata_do_merge AS boolean) THEN /* TEMPLATE_BEGIN: metadata_merge_clause */ metadata /* TEMPLATE_END */ ELSE metadata END
 WHERE id = @id
 RETURNING *;
 

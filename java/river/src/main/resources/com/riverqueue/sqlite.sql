@@ -169,7 +169,10 @@ state=CASE WHEN state != 'running' THEN state WHEN (SELECT target_state FROM cho
 finalized_at=CASE WHEN state != 'running' THEN finalized_at WHEN (SELECT target_state FROM choice) IN ('available','retryable','scheduled') AND (CASE WHEN typeof(metadata)<>'text' OR json_valid(metadata) THEN json_extract(metadata,'$.cancel_attempted_at') END) IS NOT NULL THEN (SELECT now FROM choice) ELSE ? END,
 scheduled_at=CASE WHEN state != 'running' THEN scheduled_at WHEN (SELECT target_state FROM choice) IN ('available','retryable','scheduled') AND (CASE WHEN typeof(metadata)<>'text' OR json_valid(metadata) THEN json_extract(metadata,'$.cancel_attempted_at') END) IS NOT NULL THEN scheduled_at ELSE ? END,
 attempt=CASE WHEN state != 'running' THEN attempt WHEN (SELECT target_state FROM choice) IN ('available','retryable','scheduled') AND (CASE WHEN typeof(metadata)<>'text' OR json_valid(metadata) THEN json_extract(metadata,'$.cancel_attempted_at') END) IS NOT NULL THEN attempt ELSE ? END,
-metadata=CASE WHEN typeof(metadata)='text' AND NOT json_valid(metadata) THEN metadata ELSE jsonb_patch(metadata,jsonb(?)) END,
+-- Replace each top-level key like Postgres ||. jsonb_patch would merge nested objects and delete nulls.
+metadata=CASE WHEN typeof(metadata)='text' AND NOT json_valid(metadata) THEN metadata ELSE (WITH updates(doc) AS (SELECT ?)
+SELECT jsonb_group_object(key,jsonb(doc->fullkey)) FROM (SELECT key,fullkey,metadata AS doc FROM json_each(metadata) WHERE key NOT IN (SELECT key FROM updates,json_each(doc))
+UNION ALL SELECT key,fullkey,doc FROM updates,json_each(doc))) END,
 errors=CASE WHEN state != 'running' OR ? IS NULL THEN errors ELSE jsonb_insert(CASE WHEN typeof(errors)='text' AND NOT json_valid(errors) THEN jsonb_array(errors) WHEN coalesce(json_type(errors),'array') <> 'array' THEN jsonb_array(json(errors)) ELSE coalesce(errors,jsonb('[]')) END,'$[#]',jsonb(?)) END
 WHERE id=? AND attempt=? AND attempted_at=? RETURNING {columns}
 
@@ -209,7 +212,10 @@ state=CASE WHEN state IN ('completed','cancelled','discarded') THEN state ELSE ?
 finalized_at=CASE WHEN state IN ('completed','cancelled','discarded') THEN finalized_at ELSE ? END,
 scheduled_at=CASE WHEN state IN ('completed','cancelled','discarded') THEN scheduled_at ELSE ? END,
 attempt=CASE WHEN state IN ('completed','cancelled','discarded') THEN attempt ELSE ? END,
-metadata=CASE WHEN typeof(metadata)='text' AND NOT json_valid(metadata) THEN metadata ELSE jsonb_patch(metadata,jsonb(?)) END,
+-- Replace each top-level key like Postgres ||. jsonb_patch would merge nested objects and delete nulls.
+metadata=CASE WHEN typeof(metadata)='text' AND NOT json_valid(metadata) THEN metadata ELSE (WITH updates(doc) AS (SELECT ?)
+SELECT jsonb_group_object(key,jsonb(doc->fullkey)) FROM (SELECT key,fullkey,metadata AS doc FROM json_each(metadata) WHERE key NOT IN (SELECT key FROM updates,json_each(doc))
+UNION ALL SELECT key,fullkey,doc FROM updates,json_each(doc))) END,
 errors=CASE WHEN state IN ('completed','cancelled','discarded') OR ? IS NULL THEN errors ELSE jsonb_insert(CASE WHEN typeof(errors)='text' AND NOT json_valid(errors) THEN jsonb_array(errors) WHEN coalesce(json_type(errors),'array') <> 'array' THEN jsonb_array(json(errors)) ELSE coalesce(errors,jsonb('[]')) END,'$[#]',jsonb(?)) END
 WHERE state='running' AND id=? AND attempt=? AND attempted_at=? RETURNING {columns}
 -- name: periodic_scheduled_at

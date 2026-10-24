@@ -95,6 +95,34 @@ const ERRORS_APPENDED: &str = concat!(
      ELSE jsonb(json_insert(json(coalesce(errors, jsonb('[]'))), '$[#]', json(?))) END"
 );
 
+/// A SQL expression merging caller-supplied updates into `metadata`, and the
+/// values to bind to it in order.
+struct MetadataMerge {
+    binds: Vec<String>,
+    sql: String,
+}
+
+impl MetadataMerge {
+    /// Replaces each top-level key of `updates` whole, storing a JSON null as
+    /// null, like Postgres's `||`. `jsonb_patch` is a JSON Merge Patch, which
+    /// would merge nested objects and delete keys set to null.
+    fn new(updates: &Map<String, Value>) -> Result<Self, serde_json::Error> {
+        let mut merge = Self {
+            binds: Vec::with_capacity(updates.len() * 2),
+            sql: "metadata".to_owned(),
+        };
+        for (key, value) in updates {
+            // A JSON path label is quoted and escaped as a JSON string.
+            merge
+                .binds
+                .push(format!("$.{}", serde_json::to_string(key)?));
+            merge.binds.push(serde_json::to_string(value)?);
+            merge.sql = format!("jsonb_set({}, ?, jsonb(?))", merge.sql);
+        }
+        Ok(merge)
+    }
+}
+
 const QUEUE_COLUMNS: &str = r#"
     created_at,
     json(metadata) AS metadata,
@@ -981,11 +1009,8 @@ pub(crate) async fn complete_decoded(
         .map(serde_json::to_string)
         .transpose()?
         .unwrap_or_else(|| "{}".to_owned());
-    let metadata = params
-        .metadata_updates
-        .map(serde_json::to_string)
-        .transpose()?
-        .unwrap_or_else(|| "{}".to_owned());
+    let metadata = MetadataMerge::new(params.metadata_updates.unwrap_or(&Map::new()))?;
+    let metadata_merged = &metadata.sql;
     let should_cancel = format!(
         "((? IN ('available', 'retryable', 'scheduled')) AND {CANCEL_ATTEMPTED_AT} IS NOT NULL)"
     );
@@ -1006,7 +1031,7 @@ pub(crate) async fn complete_decoded(
             END,
             -- Like River Go, metadata that isn't valid JSON is left in place.
             metadata = CASE
-                WHEN ? AND {metadata_valid} THEN jsonb_patch(json(metadata), json(?))
+                WHEN ? AND {metadata_valid} THEN {metadata_merged}
                 ELSE metadata
             END,
             scheduled_at = CASE
@@ -1019,7 +1044,7 @@ pub(crate) async fn complete_decoded(
         "#
     );
     let state = params.state.as_str();
-    let row = sqlx::query(AssertSqlSafe(sql))
+    let mut query = sqlx::query(AssertSqlSafe(sql))
         .bind(state)
         .bind(params.attempt.is_some())
         .bind(params.attempt.unwrap_or_default())
@@ -1031,8 +1056,11 @@ pub(crate) async fn complete_decoded(
         .bind(sqlite_time(params.now))
         .bind(params.finalized_at.is_some())
         .bind(sqlite_time_optional(params.finalized_at))
-        .bind(params.metadata_updates.is_some())
-        .bind(metadata)
+        .bind(params.metadata_updates.is_some());
+    for bind in metadata.binds {
+        query = query.bind(bind);
+    }
+    let row = query
         .bind(state)
         .bind(params.scheduled_at.is_some())
         .bind(sqlite_time_optional(params.scheduled_at))
@@ -1051,25 +1079,26 @@ pub(crate) async fn merge_metadata_if_not_running(
     id: i64,
     metadata_updates: &Map<String, Value>,
 ) -> Result<Option<DecodedJob>, BackendError> {
-    let metadata = serde_json::to_string(metadata_updates)?;
+    let metadata = MetadataMerge::new(metadata_updates)?;
+    let metadata_merged = &metadata.sql;
     // Like River Go, metadata that isn't valid JSON is left in place.
     let metadata_valid = concat!("NOT ", invalid_json!("metadata"));
     let sql = format!(
         r#"
         UPDATE river_job
         SET metadata = CASE
-            WHEN {metadata_valid} THEN jsonb_patch(json(metadata), json(?))
+            WHEN {metadata_valid} THEN {metadata_merged}
             ELSE metadata
         END
         WHERE id = ? AND state != 'running'
         RETURNING {JOB_COLUMNS}
         "#
     );
-    let row = sqlx::query(AssertSqlSafe(sql))
-        .bind(metadata)
-        .bind(id)
-        .fetch_optional(&mut *connection)
-        .await?;
+    let mut query = sqlx::query(AssertSqlSafe(sql));
+    for bind in metadata.binds {
+        query = query.bind(bind);
+    }
+    let row = query.bind(id).fetch_optional(&mut *connection).await?;
     Ok(row.as_ref().map(decode_job_row))
 }
 
@@ -1078,17 +1107,21 @@ pub(crate) async fn update(
     id: i64,
     metadata_updates: &Map<String, Value>,
 ) -> Result<Option<JobRow>, BackendError> {
-    let metadata = serde_json::to_string(metadata_updates)?;
+    let metadata = MetadataMerge::new(metadata_updates)?;
+    let metadata_merged = &metadata.sql;
     let sql = format!(
         r#"
         UPDATE river_job
-        SET metadata = jsonb_patch(json(metadata), json(?))
+        SET metadata = {metadata_merged}
         WHERE id = ?
         RETURNING {JOB_COLUMNS}
         "#
     );
-    sqlx::query_as::<_, JobRecord>(AssertSqlSafe(sql))
-        .bind(metadata)
+    let mut query = sqlx::query_as::<_, JobRecord>(AssertSqlSafe(sql));
+    for bind in metadata.binds {
+        query = query.bind(bind);
+    }
+    query
         .bind(id)
         .fetch_optional(&mut *connection)
         .await?
