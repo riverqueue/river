@@ -159,7 +159,15 @@ final class RawStorage {
                 + ",finalized_at="
                 + (sqlite ? "datetime('now','subsec')" : "now()")
                 + ",metadata="
-                + (sqlite ? "jsonb_patch(metadata,jsonb(?))" : "metadata||?::jsonb")
+                + (sqlite
+                    ? """
+                      (WITH updates(doc) AS (SELECT jsonb(?))
+                       SELECT jsonb_group_object(key,jsonb(doc->fullkey)) FROM (
+                         SELECT key,fullkey,metadata AS doc FROM json_each(metadata)
+                         WHERE key NOT IN (SELECT key FROM updates,json_each(doc))
+                         UNION ALL SELECT key,fullkey,doc FROM updates,json_each(doc)))
+                      """
+                    : "metadata||?::jsonb")
                 + ",errors="
                 + (params.path("state").asString().equals("completed")
                     ? (sqlite

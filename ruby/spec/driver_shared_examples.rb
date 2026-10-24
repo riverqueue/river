@@ -134,9 +134,12 @@ shared_examples "driver shared examples" do
 
   it "merges metadata shallowly, preserving nulls and literal keys on both databases" do
     job = client.insert(SimpleArgs.new(job_num: 1), insert_opts: River::InsertOpts.new(
-      metadata: {"keep" => 1, "nested" => {"old" => true}, "nullable" => 2}
+      metadata: {"empty" => {"old" => true}, "keep" => 1, "nested" => {"old" => true}, "nullable" => 2}
     )).job
     updates = {'a"b' => "literal", "a.b" => [1, true], "a\\b" => false, "nested" => {"new" => true}, "nullable" => nil}
+
+    updates.merge!("" => false, "empty" => {}, "large" => 9_007_199_254_740_993)
+    1_200.times { |index| updates["key_#{index}"] = {"value" => index, "nullable" => nil} }
 
     driver.job_metadata_merge(job.id, updates)
 

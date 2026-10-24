@@ -974,17 +974,18 @@ func (e *Executor) JobSetStateIfRunningMany(ctx context.Context, params *riverdr
 	setRes := make([]*rivertype.JobRow, 0, len(params.ID))
 
 	if err := dbutil.WithTx(ctx, e.executor(), func(ctx context.Context, execTx riverdriver.ExecutorTx) error {
-		ctx = schemaTemplateParam(ctx, params.Schema)
 		dbtx := templateReplaceWrapper{dbtx: e.driver.UnwrapTx(execTx), replacer: &e.driver.replacer}
 
 		// Should be a batch update, but that's currently impossible with SQLite/sqlc. https://github.com/sqlc-dev/sqlc/issues/3802
 		for i := range params.ID {
+			// Bind this job's metadata updates to the shared merge expression.
+			ctx := metadataMergeTemplateParam(schemaTemplateParam(ctx, params.Schema), params.MetadataUpdates[i])
+
 			setStateParams := &dbsqlc.JobSetStateIfRunningParams{
-				ID:              params.ID[i],
-				Error:           []byte("{}"), // even if not used, must be valid JSON because it's bed into the `json` function
-				MetadataUpdates: []byte("{}"), // even if not used, must be valid JSON because it's bed into the `json` function
-				Now:             timeStringNullable(params.Now),
-				State:           string(params.State[i]),
+				ID:    params.ID[i],
+				Error: []byte("{}"), // even if not used, must be valid JSON because it's bed into the `json` function
+				Now:   timeStringNullable(params.Now),
+				State: string(params.State[i]),
 			}
 
 			if params.Attempt[i] != nil {
@@ -1001,7 +1002,6 @@ func (e *Executor) JobSetStateIfRunningMany(ctx context.Context, params *riverdr
 			}
 			if params.MetadataDoMerge[i] {
 				setStateParams.MetadataDoMerge = true
-				setStateParams.MetadataUpdates = params.MetadataUpdates[i]
 			}
 			if params.ScheduledAt[i] != nil {
 				setStateParams.ScheduledAtDoUpdate = true
@@ -1012,10 +1012,7 @@ func (e *Executor) JobSetStateIfRunningMany(ctx context.Context, params *riverdr
 			if err != nil {
 				if errors.Is(err, sql.ErrNoRows) {
 					var metadataRow *dbsqlc.JobSetMetadataIfNotRunningRow
-					metadataRow, err = dbsqlc.New().JobSetMetadataIfNotRunning(ctx, dbtx, &dbsqlc.JobSetMetadataIfNotRunningParams{
-						ID:              params.ID[i],
-						MetadataUpdates: sliceutil.FirstNonEmpty(params.MetadataUpdates[i], []byte("{}")),
-					})
+					metadataRow, err = dbsqlc.New().JobSetMetadataIfNotRunning(ctx, dbtx, params.ID[i])
 					if err != nil {
 						if errors.Is(err, sql.ErrNoRows) {
 							continue
@@ -1044,15 +1041,11 @@ func (e *Executor) JobSetStateIfRunningMany(ctx context.Context, params *riverdr
 }
 
 func (e *Executor) JobUpdate(ctx context.Context, params *riverdriver.JobUpdateParams) (*rivertype.JobRow, error) {
-	metadata := params.Metadata
-	if metadata == nil {
-		metadata = []byte("{}")
-	}
+	ctx = metadataMergeTemplateParam(schemaTemplateParam(ctx, params.Schema), params.Metadata)
 
-	job, err := dbsqlc.New().JobUpdate(schemaTemplateParam(ctx, params.Schema), e.dbtx, &dbsqlc.JobUpdateParams{
+	job, err := dbsqlc.New().JobUpdate(ctx, e.dbtx, &dbsqlc.JobUpdateParams{
 		ID:              params.ID,
 		MetadataDoMerge: params.MetadataDoMerge,
-		Metadata:        metadata,
 	})
 	if err != nil {
 		return nil, interpretError(err)
@@ -1882,6 +1875,21 @@ func migrationFromInternal(internal *dbsqlc.RiverMigration) *riverdriver.Migrati
 		Line:      internal.Line,
 		Version:   int(internal.Version),
 	}
+}
+
+// metadataMergeSQL is shared by job updates and both completion paths. sqlc
+// cannot resolve this expression's CTEs, so use the existing template mechanism.
+// The fixed SQL and parameter names keep the template replacer's cache enabled.
+//
+//go:embed metadata_merge.sql
+var metadataMergeSQL string
+
+func metadataMergeTemplateParam(ctx context.Context, metadataUpdates []byte) context.Context {
+	return sqlctemplate.WithReplacements(ctx, map[string]sqlctemplate.Replacement{
+		"metadata_merge_clause": {Stable: true, Value: metadataMergeSQL},
+	}, map[string]any{
+		"metadata_merge_updates": string(sliceutil.FirstNonEmpty(metadataUpdates, []byte("{}"))),
+	})
 }
 
 func schemaTemplateParam(ctx context.Context, schema string) context.Context {

@@ -1801,9 +1801,9 @@ func (q *Queries) JobScheduleSetDiscarded(ctx context.Context, db DBTX, arg *Job
 const jobSetMetadataIfNotRunning = `-- name: JobSetMetadataIfNotRunning :one
 UPDATE /* TEMPLATE: schema */river_job
 SET metadata = CASE WHEN typeof(metadata) <> 'text' OR json_valid(metadata)
-                    THEN jsonb_patch(json(metadata), json(?1))
+                    THEN /* TEMPLATE_BEGIN: metadata_merge_clause */ metadata /* TEMPLATE_END */
                     ELSE metadata END
-WHERE id = ?2
+WHERE id = ?1
     AND state != 'running'
 RETURNING
     id,
@@ -1825,11 +1825,6 @@ RETURNING
     unique_key,
     unique_states
 `
-
-type JobSetMetadataIfNotRunningParams struct {
-	MetadataUpdates interface{}
-	ID              int64
-}
 
 type JobSetMetadataIfNotRunningRow struct {
 	ID           int64
@@ -1856,8 +1851,9 @@ type JobSetMetadataIfNotRunningRow struct {
 // for JobSetStateIfRunning to use when falling back to non-running jobs.
 // Metadata that isn't valid JSON is left in place, and columns are listed out
 // to tolerate values that aren't valid JSON. See JobGetAvailable.
-func (q *Queries) JobSetMetadataIfNotRunning(ctx context.Context, db DBTX, arg *JobSetMetadataIfNotRunningParams) (*JobSetMetadataIfNotRunningRow, error) {
-	row := db.QueryRowContext(ctx, jobSetMetadataIfNotRunning, arg.MetadataUpdates, arg.ID)
+// The shared metadata_merge.sql template applies top-level replacements.
+func (q *Queries) JobSetMetadataIfNotRunning(ctx context.Context, db DBTX, id int64) (*JobSetMetadataIfNotRunningRow, error) {
+	row := db.QueryRowContext(ctx, jobSetMetadataIfNotRunning, id)
 	var i JobSetMetadataIfNotRunningRow
 	err := row.Scan(
 		&i.ID,
@@ -1907,15 +1903,15 @@ SET
                         THEN cast(?8 AS text)
                         ELSE finalized_at END,
     metadata     = CASE WHEN cast(?9 AS boolean) AND (typeof(metadata) <> 'text' OR json_valid(metadata))
-                        THEN jsonb_patch(json(metadata), json(?10))
+                        THEN /* TEMPLATE_BEGIN: metadata_merge_clause */ metadata /* TEMPLATE_END */
                         ELSE metadata END,
-    scheduled_at = CASE WHEN /* NOT should_cancel */(cast(?1 AS text) <> 'available' AND ?1 <> 'retryable' AND ?1 <> 'scheduled' OR (CASE WHEN typeof(metadata) <> 'text' OR json_valid(metadata) THEN metadata -> 'cancel_attempted_at' END) IS NULL) AND cast(?11 AS boolean)
-                        THEN cast(?12 AS text)
+    scheduled_at = CASE WHEN /* NOT should_cancel */(cast(?1 AS text) <> 'available' AND ?1 <> 'retryable' AND ?1 <> 'scheduled' OR (CASE WHEN typeof(metadata) <> 'text' OR json_valid(metadata) THEN metadata -> 'cancel_attempted_at' END) IS NULL) AND cast(?10 AS boolean)
+                        THEN cast(?11 AS text)
                         ELSE scheduled_at END,
     state        = CASE WHEN /* should_cancel */((?1 = 'available' OR ?1 = 'retryable' OR ?1 = 'scheduled') AND (CASE WHEN typeof(metadata) <> 'text' OR json_valid(metadata) THEN metadata -> 'cancel_attempted_at' END) IS NOT NULL)
                         THEN 'cancelled'
                         ELSE ?1 END
-WHERE id = ?13
+WHERE id = ?12
     AND state = 'running'
 RETURNING
     id,
@@ -1948,7 +1944,6 @@ type JobSetStateIfRunningParams struct {
 	FinalizedAtDoUpdate bool
 	FinalizedAt         *string
 	MetadataDoMerge     bool
-	MetadataUpdates     interface{}
 	ScheduledAtDoUpdate bool
 	ScheduledAt         string
 	ID                  int64
@@ -1994,7 +1989,6 @@ func (q *Queries) JobSetStateIfRunning(ctx context.Context, db DBTX, arg *JobSet
 		arg.FinalizedAtDoUpdate,
 		arg.FinalizedAt,
 		arg.MetadataDoMerge,
-		arg.MetadataUpdates,
 		arg.ScheduledAtDoUpdate,
 		arg.ScheduledAt,
 		arg.ID,
@@ -2026,19 +2020,18 @@ func (q *Queries) JobSetStateIfRunning(ctx context.Context, db DBTX, arg *JobSet
 const jobUpdate = `-- name: JobUpdate :one
 UPDATE /* TEMPLATE: schema */river_job
 SET
-    metadata = CASE WHEN cast(?1 AS boolean) THEN jsonb_patch(json(metadata), json(?2)) ELSE metadata END
-WHERE id = ?3
+    metadata = CASE WHEN cast(?1 AS boolean) THEN /* TEMPLATE_BEGIN: metadata_merge_clause */ metadata /* TEMPLATE_END */ ELSE metadata END
+WHERE id = ?2
 RETURNING id, json(args), attempt, attempted_at, json(attempted_by), created_at, json(errors), finalized_at, kind, max_attempts, json(metadata), priority, queue, state, scheduled_at, json(tags), unique_key, unique_states
 `
 
 type JobUpdateParams struct {
 	MetadataDoMerge bool
-	Metadata        interface{}
 	ID              int64
 }
 
 func (q *Queries) JobUpdate(ctx context.Context, db DBTX, arg *JobUpdateParams) (*RiverJob, error) {
-	row := db.QueryRowContext(ctx, jobUpdate, arg.MetadataDoMerge, arg.Metadata, arg.ID)
+	row := db.QueryRowContext(ctx, jobUpdate, arg.MetadataDoMerge, arg.ID)
 	var i RiverJob
 	err := row.Scan(
 		&i.ID,

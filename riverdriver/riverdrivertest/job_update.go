@@ -1282,6 +1282,42 @@ func exerciseJobUpdate[TTx any](ctx context.Context, t *testing.T, executorWithT
 			require.ErrorContains(t, err, "error unmarshaling `tags`")
 		})
 
+		// A metadata merge replaces each top-level value outright instead of
+		// merging into it, and stores a JSON null instead of removing the key.
+		// A resumable job relies on this to drop the cursors of completed steps.
+		t.Run("MetadataUpdatesReplaceTopLevelValues", func(t *testing.T) {
+			t.Parallel()
+
+			exec, _ := setup(ctx, t)
+
+			now := time.Now().UTC()
+
+			const (
+				metadataBefore  = `{"gone":5, "keep":{"x":1}, "river:resumable_cursor":{"c":1}, "river:resumable_step":"a"}`
+				metadataUpdates = `{"gone":null, "river:resumable_cursor":{"d":7, "n":null}, "river:resumable_step":"c"}`
+				metadataAfter   = `{"gone":null, "keep":{"x":1}, "river:resumable_cursor":{"d":7, "n":null}, "river:resumable_step":"c"}`
+			)
+
+			runningJob := testfactory.Job(ctx, t, exec, &testfactory.JobOpts{
+				Metadata: []byte(metadataBefore),
+				State:    new(rivertype.JobStateRunning),
+			})
+			retryableJob := testfactory.Job(ctx, t, exec, &testfactory.JobOpts{
+				Metadata:    []byte(metadataBefore),
+				ScheduledAt: new(now.Add(10 * time.Second)),
+				State:       new(rivertype.JobStateRetryable),
+			})
+
+			jobsAfter, err := exec.JobSetStateIfRunningMany(ctx, setStateManyParams(
+				riverdriver.JobSetStateErrorRetryable(runningJob.ID, now, makeErrPayload(t, now), []byte(metadataUpdates)),
+				riverdriver.JobSetStateErrorRetryable(retryableJob.ID, now, makeErrPayload(t, now), []byte(metadataUpdates)),
+			))
+			require.NoError(t, err)
+			require.Len(t, jobsAfter, 2)
+			require.JSONEq(t, metadataAfter, string(jobsAfter[0].Metadata))
+			require.JSONEq(t, metadataAfter, string(jobsAfter[1].Metadata))
+		})
+
 		t.Run("UpdatesOnlyMetadataForAlreadyRetryableJobs", func(t *testing.T) {
 			t.Parallel()
 
@@ -1548,6 +1584,98 @@ func exerciseJobUpdate[TTx any](ctx context.Context, t *testing.T, executorWithT
 			})
 			require.NoError(t, err)
 			require.JSONEq(t, `{"key1":"val1","key2":"val2"}`, string(updatedJob.Metadata))
+		})
+
+		t.Run("MetadataMergePreservesJSONValuesAndLiteralKeys", func(t *testing.T) {
+			t.Parallel()
+
+			exec, _ := setup(ctx, t)
+
+			job := testfactory.Job(ctx, t, exec, &testfactory.JobOpts{
+				Metadata: []byte(`{"keep":123456789012345678901234567890,"\u0061":{"old":true},"a.b":{"old":true},"empty":{"old":true},"nullable":1}`),
+			})
+			updatedJob, err := exec.JobUpdate(ctx, &riverdriver.JobUpdateParams{
+				ID:              job.ID,
+				MetadataDoMerge: true,
+				Metadata:        []byte(`{"":false,"a":{"new":true},"a.b":{"new":true},"a\"b.c":[true,false,null],"a\\b":null,"<key>&":true,"é":{},"empty":{},"nullable":null,"large":9007199254740993}`),
+			})
+			require.NoError(t, err)
+			require.JSONEq(t, `{"keep":123456789012345678901234567890,"":false,"a":{"new":true},"a.b":{"new":true},"a\"b.c":[true,false,null],"a\\b":null,"<key>&":true,"é":{},"empty":{},"nullable":null,"large":9007199254740993}`, string(updatedJob.Metadata))
+			require.Equal(t, "123456789012345678901234567890", gjson.GetBytes(updatedJob.Metadata, "keep").Raw)
+			require.Equal(t, "9007199254740993", gjson.GetBytes(updatedJob.Metadata, "large").Raw)
+			require.True(t, gjson.GetBytes(updatedJob.Metadata, "a.new").Bool())
+		})
+
+		t.Run("MetadataMergeReplacesTopLevelValues", func(t *testing.T) {
+			t.Parallel()
+
+			exec, _ := setup(ctx, t)
+
+			job := testfactory.Job(ctx, t, exec, &testfactory.JobOpts{
+				Metadata: []byte(`{"gone":5, "keep":{"x":1}, "river:resumable_cursor":{"c":1}, "river:resumable_step":"a"}`),
+			})
+
+			updatedJob, err := exec.JobUpdate(ctx, &riverdriver.JobUpdateParams{
+				ID:              job.ID,
+				MetadataDoMerge: true,
+				Metadata:        []byte(`{"gone":null, "river:resumable_cursor":{"d":7, "n":null}, "river:resumable_step":"c"}`),
+			})
+			require.NoError(t, err)
+			require.JSONEq(t,
+				`{"gone":null, "keep":{"x":1}, "river:resumable_cursor":{"d":7, "n":null}, "river:resumable_step":"c"}`,
+				string(updatedJob.Metadata),
+			)
+		})
+
+		t.Run("MetadataMergeWithManyKeys", func(t *testing.T) {
+			t.Parallel()
+
+			exec, _ := setup(ctx, t)
+
+			updates := make(map[string]any, 1200)
+			for i := range 1200 {
+				updates[fmt.Sprintf("key_%04d", i)] = map[string]any{"value": i, "nullable": nil}
+			}
+			encoded, err := json.Marshal(updates)
+			require.NoError(t, err)
+			job := testfactory.Job(ctx, t, exec, &testfactory.JobOpts{
+				Metadata: []byte(`{"keep":true,"key_0000":{"old":true}}`),
+			})
+			updatedJob, err := exec.JobUpdate(ctx, &riverdriver.JobUpdateParams{
+				ID:              job.ID,
+				MetadataDoMerge: true,
+				Metadata:        encoded,
+			})
+			require.NoError(t, err)
+			updates["keep"] = true
+			expected, err := json.Marshal(updates)
+			require.NoError(t, err)
+			require.JSONEq(t, string(expected), string(updatedJob.Metadata))
+		})
+
+		t.Run("MetadataMergeWithNonObjectMetadata", func(t *testing.T) {
+			t.Parallel()
+
+			for _, before := range []string{`[1,true,null]`, `true`, `42`, `"text"`, `null`} {
+				t.Run(before, func(t *testing.T) {
+					t.Parallel()
+
+					exec, _ := setup(ctx, t)
+
+					job := testfactory.Job(ctx, t, exec, &testfactory.JobOpts{Metadata: []byte(before)})
+					updatedJob, err := exec.JobUpdate(ctx, &riverdriver.JobUpdateParams{
+						ID:              job.ID,
+						MetadataDoMerge: true,
+						Metadata:        []byte(`{"new":null}`),
+					})
+					require.NoError(t, err)
+					expected := "[" + before + `,{"new":null}]`
+					if strings.HasPrefix(before, "[") {
+						expected = strings.TrimSuffix(before, "]") + `,{"new":null}]`
+					}
+					require.JSONEq(t, expected, string(updatedJob.Metadata))
+				})
+			}
 		})
 
 		t.Run("NoArgs", func(t *testing.T) {

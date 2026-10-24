@@ -20,6 +20,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Support large SQLite metadata updates without reaching the expression-depth limit, preserving top-level replacement and JSON null values. [PR #1533](https://github.com/riverqueue/river/pull/1533).
+
 - A `River::Config` without an explicit `id:` generates its default client ID on first use in each process, so clients built before a fork (as with preloading Puma, Unicorn, or Pitchfork servers) no longer share one ID across forked workers. Explicit IDs are unchanged, and `Config#with` copies share the original's ID. [PR #1498](https://github.com/riverqueue/river/pull/1498).
 - Inserting a job stores its encoded args as given instead of decoding and re-encoding them in Ruby, which rewrote numbers like `1.10` as `1.1` and `1e3` as `1000.0` and rounded digits beyond `Float` precision. Postgres applies its usual `jsonb` normalization, and SQLite keeps the encoded bytes, matching River's Go drivers. Affects Active Record on Postgres and SQLite, and Sequel on SQLite. [PR #1503](https://github.com/riverqueue/river/pull/1503).
 - Wake workers when scheduled jobs become available or jobs are manually retried, including workers in other clients. [PR #1496](https://github.com/riverqueue/river/pull/1496).

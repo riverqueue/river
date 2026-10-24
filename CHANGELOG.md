@@ -13,6 +13,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Fixed SQLite metadata updates recursively merging nested objects and deleting keys set to JSON null. Updates now replace whole top-level values, matching Postgres and preventing completed resumable cursor steps from running again on later retries. [PR #1533](https://github.com/riverqueue/river/pull/1533).
+
 - Fixed resumable transactional checkpoints being saved again after rollback or a failed write, and first-step cursors being lost on error, snooze, or cooperative shutdown. After a successful checkpoint write, the caller's transaction owns that progress; rollback may replay earlier unpersisted steps. The Rust, JavaScript, and Java runtimes now share the applicable behavior, including preserving progress on snooze.
 
 - Fixed `AddWorkerSafely` leaving a worker's primary kind and earlier aliases registered when a later kind alias conflicts with an existing registration. Failed registrations now leave the worker registry unchanged. [PR #1440](https://github.com/riverqueue/river/pull/1440).

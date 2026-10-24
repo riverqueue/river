@@ -88,6 +88,23 @@ const PREFILTER_METADATA_SQL = `(CASE WHEN ${invalidJsonTextSql("metadata")} THE
 const VALID_METADATA_SQL = `NOT ${invalidJsonTextSql("metadata")}`;
 
 /**
+ * Replace whole top-level values, including JSON null, like Postgres's `||`.
+ * One JSON object is bound regardless of its size. Reading values with `->`
+ * preserves booleans and numeric tokens without a host-language round trip.
+ */
+const MERGE_METADATA_SQL = `(WITH updates(doc) AS (SELECT jsonb(?))
+    SELECT CASE WHEN json_type(metadata) = 'object' THEN (
+        SELECT jsonb_group_object(key, jsonb(doc -> fullkey))
+        FROM (
+            SELECT key, fullkey, metadata AS doc FROM json_each(metadata)
+            WHERE key NOT IN (SELECT key FROM updates, json_each(doc))
+            UNION ALL
+            SELECT key, fullkey, doc FROM updates, json_each(doc)
+        )
+    ) WHEN json_type(metadata) = 'array' THEN jsonb_insert(metadata, '$[#]', doc)
+    ELSE jsonb_array(json(metadata), doc) END FROM updates)`;
+
+/**
  * Append the bound client ID to `attempted_by`, keeping the newest
  * `MAX_ATTEMPTED_BY - 1` (bound first) existing entries. Matches Go's
  * statement, except that a non-array value (Go may write JSON `null`) starts a
@@ -286,7 +303,7 @@ export function completeJobs(
         END,
         metadata = CASE
           WHEN ? AND ${VALID_METADATA_SQL}
-          THEN jsonb_patch(json(metadata), json(?))
+          THEN ${MERGE_METADATA_SQL}
           ELSE metadata
         END,
         scheduled_at = CASE
@@ -332,7 +349,7 @@ export function completeJobs(
             database,
             `UPDATE river_job
              SET metadata = CASE WHEN ${VALID_METADATA_SQL}
-               THEN jsonb_patch(json(metadata), json(?)) ELSE metadata END
+               THEN ${MERGE_METADATA_SQL} ELSE metadata END
              WHERE id = ?
                AND state != 'running'
                AND attempt = ?
@@ -550,8 +567,8 @@ function jsonContains(actual: JsonValue, expected: JsonValue): boolean {
 }
 
 /**
- * Merge metadata and set output on a job with a JSON merge patch, like River
- * for Go's SQLite `JobUpdate`.
+ * Merge metadata and set output on a job, replacing whole top-level values
+ * like the Postgres driver.
  */
 export function updateJob(
   database: DatabaseSync,
@@ -571,7 +588,7 @@ export function updateJob(
     database,
     `UPDATE river_job SET
        metadata = CASE
-         WHEN ? THEN jsonb_patch(json(metadata), json(?)) ELSE metadata END
+         WHEN ? THEN ${MERGE_METADATA_SQL} ELSE metadata END
      WHERE id = ?
      RETURNING ${JOB_COLUMNS}`
   ).get(hasMetadataPatch ? 1 : 0, encodeJson(metadataPatch, "metadata"), id);

@@ -49,6 +49,51 @@ class ClientTest {
   }
 
   @Test
+  void completionMetadataReplacesTopLevelKeys() {
+    var client = database();
+    var database = client.database();
+    var stored =
+        Json.parse(
+            """
+            {"empty":{"old":true},"keep":{"x":1},"river:resumable_step":"a","river:resumable_cursor":{"c":1},"gone":5}""");
+    var updates =
+        Json.parse(
+            """
+            {"river:resumable_step":"c","river:resumable_cursor":{"d":7,"n":null},"gone":null}""");
+    var updateObject = (tools.jackson.databind.node.ObjectNode) updates;
+    updateObject.put("", false);
+    updateObject.set("a\"b.c", Json.parse("[true,false,null]"));
+    updateObject.putNull("a\\b");
+    updateObject.set("empty", Json.object());
+    updateObject.put("large", 9_007_199_254_740_993L);
+    for (int index = 0; index < 1200; index++)
+      updateObject.set("key_" + index, Json.parse("{\"value\":" + index + ",\"nullable\":null}"));
+    var options = InsertOptions.builder().metadata(stored).build();
+    var inserted = client.insert(EMAIL, new Email("merge@example.com"), options).job();
+    var claimed =
+        client.transaction(
+            connection -> {
+              try (var statement =
+                      Sql.prepare(
+                          connection,
+                          Sql.query(database, "claim"),
+                          database.timestamp(NOW),
+                          "worker",
+                          "default",
+                          database.timestamp(NOW),
+                          1);
+                  var rows = statement.executeQuery()) {
+                assertTrue(rows.next());
+                return client.read(rows);
+              }
+            });
+    client.transaction(connection -> client.complete(connection, claimed, updates));
+    var expected = ((tools.jackson.databind.node.ObjectNode) inserted.metadata()).deepCopy();
+    updates.properties().forEach(entry -> expected.set(entry.getKey(), entry.getValue()));
+    assertEquals(expected, client.get(claimed.id()).metadata());
+  }
+
+  @Test
   void crossKindUniqueConflictsPreserveTheIncumbent() {
     var client = database();
     var firstType = JobType.of("original_kind", tools.jackson.databind.JsonNode.class);
