@@ -22,6 +22,21 @@ import (
 	"github.com/riverqueue/river/rivershared/util/timeoututil"
 )
 
+// ListenerReadyFunc runs after initial connection and each successful reconnect.
+type ListenerReadyFunc func()
+
+// ListenerReadySubscription unregisters a listener-ready callback.
+type ListenerReadySubscription struct {
+	notifier *Notifier
+}
+
+// Unregister stops future callbacks; an invocation already in progress may finish.
+func (s *ListenerReadySubscription) Unregister() {
+	s.notifier.mu.Lock()
+	defer s.notifier.mu.Unlock()
+	delete(s.notifier.listenerReadyFuncs, s)
+}
+
 type NotificationTopic string
 
 const (
@@ -88,12 +103,13 @@ type Notifier struct {
 	testSignals       notifierTestSignals
 	waitInterruptChan chan func()
 
-	mu            sync.RWMutex
-	isConnected   bool
-	isStarted     bool
-	isWaiting     bool
-	subscriptions map[NotificationTopic][]*Subscription
-	waitCancel    context.CancelFunc
+	mu                 sync.RWMutex
+	isConnected        bool
+	isStarted          bool
+	isWaiting          bool
+	listenerReadyFuncs map[*ListenerReadySubscription]ListenerReadyFunc
+	subscriptions      map[NotificationTopic][]*Subscription
+	waitCancel         context.CancelFunc
 }
 
 func New(archetype *baseservice.Archetype, listener riverdriver.Listener) *Notifier {
@@ -102,12 +118,29 @@ func New(archetype *baseservice.Archetype, listener riverdriver.Listener) *Notif
 		notificationBuf:   make(chan *riverdriver.Notification, 1000),
 		waitInterruptChan: make(chan func(), 10),
 
-		subscriptions: make(map[NotificationTopic][]*Subscription),
+		listenerReadyFuncs: make(map[*ListenerReadySubscription]ListenerReadyFunc),
+		subscriptions:      make(map[NotificationTopic][]*Subscription),
 	})
 	return notifier
 }
 
+// RegisterListenerReadyFunc registers a callback for initial connection and reconnects.
+func (n *Notifier) RegisterListenerReadyFunc(listenerReadyFunc ListenerReadyFunc) *ListenerReadySubscription {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+
+	sub := &ListenerReadySubscription{notifier: n}
+	n.listenerReadyFuncs[sub] = listenerReadyFunc
+	return sub
+}
+
 func (n *Notifier) Start(ctx context.Context) error {
+	return n.StartWithConnectContext(ctx, ctx)
+}
+
+// StartWithConnectContext starts the notifier with a separate context for its
+// initial connection, allowing startup to be canceled independently of draining.
+func (n *Notifier) StartWithConnectContext(ctx, connectCtx context.Context) error {
 	ctx, shouldStart, started, stopped := n.StartInit(ctx)
 	if !shouldStart {
 		return nil
@@ -115,7 +148,12 @@ func (n *Notifier) Start(ctx context.Context) error {
 
 	// The loop below will connect/close on every iteration, but do one initial
 	// connect so the notifier fails fast in case of an obvious problem.
-	if err := n.listenerConnect(ctx, false); err != nil {
+	connectCtx, cancelConnect := context.WithCancel(connectCtx)
+	stopCancelConnect := context.AfterFunc(ctx, cancelConnect)
+	err := n.listenerConnect(connectCtx, false)
+	stopCancelConnect()
+	cancelConnect()
+	if err != nil {
 		stopped()
 		if errors.Is(err, context.Canceled) {
 			return nil
@@ -213,6 +251,16 @@ func (n *Notifier) listenAndWait(ctx context.Context) error {
 
 	n.testSignals.ListeningBegin.Signal(struct{}{})
 	defer n.testSignals.ListeningEnd.Signal(struct{}{})
+
+	listenerReadyFuncs := func() []ListenerReadyFunc {
+		n.mu.RLock()
+		defer n.mu.RUnlock()
+
+		return maputil.Values(n.listenerReadyFuncs)
+	}()
+	for _, listenerReadyFunc := range listenerReadyFuncs {
+		listenerReadyFunc()
+	}
 
 	drainInterrupts := func() {
 		for {

@@ -1231,6 +1231,16 @@ func (c *Client[TTx]) Start(ctx context.Context) error {
 		fetchCtx := withClient(fetchCtx, c)
 		workCtx = withClient(workCtx, c)
 
+		// Keep cancellation notifications and reconnects live until producers
+		// finish draining. The notifier is stopped with the other services below.
+		if c.notifier != nil {
+			if err := c.notifier.StartWithConnectContext(context.WithoutCancel(fetchCtx), fetchCtx); err != nil {
+				workCancel(err)
+				stopServicesOnError()
+				return err
+			}
+		}
+
 		if err := startstop.StartAll(fetchCtx, c.services...); err != nil {
 			workCancel(err)
 			stopServicesOnError()
@@ -1533,11 +1543,9 @@ func (c *Client[TTx]) JobCancel(ctx context.Context, jobID int64) (*rivertype.Jo
 		return nil, err
 	}
 
-	c.notifyProducerWithoutListenerQueueControlEvent(job.Queue, &controlEventPayload{
-		Action: controlActionCancel,
-		JobID:  job.ID,
-		Queue:  job.Queue,
-	})
+	if job.State == rivertype.JobStateRunning {
+		c.notifyProducerOfCancelWithoutNotifier(ctx, job)
+	}
 
 	return job, nil
 }
@@ -2406,14 +2414,15 @@ func (c *Client[TTx]) producerAdd(queueName string, queueConfig QueueConfig) (*p
 }
 
 func (c *Client[TTx]) producerRemove(ctx context.Context, queueName string) error {
-	c.producersMu.Lock()
-	defer c.producersMu.Unlock()
-
+	c.producersMu.RLock()
 	producer, ok := c.producersByQueueName[queueName]
+	c.producersMu.RUnlock()
 	if !ok {
 		return &QueueNotFoundError{Name: queueName}
 	}
 
+	// QueueBundle serializes additions and removals. Keep the registry readable
+	// while draining so workers can still receive local cancellation requests.
 	shouldStop, stopped, finalizeStop := producer.StopInit()
 	if shouldStop {
 		select {
@@ -2425,7 +2434,9 @@ func (c *Client[TTx]) producerRemove(ctx context.Context, queueName string) erro
 		}
 	}
 
+	c.producersMu.Lock()
 	delete(c.producersByQueueName, queueName)
+	c.producersMu.Unlock()
 
 	return nil
 }
@@ -2813,7 +2824,7 @@ func (c *Client[TTx]) QueuePause(ctx context.Context, name string, opts *QueuePa
 		return err
 	}
 
-	c.notifyProducerWithoutListenerQueueControlEvent(name, controlEvent)
+	c.notifyProducerWithoutListenerQueueControlEvent(ctx, name, controlEvent)
 
 	return nil
 }
@@ -2883,7 +2894,7 @@ func (c *Client[TTx]) QueueResume(ctx context.Context, name string, opts *QueueP
 		return err
 	}
 
-	c.notifyProducerWithoutListenerQueueControlEvent(name, controlEvent)
+	c.notifyProducerWithoutListenerQueueControlEvent(ctx, name, controlEvent)
 
 	return nil
 }
@@ -2943,7 +2954,7 @@ func (c *Client[TTx]) QueueUpdate(ctx context.Context, name string, params *Queu
 		return nil, err
 	}
 
-	c.notifyProducerWithoutListenerQueueControlEvent(name, controlEvent)
+	c.notifyProducerWithoutListenerQueueControlEvent(ctx, name, controlEvent)
 
 	return queue, nil
 }
@@ -2965,20 +2976,65 @@ func (c *Client[TTx]) QueueUpdateTx(ctx context.Context, tx TTx, name string, pa
 // Should only ever be invoked *outside* a transaction. If invoked within a
 // transaction, the producer wouldn't yet be able to access the state that
 // triggered the notification because it's not committed yet.
-func (c *Client[TTx]) notifyProducerWithoutListenerQueueControlEvent(queue string, controlEvent *controlEventPayload) {
+func (c *Client[TTx]) notifyProducerWithoutListenerQueueControlEvent(ctx context.Context, queue string, controlEvent *controlEventPayload) {
 	if c.driver.SupportsListener() {
 		return
 	}
 
 	c.producersMu.RLock()
-	defer c.producersMu.RUnlock()
+	producer := c.producersByQueueName[queue]
+	c.producersMu.RUnlock()
 
-	if len(c.producersByQueueName) < 1 {
+	if producer != nil {
+		producer.TriggerQueueControlEvent(ctx, controlEvent)
+	}
+}
+
+// Deliver cancellations locally when no notifier is configured, including PollOnly.
+// Only call after commit so the producer can observe the cancellation metadata.
+func (c *Client[TTx]) notifyProducerOfCancelWithoutNotifier(ctx context.Context, job *rivertype.JobRow) {
+	if c.notifier != nil {
 		return
 	}
 
-	if producer, ok := c.producersByQueueName[queue]; ok {
-		producer.TriggerQueueControlEvent(controlEvent)
+	c.producersMu.RLock()
+	producer := c.producersByQueueName[job.Queue]
+	c.producersMu.RUnlock()
+	if producer == nil {
+		return
+	}
+
+	state := producer.runState.Load()
+	if state == nil {
+		return
+	}
+	select {
+	case <-state.done:
+		return
+	default:
+	}
+
+	producer.activeJobsMu.Lock()
+	executor := producer.activeJobs[job.ID]
+	if executor != nil {
+		sameAttemptedAt := executor.JobRow.AttemptedAt == job.AttemptedAt ||
+			(executor.JobRow.AttemptedAt != nil && job.AttemptedAt != nil && executor.JobRow.AttemptedAt.Equal(*job.AttemptedAt))
+		if executor.JobRow.Attempt != job.Attempt || !sameAttemptedAt {
+			executor = nil
+		}
+	}
+	producer.activeJobsMu.Unlock()
+
+	// Keep the matching execution attached even if delivery waits on the buffer.
+	select {
+	case producer.cancelCh <- producerCancelRequest{executor: executor, jobID: job.ID}:
+		producer.testSignals.QueueControlEventTriggered.Signal(&controlEventPayload{
+			Action: controlActionCancel,
+			JobID:  job.ID,
+			Queue:  job.Queue,
+		})
+	case <-ctx.Done():
+	case <-state.done:
 	}
 }
 

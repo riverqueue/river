@@ -2,6 +2,7 @@ package com.riverqueue;
 
 import java.util.Map;
 import java.util.function.Consumer;
+import java.util.function.LongConsumer;
 import java.util.regex.Pattern;
 
 /** Stored and transmitted values shared with the other River implementations. */
@@ -57,8 +58,7 @@ final class Protocol {
   /** Shared by both database listeners; dispatching itself requires no database I/O. */
   record Dispatcher(
       String clientId,
-      Map<Long, WorkContext<?>> active,
-      Map<Long, Long> pendingCancellation,
+      LongConsumer cancellation,
       Consumer<QueueNotice> queues,
       Consumer<LeadershipNotice> leadership) {
     void dispatch(String topic, String payload) {
@@ -70,14 +70,9 @@ final class Protocol {
       switch (topic) {
         case TOPIC_CONTROL -> {
           if (action.equals("cancel") && value.path("job_id").isIntegralNumber()) {
-            long jobId = value.path("job_id").asLong();
-            // Publish pending cancellation first so an attempt registered concurrently sees it.
-            pendingCancellation.put(jobId, System.nanoTime());
-            var context = active.get(jobId);
-            if (context != null) {
-              context.requestCancellation(WorkContext.Cancellation.REMOTE);
-              pendingCancellation.remove(jobId);
-            }
+            // Notices identify a job, not an attempt. Confirm its durable marker
+            // before cancelling so a delayed notice cannot undo a retry.
+            cancellation.accept(value.path("job_id").asLong());
           } else if ((action.equals("metadata_changed")
                   || action.equals("pause")
                   || action.equals("resume"))

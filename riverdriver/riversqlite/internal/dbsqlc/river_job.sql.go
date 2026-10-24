@@ -1450,27 +1450,70 @@ const jobRetry = `-- name: JobRetry :one
 UPDATE /* TEMPLATE: schema */river_job
 SET
     state = 'available',
-    max_attempts = CASE WHEN attempt = max_attempts THEN max_attempts + 1 ELSE max_attempts END,
-    finalized_at = NULL,
-    scheduled_at = coalesce(cast(?1 AS text), datetime('now', 'subsec'))
+    max_attempts = CASE WHEN state = 'available' AND scheduled_at < coalesce(cast(?1 AS text), datetime('now', 'subsec')) THEN max_attempts WHEN attempt = max_attempts THEN max_attempts + 1 ELSE max_attempts END,
+    finalized_at = CASE WHEN state = 'available' AND scheduled_at < coalesce(cast(?1 AS text), datetime('now', 'subsec')) THEN finalized_at ELSE NULL END,
+    metadata = CASE WHEN typeof(metadata) = 'text' AND NOT json_valid(metadata)
+        THEN metadata ELSE jsonb_remove(metadata, '$.cancel_attempted_at') END,
+    scheduled_at = CASE WHEN state = 'available' AND scheduled_at < coalesce(cast(?1 AS text), datetime('now', 'subsec')) THEN scheduled_at ELSE coalesce(cast(?1 AS text), datetime('now', 'subsec')) END
 WHERE id = ?2
     -- Do not touch running jobs:
     AND state != 'running'
-    -- If the job is already available with a prior scheduled_at, leave it alone.
+    -- Preserve the position of already available jobs while clearing stale cancellation metadata.
     --
     -- I had to invert the original 'AND NOT' to 'AND'. Something about
     -- sqlc's SQLite parser cannot detect a parameter inside an ` + "`" + `AND NOT` + "`" + `. An
     -- unfortunate bug that will hopefully be fixed in the future ...
     AND (
-        state <> 'available'
-        OR scheduled_at > coalesce(cast(?1 AS text), datetime('now', 'subsec'))
+        (CASE WHEN typeof(metadata) = 'text' AND NOT json_valid(metadata) THEN NULL
+              ELSE json_type(metadata, '$.cancel_attempted_at') END) IS NOT NULL
+        OR state <> 'available'
+        OR scheduled_at >= coalesce(cast(?1 AS text), datetime('now', 'subsec'))
     )
-RETURNING id, json(args), attempt, attempted_at, json(attempted_by), created_at, json(errors), finalized_at, kind, max_attempts, json(metadata), priority, queue, state, scheduled_at, json(tags), unique_key, unique_states
+RETURNING
+    id,
+    cast(CASE WHEN typeof(args) = 'text' AND NOT json_valid(args) THEN args ELSE json(args) END AS blob) AS args,
+    attempt,
+    attempted_at,
+    cast(CASE WHEN typeof(attempted_by) = 'text' AND NOT json_valid(attempted_by) THEN attempted_by ELSE json(attempted_by) END AS blob) AS attempted_by,
+    created_at,
+    cast(CASE WHEN typeof(errors) = 'text' AND NOT json_valid(errors) THEN errors ELSE json(errors) END AS blob) AS errors,
+    finalized_at,
+    kind,
+    max_attempts,
+    cast(CASE WHEN typeof(metadata) = 'text' AND NOT json_valid(metadata) THEN metadata ELSE json(metadata) END AS blob) AS metadata,
+    priority,
+    queue,
+    state,
+    scheduled_at,
+    cast(CASE WHEN typeof(tags) = 'text' AND NOT json_valid(tags) THEN tags ELSE json(tags) END AS blob) AS tags,
+    unique_key,
+    unique_states
 `
 
 type JobRetryParams struct {
 	Now *string
 	ID  int64
+}
+
+type JobRetryRow struct {
+	ID           int64
+	Column2      []byte
+	Attempt      int64
+	AttemptedAt  *time.Time
+	Column5      []byte
+	CreatedAt    time.Time
+	Column7      []byte
+	FinalizedAt  *time.Time
+	Kind         string
+	MaxAttempts  int64
+	Column11     []byte
+	Priority     int64
+	Queue        string
+	State        string
+	ScheduledAt  time.Time
+	Column16     []byte
+	UniqueKey    []byte
+	UniqueStates *int64
 }
 
 // Differs by necessity from other drivers because SQLite doesn't support
@@ -1482,26 +1525,26 @@ type JobRetryParams struct {
 // sqlc bug. Something about sqlc's SQLite parser cannot detect a parameter
 // inside an `AND NOT`. I'll try to get this fixed upstream at some point so we
 // can clean this up and keep it more like the Postgres version.
-func (q *Queries) JobRetry(ctx context.Context, db DBTX, arg *JobRetryParams) (*RiverJob, error) {
+func (q *Queries) JobRetry(ctx context.Context, db DBTX, arg *JobRetryParams) (*JobRetryRow, error) {
 	row := db.QueryRowContext(ctx, jobRetry, arg.Now, arg.ID)
-	var i RiverJob
+	var i JobRetryRow
 	err := row.Scan(
 		&i.ID,
-		&i.Args,
+		&i.Column2,
 		&i.Attempt,
 		&i.AttemptedAt,
-		&i.AttemptedBy,
+		&i.Column5,
 		&i.CreatedAt,
-		&i.Errors,
+		&i.Column7,
 		&i.FinalizedAt,
 		&i.Kind,
 		&i.MaxAttempts,
-		&i.Metadata,
+		&i.Column11,
 		&i.Priority,
 		&i.Queue,
 		&i.State,
 		&i.ScheduledAt,
-		&i.Tags,
+		&i.Column16,
 		&i.UniqueKey,
 		&i.UniqueStates,
 	)

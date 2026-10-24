@@ -80,7 +80,7 @@ impl Backend for PostgresBackend<'_> {
         let table = self.schema.qualify("river_job");
         let sql = format!(
             "SELECT id FROM {table} \
-             WHERE id = any($1) AND metadata ? 'cancel_attempted_at' AND state = 'running' \
+             WHERE id = any($1) AND jsonb_typeof(metadata) = 'object' AND metadata ? 'cancel_attempted_at' AND state = 'running' \
              ORDER BY id"
         );
         Ok(sqlx::query_scalar(AssertSqlSafe(sql))
@@ -238,10 +238,11 @@ impl Backend for PostgresBackend<'_> {
         let sql = format!(
             "WITH locked AS (SELECT id FROM {table} WHERE id = $1 FOR UPDATE), \
              updated AS (UPDATE {table} AS job SET state = 'available', \
-                 max_attempts = CASE WHEN attempt = max_attempts THEN max_attempts + 1 ELSE max_attempts END, \
-                 finalized_at = NULL, scheduled_at = now() \
+                 max_attempts = CASE WHEN job.state = 'available' AND job.scheduled_at < now() THEN max_attempts WHEN attempt = max_attempts THEN max_attempts + 1 ELSE max_attempts END, \
+                 finalized_at = CASE WHEN job.state = 'available' AND job.scheduled_at < now() THEN finalized_at ELSE NULL END, metadata = CASE WHEN jsonb_typeof(metadata) = 'object' \
+                     THEN metadata - 'cancel_attempted_at' ELSE metadata END, scheduled_at = CASE WHEN job.state = 'available' AND job.scheduled_at < now() THEN scheduled_at ELSE now() END \
                  FROM locked WHERE job.id = locked.id AND job.state != 'running' \
-                   AND NOT (job.state = 'available' AND job.scheduled_at < now()) RETURNING job.*) \
+                   AND ((jsonb_typeof(metadata) = 'object' AND metadata ? 'cancel_attempted_at') OR NOT (job.state = 'available' AND job.scheduled_at < now())) RETURNING job.*) \
              SELECT {}, false AS unique_skipped_as_duplicate FROM updated AS job \
              UNION ALL SELECT {}, false AS unique_skipped_as_duplicate \
                  FROM (SELECT * FROM {table} WHERE id = $1 FOR UPDATE) AS job \

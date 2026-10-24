@@ -77,9 +77,11 @@ RSpec.shared_examples "cancellation while draining" do
       runtime = client.instance_variable_get(:@runtime)
       signalled = false
       failures = 0
+      poll_failed = Queue.new
       @driver.define_singleton_method(:job_get_cancelled_ids) do |ids|
         if poll_failure && signalled && failures.zero?
           failures += 1
+          poll_failed << true
           raise "temporary cancellation query failure"
         end
         super(ids)
@@ -106,6 +108,7 @@ RSpec.shared_examples "cancellation while draining" do
         nil
       end
       Timeout.timeout(5) { draining.pop }
+      Timeout.timeout(5) { poll_failed.pop } if poll_failure
 
       # Persist through another client so only database polling can deliver it.
       River::Client.new(@driver).job_cancel(job.id)

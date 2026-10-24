@@ -1,12 +1,14 @@
 //! Client configuration and construction.
 
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicBool, AtomicU64};
+use std::sync::atomic::AtomicBool;
+#[cfg(test)]
+use std::sync::atomic::AtomicU64;
 use std::sync::{Arc, Mutex, RwLock};
 use std::time::Duration;
 
 use serde_json::{Map, Value};
-use tokio::sync::{broadcast, watch};
+use tokio::sync::{Notify, broadcast, watch};
 
 use crate::__private::Pilot;
 #[cfg(feature = "postgres")]
@@ -802,6 +804,7 @@ impl ClientBuilder {
             inner: Arc::new(ClientInner {
                 allow_legacy_job_kinds: self.allow_legacy_job_kinds,
                 allow_unregistered_job_kinds: self.allow_unregistered_job_kinds,
+                cancellation_wakeup: Notify::new(),
                 completion_sender: Mutex::new(None),
                 database: self.database,
                 default_max_attempts: self.default_max_attempts,
@@ -809,7 +812,6 @@ impl ClientBuilder {
                 events,
                 fetch_cooldown: self.fetch_cooldown,
                 fetch_kinds,
-                fetch_registration_windows: AtomicU64::new(0),
                 hooks: self.hooks,
                 id: self.id,
                 insert_middleware: self.insert_middleware,
@@ -823,7 +825,6 @@ impl ClientBuilder {
                 #[cfg(test)]
                 notifier_start_panics: AtomicU64::new(0),
                 peer_owners: Mutex::new(HashMap::new()),
-                pending_cancellations: Mutex::new(HashMap::new()),
                 periodic_jobs,
                 pilot: self.pilot,
                 poll_only: self.poll_only,

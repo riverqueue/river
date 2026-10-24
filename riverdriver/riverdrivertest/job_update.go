@@ -511,13 +511,38 @@ func exerciseJobUpdate[TTx any](ctx context.Context, t *testing.T, executorWithT
 	t.Run("JobRetry", func(t *testing.T) {
 		t.Parallel()
 
+		t.Run("ClearsCancellationWithoutReorderingAvailableJob", func(t *testing.T) {
+			t.Parallel()
+
+			exec, _ := setup(ctx, t)
+			now := time.Now().UTC()
+			job := testfactory.Job(ctx, t, exec, &testfactory.JobOpts{
+				Attempt:     new(1),
+				MaxAttempts: new(1),
+				Metadata:    []byte(`{"cancel_attempted_at":"2026-01-01T00:00:00Z","preserved":true}`),
+				ScheduledAt: new(now.Add(-time.Hour)),
+			})
+
+			retried, err := exec.JobRetry(ctx, &riverdriver.JobRetryParams{ID: job.ID, Now: &now})
+			require.NoError(t, err)
+			require.JSONEq(t, `{"preserved":true}`, string(retried.Metadata))
+			require.Equal(t, job.Attempt, retried.Attempt)
+			require.Equal(t, job.MaxAttempts, retried.MaxAttempts)
+			require.Equal(t, job.ScheduledAt, retried.ScheduledAt)
+			persisted, err := exec.JobGetByID(ctx, &riverdriver.JobGetByIDParams{ID: job.ID})
+			require.NoError(t, err)
+			require.Equal(t, retried, persisted)
+		})
+
 		t.Run("DoesNotUpdateARunningJob", func(t *testing.T) {
 			t.Parallel()
 
 			exec, _ := setup(ctx, t)
 
+			metadata := []byte(`{"cancel_attempted_at":"2026-01-01T00:00:00Z","custom":"preserved"}`)
 			job := testfactory.Job(ctx, t, exec, &testfactory.JobOpts{
-				State: new(rivertype.JobStateRunning),
+				Metadata: metadata,
+				State:    new(rivertype.JobStateRunning),
 			})
 
 			jobAfter, err := exec.JobRetry(ctx, &riverdriver.JobRetryParams{
@@ -525,11 +550,13 @@ func exerciseJobUpdate[TTx any](ctx context.Context, t *testing.T, executorWithT
 			})
 			require.NoError(t, err)
 			require.Equal(t, rivertype.JobStateRunning, jobAfter.State)
+			require.JSONEq(t, string(metadata), string(jobAfter.Metadata))
 			require.WithinDuration(t, job.ScheduledAt, jobAfter.ScheduledAt, time.Microsecond)
 
 			jobUpdated, err := exec.JobGetByID(ctx, &riverdriver.JobGetByIDParams{ID: job.ID})
 			require.NoError(t, err)
 			require.Equal(t, rivertype.JobStateRunning, jobUpdated.State)
+			require.JSONEq(t, string(metadata), string(jobUpdated.Metadata))
 		})
 
 		for _, state := range []rivertype.JobState{
@@ -561,6 +588,7 @@ func exerciseJobUpdate[TTx any](ctx context.Context, t *testing.T, executorWithT
 
 				job := testfactory.Job(ctx, t, exec, &testfactory.JobOpts{
 					FinalizedAt: finalizedAt,
+					Metadata:    []byte(`{"cancel_attempted_at":"2026-01-01T00:00:00Z","custom":"preserved"}`),
 					ScheduledAt: new(now.Add(1 * time.Hour)),
 					State:       &state,
 				})
@@ -571,12 +599,14 @@ func exerciseJobUpdate[TTx any](ctx context.Context, t *testing.T, executorWithT
 				})
 				require.NoError(t, err)
 				require.Equal(t, rivertype.JobStateAvailable, jobAfter.State)
+				require.JSONEq(t, `{"custom":"preserved"}`, string(jobAfter.Metadata))
 				require.WithinDuration(t, now, jobAfter.ScheduledAt, bundle.driver.TimePrecision())
 
 				jobUpdated, err := exec.JobGetByID(ctx, &riverdriver.JobGetByIDParams{ID: job.ID})
 				require.NoError(t, err)
 				require.Equal(t, rivertype.JobStateAvailable, jobUpdated.State)
 				require.Nil(t, jobUpdated.FinalizedAt)
+				require.JSONEq(t, `{"custom":"preserved"}`, string(jobUpdated.Metadata))
 			})
 		}
 
@@ -631,6 +661,64 @@ func exerciseJobUpdate[TTx any](ctx context.Context, t *testing.T, executorWithT
 			jobUpdated, err := exec.JobGetByID(ctx, &riverdriver.JobGetByIDParams{ID: job.ID})
 			require.NoError(t, err)
 			require.Equal(t, rivertype.JobStateAvailable, jobUpdated.State)
+		})
+
+		t.Run("IncrementsExhaustedAttemptsAtExactSchedule", func(t *testing.T) {
+			t.Parallel()
+
+			exec, _ := setup(ctx, t)
+			now := time.Now().UTC().Truncate(time.Second)
+			job := testfactory.Job(ctx, t, exec, &testfactory.JobOpts{
+				Attempt:     new(1),
+				MaxAttempts: new(1),
+				ScheduledAt: &now,
+			})
+
+			retried, err := exec.JobRetry(ctx, &riverdriver.JobRetryParams{ID: job.ID, Now: &now})
+			require.NoError(t, err)
+			require.Equal(t, 2, retried.MaxAttempts)
+			require.Equal(t, job.ScheduledAt, retried.ScheduledAt)
+		})
+
+		t.Run("PreservesInvalidMetadata", func(t *testing.T) {
+			t.Parallel()
+
+			exec, bundle := setup(ctx, t)
+			if bundle.driver.DatabaseName() != riverdriver.DatabaseNameSQLite {
+				t.Skip("only SQLite's JSON columns can hold invalid JSON")
+			}
+			job := testfactory.Job(ctx, t, exec, &testfactory.JobOpts{State: new(rivertype.JobStateRetryable)})
+			sqliteSetJobColumnMalformed(ctx, t, exec, job.ID, "metadata")
+
+			// Retry still validates its returned row, but the SQL must preserve
+			// malformed metadata and let the decoder report the invalid field.
+			_, err := exec.JobRetry(ctx, &riverdriver.JobRetryParams{ID: job.ID})
+			require.ErrorContains(t, err, "error unmarshaling `metadata`")
+			require.Equal(t, sqliteMalformedValue, sqliteJobColumnText(ctx, t, exec, job.ID, "metadata"))
+		})
+
+		t.Run("PreservesNonObjectMetadata", func(t *testing.T) {
+			t.Parallel()
+
+			for _, metadata := range []string{`["cancel_attempted_at"]`, `false`, `null`, `42`, `"cancel_attempted_at"`} {
+				t.Run(metadata, func(t *testing.T) {
+					t.Parallel()
+
+					exec, _ := setup(ctx, t)
+					job := testfactory.Job(ctx, t, exec, &testfactory.JobOpts{
+						Metadata: []byte(metadata),
+						State:    new(rivertype.JobStateRetryable),
+					})
+
+					jobAfter, err := exec.JobRetry(ctx, &riverdriver.JobRetryParams{ID: job.ID})
+					require.NoError(t, err)
+					require.Equal(t, rivertype.JobStateAvailable, jobAfter.State)
+					require.JSONEq(t, metadata, string(jobAfter.Metadata))
+					persisted, err := exec.JobGetByID(ctx, &riverdriver.JobGetByIDParams{ID: job.ID})
+					require.NoError(t, err)
+					require.JSONEq(t, metadata, string(persisted.Metadata))
+				})
+			}
 		})
 
 		t.Run("ReturnsErrNotFoundIfJobNotFound", func(t *testing.T) {

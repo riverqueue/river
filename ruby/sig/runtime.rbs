@@ -358,6 +358,7 @@ module River
       def initialize: (Time, Float, Time) -> void
     end
 
+    @cancellation_thread: Thread?
     @client: Client
     @condition: ConditionVariable
     @config: Config
@@ -404,7 +405,8 @@ module River
     private
 
     def begin_work: (Integer) -> untyped
-    def check_remote_cancellations: (String) -> untyped
+    def cancellation_loop: () -> untyped
+    def check_remote_cancellations: () -> untyped
     def error_handler_cancel?: (Exception, Job) -> bool
     def execute: (JobRow) -> untyped
     def finish_failed: (JobRow, Job, Exception, JobTiming, ?cancelled: bool, ?worker: untyped) -> untyped

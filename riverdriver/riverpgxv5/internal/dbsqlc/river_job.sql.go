@@ -599,6 +599,7 @@ const jobGetCancelRequested = `-- name: JobGetCancelRequested :many
 SELECT id
 FROM /* TEMPLATE: schema */river_job
 WHERE id = any($1::bigint[])
+    AND jsonb_typeof(metadata) = 'object'
     AND metadata ? 'cancel_attempted_at'
     AND state = 'running'
 ORDER BY id
@@ -1282,18 +1283,20 @@ updated_job AS (
     UPDATE /* TEMPLATE: schema */river_job
     SET
         state = 'available',
-        max_attempts = CASE WHEN attempt = max_attempts THEN max_attempts + 1 ELSE max_attempts END,
-        finalized_at = NULL,
-        scheduled_at = coalesce($2::timestamptz, now())
+        max_attempts = CASE WHEN river_job.state = 'available' AND river_job.scheduled_at < coalesce($2::timestamptz, now()) THEN max_attempts WHEN attempt = max_attempts THEN max_attempts + 1 ELSE max_attempts END,
+        finalized_at = CASE WHEN river_job.state = 'available' AND river_job.scheduled_at < coalesce($2::timestamptz, now()) THEN finalized_at ELSE NULL END,
+        metadata = CASE WHEN jsonb_typeof(metadata) = 'object'
+            THEN metadata - 'cancel_attempted_at' ELSE metadata END,
+        scheduled_at = CASE WHEN river_job.state = 'available' AND river_job.scheduled_at < coalesce($2::timestamptz, now()) THEN scheduled_at ELSE coalesce($2::timestamptz, now()) END
     FROM job_to_update
     WHERE river_job.id = job_to_update.id
         -- Do not touch running jobs:
         AND river_job.state != 'running'
-        -- If the job is already available with a prior scheduled_at, leave it alone.
-        AND NOT (
+        -- Already available jobs only need stale cancellation metadata cleared.
+        AND ((jsonb_typeof(metadata) = 'object' AND metadata ? 'cancel_attempted_at') OR NOT (
             river_job.state = 'available'
             AND river_job.scheduled_at < coalesce($2::timestamptz, now())
-        )
+        ))
     RETURNING river_job.id, river_job.args, river_job.attempt, river_job.attempted_at, river_job.attempted_by, river_job.created_at, river_job.errors, river_job.finalized_at, river_job.kind, river_job.max_attempts, river_job.metadata, river_job.priority, river_job.queue, river_job.state, river_job.scheduled_at, river_job.tags, river_job.unique_key, river_job.unique_states
 )
 SELECT id, args, attempt, attempted_at, attempted_by, created_at, errors, finalized_at, kind, max_attempts, metadata, priority, queue, state, scheduled_at, tags, unique_key, unique_states FROM (

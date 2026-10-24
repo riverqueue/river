@@ -9,6 +9,7 @@ import java.time.Duration;
 import java.time.Instant;
 import java.time.ZoneOffset;
 import java.util.List;
+import java.util.Map;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.TimeUnit;
@@ -26,6 +27,55 @@ class RetryTest {
   private static final JobType<String> TYPE = JobType.of("retry_test", String.class);
   @RegisterExtension final TestDatabase databases = new TestDatabase();
   @TempDir Path directory;
+
+  @Test
+  void retryClearsCancellation() {
+    var database = databases.open(directory.resolve("river.db"));
+    var client = new Client(database);
+    var inserted = client.insert(TYPE, "retry cancelled").job();
+    var cancelled = client.cancel(inserted.id());
+    assertTrue(cancelled.metadata().has("cancel_attempted_at"));
+    var retried = client.retry(inserted.id());
+    assertEquals(Job.State.AVAILABLE, retried.state());
+    assertFalse(retried.metadata().has("cancel_attempted_at"));
+    assertFalse(client.get(inserted.id()).metadata().has("cancel_attempted_at"));
+  }
+
+  @Test
+  void retryClearsCancellationWithoutReorderingAvailableJob() {
+    var database = databases.open(directory.resolve("river.db"));
+    var client = new Client(database, Clock.fixed(NOW, ZoneOffset.UTC));
+    var inserted =
+        client
+            .insert(
+                TYPE,
+                "already available",
+                InsertOptions.builder()
+                    .metadata(Map.of("cancel_attempted_at", NOW.toString(), "preserved", true))
+                    .scheduledAt(NOW.minusSeconds(3600))
+                    .build())
+            .job();
+    client.transaction(
+        connection -> {
+          try (var statement =
+              Sql.prepare(
+                  connection,
+                  "UPDATE "
+                      + database.prefix()
+                      + "river_job SET state='available', attempt=max_attempts WHERE id=?",
+                  inserted.id())) {
+            assertEquals(1, statement.executeUpdate());
+          }
+          return null;
+        });
+    var retried = client.retry(inserted.id());
+    assertEquals(inserted.scheduledAt(), retried.scheduledAt());
+    assertEquals(inserted.maxAttempts(), retried.maxAttempts());
+    var expectedMetadata = (tools.jackson.databind.node.ObjectNode) inserted.metadata().deepCopy();
+    expectedMetadata.remove("cancel_attempted_at");
+    assertEquals(expectedMetadata, retried.metadata());
+    assertEquals(retried, client.get(inserted.id()));
+  }
 
   @ParameterizedTest
   @EnumSource(Job.State.class)
@@ -65,6 +115,36 @@ class RetryTest {
       assertEquals(2, retried.maxAttempts());
       assertEquals(1, notifications.get());
     }
+  }
+
+  @ParameterizedTest
+  @ValueSource(
+      strings = {"null", "42", "false", "\"cancel_attempted_at\"", "[\"cancel_attempted_at\"]"})
+  void retryPreservesNonObjectMetadata(String metadata) {
+    var database = databases.open(directory.resolve("river.db"));
+    var client = new Client(database);
+    var inserted = client.insert(TYPE, "retry metadata").job();
+    client.transaction(
+        connection -> {
+          try (var statement =
+              Sql.prepare(
+                  connection,
+                  "UPDATE "
+                      + database.prefix()
+                      + "river_job SET state='retryable', metadata="
+                      + (database.dialect() == Database.Dialect.POSTGRES
+                          ? "CAST(? AS jsonb)"
+                          : "jsonb(?)")
+                      + " WHERE id=?",
+                  metadata,
+                  inserted.id())) {
+            assertEquals(1, statement.executeUpdate());
+          }
+          return null;
+        });
+
+    assertEquals(Job.State.AVAILABLE, client.retry(inserted.id()).state());
+    assertEquals(Json.parse(metadata), client.get(inserted.id()).metadata());
   }
 
   @ParameterizedTest
@@ -215,5 +295,37 @@ class RetryTest {
         "outer transaction remains usable",
         job.metadata().path(Protocol.METADATA_OUTPUT).asString());
     assertEquals(0, notifications.get());
+  }
+
+  @Test
+  void sqliteRetryQueryPreservesMalformedMetadata() {
+    var database = TestDatabase.sqlite(directory.resolve("river.db"));
+    var client = new Client(database);
+    var inserted = client.insert(TYPE, "retry malformed metadata").job();
+    client.transaction(
+        connection -> {
+          try (var statement =
+              Sql.prepare(
+                  connection,
+                  "UPDATE river_job SET state='retryable', metadata='[not json' WHERE id=?",
+                  inserted.id())) {
+            assertEquals(1, statement.executeUpdate());
+          }
+          // The public retry validates the locked row first. Exercise the SQL
+          // directly so cleanup cannot turn a decode error into a SQL error.
+          try (var statement =
+                  Sql.prepare(
+                      connection,
+                      Sql.query(database, "retry"),
+                      database.timestamp(NOW),
+                      inserted.id());
+              var rows = statement.executeQuery()) {
+            assertTrue(rows.next());
+            assertEquals("[not json", rows.getString("metadata"));
+          }
+          return null;
+        });
+    var error = assertThrows(IllegalArgumentException.class, () -> client.get(inserted.id()));
+    assertTrue(error.getMessage().contains("metadata"));
   }
 }

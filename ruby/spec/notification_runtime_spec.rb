@@ -30,6 +30,7 @@ RSpec.describe "River notification dispatch and recovery" do
   end
 
   it "cancels an attempt before its worker starts but ignores another queue's job" do
+    driver.define_singleton_method(:job_get_cancelled_ids) { |ids| ids }
     entry = {queue: "one", thread: Thread.current, working: false}
     runtime.instance_variable_set(:@running, 42 => entry)
     runtime.send(:receive_notification, "river_control", JSON.generate(action: "cancel", queue: "two", job_id: 42))
@@ -38,6 +39,45 @@ RSpec.describe "River notification dispatch and recovery" do
     runtime.send(:receive_notification, "river_control", JSON.generate(action: "cancel", queue: "one", job_id: 42))
     expect { runtime.send(:begin_work, 42) }.to raise_error(River::JobCancelError)
     expect(entry[:working]).to be false
+  end
+
+  [false, true].each do |working|
+    it "ignores a delayed cancellation notice after retry#{" while working" if working}" do
+      raised = []
+      thread = Object.new
+      thread.define_singleton_method(:raise) { |error| raised << error }
+      entry = {queue: "one", thread: thread, working: working}
+      runtime.instance_variable_set(:@running, 42 => entry)
+      driver.define_singleton_method(:job_get_cancelled_ids) { |_ids| [] }
+
+      runtime.send(:receive_notification, "river_control", JSON.generate(action: "cancel", queue: "one", job_id: 42))
+      runtime.send(:check_remote_cancellations)
+      runtime.send(:begin_work, 42) unless working
+
+      expect(raised).to be_empty
+      expect(entry[:cancelled]).to be_nil
+      expect(entry[:working]).to be true
+    end
+  end
+
+  it "does not interrupt a replacement registered during a cancellation check" do
+    raised = []
+    thread = Object.new
+    thread.define_singleton_method(:raise) { |error| raised << error }
+    original = {queue: "one", thread: thread, working: true}
+    replacement = original.dup
+    value = runtime
+    value.instance_variable_set(:@running, 42 => original)
+    driver.define_singleton_method(:job_get_cancelled_ids) do |ids|
+      value.instance_variable_set(:@running, 42 => replacement)
+      ids
+    end
+
+    value.send(:receive_notification, "river_control", JSON.generate(action: "cancel", queue: "one", job_id: 42))
+    value.send(:check_remote_cancellations)
+
+    expect(raised).to be_empty
+    expect(replacement[:cancelled]).to be_nil
   end
 
   it "ignores invalid payloads without disrupting the receiver" do
