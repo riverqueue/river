@@ -37,8 +37,8 @@ class PeerCancellationTest {
     var database = databases.open(directory.resolve("river.db"));
     var client =
         new Client(database)
-            .withPlugin(
-                new Plugin() {
+            .withPilot(
+                new Pilot() {
                   @Override
                   public JsonNode decode(Job<JsonNode> job) {
                     if (job.queue().equals("peers")) {

@@ -180,8 +180,8 @@ class WorkersTest {
     var attempts = new AtomicInteger();
     var client =
         client()
-            .withPlugin(
-                new Plugin() {
+            .withPilot(
+                new Pilot() {
                   @Override
                   public void afterAttempt(
                       Connection connection,
@@ -219,8 +219,8 @@ class WorkersTest {
     var attempts = new AtomicInteger();
     var client =
         client()
-            .withPlugin(
-                new Plugin() {
+            .withPilot(
+                new Pilot() {
                   @Override
                   public void afterAttempt(
                       Connection connection,
@@ -235,7 +235,7 @@ class WorkersTest {
                   public java.util.List<Client.Decoded> claim(
                       Connection connection,
                       Client.Driver driver,
-                      Plugin.Claim claim,
+                      Pilot.Claim claim,
                       Client.Transaction<java.util.List<Client.Decoded>> next)
                       throws Exception {
                     var rows = next.run(connection);
@@ -294,8 +294,8 @@ class WorkersTest {
     var context = new CompletableFuture<WorkContext<String>>();
     var client =
         client()
-            .withPlugin(
-                new Plugin() {
+            .withPilot(
+                new Pilot() {
                   @Override
                   public void afterAttempt(
                       Connection connection,
@@ -329,8 +329,8 @@ class WorkersTest {
     var release = new CountDownLatch(1);
     var client =
         client()
-            .withPlugin(
-                new Plugin() {
+            .withPilot(
+                new Pilot() {
                   @Override
                   public void producer(
                       Connection connection, Client.Driver driver, Producer producer)
@@ -437,11 +437,11 @@ class WorkersTest {
   @ParameterizedTest
   @ValueSource(ints = {-1, 0, 120})
   void rescueDefaultAccountsForTheJobTimeout(int timeoutMinutes) throws Exception {
-    var rescue = new CompletableFuture<Plugin.Rescue>();
+    var rescue = new CompletableFuture<Pilot.Rescue>();
     var client =
         client()
-            .withPlugin(
-                new Plugin() {
+            .withPilot(
+                new Pilot() {
                   @Override
                   public boolean rescue(Client client, Rescue request) {
                     rescue.complete(request);
@@ -542,10 +542,10 @@ class WorkersTest {
               }
             });
     var observer =
-        client.withExtension(
-            new Extension() {
+        client.withHooks(
+            new HookPeriodicJobsStart() {
               @Override
-              public void periodicStarted() {
+              public void start() {
                 elected.countDown();
               }
             });
@@ -788,8 +788,8 @@ class WorkersTest {
     var commit = new CountDownLatch(1);
     var client =
         client()
-            .withPlugin(
-                new Plugin() {
+            .withPilot(
+                new Pilot() {
                   @Override
                   public java.util.List<Client.Decoded> claim(
                       Connection connection,

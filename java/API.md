@@ -15,7 +15,7 @@ Java exposes every Go helper. Stored values and protocol behavior still follow G
 | `JobUpdate` output parameter, `RecordOutput` | `Client.output`, `WorkContext.output` | Names describe the supported operation; attempt output is buffered until completion. |
 | `JobCompleteTx` | `Client.complete(connection, job)`, `WorkContext.complete(connection)` | Completion keeps `Job<A>` and commits with application changes. Only a running attempt can be completed. A committed completion remains authoritative if the handler subsequently throws. |
 | Context client, cancellation, cancel/snooze errors | `WorkContext.client`, cancellation methods, `cancel`, `discard`, `snooze` | Java has no Go context parameter convention. Control methods end the attempt; virtual-thread interruption supplements cooperative cancellation. |
-| Hooks and middleware | `Extension` | Default methods group related callbacks. JDBC hooks and middleware may throw checked exceptions; insert middleware receives a standard `Callable<T>`. |
+| Plugins, hooks, and middleware | `Plugin`, `HookInsertBegin`, `HookPeriodicJobsStart`, `HookWorkBegin`, `HookWorkEnd`, `JobInsertMiddleware`, `WorkerMiddleware` | `withPlugins` activates every hook and middleware interface on a value. `withHooks` and `withMiddleware` restrict registration to that side. Plugins run first, as in Go. Functional interfaces support lambdas and checked exceptions. |
 | Retry policy | `RetryPolicy` | A lambda receives the full job and returns `Duration`; the default uses the same error-count backoff and jitter. |
 | `Queues`, queue CRUD/control APIs | `Workers.addQueue/removeQueue`, `Client.queues()` | Runtime concurrency and persisted queue state have separate owners. Reads and mutations support caller transactions. |
 | `Subscribe`, `EventKind`, `Event` | `Workers.subscribe`, `EventKind`, `Event`, `Subscription` | Enum filters and an `AutoCloseable` subscription replace channels. Callbacks are synchronous; queue events include their queue. |
@@ -27,6 +27,14 @@ Java exposes every Go helper. Stored values and protocol behavior still follow G
 
 ## Changes made before release
 
+- Replaced `Extension` and `withExtension` with separate hook and middleware
+  interfaces. Names follow Go, while functional interfaces allow Java lambdas.
+  Work-end hooks can preserve, replace, or clear the failure; a work-begin failure
+  skips the handler and work-end hooks. The conformance claim barrier now uses
+  worker middleware instead of an application-facing `afterClaim` callback.
+- Added the common `Plugin` marker and `withPlugins` registration to install all
+  of an implementation's hooks and middleware together. Renamed the internal Pro
+  storage interface and registration from `Plugin`/`withPlugin` to `Pilot`/`withPilot`.
 - Removed no-op `Client.close()`. Close `Workers` and the application-owned pool.
 - Added typed retrieval and typed transactional completion, including running-state validation.
 - Unified bulk insertion around typed homogeneous lists and mixed-kind submissions,
@@ -44,7 +52,7 @@ Java exposes every Go helper. Stored values and protocol behavior still follow G
 - Changed retry callbacks to receive the full job, enabling kind- and metadata-specific policies.
 - Added named migration options and fluent uniqueness state/kind overrides.
 - Kept destructive reset and retention helpers behind the internal driver seam.
-  `Plugin`, `Client.Driver`, protocol JSON helpers, and explicitly marked companion
+  `Pilot`, `Client.Driver`, protocol JSON helpers, and explicitly marked companion
   methods are not stable application extension APIs.
 
 Options copy collections and metadata on construction; `InsertOptions.metadata()`

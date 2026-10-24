@@ -1,15 +1,20 @@
 package com.riverqueue.conformance;
 
 import com.riverqueue.Client;
-import com.riverqueue.Extension;
+import com.riverqueue.HookInsertBegin;
+import com.riverqueue.HookPeriodicJobsStart;
+import com.riverqueue.HookWorkBegin;
+import com.riverqueue.HookWorkEnd;
 import com.riverqueue.InsertOptions;
 import com.riverqueue.Job;
+import com.riverqueue.JobInsertMiddleware;
 import com.riverqueue.JobType;
 import com.riverqueue.Json;
 import com.riverqueue.RiverException;
 import com.riverqueue.Schedule;
 import com.riverqueue.Unique;
 import com.riverqueue.WorkContext;
+import com.riverqueue.WorkerMiddleware;
 import com.riverqueue.Workers;
 import java.sql.Connection;
 import java.time.Duration;
@@ -82,53 +87,62 @@ final class RuntimeAdapter {
     };
   }
 
-  Extension instrumentation() {
-    return new Extension() {
-      @Override
-      public void afterClaim(Job<?> job) throws Exception {
-        if (claimBarrier != null && firstClaim.compareAndSet(false, true)) claimBarrier.await();
-      }
+  Client instrument(Client river) {
+    return river.withPlugins(new Instrumentation());
+  }
 
-      @Override
-      public void beforeInsert(
-          Connection connection, JobType<?> type, Object args, InsertOptions options) {
-        if (probe.instrumented) probe.trace.add("hook:insert_begin");
-      }
+  private final class Instrumentation
+      implements HookInsertBegin,
+          HookPeriodicJobsStart,
+          HookWorkBegin,
+          HookWorkEnd,
+          JobInsertMiddleware,
+          WorkerMiddleware {
+    @Override
+    public void insertBegin(
+        Connection connection, JobType<?> type, Object args, InsertOptions options) {
+      if (probe.instrumented) probe.trace.add("hook:insert_begin");
+    }
 
-      @Override
-      public void beforeWork(WorkContext<?> context) {
-        if (probe.instrumented) probe.trace.add("hook:work_begin");
-      }
+    @Override
+    public List<Job.InsertResult> insertMany(
+        Connection connection,
+        List<Client.Submission<?>> submissions,
+        Callable<List<Job.InsertResult>> next)
+        throws Exception {
+      if (probe.instrumented) probe.trace.add("middleware:insert_before");
+      var result = next.call();
+      if (probe.instrumented) probe.trace.add("middleware:insert_after");
+      return result;
+    }
 
-      @Override
-      public void afterWork(WorkContext<?> context, Throwable failure) {
-        if (probe.instrumented) probe.trace.add("hook:work_end");
-      }
+    @Override
+    public void start() {
+      probe.periodicStarts.incrementAndGet();
+      if (probe.instrumented) probe.trace.add("hook:periodic_start");
+    }
 
-      @Override
-      public <T> T insert(Connection connection, Callable<T> next) throws Exception {
-        if (probe.instrumented) probe.trace.add("middleware:insert_before");
-        T result = next.call();
-        if (probe.instrumented) probe.trace.add("middleware:insert_after");
-        return result;
+    @Override
+    public void work(WorkContext<?> context, WorkContext.Step next) throws Exception {
+      if (claimBarrier != null && firstClaim.compareAndSet(false, true)) claimBarrier.await();
+      if (probe.instrumented) probe.trace.add("middleware:work_before");
+      try {
+        next.run();
+      } finally {
+        if (probe.instrumented) probe.trace.add("middleware:work_after");
       }
+    }
 
-      @Override
-      public void periodicStarted() {
-        probe.periodicStarts.incrementAndGet();
-        if (probe.instrumented) probe.trace.add("hook:periodic_start");
-      }
+    @Override
+    public void workBegin(WorkContext<?> context) {
+      if (probe.instrumented) probe.trace.add("hook:work_begin");
+    }
 
-      @Override
-      public void work(WorkContext<?> context, WorkContext.Step next) throws Exception {
-        if (probe.instrumented) probe.trace.add("middleware:work_before");
-        try {
-          next.run();
-        } finally {
-          if (probe.instrumented) probe.trace.add("middleware:work_after");
-        }
-      }
-    };
+    @Override
+    public Throwable workEnd(WorkContext<?> context, Throwable failure) {
+      if (probe.instrumented) probe.trace.add("hook:work_end");
+      return failure;
+    }
   }
 
   void stop(boolean cancel) {

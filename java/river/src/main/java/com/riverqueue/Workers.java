@@ -242,7 +242,7 @@ public final class Workers implements AutoCloseable {
             for (var queue : queues.entrySet()) {
               if (drainingQueues.contains(queue.getKey())) continue;
               int available =
-                  river.plugin().workerLimit(queue.getKey(), queue.getValue())
+                  river.pilot().workerLimit(queue.getKey(), queue.getValue())
                       - (int)
                           active.values().stream()
                               .filter(c -> c.job().queue().equals(queue.getKey()))
@@ -335,11 +335,11 @@ public final class Workers implements AutoCloseable {
         river.transaction(
             c ->
                 river
-                    .plugin()
+                    .pilot()
                     .claim(
                         c,
                         river.driver(),
-                        new Plugin.Claim(
+                        new Pilot.Claim(
                             id,
                             queue,
                             count,
@@ -401,22 +401,24 @@ public final class Workers implements AutoCloseable {
         row,
         context,
         () -> {
-          for (var extension : river.extensions()) extension.afterClaim(row);
           workMiddleware(
               context,
               0,
               () -> {
+                for (var hook : river.hooks())
+                  if (hook instanceof HookWorkBegin workHook) workHook.workBegin(context);
                 Throwable workFailure = null;
                 try {
-                  for (var extension : river.extensions()) extension.beforeWork(context);
                   registration.handler.work(context);
                 } catch (Exception | Error e) {
                   workFailure = e;
-                  throw e;
-                } finally {
-                  for (var extension : river.extensions())
-                    extension.afterWork(context, workFailure);
                 }
+                for (var hook : river.hooks())
+                  if (hook instanceof HookWorkEnd workHook)
+                    workFailure = workHook.workEnd(context, workFailure);
+                if (workFailure instanceof Exception exception) throw exception;
+                if (workFailure instanceof Error error) throw error;
+                if (workFailure != null) throw new RuntimeException(workFailure);
               });
         });
   }
@@ -482,9 +484,12 @@ public final class Workers implements AutoCloseable {
 
   private void workMiddleware(WorkContext<?> context, int index, WorkContext.Step next)
       throws Exception {
-    if (index == river.extensions().size()) next.run();
+    if (index == river.workerMiddleware().size()) next.run();
     else
-      river.extensions().get(index).work(context, () -> workMiddleware(context, index + 1, next));
+      river
+          .workerMiddleware()
+          .get(index)
+          .work(context, () -> workMiddleware(context, index + 1, next));
   }
 
   <A> List<WorkContext<A>> claimPeers(
@@ -494,7 +499,7 @@ public final class Workers implements AutoCloseable {
         river.transaction(
             connection -> {
               var claimed = operation.run(connection);
-              river.plugin().afterPeerClaim(connection, river.driver(), claimed);
+              river.pilot().afterPeerClaim(connection, river.driver(), claimed);
               return claimed;
             });
     // Register every committed claim before decoding any arguments. A decoding failure must still
@@ -677,9 +682,9 @@ public final class Workers implements AutoCloseable {
                         }
                       }
                     for (var job : rows)
-                      if (job != null) river.plugin().afterStateChange(c, river.driver(), job);
+                      if (job != null) river.pilot().afterStateChange(c, river.driver(), job);
                     for (var completion : batch)
-                      river.plugin().afterAttempt(c, river.driver(), completion.original);
+                      river.pilot().afterAttempt(c, river.driver(), completion.original);
                     return rows;
                   });
           for (int i = 0; i < batch.size(); i++) batch.get(i).done.complete(results.get(i));
@@ -706,11 +711,11 @@ public final class Workers implements AutoCloseable {
             statement.executeUpdate();
           }
           river
-              .plugin()
+              .pilot()
               .producer(
                   c,
                   river.driver(),
-                  new Plugin.Producer(
+                  new Pilot.Producer(
                       id,
                       queue,
                       queues.getOrDefault(queue, config.queues.getOrDefault(queue, 1)),
@@ -893,7 +898,7 @@ public final class Workers implements AutoCloseable {
     }
   }
 
-  private void maintain() {
+  private void maintain() throws Exception {
     leadershipLock.lock();
     try {
       if (resigningTerm != null) resign();
@@ -957,8 +962,9 @@ public final class Workers implements AutoCloseable {
       if (!running.get()) return;
       if (!elected.equals(initializedTerm)) {
         periodicNext.clear();
-        river.plugin().leadershipStarted();
-        river.extensions().forEach(Extension::periodicStarted);
+        river.pilot().leadershipStarted();
+        for (var hook : river.hooks())
+          if (hook instanceof HookPeriodicJobsStart periodicHook) periodicHook.start();
         initializedTerm = elected;
       }
       Instant term = elected;
@@ -1019,7 +1025,7 @@ public final class Workers implements AutoCloseable {
     if (!ownsTerm(term)) return;
     schedule(now);
     if (!ownsTerm(term)) return;
-    river.plugin().maintain(river, now);
+    river.pilot().maintain(river, now);
     if (!ownsTerm(term)) return;
     rescue(now, term);
     if (!ownsTerm(term)) return;
@@ -1055,7 +1061,7 @@ public final class Workers implements AutoCloseable {
 
   private void clean(Instant now) {
     if (river
-        .plugin()
+        .pilot()
         .clean(
             river,
             now,
@@ -1188,10 +1194,10 @@ public final class Workers implements AutoCloseable {
 
   private void rescue(Instant now, Instant term) {
     if (river
-        .plugin()
+        .pilot()
         .rescue(
             river,
-            new Plugin.Rescue(
+            new Pilot.Rescue(
                 now,
                 now.minus(config.rescueAfter),
                 java.util.Set.copyOf(active.keySet()),
@@ -1645,7 +1651,7 @@ public final class Workers implements AutoCloseable {
       if (config.rescueAfter.compareTo(jobTimeout) < 0)
         throw new IllegalArgumentException("rescueAfter must not be less than jobTimeout");
       river
-          .plugin()
+          .pilot()
           .starting(leadership, cancelledRetention, completedRetention, discardedRetention);
       return new Workers(config);
     }

@@ -35,8 +35,8 @@ class RescueTest {
     var failClaim = new AtomicBoolean(mode.equals("peer_claim_retry"));
     var client =
         new Client(failingNotifications(database, maintained, failNotification))
-            .withPlugin(
-                new Plugin() {
+            .withPilot(
+                new Pilot() {
                   @Override
                   public boolean clean(Client client, Instant now) {
                     maintained.complete(null);
@@ -64,8 +64,8 @@ class RescueTest {
     var fetched = new CompletableFuture<Void>();
     var peerClient =
         new Client(database)
-            .withPlugin(
-                new Plugin() {
+            .withPilot(
+                new Pilot() {
                   @Override
                   public List<Client.Decoded> claim(
                       Connection connection,

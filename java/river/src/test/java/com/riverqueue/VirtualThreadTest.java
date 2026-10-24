@@ -68,8 +68,8 @@ class VirtualThreadTest {
       new Migrator(database).migrate();
       var client =
           new Client(database)
-              .withPlugin(
-                  new Plugin() {
+              .withPilot(
+                  new Pilot() {
                     @Override
                     public List<Client.Decoded> claim(
                         Connection connection,
@@ -84,10 +84,10 @@ class VirtualThreadTest {
                       return next.run(connection);
                     }
                   })
-              .withExtension(
-                  new Extension() {
+              .withHooks(
+                  new HookPeriodicJobsStart() {
                     @Override
-                    public void periodicStarted() {
+                    public void start() {
                       if (!args[0].equals("leadership")) return;
                       entered.countDown();
                       try {

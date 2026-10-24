@@ -76,8 +76,8 @@ class NotificationCleanupTest {
     var cleaned = new CompletableFuture<List<Long>>();
     var errors = new LinkedBlockingQueue<Throwable>();
     var client =
-        base.withPlugin(
-            new Plugin() {
+        base.withPilot(
+            new Pilot() {
               @Override
               public boolean clean(Client river, Instant now) {
                 // The next maintenance stage observes the notification cleanup's committed result.

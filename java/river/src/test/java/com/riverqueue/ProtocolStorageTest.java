@@ -66,8 +66,8 @@ class ProtocolStorageTest {
     var maintained = new CompletableFuture<Void>();
     var client =
         client()
-            .withPlugin(
-                new Plugin() {
+            .withPilot(
+                new Pilot() {
                   @Override
                   public boolean clean(Client client, Instant now) {
                     // Maintenance calls clean only after rescue has committed.

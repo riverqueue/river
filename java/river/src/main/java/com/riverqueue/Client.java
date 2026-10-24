@@ -10,6 +10,7 @@ import java.util.Arrays;
 import java.util.HexFormat;
 import java.util.List;
 import java.util.Objects;
+import java.util.stream.Stream;
 import tools.jackson.databind.JsonNode;
 
 /**
@@ -21,24 +22,53 @@ public final class Client {
   private final java.util.concurrent.CopyOnWriteArrayList<Runnable> insertListeners =
       new java.util.concurrent.CopyOnWriteArrayList<>();
   private final ThreadLocal<Commit> ownedCommit = new ThreadLocal<>();
-  private final Plugin plugin;
+  private final Pilot pilot;
   private final Clock clock;
   private final Database database;
-  private final List<Extension> extensions;
+  private final List<Hook> allHooks;
+  private final List<Hook> hooks;
+  private final List<JobInsertMiddleware> insertMiddleware;
+  private final List<Middleware> middleware;
+  private final List<Plugin> plugins;
+  private final List<WorkerMiddleware> workerMiddleware;
 
   public Client(Database database) {
     this(database, Clock.systemUTC());
   }
 
   public Client(Database database, Clock clock) {
-    this(database, clock, List.of(), new Plugin() {});
+    this(database, clock, List.of(), List.of(), List.of(), new Pilot() {});
   }
 
-  private Client(Database database, Clock clock, List<Extension> extensions, Plugin plugin) {
-    this.plugin = plugin;
+  private Client(
+      Database database,
+      Clock clock,
+      List<Hook> hooks,
+      List<Middleware> middleware,
+      List<Plugin> plugins,
+      Pilot pilot) {
+    this.pilot = pilot;
     this.database = Objects.requireNonNull(database);
     this.clock = Objects.requireNonNull(clock);
-    this.extensions = List.copyOf(extensions);
+    this.hooks = List.copyOf(hooks);
+    this.middleware = List.copyOf(middleware);
+    this.plugins = List.copyOf(plugins);
+    this.allHooks =
+        Stream.concat(this.plugins.stream(), this.hooks.stream())
+            .filter(Hook.class::isInstance)
+            .map(Hook.class::cast)
+            .toList();
+    var allMiddleware = Stream.concat(this.plugins.stream(), this.middleware.stream()).toList();
+    this.insertMiddleware =
+        allMiddleware.stream()
+            .filter(JobInsertMiddleware.class::isInstance)
+            .map(JobInsertMiddleware.class::cast)
+            .toList();
+    this.workerMiddleware =
+        allMiddleware.stream()
+            .filter(WorkerMiddleware.class::isInstance)
+            .map(WorkerMiddleware.class::cast)
+            .toList();
   }
 
   public Database database() {
@@ -53,15 +83,42 @@ public final class Client {
     return new Workers.Builder(this);
   }
 
-  public Client withExtension(Extension extension) {
-    var all = new ArrayList<>(extensions);
-    all.add(extension);
-    return new Client(database, clock, all, plugin);
+  /**
+   * Returns a new client with hooks appended in registration order, after plugins. Only hook
+   * interfaces are activated; use {@link #withPlugins(Plugin...)} to also activate middleware.
+   */
+  public Client withHooks(Hook... hooks) {
+    var all = new ArrayList<>(this.hooks);
+    all.addAll(List.of(hooks));
+    return new Client(database, clock, all, middleware, plugins, pilot);
+  }
+
+  /**
+   * Returns a new client with middleware appended after plugins; the first middleware is outermost.
+   * Only middleware interfaces are activated; use {@link #withPlugins(Plugin...)} to also activate
+   * hooks.
+   */
+  public Client withMiddleware(Middleware... middleware) {
+    var all = new ArrayList<>(this.middleware);
+    all.addAll(List.of(middleware));
+    return new Client(database, clock, hooks, all, plugins, pilot);
   }
 
   /** Internal integration point used by River Pro; not a stable application API. */
-  public Client withPlugin(Plugin plugin) {
-    return new Client(database, clock, extensions, Objects.requireNonNull(plugin));
+  public Client withPilot(Pilot pilot) {
+    return new Client(database, clock, hooks, middleware, plugins, Objects.requireNonNull(pilot));
+  }
+
+  /**
+   * Returns a new client with plugins appended in registration order. Each plugin activates all its
+   * hook and middleware interfaces. Plugins run before separately configured hooks and middleware,
+   * regardless of which registration method was called first. Repeated registrations are retained,
+   * including when the same instance is registered through multiple methods.
+   */
+  public Client withPlugins(Plugin... plugins) {
+    var all = new ArrayList<>(this.plugins);
+    all.addAll(List.of(plugins));
+    return new Client(database, clock, hooks, middleware, all, pilot);
   }
 
   Runnable onInsertCommit(Runnable listener) {
@@ -78,8 +135,8 @@ public final class Client {
     }
   }
 
-  Plugin plugin() {
-    return plugin;
+  Pilot pilot() {
+    return pilot;
   }
 
   /** Internal driver access for the matched River Pro release. */
@@ -157,18 +214,24 @@ public final class Client {
           connection,
           c ->
               insertMiddleware(
-                  c,
-                  0,
-                  () -> {
-                    for (var extension : extensions)
-                      extension.beforeInsert(c, type, original.args(), options);
-                    return insertOne(c, type, original.args(), options, original, null);
-                  }));
+                      c,
+                      List.of(type.submission(original.args(), options)),
+                      0,
+                      () -> {
+                        insertBegin(c, type, original.args(), options);
+                        return List.of(
+                            insertOne(c, type, original.args(), options, original, null));
+                      })
+                  .getFirst());
     }
   }
 
-  List<Extension> extensions() {
-    return extensions;
+  List<Hook> hooks() {
+    return allHooks;
+  }
+
+  List<WorkerMiddleware> workerMiddleware() {
+    return workerMiddleware;
   }
 
   public Job<JsonNode> cancel(long id) {
@@ -191,7 +254,7 @@ public final class Client {
               var rows = statement.executeQuery()) {
             if (!rows.next()) return get(c, id);
             var job = read(rows);
-            plugin.afterStateChange(c, driver(), job);
+            pilot.afterStateChange(c, driver(), job);
             notify(c, Protocol.cancel(id, job.queue()));
             return job;
           }
@@ -213,7 +276,7 @@ public final class Client {
               var rows = statement.executeQuery()) {
             rows.next();
             var deleted = read(rows);
-            plugin.afterDelete(c, driver(), deleted);
+            pilot.afterDelete(c, driver(), deleted);
             return deleted;
           }
         });
@@ -274,7 +337,7 @@ public final class Client {
               var rows = statement.executeQuery()) {
             if (!rows.next()) return get(c, job.id()).mapArgs(ignored -> job.args());
             var completed = read(rows);
-            plugin.afterStateChange(c, driver(), completed);
+            pilot.afterStateChange(c, driver(), completed);
             return completed.mapArgs(ignored -> job.args());
           }
         });
@@ -313,7 +376,7 @@ public final class Client {
                 // Recheck every filter atomically: a peer may have updated this job since listing.
                 if (!rows.next()) continue;
                 var deleted = read(rows);
-                plugin.afterDelete(c, driver(), deleted);
+                pilot.afterDelete(c, driver(), deleted);
                 result.add(deleted);
               }
             }
@@ -382,22 +445,38 @@ public final class Client {
         connection,
         c -> {
           return insertMiddleware(
-              c,
-              0,
-              () -> {
-                for (var extension : extensions) extension.beforeInsert(c, type, args, options);
-                return insertOne(c, type, args, options, null, scheduledDefault);
-              });
+                  c,
+                  List.of(type.submission(args, options)),
+                  0,
+                  () -> {
+                    insertBegin(c, type, args, options);
+                    return List.of(insertOne(c, type, args, options, null, scheduledDefault));
+                  })
+              .getFirst();
         });
   }
 
-  private <T> T insertMiddleware(
-      Connection connection, int index, java.util.concurrent.Callable<T> next) throws Exception {
-    return index == extensions.size()
+  private void insertBegin(
+      Connection connection, JobType<?> type, Object args, InsertOptions options) throws Exception {
+    for (var hook : allHooks)
+      if (hook instanceof HookInsertBegin insertHook)
+        insertHook.insertBegin(connection, type, args, options);
+  }
+
+  private List<Job.InsertResult> insertMiddleware(
+      Connection connection,
+      List<Submission<?>> submissions,
+      int index,
+      java.util.concurrent.Callable<List<Job.InsertResult>> next)
+      throws Exception {
+    return index == insertMiddleware.size()
         ? next.call()
-        : extensions
+        : insertMiddleware
             .get(index)
-            .insert(connection, () -> insertMiddleware(connection, index + 1, next));
+            .insertMany(
+                connection,
+                submissions,
+                () -> insertMiddleware(connection, submissions, index + 1, next));
   }
 
   /** Inserts jobs of one kind atomically, inheriting the job type's defaults. */
@@ -420,7 +499,7 @@ public final class Client {
   /** Inserts jobs of one kind with common options in the caller's transaction. */
   public <A> List<Job.InsertResult> insertMany(
       Connection connection, JobType<A> type, List<A> args, InsertOptions options) {
-    return insertBatch(connection, args, (c, arg) -> insertWithHooks(c, type, arg, options));
+    return insertMany(connection, args.stream().map(arg -> type.submission(arg, options)).toList());
   }
 
   /** Inserts mixed job kinds and per-job options atomically, in input order. */
@@ -431,13 +510,13 @@ public final class Client {
   /** Inserts mixed job kinds and per-job options inside the caller's transaction. */
   public List<Job.InsertResult> insertMany(
       Connection connection, List<? extends Submission<?>> submissions) {
-    return insertBatch(connection, submissions, (c, submission) -> insertSubmission(c, submission));
+    return insertBatch(connection, List.copyOf(submissions));
   }
 
   private <A> Job.InsertResult insertWithHooks(
       Connection connection, JobType<A> type, A args, InsertOptions options) {
     try {
-      for (var extension : extensions) extension.beforeInsert(connection, type, args, options);
+      insertBegin(connection, type, args, options);
     } catch (Exception error) {
       throw propagate(error);
     }
@@ -448,22 +527,21 @@ public final class Client {
     return insertWithHooks(connection, value.type(), value.args(), value.options());
   }
 
-  private <S> List<Job.InsertResult> insertBatch(
-      Connection connection,
-      List<S> values,
-      java.util.function.BiFunction<Connection, S, Job.InsertResult> insert) {
-    if (values.isEmpty()) throw new IllegalArgumentException("Cannot insert an empty batch");
+  private List<Job.InsertResult> insertBatch(
+      Connection connection, List<Submission<?>> submissions) {
+    if (submissions.isEmpty()) throw new IllegalArgumentException("Cannot insert an empty batch");
     return atomic(
         connection,
         c ->
             insertMiddleware(
                 c,
+                submissions,
                 0,
                 () -> {
                   var results = new ArrayList<Job.InsertResult>();
                   var keys = new java.util.HashSet<String>();
-                  for (var value : values) {
-                    var result = insert.apply(c, value);
+                  for (var submission : submissions) {
+                    var result = insertSubmission(c, submission);
                     if (result.job().uniqueKey() != null && !keys.add(result.job().uniqueKey()))
                       throw new RiverException(
                           RiverException.Code.REJECTED, "Batch repeats a unique key");
@@ -490,7 +568,7 @@ public final class Client {
     String encodedArgs = Json.encode(args);
     try {
       var prepared =
-          plugin.prepare(connection, driver(), new Plugin.Insert(type, encodedArgs, resolved));
+          pilot.prepare(connection, driver(), new Pilot.Insert(type, encodedArgs, resolved));
       encodedArgs = prepared.args();
       resolved = prepared.options();
       validate(resolved);
@@ -585,7 +663,7 @@ public final class Client {
                     .path(Protocol.METADATA_UNIQUE_NONCE)
                     .equals(metadata.path(Protocol.METADATA_UNIQUE_NONCE))
                 : rows.getBoolean("duplicate");
-        if (!duplicate) plugin.afterInsert(connection, driver(), job);
+        if (!duplicate) pilot.afterInsert(connection, driver(), job);
         if (!duplicate && job.state() == Job.State.AVAILABLE) notifyInsert(connection, job.queue());
         return new Job.InsertResult(job, duplicate);
       } finally {
@@ -709,7 +787,7 @@ public final class Client {
               var rows = statement.executeQuery()) {
             boolean updated = rows.next();
             var job = updated ? read(rows) : before;
-            plugin.afterStateChange(c, driver(), job);
+            pilot.afterStateChange(c, driver(), job);
             if (updated) notifyInsert(c, job.queue());
             return job;
           }
@@ -809,7 +887,7 @@ public final class Client {
   }
 
   <A> Job<A> typed(Job<JsonNode> job, JobType<A> type) {
-    return job.mapArgs(ignored -> Json.decode(plugin.decode(job), type.argsType()));
+    return job.mapArgs(ignored -> Json.decode(pilot.decode(job), type.argsType()));
   }
 
   Job<JsonNode> read(ResultSet rows) throws SQLException {

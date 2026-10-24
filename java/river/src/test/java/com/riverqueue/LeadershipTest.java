@@ -67,10 +67,10 @@ class LeadershipTest {
     var reported = new CompletableFuture<Void>();
     var client =
         new Client(failLeadershipCommit(database, failCommit))
-            .withExtension(
-                new Extension() {
+            .withHooks(
+                new HookPeriodicJobsStart() {
                   @Override
-                  public void periodicStarted() {
+                  public void start() {
                     started.countDown();
                   }
                 });
@@ -190,10 +190,10 @@ class LeadershipTest {
     var starts = new LinkedBlockingQueue<Boolean>();
     var errors = new LinkedBlockingQueue<Throwable>();
     client =
-        client.withExtension(
-            new Extension() {
+        client.withHooks(
+            new HookPeriodicJobsStart() {
               @Override
-              public void periodicStarted() {
+              public void start() {
                 starts.add(true);
               }
             });
@@ -252,10 +252,10 @@ class LeadershipTest {
     try (first) {
       assertTrue(firstCheck.await(5, TimeUnit.SECONDS));
       var follower =
-          client.withExtension(
-              new Extension() {
+          client.withHooks(
+              new HookPeriodicJobsStart() {
                 @Override
-                public void periodicStarted() {
+                public void start() {
                   elected.countDown();
                 }
               });
@@ -297,8 +297,8 @@ class LeadershipTest {
     var rescues = new AtomicInteger();
     var errors = new LinkedBlockingQueue<Throwable>();
     var blocked =
-        base.withPlugin(
-            new Plugin() {
+        base.withPilot(
+            new Pilot() {
               @Override
               public void maintain(Client client, Instant now) {
                 entered.countDown();
@@ -330,10 +330,10 @@ class LeadershipTest {
       assertTrue(entered.await(5, TimeUnit.SECONDS));
       var elected = new CountDownLatch(1);
       var peer =
-          base.withExtension(
-              new Extension() {
+          base.withHooks(
+              new HookPeriodicJobsStart() {
                 @Override
-                public void periodicStarted() {
+                public void start() {
                   elected.countDown();
                 }
               });
@@ -369,10 +369,10 @@ class LeadershipTest {
     var errors = new LinkedBlockingQueue<Throwable>();
     var client =
         new Client(databases.open(directory.resolve("river.db")))
-            .withExtension(
-                new Extension() {
+            .withHooks(
+                new HookPeriodicJobsStart() {
                   @Override
-                  public void periodicStarted() {
+                  public void start() {
                     if (attempts.incrementAndGet() == 1)
                       throw new IllegalStateException("startup failed");
                     started.countDown();
@@ -406,8 +406,8 @@ class LeadershipTest {
     var checked = new CountDownLatch(1);
     var client =
         new Client(failLeadershipCommit(database, failCommit))
-            .withPlugin(
-                new Plugin() {
+            .withPilot(
+                new Pilot() {
                   @Override
                   public void producer(
                       Connection connection, Client.Driver driver, Producer producer)

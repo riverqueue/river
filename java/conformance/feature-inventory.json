@@ -504,7 +504,7 @@
       "id": "config.AdvisoryLockPrefix",
       "rationale": "Copied into the periodic job enqueuer's configuration but not used to derive any lock key in this version; it has no persisted or cross-process effect to match.",
       "source": "client.go:river.Config.AdvisoryLockPrefix",
-      "java_surface": "Workers.Builder, JobType, Extension, Database"
+      "java_surface": "Workers.Builder, JobType, Hook, Middleware, Database"
     },
     {
       "applicability": "protocol_visible",
@@ -516,7 +516,7 @@
         "maintenance_job_cleaner_retention"
       ],
       "source": "client.go:river.Config.CancelledJobRetentionPeriod",
-      "java_surface": "Workers.Builder, JobType, Extension, Database"
+      "java_surface": "Workers.Builder, JobType, Hook, Middleware, Database"
     },
     {
       "applicability": "protocol_visible",
@@ -528,7 +528,7 @@
         "maintenance_job_cleaner_retention"
       ],
       "source": "client.go:river.Config.CompletedJobRetentionPeriod",
-      "java_surface": "Workers.Builder, JobType, Extension, Database"
+      "java_surface": "Workers.Builder, JobType, Hook, Middleware, Database"
     },
     {
       "applicability": "protocol_visible",
@@ -540,7 +540,7 @@
         "maintenance_job_cleaner_retention"
       ],
       "source": "client.go:river.Config.DiscardedJobRetentionPeriod",
-      "java_surface": "Workers.Builder, JobType, Extension, Database"
+      "java_surface": "Workers.Builder, JobType, Hook, Middleware, Database"
     },
     {
       "applicability": "api_equivalent",
@@ -552,7 +552,7 @@
         "error_handler_cancel_override"
       ],
       "source": "client.go:river.Config.ErrorHandler",
-      "java_surface": "Workers.Builder, JobType, Extension, Database"
+      "java_surface": "Workers.Builder, JobType, Hook, Middleware, Database"
     },
     {
       "applicability": "api_equivalent",
@@ -561,7 +561,7 @@
       "id": "config.FetchCooldown",
       "rationale": "Per-client minimum interval between fetches (a throughput throttle), which also suppresses a client's repeated insert notification for a queue within the interval on every backend. Implementations expose an equivalent client-level knob with the same default and minimum. Rows are unaffected; the reference adapter's 1 ms setting keeps notification scenarios deterministic.",
       "source": "client.go:river.Config.FetchCooldown",
-      "java_surface": "Workers.Builder, JobType, Extension, Database",
+      "java_surface": "Workers.Builder, JobType, Hook, Middleware, Database",
       "java_difference": "Wakeups are coalesced; Java does not expose a separate fetch cooldown knob."
     },
     {
@@ -571,7 +571,7 @@
       "id": "config.FetchOnlyKnownKinds",
       "rationale": "Restricts a client's claims to the kinds of its registered workers, including aliases, so jobs of other kinds stay available without using attempts. The filter is local to the claiming client; implementations expose an equivalent option, and the jobs it leaves are ordinary available rows any client may work.",
       "source": "client.go:river.Config.FetchOnlyKnownKinds",
-      "java_surface": "Workers.Builder, JobType, Extension, Database"
+      "java_surface": "Workers.Builder, JobType, Hook, Middleware, Database"
     },
     {
       "applicability": "api_equivalent",
@@ -584,7 +584,7 @@
         "notification_only_wakeups"
       ],
       "source": "client.go:river.Config.FetchPollInterval",
-      "java_surface": "Workers.Builder, JobType, Extension, Database"
+      "java_surface": "Workers.Builder, JobType, Hook, Middleware, Database"
     },
     {
       "applicability": "api_equivalent",
@@ -593,7 +593,7 @@
       "id": "config.Hooks",
       "rationale": "Registration of global hooks in each language's idiom. Hook ordering semantics are exercised through plugin registration in extension_hook_middleware_order.",
       "source": "client.go:river.Config.Hooks",
-      "java_surface": "Workers.Builder, JobType, Extension, Database"
+      "java_surface": "Client.withHooks"
     },
     {
       "applicability": "protocol_visible",
@@ -606,7 +606,7 @@
         "sqlite_runtime_attempted_by_ordering"
       ],
       "source": "client.go:river.Config.ID",
-      "java_surface": "Workers.Builder, JobType, Extension, Database"
+      "java_surface": "Workers.Builder, JobType, Hook, Middleware, Database"
     },
     {
       "applicability": "internal",
@@ -615,7 +615,7 @@
       "id": "config.JobCleanerTimeout",
       "rationale": "Timeout for individual job cleaner queries; bounds local work only and changes no persisted outcome.",
       "source": "client.go:river.Config.JobCleanerTimeout",
-      "java_surface": "Workers.Builder, JobType, Extension, Database"
+      "java_surface": "Workers.Builder, JobType, Hook, Middleware, Database"
     },
     {
       "applicability": "not_applicable",
@@ -624,7 +624,7 @@
       "id": "config.JobInsertMiddleware",
       "rationale": "Deprecated Go field superseded by Plugins. The insert-middleware concept is classified under extension.rivertype.JobInsertMiddleware.",
       "source": "client.go:river.Config.JobInsertMiddleware",
-      "java_surface": "Workers.Builder, JobType, Extension, Database"
+      "java_surface": "Workers.Builder, JobType, Hook, Middleware, Database"
     },
     {
       "applicability": "api_equivalent",
@@ -636,7 +636,7 @@
         "stuck_job_detection"
       ],
       "source": "client.go:river.Config.JobStuckHandler",
-      "java_surface": "Workers.Builder, JobType, Extension, Database"
+      "java_surface": "Workers.Builder, JobType, Hook, Middleware, Database"
     },
     {
       "applicability": "api_equivalent",
@@ -648,7 +648,7 @@
         "stuck_job_detection"
       ],
       "source": "client.go:river.Config.JobStuckThreshold",
-      "java_surface": "Workers.Builder, JobType, Extension, Database"
+      "java_surface": "Workers.Builder, JobType, Hook, Middleware, Database"
     },
     {
       "applicability": "protocol_visible",
@@ -660,7 +660,7 @@
         "timeout_cancellation"
       ],
       "source": "client.go:river.Config.JobTimeout",
-      "java_surface": "Workers.Builder, JobType, Extension, Database"
+      "java_surface": "Workers.Builder, JobType, Hook, Middleware, Database"
     },
     {
       "applicability": "protocol_visible",
@@ -674,7 +674,7 @@
         "sqlite_runtime_leader_election_disabled"
       ],
       "source": "client.go:river.Config.LeaderElectionDisabled",
-      "java_surface": "Workers.Builder, JobType, Extension, Database"
+      "java_surface": "Workers.Builder, JobType, Hook, Middleware, Database"
     },
     {
       "applicability": "api_equivalent",
@@ -683,7 +683,7 @@
       "id": "config.Logger",
       "rationale": "Each implementation uses its own logging facility.",
       "source": "client.go:river.Config.Logger",
-      "java_surface": "Workers.Builder, JobType, Extension, Database",
+      "java_surface": "Workers.Builder, JobType, Hook, Middleware, Database",
       "java_difference": "Uses System.Logger and Workers.Builder.errorHandler instead of a logger object on the client."
     },
     {
@@ -697,7 +697,7 @@
         "reference_insert_candidate_work"
       ],
       "source": "client.go:river.Config.MaxAttempts",
-      "java_surface": "Workers.Builder, JobType, Extension, Database",
+      "java_surface": "Workers.Builder, JobType, Hook, Middleware, Database",
       "java_difference": "Configure insert defaults on JobType instead of a process-wide client default."
     },
     {
@@ -707,7 +707,7 @@
       "id": "config.Middleware",
       "rationale": "Registration of global middleware in each language's idiom. Middleware ordering semantics are exercised through plugin registration in extension_hook_middleware_order.",
       "source": "client.go:river.Config.Middleware",
-      "java_surface": "Workers.Builder, JobType, Extension, Database"
+      "java_surface": "Client.withMiddleware"
     },
     {
       "applicability": "protocol_visible",
@@ -722,7 +722,7 @@
         "sqlite_runtime_periodic_scheduler"
       ],
       "source": "client.go:river.Config.PeriodicJobs",
-      "java_surface": "Workers.Builder, JobType, Extension, Database"
+      "java_surface": "Workers.Builder, JobType, Hook, Middleware, Database"
     },
     {
       "applicability": "api_equivalent",
@@ -734,7 +734,7 @@
         "extension_hook_middleware_order"
       ],
       "source": "client.go:river.Config.Plugins",
-      "java_surface": "Workers.Builder, JobType, Extension, Database"
+      "java_surface": "Client.withPlugins"
     },
     {
       "applicability": "api_equivalent",
@@ -748,7 +748,7 @@
         "sqlite_runtime_poll_only_recovery"
       ],
       "source": "client.go:river.Config.PollOnly",
-      "java_surface": "Workers.Builder, JobType, Extension, Database"
+      "java_surface": "Workers.Builder, JobType, Hook, Middleware, Database"
     },
     {
       "applicability": "protocol_visible",
@@ -761,7 +761,7 @@
         "dynamic_queue_add_reconfigure_remove"
       ],
       "source": "client.go:river.Config.Queues",
-      "java_surface": "Workers.Builder, JobType, Extension, Database"
+      "java_surface": "Workers.Builder, JobType, Hook, Middleware, Database"
     },
     {
       "applicability": "protocol_visible",
@@ -773,7 +773,7 @@
         "maintenance_reindexer_skips_artifacts"
       ],
       "source": "client.go:river.Config.ReindexerIndexNames",
-      "java_surface": "Workers.Builder, JobType, Extension, Database"
+      "java_surface": "Workers.Builder, JobType, Hook, Middleware, Database"
     },
     {
       "applicability": "protocol_visible",
@@ -785,7 +785,7 @@
         "maintenance_reindexer_skips_artifacts"
       ],
       "source": "client.go:river.Config.ReindexerSchedule",
-      "java_surface": "Workers.Builder, JobType, Extension, Database",
+      "java_surface": "Workers.Builder, JobType, Hook, Middleware, Database",
       "java_difference": "Supports a duration override or the default daily UTC schedule; arbitrary reindex cron schedules are not exposed."
     },
     {
@@ -795,7 +795,7 @@
       "id": "config.ReindexerTimeout",
       "rationale": "Per-reindex operation timeout; bounds local work only.",
       "source": "client.go:river.Config.ReindexerTimeout",
-      "java_surface": "Workers.Builder, JobType, Extension, Database"
+      "java_surface": "Workers.Builder, JobType, Hook, Middleware, Database"
     },
     {
       "applicability": "protocol_visible",
@@ -809,7 +809,7 @@
         "reference_process_kill_candidate_rescue"
       ],
       "source": "client.go:river.Config.RescueStuckJobsAfter",
-      "java_surface": "Workers.Builder, JobType, Extension, Database"
+      "java_surface": "Workers.Builder, JobType, Hook, Middleware, Database"
     },
     {
       "applicability": "protocol_visible",
@@ -822,7 +822,7 @@
         "deterministic_retry_clock_rng"
       ],
       "source": "client.go:river.Config.RetryPolicy",
-      "java_surface": "Workers.Builder, JobType, Extension, Database"
+      "java_surface": "Workers.Builder, JobType, Hook, Middleware, Database"
     },
     {
       "applicability": "protocol_visible",
@@ -835,7 +835,7 @@
         "custom_schema_reference_migrate_candidate_work"
       ],
       "source": "client.go:river.Config.Schema",
-      "java_surface": "Workers.Builder, JobType, Extension, Database"
+      "java_surface": "Workers.Builder, JobType, Hook, Middleware, Database"
     },
     {
       "applicability": "api_equivalent",
@@ -844,7 +844,7 @@
       "id": "config.SkipJobKindValidation",
       "rationale": "Deprecated escape hatch that skips kind-format validation at insert time; implementations may offer an equivalent legacy-kind option.",
       "source": "client.go:river.Config.SkipJobKindValidation",
-      "java_surface": "Workers.Builder, JobType, Extension, Database",
+      "java_surface": "Workers.Builder, JobType, Hook, Middleware, Database",
       "java_difference": "New JobType values require the Go-compatible kind format; no legacy validation bypass is exposed."
     },
     {
@@ -857,7 +857,7 @@
         "mixed_unknown_kind_error"
       ],
       "source": "client.go:river.Config.SkipUnknownJobCheck",
-      "java_surface": "Workers.Builder, JobType, Extension, Database",
+      "java_surface": "Workers.Builder, JobType, Hook, Middleware, Database",
       "java_difference": "Inserts are independent of worker registrations, which permits inserting jobs owned by other languages."
     },
     {
@@ -870,7 +870,7 @@
         "hard_shutdown_soft_stop_classification"
       ],
       "source": "client.go:river.Config.SoftStopTimeout",
-      "java_surface": "Workers.Builder, JobType, Extension, Database"
+      "java_surface": "Workers.Builder, JobType, Hook, Middleware, Database"
     },
     {
       "applicability": "not_applicable",
@@ -879,7 +879,7 @@
       "id": "config.Test",
       "rationale": "Go test-environment settings (time generator, unique enforcement toggle). Conformance drives time through the adapter's clock_set instead.",
       "source": "client.go:river.Config.Test",
-      "java_surface": "Workers.Builder, JobType, Extension, Database"
+      "java_surface": "Workers.Builder, JobType, Hook, Middleware, Database"
     },
     {
       "applicability": "not_applicable",
@@ -888,7 +888,7 @@
       "id": "config.TestOnly",
       "rationale": "Go test-suite switch that removes startup jitter; not part of any production behavior.",
       "source": "client.go:river.Config.TestOnly",
-      "java_surface": "Workers.Builder, JobType, Extension, Database"
+      "java_surface": "Workers.Builder, JobType, Hook, Middleware, Database"
     },
     {
       "applicability": "not_applicable",
@@ -897,7 +897,7 @@
       "id": "config.WorkerMiddleware",
       "rationale": "Deprecated Go field superseded by Plugins. The worker-middleware concept is classified under extension.rivertype.WorkerMiddleware.",
       "source": "client.go:river.Config.WorkerMiddleware",
-      "java_surface": "Workers.Builder, JobType, Extension, Database"
+      "java_surface": "Workers.Builder, JobType, Hook, Middleware, Database"
     },
     {
       "applicability": "api_equivalent",
@@ -906,7 +906,7 @@
       "id": "config.Workers",
       "rationale": "Language-native worker registry mapping kinds to handlers.",
       "source": "client.go:river.Config.Workers",
-      "java_surface": "Workers.Builder, JobType, Extension, Database"
+      "java_surface": "Workers.Builder, JobType, Hook, Middleware, Database"
     },
     {
       "applicability": "driver_specific",
@@ -1851,7 +1851,7 @@
       "id": "extension.riverpilot.Pilot.JobCancel",
       "rationale": "Part of the unstable Go extension seam (riverpilot) used to substitute storage operations. Implementations may have their own seam; it carries no cross-language contract, and the default behavior's effects are covered by the driver and protocol items.",
       "source": "rivershared/riverpilot/pilot.go:riverpilot.Pilot.JobCancel",
-      "java_surface": "Extension and Plugin (internal Pro seam)"
+      "java_surface": "Pilot and Client.Driver (internal Pro seam)"
     },
     {
       "applicability": "internal",
@@ -1860,7 +1860,7 @@
       "id": "extension.riverpilot.Pilot.JobCleanerQueuesExcluded",
       "rationale": "Part of the unstable Go extension seam (riverpilot) used to substitute storage operations. Implementations may have their own seam; it carries no cross-language contract, and the default behavior's effects are covered by the driver and protocol items.",
       "source": "rivershared/riverpilot/pilot.go:riverpilot.Pilot.JobCleanerQueuesExcluded",
-      "java_surface": "Extension and Plugin (internal Pro seam)"
+      "java_surface": "Pilot and Client.Driver (internal Pro seam)"
     },
     {
       "applicability": "internal",
@@ -1869,7 +1869,7 @@
       "id": "extension.riverpilot.Pilot.JobGetAvailable",
       "rationale": "Part of the unstable Go extension seam (riverpilot) used to substitute storage operations. Implementations may have their own seam; it carries no cross-language contract, and the default behavior's effects are covered by the driver and protocol items.",
       "source": "rivershared/riverpilot/pilot.go:riverpilot.Pilot.JobGetAvailable",
-      "java_surface": "Extension and Plugin (internal Pro seam)"
+      "java_surface": "Pilot and Client.Driver (internal Pro seam)"
     },
     {
       "applicability": "internal",
@@ -1878,7 +1878,7 @@
       "id": "extension.riverpilot.Pilot.JobInsertMany",
       "rationale": "Part of the unstable Go extension seam (riverpilot) used to substitute storage operations. Implementations may have their own seam; it carries no cross-language contract, and the default behavior's effects are covered by the driver and protocol items.",
       "source": "rivershared/riverpilot/pilot.go:riverpilot.Pilot.JobInsertMany",
-      "java_surface": "Extension and Plugin (internal Pro seam)"
+      "java_surface": "Pilot and Client.Driver (internal Pro seam)"
     },
     {
       "applicability": "internal",
@@ -1887,7 +1887,7 @@
       "id": "extension.riverpilot.Pilot.JobRetry",
       "rationale": "Part of the unstable Go extension seam (riverpilot) used to substitute storage operations. Implementations may have their own seam; it carries no cross-language contract, and the default behavior's effects are covered by the driver and protocol items.",
       "source": "rivershared/riverpilot/pilot.go:riverpilot.Pilot.JobRetry",
-      "java_surface": "Extension and Plugin (internal Pro seam)"
+      "java_surface": "Pilot and Client.Driver (internal Pro seam)"
     },
     {
       "applicability": "internal",
@@ -1896,7 +1896,7 @@
       "id": "extension.riverpilot.Pilot.JobSetStateIfRunningMany",
       "rationale": "Part of the unstable Go extension seam (riverpilot) used to substitute storage operations. Implementations may have their own seam; it carries no cross-language contract, and the default behavior's effects are covered by the driver and protocol items.",
       "source": "rivershared/riverpilot/pilot.go:riverpilot.Pilot.JobSetStateIfRunningMany",
-      "java_surface": "Extension and Plugin (internal Pro seam)"
+      "java_surface": "Pilot and Client.Driver (internal Pro seam)"
     },
     {
       "applicability": "internal",
@@ -1905,7 +1905,7 @@
       "id": "extension.riverpilot.Pilot.PilotInit",
       "rationale": "Part of the unstable Go extension seam (riverpilot) used to substitute storage operations. Implementations may have their own seam; it carries no cross-language contract, and the default behavior's effects are covered by the driver and protocol items.",
       "source": "rivershared/riverpilot/pilot.go:riverpilot.Pilot.PilotInit",
-      "java_surface": "Extension and Plugin (internal Pro seam)"
+      "java_surface": "Pilot and Client.Driver (internal Pro seam)"
     },
     {
       "applicability": "internal",
@@ -1914,7 +1914,7 @@
       "id": "extension.riverpilot.Pilot.PilotPeriodicJob",
       "rationale": "Part of the unstable Go extension seam (riverpilot) used to substitute storage operations. Implementations may have their own seam; it carries no cross-language contract, and the default behavior's effects are covered by the driver and protocol items.",
       "source": "rivershared/riverpilot/pilot.go:riverpilot.Pilot",
-      "java_surface": "Extension and Plugin (internal Pro seam)"
+      "java_surface": "Pilot and Client.Driver (internal Pro seam)"
     },
     {
       "applicability": "internal",
@@ -1923,7 +1923,7 @@
       "id": "extension.riverpilot.Pilot.ProducerInit",
       "rationale": "Part of the unstable Go extension seam (riverpilot) used to substitute storage operations. Implementations may have their own seam; it carries no cross-language contract, and the default behavior's effects are covered by the driver and protocol items.",
       "source": "rivershared/riverpilot/pilot.go:riverpilot.Pilot.ProducerInit",
-      "java_surface": "Extension and Plugin (internal Pro seam)"
+      "java_surface": "Pilot and Client.Driver (internal Pro seam)"
     },
     {
       "applicability": "internal",
@@ -1932,7 +1932,7 @@
       "id": "extension.riverpilot.Pilot.ProducerKeepAlive",
       "rationale": "Part of the unstable Go extension seam (riverpilot) used to substitute storage operations. Implementations may have their own seam; it carries no cross-language contract, and the default behavior's effects are covered by the driver and protocol items.",
       "source": "rivershared/riverpilot/pilot.go:riverpilot.Pilot.ProducerKeepAlive",
-      "java_surface": "Extension and Plugin (internal Pro seam)"
+      "java_surface": "Pilot and Client.Driver (internal Pro seam)"
     },
     {
       "applicability": "internal",
@@ -1941,7 +1941,7 @@
       "id": "extension.riverpilot.Pilot.ProducerShutdown",
       "rationale": "Part of the unstable Go extension seam (riverpilot) used to substitute storage operations. Implementations may have their own seam; it carries no cross-language contract, and the default behavior's effects are covered by the driver and protocol items.",
       "source": "rivershared/riverpilot/pilot.go:riverpilot.Pilot.ProducerShutdown",
-      "java_surface": "Extension and Plugin (internal Pro seam)"
+      "java_surface": "Pilot and Client.Driver (internal Pro seam)"
     },
     {
       "applicability": "internal",
@@ -1950,7 +1950,7 @@
       "id": "extension.riverpilot.Pilot.QueueMetadataChanged",
       "rationale": "Part of the unstable Go extension seam (riverpilot) used to substitute storage operations. Implementations may have their own seam; it carries no cross-language contract, and the default behavior's effects are covered by the driver and protocol items.",
       "source": "rivershared/riverpilot/pilot.go:riverpilot.Pilot.QueueMetadataChanged",
-      "java_surface": "Extension and Plugin (internal Pro seam)"
+      "java_surface": "Pilot and Client.Driver (internal Pro seam)"
     },
     {
       "applicability": "internal",
@@ -1959,7 +1959,7 @@
       "id": "extension.riverpilot.PilotJobCompletionConcurrency.JobSetStateIfRunningManyConcurrency",
       "rationale": "Part of the unstable Go extension seam (riverpilot) used to substitute storage operations. Implementations may have their own seam; it carries no cross-language contract, and the default behavior's effects are covered by the driver and protocol items.",
       "source": "rivershared/riverpilot/pilot.go:riverpilot.PilotJobCompletionConcurrency.JobSetStateIfRunningManyConcurrency",
-      "java_surface": "Extension and Plugin (internal Pro seam)"
+      "java_surface": "Pilot and Client.Driver (internal Pro seam)"
     },
     {
       "applicability": "internal",
@@ -1968,7 +1968,7 @@
       "id": "extension.riverpilot.PilotJobRescuer.JobGetStuck",
       "rationale": "Part of the unstable Go extension seam (riverpilot) used to substitute storage operations. Implementations may have their own seam; it carries no cross-language contract, and the default behavior's effects are covered by the driver and protocol items.",
       "source": "rivershared/riverpilot/pilot.go:riverpilot.PilotJobRescuer.JobGetStuck",
-      "java_surface": "Extension and Plugin (internal Pro seam)"
+      "java_surface": "Pilot and Client.Driver (internal Pro seam)"
     },
     {
       "applicability": "internal",
@@ -1977,7 +1977,7 @@
       "id": "extension.riverpilot.PilotJobRescuer.JobRescueMany",
       "rationale": "Part of the unstable Go extension seam (riverpilot) used to substitute storage operations. Implementations may have their own seam; it carries no cross-language contract, and the default behavior's effects are covered by the driver and protocol items.",
       "source": "rivershared/riverpilot/pilot.go:riverpilot.PilotJobRescuer.JobRescueMany",
-      "java_surface": "Extension and Plugin (internal Pro seam)"
+      "java_surface": "Pilot and Client.Driver (internal Pro seam)"
     },
     {
       "applicability": "internal",
@@ -1986,7 +1986,7 @@
       "id": "extension.riverpilot.PilotPeriodicJob.PeriodicJobGetAll",
       "rationale": "Part of the unstable Go extension seam (riverpilot) used to substitute storage operations. Implementations may have their own seam; it carries no cross-language contract, and the default behavior's effects are covered by the driver and protocol items.",
       "source": "rivershared/riverpilot/pilot.go:riverpilot.PilotPeriodicJob.PeriodicJobGetAll",
-      "java_surface": "Extension and Plugin (internal Pro seam)"
+      "java_surface": "Pilot and Client.Driver (internal Pro seam)"
     },
     {
       "applicability": "internal",
@@ -1995,7 +1995,7 @@
       "id": "extension.riverpilot.PilotPeriodicJob.PeriodicJobKeepAliveAndReap",
       "rationale": "Part of the unstable Go extension seam (riverpilot) used to substitute storage operations. Implementations may have their own seam; it carries no cross-language contract, and the default behavior's effects are covered by the driver and protocol items.",
       "source": "rivershared/riverpilot/pilot.go:riverpilot.PilotPeriodicJob.PeriodicJobKeepAliveAndReap",
-      "java_surface": "Extension and Plugin (internal Pro seam)"
+      "java_surface": "Pilot and Client.Driver (internal Pro seam)"
     },
     {
       "applicability": "internal",
@@ -2004,7 +2004,7 @@
       "id": "extension.riverpilot.PilotPeriodicJob.PeriodicJobUpsertMany",
       "rationale": "Part of the unstable Go extension seam (riverpilot) used to substitute storage operations. Implementations may have their own seam; it carries no cross-language contract, and the default behavior's effects are covered by the driver and protocol items.",
       "source": "rivershared/riverpilot/pilot.go:riverpilot.PilotPeriodicJob.PeriodicJobUpsertMany",
-      "java_surface": "Extension and Plugin (internal Pro seam)"
+      "java_surface": "Pilot and Client.Driver (internal Pro seam)"
     },
     {
       "applicability": "internal",
@@ -2013,7 +2013,7 @@
       "id": "extension.riverpilot.ProducerState.JobFinish",
       "rationale": "Part of the unstable Go extension seam (riverpilot) used to substitute storage operations. Implementations may have their own seam; it carries no cross-language contract, and the default behavior's effects are covered by the driver and protocol items.",
       "source": "rivershared/riverpilot/pilot.go:riverpilot.ProducerState.JobFinish",
-      "java_surface": "Extension and Plugin (internal Pro seam)"
+      "java_surface": "Pilot and Client.Driver (internal Pro seam)"
     },
     {
       "applicability": "not_applicable",
@@ -2022,7 +2022,7 @@
       "id": "extension.rivertype.Hook.IsHook",
       "rationale": "Go marker method used to discriminate hook, middleware, and plugin values; other languages express this with their own type systems.",
       "source": "rivertype/river_type.go:rivertype.Hook.IsHook",
-      "java_surface": "Extension and Plugin (internal Pro seam)"
+      "java_surface": "Hook"
     },
     {
       "applicability": "not_applicable",
@@ -2031,7 +2031,7 @@
       "id": "extension.rivertype.HookInsertBegin.Hook",
       "rationale": "Go interface composition marking the value as a hook or middleware; other languages express this with their own type systems.",
       "source": "rivertype/river_type.go:rivertype.HookInsertBegin",
-      "java_surface": "Extension and Plugin (internal Pro seam)"
+      "java_surface": "HookInsertBegin"
     },
     {
       "applicability": "api_equivalent",
@@ -2043,7 +2043,7 @@
         "extension_hook_middleware_order"
       ],
       "source": "rivertype/river_type.go:rivertype.HookInsertBegin.InsertBegin",
-      "java_surface": "Extension and Plugin (internal Pro seam)"
+      "java_surface": "HookInsertBegin"
     },
     {
       "applicability": "not_applicable",
@@ -2052,7 +2052,7 @@
       "id": "extension.rivertype.HookMetricEmit.Hook",
       "rationale": "Go interface composition marking the value as a hook or middleware; other languages express this with their own type systems.",
       "source": "rivertype/river_type.go:rivertype.HookMetricEmit",
-      "java_surface": "Extension and Plugin (internal Pro seam)"
+      "java_surface": "Plugin, Hook, Middleware, and Pilot (internal Pro seam)"
     },
     {
       "applicability": "not_applicable",
@@ -2061,7 +2061,7 @@
       "id": "extension.rivertype.HookMetricEmit.MetricEmit",
       "rationale": "Go-specific metric hook; other implementations expose telemetry through their own instrumentation.",
       "source": "rivertype/river_type.go:rivertype.HookMetricEmit.MetricEmit",
-      "java_surface": "Extension and Plugin (internal Pro seam)"
+      "java_surface": "Plugin, Hook, Middleware, and Pilot (internal Pro seam)"
     },
     {
       "applicability": "not_applicable",
@@ -2070,7 +2070,7 @@
       "id": "extension.rivertype.HookPeriodicJobsStart.Hook",
       "rationale": "Go interface composition marking the value as a hook or middleware; other languages express this with their own type systems.",
       "source": "rivertype/river_type.go:rivertype.HookPeriodicJobsStart",
-      "java_surface": "Extension and Plugin (internal Pro seam)"
+      "java_surface": "HookPeriodicJobsStart"
     },
     {
       "applicability": "api_equivalent",
@@ -2082,7 +2082,7 @@
         "periodic_run_on_start"
       ],
       "source": "rivertype/river_type.go:rivertype.HookPeriodicJobsStart.Start",
-      "java_surface": "Extension and Plugin (internal Pro seam)"
+      "java_surface": "HookPeriodicJobsStart"
     },
     {
       "applicability": "not_applicable",
@@ -2091,7 +2091,7 @@
       "id": "extension.rivertype.HookWorkBegin.Hook",
       "rationale": "Go interface composition marking the value as a hook or middleware; other languages express this with their own type systems.",
       "source": "rivertype/river_type.go:rivertype.HookWorkBegin",
-      "java_surface": "Extension and Plugin (internal Pro seam)"
+      "java_surface": "HookWorkBegin"
     },
     {
       "applicability": "api_equivalent",
@@ -2103,7 +2103,7 @@
         "extension_hook_middleware_order"
       ],
       "source": "rivertype/river_type.go:rivertype.HookWorkBegin.WorkBegin",
-      "java_surface": "Extension and Plugin (internal Pro seam)"
+      "java_surface": "HookWorkBegin"
     },
     {
       "applicability": "not_applicable",
@@ -2112,7 +2112,7 @@
       "id": "extension.rivertype.HookWorkEnd.Hook",
       "rationale": "Go interface composition marking the value as a hook or middleware; other languages express this with their own type systems.",
       "source": "rivertype/river_type.go:rivertype.HookWorkEnd",
-      "java_surface": "Extension and Plugin (internal Pro seam)"
+      "java_surface": "HookWorkEnd"
     },
     {
       "applicability": "api_equivalent",
@@ -2124,7 +2124,7 @@
         "extension_hook_middleware_order"
       ],
       "source": "rivertype/river_type.go:rivertype.HookWorkEnd.WorkEnd",
-      "java_surface": "Extension and Plugin (internal Pro seam)"
+      "java_surface": "HookWorkEnd"
     },
     {
       "applicability": "api_equivalent",
@@ -2136,7 +2136,7 @@
         "extension_hook_middleware_order"
       ],
       "source": "rivertype/river_type.go:rivertype.JobInsertMiddleware.InsertMany",
-      "java_surface": "Extension and Plugin (internal Pro seam)"
+      "java_surface": "JobInsertMiddleware"
     },
     {
       "applicability": "not_applicable",
@@ -2145,7 +2145,7 @@
       "id": "extension.rivertype.JobInsertMiddleware.Middleware",
       "rationale": "Go interface composition marking the value as a hook or middleware; other languages express this with their own type systems.",
       "source": "rivertype/river_type.go:rivertype.JobInsertMiddleware",
-      "java_surface": "Extension and Plugin (internal Pro seam)"
+      "java_surface": "JobInsertMiddleware"
     },
     {
       "applicability": "not_applicable",
@@ -2154,7 +2154,7 @@
       "id": "extension.rivertype.Middleware.IsMiddleware",
       "rationale": "Go marker method used to discriminate hook, middleware, and plugin values; other languages express this with their own type systems.",
       "source": "rivertype/river_type.go:rivertype.Middleware.IsMiddleware",
-      "java_surface": "Extension and Plugin (internal Pro seam)"
+      "java_surface": "Middleware"
     },
     {
       "applicability": "not_applicable",
@@ -2163,7 +2163,7 @@
       "id": "extension.rivertype.Plugin.IsPlugin",
       "rationale": "Go marker method used to discriminate hook, middleware, and plugin values; other languages express this with their own type systems.",
       "source": "rivertype/river_type.go:rivertype.Plugin.IsPlugin",
-      "java_surface": "Extension and Plugin (internal Pro seam)"
+      "java_surface": "Plugin (marker interface inherited by Hook and Middleware)"
     },
     {
       "applicability": "not_applicable",
@@ -2172,7 +2172,7 @@
       "id": "extension.rivertype.WorkerMiddleware.Middleware",
       "rationale": "Go interface composition marking the value as a hook or middleware; other languages express this with their own type systems.",
       "source": "rivertype/river_type.go:rivertype.WorkerMiddleware",
-      "java_surface": "Extension and Plugin (internal Pro seam)"
+      "java_surface": "WorkerMiddleware"
     },
     {
       "applicability": "api_equivalent",
@@ -2184,7 +2184,7 @@
         "extension_hook_middleware_order"
       ],
       "source": "rivertype/river_type.go:rivertype.WorkerMiddleware.Work",
-      "java_surface": "Extension and Plugin (internal Pro seam)"
+      "java_surface": "WorkerMiddleware"
     },
     {
       "applicability": "protocol_visible",
