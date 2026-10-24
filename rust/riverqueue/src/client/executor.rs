@@ -458,7 +458,7 @@ pub(super) fn worker_join_result(
 }
 
 pub(super) fn worker_failure_from_source(error: BoxError) -> WorkerFailure {
-    let error = WorkError::new(error);
+    let error = WorkError::from_boxed(error);
     WorkerFailure {
         error: Chain(&error).to_string(),
         kind: WorkerFailureKind::Error,
@@ -769,5 +769,35 @@ mod snooze_counter_tests {
                 case.name
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod worker_failure_tests {
+    use crate::{BoxError, WorkError};
+
+    use super::worker_failure_from_source;
+
+    /// A boxed `WorkError`, as an extension returns after running work-end
+    /// hooks, keeps its original error rather than being wrapped again.
+    #[test]
+    fn boxed_work_errors_keep_their_original_error() {
+        let original = WorkError::new(std::io::Error::other("worker failed"));
+        let failure = worker_failure_from_source(Box::new(original) as BoxError);
+        let source = failure.source.unwrap();
+        assert!(source.downcast_ref::<std::io::Error>().is_some());
+        assert_eq!(failure.error, "worker failed");
+    }
+
+    #[test]
+    fn other_errors_are_wrapped() {
+        let failure = worker_failure_from_source(Box::new(std::io::Error::other("worker failed")));
+        assert!(
+            failure
+                .source
+                .unwrap()
+                .downcast_ref::<std::io::Error>()
+                .is_some()
+        );
     }
 }
