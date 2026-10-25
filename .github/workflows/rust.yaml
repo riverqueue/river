@@ -7,6 +7,7 @@ on:
     branches:
       - master
     paths:
+      - ".github/actions/setup-go-ci/**"
       - ".github/workflows/rust.yaml"
       - "Makefile"
       - "conformance/**"
@@ -16,6 +17,7 @@ on:
       - "rust/**"
   pull_request:
     paths:
+      - ".github/actions/setup-go-ci/**"
       - ".github/workflows/rust.yaml"
       - "Makefile"
       - "conformance/**"
@@ -157,7 +159,7 @@ jobs:
           save-if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/master' }}
           workspaces: rust -> target
       # Tests read fixtures generated from River's Go implementation.
-      - uses: actions/setup-go@v7
+      - uses: ./.github/actions/setup-go-ci
         with:
           go-version-file: go.work
       - name: Check every target and feature
@@ -199,7 +201,7 @@ jobs:
           save-if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/master' && matrix.postgres-version == 18 }}
           workspaces: rust -> target
       # Tests read fixtures generated from River's Go implementation.
-      - uses: actions/setup-go@v7
+      - uses: ./.github/actions/setup-go-ci
         with:
           go-version-file: go.work
       - name: Create test database

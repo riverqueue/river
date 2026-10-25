@@ -52,9 +52,10 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
-      - name: Setup Go ${{ matrix.go-version }}
-        uses: actions/setup-go@v7
+      - name: Set up Go ${{ matrix.go-version }} for CI
+        uses: ./.github/actions/setup-go-ci
         with:
+          build-cache-scope: benchmark-postgres-${{ matrix.postgres-version }}
           go-version: ${{ matrix.go-version }}
 
       - name: Display Go version
@@ -123,9 +124,15 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
-      - name: Setup Go ${{ matrix.go-version }}
-        uses: actions/setup-go@v7
+      - name: Set up Go ${{ matrix.go-version }} for CI
+        uses: ./.github/actions/setup-go-ci
         with:
+          # Go's test-result cache cannot detect a different Postgres server.
+          # Keep each database version and race mode in its own build archive.
+          build-cache-scope: postgres-${{ matrix.postgres-version }}-${{ matrix.primary && 'race' || 'standard' }}
+          # Only the full primary suite may publish the shared module archive;
+          # verification/CLI jobs download only a subset of the dependencies.
+          save-module-cache: "${{ matrix.primary == true }}"
           go-version: ${{ matrix.go-version }}
 
       - name: Display Go version
@@ -162,9 +169,10 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
-      - name: Setup Go ${{ matrix.go-version }}
-        uses: actions/setup-go@v7
+      - name: Set up Go ${{ matrix.go-version }} for CI
+        uses: ./.github/actions/setup-go-ci
         with:
+          build-cache-scope: sqlite-${{ matrix.primary && 'race' || 'standard' }}
           go-version: ${{ matrix.go-version }}
 
       - name: Test with race detector
@@ -184,6 +192,10 @@ jobs:
     timeout-minutes: 10
 
     steps:
+      # Load the local action and dependency files before restoring caches.
+      - name: Checkout
+        uses: actions/checkout@v7
+
       # CLI tests use each runner's bundled Postgres version; the database
       # test matrix above covers supported Postgres versions separately.
       # GitHub's Linux image includes Postgres with its service disabled.
@@ -228,10 +240,13 @@ jobs:
           # adds the bundled client tools to PATH for all subsequent steps.
           $env:PGBIN | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
 
-      - uses: actions/setup-go@v7
+      - uses: ./.github/actions/setup-go-ci
         with:
+          # Windows has no full-suite job, so its only Go workload must save
+          # its own module downloads. Linux uses the primary suite's archive.
+          save-module-cache: "${{ runner.os == 'Windows' }}"
           go-version: "stable"
-          check-latest: true
+          check-latest: "true"
 
       - name: Setup GOBIN (Linux)
         if: runner.os == 'Linux'
@@ -247,9 +262,6 @@ jobs:
           echo "GOBIN=$gobin" >> $env:GITHUB_ENV
           echo $gobin | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
         shell: pwsh
-
-      - name: Checkout
-        uses: actions/checkout@v7
 
       - name: export RIVER_CMD_DIR
         run: |
@@ -377,13 +389,14 @@ jobs:
       pull-requests: read
 
     steps:
-      - uses: actions/setup-go@v7
-        with:
-          go-version: "stable"
-          check-latest: true
-
+      # Load the local action and dependency files before restoring caches.
       - name: Checkout
         uses: actions/checkout@v7
+
+      - uses: ./.github/actions/setup-go-ci
+        with:
+          go-version: "stable"
+          check-latest: "true"
 
       - name: Lint
         uses: golangci/golangci-lint-action@v9
@@ -409,7 +422,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v7
 
-      - uses: actions/setup-go@v7
+      - uses: ./.github/actions/setup-go-ci
         with:
           go-version: "1.27"
 
@@ -435,13 +448,14 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - uses: actions/setup-go@v7
-        with:
-          go-version: "stable"
-          check-latest: true
-
+      # Load the local action and dependency files before restoring caches.
       - name: Checkout
         uses: actions/checkout@v7
+
+      - uses: ./.github/actions/setup-go-ci
+        with:
+          go-version: "stable"
+          check-latest: "true"
 
       - name: Check all go/toolchain directives match
         run: CHECK=true make update-mod-go

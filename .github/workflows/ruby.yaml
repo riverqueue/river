@@ -6,6 +6,7 @@ on:
   push:
     branches: [master]
     paths:
+      - ".github/actions/setup-go-ci/**"
       - ".github/workflows/ruby.yaml"
       - "Makefile"
       - "conformance/**"
@@ -14,6 +15,7 @@ on:
     tags: ["ruby/v*"]
   pull_request:
     paths:
+      - ".github/actions/setup-go-ci/**"
       - ".github/workflows/ruby.yaml"
       - "Makefile"
       - "conformance/**"
@@ -106,7 +108,7 @@ jobs:
           ruby-version: ${{ matrix.ruby }}
           working-directory: ruby
           bundler-cache: true
-      - uses: actions/setup-go@v7
+      - uses: ./.github/actions/setup-go-ci
         with:
           go-version-file: go.work
       - run: make generate/fixtures
@@ -142,7 +144,7 @@ jobs:
           ruby-version: "4.0"
           working-directory: ruby
           bundler-cache: true
-      - uses: actions/setup-go@v7
+      - uses: ./.github/actions/setup-go-ci
         with:
           go-version-file: go.work
       - run: make generate/fixtures
