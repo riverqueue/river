@@ -111,7 +111,7 @@ shared_examples "driver shared examples" do
   end
 
   %i[insert_begin insert_end insert_many].each do |hook|
-    it "rolls back #{hook} writes and the enqueue without aborting the caller's transaction" do
+    it "rolls back #{hook} writes and the enqueue in an application savepoint" do
       plugin = Object.new
       plain_client = client
       failure = RuntimeError.new("hook failed")
@@ -124,7 +124,8 @@ shared_examples "driver shared examples" do
 
       driver.transaction do
         kept = plain_client.insert(SimpleArgs.new(job_num: 1)).job
-        expect { hooked_client.insert(SimpleArgs.new(job_num: 2)) }.to raise_error { |error| expect(error).to equal(failure) }
+        expect { savepoint(driver) { hooked_client.insert(SimpleArgs.new(job_num: 2)) } }
+          .to raise_error { |error| expect(error).to equal(failure) }
         expect(plain_client.job_list.jobs.map(&:id)).to eq([kept.id])
         expect(plain_client.insert(SimpleArgs.new(job_num: 3)).job.args).to eq("job_num" => 3)
       end
@@ -150,7 +151,7 @@ shared_examples "driver shared examples" do
     job = client.insert(SimpleArgs.new(job_num: 1)).job
     driver.define_singleton_method(:runtime_notify) { |*_args| raise "notification failed" }
 
-    expect { client.job_cancel(job.id) }.to raise_error("notification failed")
+    expect { savepoint(driver) { client.job_cancel(job.id) } }.to raise_error("notification failed")
     expect(client.job_get(job.id)).to have_attributes(state: "available", metadata: job.metadata)
   end
 
@@ -184,7 +185,6 @@ shared_examples "driver shared examples" do
     expect(driver.send(:runtime_job_list_without_params)).to be_an(Array)
     expect(driver.send(:runtime_postgres?)).to satisfy { |value| value == true || value == false }
     expect(driver.send(:runtime_quote, "value")).to be_a(String)
-    expect(driver.send(:runtime_unique_violation_class)).to be <= StandardError
     expect(driver.send(:runtime_value, {"id" => 1}, :id)).to eq(1)
   end
 
@@ -194,7 +194,7 @@ shared_examples "driver shared examples" do
       options = River::InsertOpts.new(unique_opts: River::UniqueOpts.new(by_args: true))
       batch = [2, 1, 1].map { |number| River::InsertManyParams.new(SimpleArgs.new(job_num: number), insert_opts: options) }
 
-      expect { client.insert_many(batch) }.to raise_error(StandardError)
+      expect { savepoint(driver) { client.insert_many(batch) } }.to raise_error(StandardError)
       expect(client.job_list.jobs.map(&:id)).to eq([kept.id])
     end
 
@@ -408,7 +408,7 @@ shared_examples "driver shared examples" do
     it "inserts in a transaction" do
       insert_res = nil
 
-      driver.transaction do
+      savepoint(driver) do
         insert_res = client.insert(SimpleArgs.new(job_num: 1))
 
         job = driver.job_get_by_id(insert_res.job.id)
@@ -529,7 +529,7 @@ shared_examples "driver shared examples" do
     it "inserts multiple jobs in a transaction" do
       jobs = nil
 
-      driver.transaction do
+      savepoint(driver) do
         inserted = client.insert_many([
           SimpleArgs.new(job_num: 1),
           SimpleArgs.new(job_num: 2)
@@ -601,23 +601,57 @@ shared_examples "driver shared examples" do
   end
 
   describe "#transaction" do
-    it "runs block in a transaction" do
+    it "joins the caller's transaction without a savepoint" do
+      # Until the outer transaction runs a query, Active Record restarts it
+      # instead of opening a savepoint, so run one first to make an unwanted
+      # savepoint visible.
+      client.insert(SimpleArgs.new(job_num: 0))
       insert_res = nil
 
-      driver.transaction do
-        insert_res = client.insert(SimpleArgs.new(job_num: 1))
-
-        job = driver.job_get_by_id(insert_res.job.id)
-
-        expect(job).to_not be_nil
-
-        raise driver.rollback_exception
+      savepoints = savepoint_statements(driver) do
+        driver.transaction do
+          insert_res = client.insert(SimpleArgs.new(job_num: 1))
+        end
       end
 
-      # Not present because the job was rolled back.
-      job = driver.job_get_by_id(insert_res.job.id)
+      expect(savepoints).to eq([])
+      expect(driver.job_get_by_id(insert_res.job.id)).to_not be_nil
+    end
 
-      expect(job).to be_nil
+    %w[1 true].each do |value|
+      it "opens a savepoint when RIVER_USE_LEGACY_SUBTRANSACTIONS is #{value}" do
+        previous = ENV["RIVER_USE_LEGACY_SUBTRANSACTIONS"]
+        ENV["RIVER_USE_LEGACY_SUBTRANSACTIONS"] = value
+        insert_res = kept = nil
+
+        savepoints = savepoint_statements(driver) do
+          kept = client.insert(SimpleArgs.new(job_num: 1)).job
+          driver.transaction do
+            insert_res = client.insert(SimpleArgs.new(job_num: 2))
+            raise driver.rollback_exception
+          end
+        end
+
+        expect(savepoints.grep(/\ASAVEPOINT/i)).not_to be_empty
+        expect(driver.job_get_by_id(insert_res.job.id)).to be_nil
+        expect(driver.job_get_by_id(kept.id)).to_not be_nil
+      ensure
+        ENV["RIVER_USE_LEGACY_SUBTRANSACTIONS"] = previous
+      end
+    end
+
+    it "passes a rollback to the caller's transaction" do
+      insert_res = nil
+
+      savepoint(driver) do
+        driver.transaction do
+          insert_res = client.insert(SimpleArgs.new(job_num: 1))
+          raise driver.rollback_exception
+        end
+        raise "unreachable"
+      end
+
+      expect(driver.job_get_by_id(insert_res.job.id)).to be_nil
     end
   end
 end

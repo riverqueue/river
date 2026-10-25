@@ -16,9 +16,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- River operations called inside an open Active Record or Sequel transaction now run in that transaction and open no savepoint of their own. If an operation raises, roll back the transaction, or wrap the call in your own savepoint to recover and continue. A `driver.rollback_exception` raised inside `Driver#transaction` now reaches the enclosing transaction block, as a rollback raised in your own code would. Before, it rolled back only River's savepoint. Set `RIVER_USE_LEGACY_SUBTRANSACTIONS=1` (or `true`) to restore the savepoints. This temporary fallback will be removed in a future release. [PR #1544](https://github.com/riverqueue/river/pull/1544).
 - `work_end(job, error)` hooks now return the attempt's error, matching Go. Return the incoming error to preserve it, a replacement exception to change it, or `nil` to clear a failure. The return value feeds the next hook in registration order. Existing observing hooks must explicitly return `error`. End hooks are skipped if `work_begin` raises or the worker raises an exception outside `StandardError`. [PR #1520](https://github.com/riverqueue/river/pull/1520).
 
 ### Fixed
+
+- The scheduler no longer opens a savepoint for each due job to catch unique key conflicts. A pass that made more than 64 jobs available overflowed the Postgres subtransaction cache, which can slow queries across the server. The scheduler now finds conflicts with one statement on Postgres and checks before each write on SQLite. Conflicting jobs are still discarded with `unique_key_conflict: scheduler_discarded` metadata. On Postgres, the scheduler now waits for a due job that another transaction has locked, instead of skipping it. [PR #1544](https://github.com/riverqueue/river/pull/1544).
 
 - Default periodic jobs to their occurrence time, preserving constructor and argument-level schedules. [PR #1537](https://github.com/riverqueue/river/pull/1537).
 

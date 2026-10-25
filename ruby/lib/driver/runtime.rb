@@ -275,35 +275,18 @@ module River::Driver
       job
     end
 
+    # Makes due scheduled and retryable jobs available. A job is discarded
+    # instead if another row already holds its unique key, or if an earlier
+    # job in the same pass shares that key. The queries find these conflicts
+    # before they write, so the pass never needs a savepoint to recover from a
+    # failed write.
     def job_schedule(now: Time.now.utc, max: 1_000)
       transaction do
-        queues = [] #: Array[String]
-        # Hold each selected row until its transition (including uniqueness
-        # conflict handling) finishes. A concurrent retry may change its due time.
-        lock = runtime_postgres? ? "FOR UPDATE SKIP LOCKED" : ""
-        rows = runtime_query_rows(<<~SQL)
-          SELECT id, queue FROM river_job
-          WHERE state IN ('retryable', 'scheduled') AND scheduled_at <= #{runtime_time(now)}
-          ORDER BY priority, scheduled_at, id
-          LIMIT #{Integer(max)} #{lock}
-        SQL
-        rows.each do |row|
-          id = runtime_value(row, :id).to_i
-          transaction do
-            runtime_execute("UPDATE river_job SET state = 'available' WHERE id = #{id} AND state IN ('retryable', 'scheduled')")
-            queues << runtime_value(row, :queue)
-          end
-        rescue runtime_unique_violation_class
-          runtime_execute(<<~SQL)
-            UPDATE river_job
-            SET state = 'discarded', finalized_at = #{runtime_time(now)},
-                metadata = #{runtime_merge_metadata("unique_key_conflict" => "scheduler_discarded")}
-            WHERE id = #{id}
-          SQL
-        end
-
+        queues = runtime_postgres? ? runtime_schedule_postgres(now, Integer(max)) : runtime_schedule_sqlite(now, Integer(max))
+        # Notify each changed queue, including queues with only discarded
+        # jobs, as Go does.
         queues.uniq.each { |queue| runtime_notify("river_insert", queue: queue) }
-        rows.length
+        queues.length
       end
     end
 
@@ -676,6 +659,12 @@ module River::Driver
       runtime_postgres? ? "#{runtime_quote(encoded)}::jsonb" : "jsonb(#{runtime_quote(encoded)})"
     end
 
+    # Temporary fallback: when true, transaction helpers open a savepoint
+    # inside an open transaction instead of joining it.
+    private def runtime_legacy_subtransactions?
+      %w[1 true].include?(ENV.fetch("RIVER_USE_LEGACY_SUBTRANSACTIONS", ""))
+    end
+
     private def runtime_merge_metadata(metadata)
       raise ArgumentError, "metadata must be a Hash" unless metadata.is_a?(Hash)
 
@@ -775,6 +764,114 @@ module River::Driver
 
     private def runtime_returning_ids(sql)
       runtime_query_rows(sql).map { |row| runtime_value(row, :id).to_i }
+    end
+
+    # Finds conflicts and changes the whole pass in one statement.
+    private def runtime_schedule_postgres(now, max)
+      now = runtime_time(now)
+      runtime_query_rows(<<~SQL).map { |row| runtime_value(row, :queue) }
+        WITH jobs_to_schedule AS (
+            SELECT id, unique_key, unique_states, priority, scheduled_at
+            FROM river_job
+            WHERE state IN ('retryable', 'scheduled')
+                AND priority >= 0
+                AND queue IS NOT NULL
+                AND scheduled_at <= #{now}
+            ORDER BY priority, scheduled_at, id
+            LIMIT #{max}
+            FOR UPDATE
+        ),
+        jobs_with_rownum AS (
+            SELECT
+                *,
+                CASE
+                    WHEN unique_key IS NOT NULL AND unique_states IS NOT NULL THEN
+                        ROW_NUMBER() OVER (PARTITION BY unique_key ORDER BY priority, scheduled_at, id)
+                END AS row_num
+            FROM jobs_to_schedule
+        ),
+        unique_conflicts AS (
+            SELECT river_job.unique_key
+            FROM river_job
+            JOIN jobs_with_rownum
+                ON river_job.unique_key = jobs_with_rownum.unique_key
+                AND river_job.id != jobs_with_rownum.id
+            WHERE river_job.unique_key IS NOT NULL
+                AND river_job.unique_states IS NOT NULL
+                AND river_job_state_in_bitmask(river_job.unique_states, river_job.state)
+        ),
+        job_updates AS (
+            SELECT
+                job.id,
+                job.row_num IS NOT NULL AND (uc.unique_key IS NOT NULL OR job.row_num > 1) AS discard
+            FROM jobs_with_rownum job
+            LEFT JOIN unique_conflicts uc ON job.unique_key = uc.unique_key
+        )
+        UPDATE river_job
+        SET state = CASE WHEN job_updates.discard THEN 'discarded'::river_job_state ELSE 'available'::river_job_state END,
+            finalized_at = CASE WHEN job_updates.discard THEN #{now} ELSE river_job.finalized_at END,
+            metadata = CASE WHEN job_updates.discard THEN river_job.metadata || '{"unique_key_conflict": "scheduler_discarded"}'::jsonb
+                            ELSE river_job.metadata END
+        FROM job_updates
+        WHERE river_job.id = job_updates.id
+        RETURNING river_job.queue
+      SQL
+    end
+
+    # Follows Go's SQLite driver: check each unique job in order, and make it
+    # available before checking the next one, so a later job with the same
+    # key sees it as a conflict. SQLite allows one writer at a time. Once this
+    # pass writes, other connections cannot write until it ends. If another
+    # connection writes first, this pass's next write fails instead of using
+    # stale rows.
+    private def runtime_schedule_sqlite(now, max)
+      rows = runtime_query_rows(<<~SQL)
+        SELECT id, queue, unique_key IS NOT NULL AS has_unique_key
+        FROM river_job
+        WHERE state IN ('retryable', 'scheduled') AND scheduled_at <= #{runtime_time(now)}
+        ORDER BY priority, scheduled_at, id
+        LIMIT #{max}
+      SQL
+      available = [] #: Array[Integer]
+      discarded = [] #: Array[Integer]
+      rows.each do |row|
+        id = runtime_value(row, :id).to_i
+        next available << id if runtime_value(row, :has_unique_key).to_i.zero?
+
+        conflict = runtime_query_rows(<<~SQL).any?
+          SELECT 1 FROM river_job
+          WHERE id <> #{id}
+            AND unique_key = (SELECT job.unique_key FROM river_job AS job WHERE job.id = #{id})
+            AND unique_states IS NOT NULL
+            AND CASE state
+                  WHEN 'available' THEN unique_states & (1 << 0)
+                  WHEN 'cancelled' THEN unique_states & (1 << 1)
+                  WHEN 'completed' THEN unique_states & (1 << 2)
+                  WHEN 'discarded' THEN unique_states & (1 << 3)
+                  WHEN 'pending'   THEN unique_states & (1 << 4)
+                  WHEN 'retryable' THEN unique_states & (1 << 5)
+                  WHEN 'running'   THEN unique_states & (1 << 6)
+                  WHEN 'scheduled' THEN unique_states & (1 << 7)
+                  ELSE 0
+                END >= 1
+          LIMIT 1
+        SQL
+        next discarded << id if conflict
+
+        runtime_execute("UPDATE river_job SET state = 'available' WHERE id = #{id}")
+      end
+
+      unless discarded.empty?
+        runtime_execute(<<~SQL)
+          UPDATE river_job
+          SET state = 'discarded', finalized_at = #{runtime_time(now)},
+              metadata = #{runtime_merge_metadata("unique_key_conflict" => "scheduler_discarded")}
+          WHERE id IN (#{discarded.join(",")})
+        SQL
+      end
+      runtime_execute("UPDATE river_job SET state = 'available' WHERE id IN (#{available.join(",")})") unless available.empty?
+
+      rows.map { |row| runtime_value(row, :queue) }
     end
 
     private def runtime_state(value)

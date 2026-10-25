@@ -177,6 +177,7 @@ module River
       def runtime_job_list: (JobListParams, ?for_delete: bool) -> Array[JobRow]
       def runtime_job_rows: (String) -> untyped
       def runtime_json: (untyped) -> untyped
+      def runtime_legacy_subtransactions?: () -> bool
       def runtime_merge_metadata: (untyped) -> untyped
       def runtime_metadata_equals: (untyped, untyped) -> untyped
       def runtime_nullable_time: (untyped) -> untyped
@@ -193,10 +194,11 @@ module River
       def runtime_quote: (untyped) -> String
       def runtime_rescue_retry: (untyped, untyped, untyped, untyped, untyped) -> Time
       def runtime_returning_ids: (untyped) -> untyped
+      def runtime_schedule_postgres: (Time, Integer) -> Array[String]
+      def runtime_schedule_sqlite: (Time, Integer) -> Array[String]
       def runtime_state: (untyped) -> untyped
       def runtime_tag_contains: (untyped) -> untyped
       def runtime_time: (untyped) -> untyped
-      def runtime_unique_violation_class: () -> singleton(Exception)
       def runtime_update_value: (untyped, untyped) -> untyped
       def runtime_value: (untyped, untyped) -> untyped
       def transaction: () { () -> untyped } -> untyped

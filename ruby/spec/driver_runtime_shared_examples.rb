@@ -1,6 +1,7 @@
 # frozen_string_literal: true
 
 require "delegate"
+require_relative "support/transaction_helpers"
 
 class DriverRuntimeArgs
   def initialize(value)
@@ -93,9 +94,64 @@ RSpec.shared_examples "overflowing metadata counters" do
   end
 end
 
+RSpec.shared_examples "scheduler unique conflicts" do
+  let(:client) { River::Client.new(driver) }
+  let(:now) { Time.utc(2026, 1, 2, 3, 4, 5) }
+
+  def insert_scheduler_job(value, **options)
+    client.insert(DriverRuntimeArgs.new(value), insert_opts: River::InsertOpts.new(state: River::JOB_STATE_AVAILABLE, **options)).job
+  end
+
+  # Covers both kinds of scheduler conflict in one pass: a job that conflicts
+  # with an existing row, and two due jobs that share a unique key. Each
+  # example already runs in a caller's transaction, so the pass must reuse it.
+  it "schedules unique conflicts in the caller's transaction without savepoints" do
+    unique = River::UniqueOpts.new(by_args: true, by_state: %w[available pending running scheduled])
+    conflicting = insert_scheduler_job(1, queue: "conflict_only", scheduled_at: now - 4, unique_opts: unique)
+    client.job_update(conflicting.id, state: River::JOB_STATE_RETRYABLE)
+    blocker = insert_scheduler_job(1, unique_opts: unique)
+    first, second = [now - 3, now - 2].map do |scheduled_at|
+      insert_scheduler_job(2, scheduled_at: scheduled_at, unique_opts: unique).tap do |job|
+        client.job_update(job.id, state: River::JOB_STATE_RETRYABLE)
+      end
+    end
+    plain = insert_scheduler_job(3, scheduled_at: now - 1, state: River::JOB_STATE_SCHEDULED)
+
+    notified = [] #: Array[String]
+    driver.define_singleton_method(:runtime_notify) do |topic, payload|
+      notified << payload[:queue] if topic == "river_insert"
+      super(topic, payload)
+    end
+
+    scheduled = nil
+    savepoints = savepoint_statements(driver) { scheduled = driver.job_schedule(now: now) }
+
+    expect(scheduled).to eq(4)
+    expect(savepoints).to eq([])
+    # Like Go, notify a queue even when its only changed job was discarded.
+    expect(notified).to contain_exactly("conflict_only", River::QUEUE_DEFAULT)
+    rows = [conflicting, blocker, first, second, plain].map { |job| driver.job_get_by_id(job.id) }
+    expect(rows.map(&:state)).to eq(%w[discarded available available discarded available])
+    expect(rows.map { |row| row.metadata["unique_key_conflict"] }).to eq(["scheduler_discarded", nil, nil, "scheduler_discarded", nil])
+    expect(rows.values_at(0, 3).map(&:finalized_at)).to all(be_within(0.001).of(now))
+    expect(rows.values_at(1, 2, 4).map(&:finalized_at)).to all(be_nil)
+
+    if driver.migration_backend == :postgresql
+      # A savepoint that writes gets its own transaction ID, so rows written in
+      # one would carry an xmin other than the caller's.
+      xmins = driver.send(:runtime_query_rows, <<~SQL).map { |row| driver.send(:runtime_value, row, :xid_matches) }
+        SELECT xmin = pg_current_xact_id()::xid AS xid_matches
+        FROM river_job WHERE id IN (#{[conflicting, first, second, plain].map(&:id).join(",")})
+      SQL
+      expect(xmins).to eq([true] * 4)
+    end
+  end
+end
+
 RSpec.shared_examples "driver job state machine" do
   it_behaves_like "driver timestamp precision"
   it_behaves_like "overflowing metadata counters"
+  it_behaves_like "scheduler unique conflicts"
 
   let(:client) { River::Client.new(driver) }
   let(:now) { Time.utc(2026, 1, 2, 3, 4, 5) }
@@ -144,10 +200,12 @@ RSpec.shared_examples "driver job state machine" do
           hooked_client = River::Client.new(driver, config: River::Config.new(plugins: [plugin]))
 
           expect do
-            if operation == :insert
-              hooked_client.insert(DriverRuntimeArgs.new(1))
-            else
-              hooked_client.insert_many([DriverRuntimeArgs.new(1), DriverRuntimeArgs.new(2)])
+            savepoint(driver) do
+              if operation == :insert
+                hooked_client.insert(DriverRuntimeArgs.new(1))
+              else
+                hooked_client.insert_many([DriverRuntimeArgs.new(1), DriverRuntimeArgs.new(2)])
+              end
             end
           end.to raise_error(ArgumentError, 'invalid insertion state: "running"; must be available, pending, or scheduled')
           expect(plain_client.job_list.jobs).to be_empty
@@ -193,6 +251,23 @@ RSpec.shared_examples "driver job state machine" do
     failure = ArgumentError.new("invalid application argument")
 
     expect do
+      savepoint(driver) do
+        driver.transaction do
+          client.insert(DriverRuntimeArgs.new(1))
+          raise failure
+        end
+      end
+    end.to raise_error { |error| expect(error).to equal(failure) }
+    expect(client.job_list.jobs).to be_empty
+    expect(client.insert(DriverRuntimeArgs.new(2)).job.state).to eq("available")
+  end
+
+  it "preserves application argument errors from a legacy savepoint and rolls back its writes" do
+    failure = ArgumentError.new("invalid application argument")
+    previous = ENV["RIVER_USE_LEGACY_SUBTRANSACTIONS"]
+    ENV["RIVER_USE_LEGACY_SUBTRANSACTIONS"] = "1"
+
+    expect do
       driver.transaction do
         client.insert(DriverRuntimeArgs.new(1))
         raise failure
@@ -200,6 +275,8 @@ RSpec.shared_examples "driver job state machine" do
     end.to raise_error { |error| expect(error).to equal(failure) }
     expect(client.job_list.jobs).to be_empty
     expect(client.insert(DriverRuntimeArgs.new(2)).job.state).to eq("available")
+  ensure
+    ENV["RIVER_USE_LEGACY_SUBTRANSACTIONS"] = previous
   end
 
   it "completes running jobs, merges metadata, and ignores missing or finished jobs" do
@@ -218,7 +295,7 @@ RSpec.shared_examples "driver job state machine" do
     driver.job_metadata_merge(row.id, "cancel_attempted_at" => nil)
     expect(driver.job_complete(id: row.id, finalized_at: now)).to eq(:cancelled)
     expect(driver.job_get_by_id(row.id).state).to eq("running")
-    driver.transaction do
+    savepoint(driver) do
       expect(driver.job_complete(id: row.id, finalized_at: now)).to eq(:cancelled)
       raise driver.rollback_exception
     end
@@ -338,7 +415,7 @@ RSpec.shared_examples "driver job state machine" do
   it "rolls back transactional completion" do
     row = insert_job(1, scheduled_at: now - 1)
     driver.job_claim(id: row.id, attempted_by: "test", now: now)
-    driver.transaction do
+    savepoint(driver) do
       expect(driver.job_complete(id: row.id, finalized_at: now).state).to eq("completed")
       raise driver.rollback_exception
     end
@@ -353,7 +430,7 @@ RSpec.shared_examples "driver job state machine" do
     driver.job_metadata_merge(null_marker.id, "cancel_attempted_at" => nil)
     expect(driver.job_get_cancelled_ids([])).to eq([])
     expect(driver.job_get_cancelled_ids([cancelled.id, unmarked.id, null_marker.id, -1, cancelled.id])).to contain_exactly(cancelled.id, null_marker.id)
-    driver.transaction do
+    savepoint(driver) do
       driver.job_metadata_merge(unmarked.id, "cancel_attempted_at" => "now")
       expect(driver.job_get_cancelled_ids([unmarked.id])).to eq([unmarked.id])
       raise driver.rollback_exception
@@ -939,6 +1016,37 @@ RSpec.shared_examples "driver job state machine" do
     expect(discarded.metadata.to_h).to include("unique_key_conflict" => "scheduler_discarded")
   end
 
+  it "runs transactional operations in the caller's transaction without savepoints" do
+    queue = "no_savepoints"
+    driver.queue_upsert(queue, now: now)
+    retried = insert_job(1, queue: queue, scheduled_at: now - 2)
+    driver.job_cancel(retried.id, now: now)
+    stuck = insert_job(2, queue: queue, scheduled_at: now - 120)
+    driver.job_claim(id: stuck.id, attempted_by: "worker", now: now - 120)
+
+    savepoints = savepoint_statements(driver) do
+      driver.transaction do
+        client.insert(DriverRuntimeArgs.new(3), queue: queue)
+        client.insert_many([4, 5].map { |value| River::InsertManyParams.new(DriverRuntimeArgs.new(value), insert_opts: River::InsertOpts.new(queue: queue)) })
+      end
+      claimed = driver.job_get_available(attempted_by: "worker", max: 1, queue: queue).first
+      driver.job_metadata_merge(claimed.id, {"merged" => true})
+      expect(client.job_complete_tx(River::Job.new(client, claimed)).state).to eq("completed")
+      driver.job_cancel(insert_job(6, queue: queue).id, now: now)
+      driver.job_retry(retried.id, now: now)
+      driver.job_rescue_stuck(horizon: now - 60, now: now, retry_policy: River::DefaultClientRetryPolicy.new)
+      driver.job_delete_many(River::JobListParams.new(kinds: ["driver_runtime"], queues: [queue], states: [River::JOB_STATE_CANCELLED]))
+      driver.queue_pause(queue, now: now)
+      driver.queue_resume(queue, now: now)
+      driver.queue_update(queue, metadata: {"updated" => true}, now: now)
+      driver.leader_acquire("no-savepoints", now: now)
+      driver.leader_release("no-savepoints")
+      driver.request_resign
+    end
+
+    expect(savepoints).to eq([])
+  end
+
   it "continues past ineligible rescue candidates without consuming the limit" do
     jobs = 3.times.map do |index|
       inserted = insert_job(index, scheduled_at: now - 120)
@@ -1239,13 +1347,13 @@ RSpec.shared_examples "driver queue and leadership state" do
     driver.queue_pause("paused", now: now)
     driver.leader_acquire("leader")
     driver.define_singleton_method(:runtime_notify) { |*| raise "notification failed" }
-    expect { driver.queue_pause("priority") }.to raise_error("notification failed")
+    expect { savepoint(driver) { driver.queue_pause("priority") } }.to raise_error("notification failed")
     expect(driver.queue_get("priority").paused_at).to be_nil
-    expect { driver.queue_resume("paused") }.to raise_error("notification failed")
+    expect { savepoint(driver) { driver.queue_resume("paused") } }.to raise_error("notification failed")
     expect(driver.queue_get("paused").paused_at).to be_within(0.001).of(now)
-    expect { driver.queue_update("priority", metadata: {"changed" => true}) }.to raise_error("notification failed")
+    expect { savepoint(driver) { driver.queue_update("priority", metadata: {"changed" => true}) } }.to raise_error("notification failed")
     expect(driver.queue_get("priority").metadata).to eq({})
-    expect { driver.leader_release("leader") }.to raise_error("notification failed")
+    expect { savepoint(driver) { driver.leader_release("leader") } }.to raise_error("notification failed")
     expect(driver.leader_renew("leader")).to be true
   end
 
