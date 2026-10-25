@@ -28,6 +28,7 @@ module River
     def leader_acquire: (String, ?ttl: Integer, ?now: Time) -> bool
     def leader_release: (String) -> untyped
     def leader_renew: (String, ?ttl: Integer, ?now: Time) -> bool
+    def normalize_time: (Time) -> Time
     def notification_delete_before: (horizon: Time, ?max: Integer) -> Integer
     def notification_listener: () -> untyped
     def request_resign: () -> nil
@@ -37,6 +38,7 @@ module River
     def queue_resume: (String, ?now: Time) -> Array[Queue]
     def queue_update: (String, metadata: Hash[untyped, untyped], ?now: Time) -> Queue?
     def queue_upsert: (String, ?metadata: Hash[untyped, untyped], ?now: Time) -> Queue?
+    def time_precision: () -> Rational
     def transaction: [T] () { () -> T } -> T
 
     # this set of methods is used only in tests
@@ -126,6 +128,7 @@ module River
       def runtime_decode_postgres_job: (untyped) -> JobRow
       @postgres_capabilities_cache: PostgresCapabilities::Cache
       def init_driver: () -> void
+      def normalize_time: (Time) -> Time
       def postgres_capabilities: () -> PostgresCapabilities
       def postgres_notify_insert: (Array[JobInsertParams]) -> void
       def job_get_cancelled_ids: (Array[Integer]) -> Array[Integer]
@@ -157,6 +160,8 @@ module River
       def queue_resume: (untyped, ?now: untyped) -> untyped
       def queue_update: (untyped, metadata: untyped, ?now: untyped) -> untyped
       def queue_upsert: (untyped, ?metadata: untyped, ?now: untyped) -> untyped
+
+      def time_precision: () -> Rational
 
       private
 

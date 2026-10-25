@@ -13,6 +13,14 @@ RSpec.describe "River driver runtime contracts" do
   it_behaves_like "driver queue and leadership state"
 end
 
+RSpec.describe "SQLite driver timestamp contract", database: :sqlite do
+  around(:each) { |example| sqlite_test_transaction(&example) }
+
+  let(:driver) { River::Driver::Sequel.new(SQLITE_DB) }
+
+  it_behaves_like "driver timestamp precision"
+end
+
 RSpec.describe "SQLite numeric metadata counters", database: :sqlite do
   around(:each) { |example| sqlite_test_transaction(&example) }
 
