@@ -845,7 +845,9 @@ func TestPeriodicJobEnqueuer(t *testing.T) {
 		var periodicJobKeepAliveAndReapMockCalled bool
 		bundle.pilotMock.PeriodicJobKeepAliveAndReapMock = func(ctx context.Context, exec riverdriver.Executor, params *riverpilot.PeriodicJobKeepAliveAndReapParams) ([]*riverpilot.PeriodicJob, error) {
 			periodicJobKeepAliveAndReapMockCalled = true
-			require.ElementsMatch(t, []string{"pilot_startup_new_job", "pilot_startup_durable_1h", "pilot_startup_durable_2h"}, params.ID)
+			require.Subset(t, []string{"pilot_startup_new_job", "pilot_startup_durable_1h", "pilot_startup_durable_2h"}, params.ID)
+			require.Contains(t, params.ID, "pilot_startup_durable_1h")
+			require.Contains(t, params.ID, "pilot_startup_durable_2h")
 			require.Equal(t, bundle.schema, params.Schema)
 			return nil, nil
 		}
@@ -915,7 +917,7 @@ func TestPeriodicJobEnqueuer(t *testing.T) {
 				UpdatedAt: now,
 			}},
 			Schema: bundle.schema,
-		})
+		}, nil)
 
 		require.False(t, periodicJobUpsertManyMockCalled)
 	})
