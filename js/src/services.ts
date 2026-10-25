@@ -15,6 +15,7 @@ import {
   buildPeriodicInsert,
   nextPeriodicRunAt,
   periodicJobIds,
+  periodicJobKeepAliveIds,
   resetPeriodicJobs,
   setPeriodicJobsChangeHandler,
 } from "./periodic.js";
@@ -758,8 +759,11 @@ export class RuntimeServices {
         durableJobs: Object.freeze([...durableJobs]),
         periodicJobs: this.#periodicJobs,
       });
-      resetPeriodicJobs(this.#periodicJobs);
-      return new Map(durableJobs.map(({ id, nextRunAt }) => [id, nextRunAt]));
+      const nextRuns = new Map(
+        durableJobs.map(({ id, nextRunAt }) => [id, nextRunAt])
+      );
+      resetPeriodicJobs(this.#periodicJobs, nextRuns);
+      return nextRuns;
     } catch (error: unknown) {
       if (signal.aborted) return null;
       this.#lastError = errorMessage(error);
@@ -827,6 +831,9 @@ export class RuntimeServices {
           if (items.length > 0) await this.#client.insertMany(items, { tx });
           await store.upsertMany(tx, upserts);
         });
+        if (!signal.aborted && this.#ownsLeadership(term)) {
+          batch.markPersisted();
+        }
       } else if (items.length > 0) {
         await this.#client.insertMany(items);
       }
@@ -843,8 +850,8 @@ export class RuntimeServices {
   async #keepPeriodicJobsAlive(signal: AbortSignal): Promise<void> {
     const store = this.#periodicJobStore;
     if (store === undefined) return;
-    const ids = periodicJobIds(this.#periodicJobs);
-    if (ids.length === 0) return;
+    if (periodicJobIds(this.#periodicJobs).length === 0) return;
+    const ids = periodicJobKeepAliveIds(this.#periodicJobs);
     try {
       await store.keepAliveAndReap(ids, { signal });
     } catch (error: unknown) {
