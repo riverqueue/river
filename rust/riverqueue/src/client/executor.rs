@@ -233,7 +233,7 @@ async fn run_worker(
                     for hook in &hooks_inner.hooks {
                         hook.work_begin(&hooks_context, &mut job)
                             .await
-                            .map_err(WorkError::new)?;
+                            .map_err(WorkError::from_boxed)?;
                     }
                     // The worker consumes the row, so it's copied only when
                     // work-end hooks need it afterward.
@@ -426,18 +426,7 @@ pub(super) fn worker_join_result(
 ) -> WorkerResult {
     match result {
         Ok(Ok(outcome)) => Ok(outcome),
-        // Like Go's `JobCancel`, a cancellation the worker returns cancels
-        // the job and records its reason.
-        Ok(Err(worker_error)) => Err(WorkerFailure {
-            error: Chain(&worker_error).to_string(),
-            kind: if JobCancelError::is_in_chain(worker_error.get_ref()) {
-                WorkerFailureKind::Cancelled
-            } else {
-                WorkerFailureKind::Error
-            },
-            source: Some(worker_error),
-            trace: String::new(),
-        }),
+        Ok(Err(worker_error)) => Err(worker_failure(worker_error)),
         // Like Go, a panic is recorded as the panic's value alone.
         Err(join_error) if join_error.is_panic() => {
             let trace = format!("{join_error:?}");
@@ -457,14 +446,24 @@ pub(super) fn worker_join_result(
     }
 }
 
-pub(super) fn worker_failure_from_source(error: BoxError) -> WorkerFailure {
-    let error = WorkError::new(error);
+/// A `JobCancelError` anywhere in the error's chain cancels the job and
+/// records its reason, whether a worker returned it or an extension reported
+/// it for a peer.
+fn worker_failure(error: WorkError) -> WorkerFailure {
     WorkerFailure {
         error: Chain(&error).to_string(),
-        kind: WorkerFailureKind::Error,
+        kind: if JobCancelError::is_in_chain(error.get_ref()) {
+            WorkerFailureKind::Cancelled
+        } else {
+            WorkerFailureKind::Error
+        },
         source: Some(error),
         trace: String::new(),
     }
+}
+
+pub(super) fn worker_failure_from_source(error: BoxError) -> WorkerFailure {
+    worker_failure(WorkError::from_boxed(error))
 }
 
 pub(super) fn public_work_result(result: &WorkerResult) -> WorkResult {
@@ -769,5 +768,49 @@ mod snooze_counter_tests {
                 case.name
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod worker_failure_tests {
+    use crate::{BoxError, JobCancelError, WorkError};
+
+    use super::{WorkerFailureKind, worker_failure_from_source};
+
+    /// A boxed `WorkError`, as an extension returns after running work-end
+    /// hooks, keeps its original error rather than being wrapped again.
+    #[test]
+    fn boxed_work_errors_keep_their_original_error() {
+        let original = WorkError::new(std::io::Error::other("worker failed"));
+        let failure = worker_failure_from_source(Box::new(original) as BoxError);
+        let source = failure.source.unwrap();
+        assert!(source.downcast_ref::<std::io::Error>().is_some());
+        assert_eq!(failure.error, "worker failed");
+    }
+
+    /// An extension reporting a peer's cancellation, boxed directly or
+    /// after work-end hooks, cancels the peer like a worker's cancellation.
+    #[test]
+    fn job_cancel_errors_cancel() {
+        for error in [
+            Box::new(JobCancelError::new("card expired")) as BoxError,
+            Box::new(WorkError::new(JobCancelError::new("card expired"))),
+        ] {
+            let failure = worker_failure_from_source(error);
+            assert!(matches!(failure.kind, WorkerFailureKind::Cancelled));
+            assert_eq!(failure.error, "JobCancelError: card expired");
+        }
+    }
+
+    #[test]
+    fn other_errors_are_wrapped() {
+        let failure = worker_failure_from_source(Box::new(std::io::Error::other("worker failed")));
+        assert!(
+            failure
+                .source
+                .unwrap()
+                .downcast_ref::<std::io::Error>()
+                .is_some()
+        );
     }
 }
