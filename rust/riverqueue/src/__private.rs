@@ -60,6 +60,17 @@ impl InsertOptsExt for crate::InsertOpts {
     }
 }
 
+impl InsertOptsExt for crate::InsertParams {
+    fn extension_options(&self) -> &Map<String, Value> {
+        &self.extension_options
+    }
+
+    fn with_extension_option(mut self, key: impl Into<String>, value: Value) -> Self {
+        self.extension_options.insert(key.into(), value);
+        self
+    }
+}
+
 /// Queue configuration reserved for River's own companion crates.
 ///
 /// Extension settings travel with a queue's configuration, through
@@ -682,8 +693,11 @@ pub struct JobSetStateParams<'a> {
 pub struct JobsInsertedParams<'a> {
     /// Selected database backend configuration.
     pub database: DatabaseConfig,
-    /// Jobs the insertion wrote, excluding unique insertions skipped as
-    /// duplicates, in input order.
+    /// Metadata of every requested job after insert hooks and interception,
+    /// in input order. A unique duplicate keeps its requested metadata here.
+    pub input_metadata: &'a [crate::JobMetadata],
+    /// Every returned job, including existing unique duplicates, in input
+    /// order. A duplicate keeps the stored row's metadata here.
     pub jobs: &'a [JobRow],
 }
 
@@ -1075,8 +1089,9 @@ pub trait Pilot: std::any::Any + Send + Sync + 'static {
     ///
     /// Called only when [`Pilot::intercepts_insert`] returns `true`, on every
     /// insertion path, including batches, caller-managed transactions, and
-    /// periodic jobs. Unique insertions skipped as duplicates aren't
-    /// included. Returning an error rolls back the insertion. As in
+    /// periodic jobs. Existing unique duplicates are included, alongside
+    /// the original input metadata. Returning an error rolls back the
+    /// insertion. As in
     /// [`Pilot::before_jobs_insert`], `connection` is the insertion's
     /// transaction, which the extension must not end.
     async fn after_jobs_inserted(

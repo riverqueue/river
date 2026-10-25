@@ -299,6 +299,19 @@ struct OptionsPilot {
     seen: Arc<Mutex<Vec<SeenInsert>>>,
 }
 
+impl riverqueue::Hook for OptionsPilot {
+    fn insert_begin(
+        &self,
+        insert: &mut riverqueue::InsertContext,
+    ) -> impl Future<Output = Result<(), riverqueue::BoxError>> + Send {
+        self.seen.lock().unwrap().push((
+            insert.opts.extension_options().clone(),
+            insert.opts.metadata.as_raw().get().to_owned(),
+        ));
+        std::future::ready(Ok(()))
+    }
+}
+
 #[async_trait]
 impl Pilot for OptionsPilot {
     fn intercepts_insert(&self) -> bool {
@@ -328,7 +341,11 @@ async fn assert_extension_options_reach_the_insert_hook(
     builder: impl Fn() -> riverqueue::ClientBuilder,
 ) {
     let pilot = OptionsPilot::default();
-    let client = builder().pilot(pilot.clone()).build().unwrap();
+    let client = builder()
+        .hook(pilot.clone())
+        .pilot(pilot.clone())
+        .build()
+        .unwrap();
 
     let defaults = client.insert(DeclaredArgs { value: 1 }).await.unwrap();
     let overridden = client
@@ -342,7 +359,9 @@ async fn assert_extension_options_reach_the_insert_hook(
         .unwrap();
 
     let seen = pilot.seen.lock().unwrap().clone();
-    assert_eq!(seen.len(), 2);
+    assert_eq!(seen.len(), 4);
+    assert_eq!(seen[0], seen[1]);
+    assert_eq!(seen[2], seen[3]);
     assert_eq!(
         Value::Object(seen[0].0.clone()),
         json!({"declared": {"type": true}, "shared": "type"})
@@ -351,10 +370,10 @@ async fn assert_extension_options_reach_the_insert_hook(
     // A call's metadata replaces the defaults, but not the declared
     // extension options, which the call overrides key by key.
     assert_eq!(
-        Value::Object(seen[1].0.clone()),
+        Value::Object(seen[2].0.clone()),
         json!({"declared": {"type": true}, "shared": "call"})
     );
-    assert_eq!(seen[1].1, r#"{"call":1}"#);
+    assert_eq!(seen[2].1, r#"{"call":1}"#);
     // Nothing about the extension options is persisted. (SQLite adds its
     // insert nonce.)
     for (id, expected) in [
@@ -367,6 +386,74 @@ async fn assert_extension_options_reach_the_insert_hook(
         metadata.remove("river:unique_nonce");
         assert_eq!(Value::Object(metadata), expected);
     }
+}
+
+type SeenResults = (Vec<i64>, Vec<i64>);
+
+/// Records every returned row, including an existing unique row.
+#[derive(Clone, Default)]
+struct InsertResultsPilot {
+    seen: Arc<Mutex<Vec<SeenResults>>>,
+}
+
+#[async_trait]
+impl Pilot for InsertResultsPilot {
+    fn intercepts_insert(&self) -> bool {
+        true
+    }
+
+    async fn after_jobs_inserted(
+        &self,
+        _connection: DatabaseConnection<'_>,
+        params: &riverqueue::__private::JobsInsertedParams<'_>,
+    ) -> Result<(), PilotError> {
+        self.seen.lock().unwrap().push((
+            params.jobs.iter().map(|job| job.id).collect(),
+            params
+                .input_metadata
+                .iter()
+                .map(|metadata| metadata.get::<i64>("input").unwrap().unwrap())
+                .collect(),
+        ));
+        Ok(())
+    }
+}
+
+async fn assert_insert_results_include_unique_duplicates(
+    builder: impl Fn() -> riverqueue::ClientBuilder,
+) {
+    let pilot = InsertResultsPilot::default();
+    let client = builder().pilot(pilot.clone()).build().unwrap();
+    let opts = |input| {
+        InsertOpts::default()
+            .with_unique(riverqueue::UniqueOpts::new().with_by_args(true))
+            .with_metadata(json!({"input": input}).as_object().unwrap().clone())
+    };
+    let first = client
+        .insert(SeamArgs { value: 1 })
+        .opts(opts(1))
+        .await
+        .unwrap();
+    let duplicate = client
+        .insert(SeamArgs { value: 1 })
+        .opts(opts(2))
+        .await
+        .unwrap();
+    assert!(duplicate.unique_skipped_as_duplicate);
+    let mut batch = riverqueue::InsertBatch::new();
+    batch.push_with(SeamArgs { value: 1 }, opts(3));
+    batch.push_with(SeamArgs { value: 2 }, opts(4));
+    let mixed = client.insert_batch(batch).await.unwrap();
+    assert!(mixed[0].unique_skipped_as_duplicate);
+    assert!(!mixed[1].unique_skipped_as_duplicate);
+    assert_eq!(
+        *pilot.seen.lock().unwrap(),
+        [
+            (vec![first.id()], vec![1]),
+            (vec![first.id()], vec![2]),
+            (vec![first.id(), mixed[1].job.id], vec![3, 4])
+        ],
+    );
 }
 
 #[cfg(all(feature = "postgres", river_postgres_tests))]
@@ -504,6 +591,13 @@ mod postgres {
     }
 
     #[tokio::test(flavor = "multi_thread")]
+    async fn insert_results_include_unique_duplicates() {
+        let schema = PostgresSchema::new("seam_unique_results").await;
+        assert_insert_results_include_unique_duplicates(|| builder(&schema)).await;
+        schema.cleanup().await;
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
     async fn insertions_reach_the_extension_as_one_batch() {
         let schema = PostgresSchema::new("seam_batch_insert").await;
         assert_batched_insert_interception(|| builder(&schema)).await;
@@ -620,6 +714,13 @@ mod sqlite {
     async fn extension_options_reach_the_insert_hook() {
         let (pool, path) = sqlite_file_pool(4).await;
         assert_extension_options_reach_the_insert_hook(|| Client::builder(pool.clone())).await;
+        sqlite_cleanup(pool, path).await;
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn insert_results_include_unique_duplicates() {
+        let (pool, path) = sqlite_file_pool(4).await;
+        assert_insert_results_include_unique_duplicates(|| Client::builder(pool.clone())).await;
         sqlite_cleanup(pool, path).await;
     }
 
