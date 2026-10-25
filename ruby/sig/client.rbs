@@ -15,6 +15,7 @@ module River
 
     def initialize: (_Driver driver, ?config: Config?) -> void
     def __finish_claimed_job: (JobRow, ?Exception?) -> untyped
+    def __insert_with_default_scheduled_at: (jobArgs, InsertOpts, Time?) -> JobInsertResult
     def __perform_job: (Integer, ?allow_scheduled: bool) -> untyped
     def __interrupt_workers: () -> untyped
     def __runtime_healthy?: () -> bool
@@ -62,7 +63,7 @@ module River
     TAG_RE: Regexp
 
     private def insert_and_check_unique_job: (Driver::JobInsertParams) -> JobInsertResult
-    private def make_insert_params: (jobArgs, InsertOpts) -> Driver::JobInsertParams
+    private def make_insert_params: (jobArgs, InsertOpts, ?Time?) -> Driver::JobInsertParams
     private def make_unique_key_and_bitmask: (Driver::JobInsertParams, UniqueOpts) -> [String, String]
     private def run_insert_plugins: (Array[Driver::JobInsertParams]) { () -> Array[JobInsertResult] } -> Array[JobInsertResult]
     private def truncate_time: (Time, Integer | Rational) -> Time

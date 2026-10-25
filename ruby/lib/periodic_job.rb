@@ -100,7 +100,9 @@ module River
       self
     end
 
-    def due(now)
+    # Internal scheduler entry point that retains each claimed occurrence's
+    # time even after advancing its registration.
+    def __due_with_times(now)
       # Application schedules may reenter the registry, so evaluate outside its
       # lock and only advance registrations that haven't been removed or claimed.
       entries = @mutex.synchronize { @jobs.map { |handle, entry| [handle, entry, entry[:next_at]] } }
@@ -111,13 +113,17 @@ module River
         @mutex.synchronize do
           next unless @jobs[handle].equal?(entry) && entry[:next_at] == next_at
           entry[:next_at] = following
-          entry[:job]
+          [entry[:job], next_at]
         end
       rescue => error
         raise unless block_given?
         yield(entry[:job], error)
         nil
       end
+    end
+
+    def due(now, &block)
+      __due_with_times(now, &block).map(&:first)
     end
 
     # Returns true when the bundle has no registered periodic jobs.
