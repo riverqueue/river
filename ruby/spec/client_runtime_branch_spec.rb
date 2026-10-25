@@ -625,6 +625,24 @@ RSpec.describe River::ClientRuntime do
     expect(output.string).to include("River maintenance service failed", "persistent service failure")
   end
 
+  it "passes the scheduled occurrence to periodic insertion even when a pass is late" do
+    occurrence = nil
+    periodic = River::PeriodicJob.new(schedule: ->(time) {
+      following = time + 60
+      occurrence ||= following
+      following
+    }) { :args }
+    observed = []
+    client = Object.new
+    client.define_singleton_method(:insert) { |_args, insert_opts:| observed << insert_opts.scheduled_at }
+    client.define_singleton_method(:__insert_with_default_scheduled_at) { |_args, _opts, fallback| observed << fallback }
+    value = described_class.new(client, Object.new, config.with(periodic_jobs: [periodic]))
+
+    value.send(:run_periodic, occurrence + 3_600)
+
+    expect(observed).to eq([occurrence])
+  end
+
   it "logs and isolates a periodic constructor failure" do
     output = StringIO.new
     periodic = River::PeriodicJob.new(
@@ -645,7 +663,7 @@ RSpec.describe River::ClientRuntime do
     good = River::PeriodicJob.new(schedule: River::PeriodicInterval.new(60), run_on_start: true) { :args }
     inserted = []
     client = Object.new
-    client.define_singleton_method(:insert) { |args, **| inserted << args }
+    client.define_singleton_method(:__insert_with_default_scheduled_at) { |args, _options, _scheduled_at| inserted << args }
     value = described_class.new(client, Object.new, config.with(logger: Logger.new(output), periodic_jobs: [broken, good]))
 
     value.send(:run_periodic, Time.now.utc + 1)

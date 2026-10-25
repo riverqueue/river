@@ -189,6 +189,23 @@ RSpec.describe River::PeriodicJobBundle do
     expect(jobs.due(Time.now.utc + 1)).to eq([job])
   end
 
+  it "timestamps delayed startup work once and keeps later occurrence times" do
+    calls = []
+    job = periodic(run_on_start: true, schedule: ->(time) {
+      calls << time
+      time + 60
+    })
+    jobs = described_class.new([job], wake: wake)
+    first_pass = Time.now.utc + 3_600
+    expect(calls).to be_empty
+
+    expect(jobs.__due_with_times(first_pass)).to eq([[job, first_pass]])
+    expect(calls).to eq([first_pass])
+    expect(jobs.__due_with_times(first_pass + 59)).to be_empty
+    expect(jobs.__due_with_times(first_pass + 65)).to eq([[job, first_pass + 60]])
+    expect(calls).to eq([first_pass, first_pass + 65])
+  end
+
   it "does not return future jobs" do
     jobs = described_class.new([periodic], wake: wake)
 
