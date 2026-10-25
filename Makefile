@@ -278,6 +278,11 @@ check/java/package: ## Build and verify publishable Maven archives without publi
 check/java/package: build/java
 	go run ./java/bin/check-packages/main.go
 
+.PHONY: check/java/release
+check/java/release: ## Build a signed Maven Central bundle without uploading (requires an OpenPGP key)
+check/java/release: generate/fixtures verify/java-migrations
+	$(java_mvn) -f java/pom.xml -Prelease clean deploy -Driver.test.database=sqlite -DexcludedGroups=postgres -Dmaven.install.skip=true -Dcentral.skipUpload=true
+
 .PHONY: check/js/dependencies
 check/js/dependencies: ## Audit JavaScript advisories and production dependency licenses
 	pnpm -C js audit

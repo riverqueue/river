@@ -13,7 +13,193 @@ make generate/fixtures
 mvn --batch-mode --no-transfer-progress -f java/pom.xml install
 ```
 
-The executable migration CLI is built at `java/cli/target/river-cli-0.48.0-alpha.1-all.jar`. For a build without running tests, use `make build/java`.
+The executable migration CLI is built at `java/cli/target/river-cli-0.1.0-alpha.1-all.jar`. For a build without running tests, use `make build/java`.
+
+## Maven Central artifacts
+
+Normal builds attach sources and Javadoc JARs for the library and CLI. The
+`release` Maven profile additionally signs the artifacts and builds a Central
+Publisher Portal bundle with checksums. It includes three coordinates, all under
+`com.riverqueue` and using the version in `java/pom.xml`:
+
+| Artifact | Contents |
+| --- | --- |
+| `river-java` | Parent POM with shared dependencies and publication metadata |
+| `river` | Library, sources, Javadoc, and POM |
+| `river-cli` | Thin CLI, executable `all` JAR, sources, Javadoc, and POM |
+
+The parent POM must be published with its children so consumers can resolve their
+dependencies. `river-conformance` is explicitly excluded from Central publication
+and skips signing, Javadoc, and local installation.
+
+### Local tooling and signing
+
+Use JDK 21 or 25, Maven 3.9 or newer, and the Go version from `go.work` for fixture
+generation. Signing uses the Maven GPG plugin's pure Java Bouncy Castle signer
+(`signer=bc`) with agent access disabled. Neither GnuPG executables nor
+`gpg-agent` are needed. Maven downloads the pinned publishing, signing, and
+Javadoc plugins automatically; no separate Sonatype CLI is needed. Select the
+supported JDK with both `JAVA_HOME` and `PATH`, even if Homebrew's Maven
+installation brings a newer JDK.
+
+Supply an exported OpenPGP private key, such as an ASCII-armored file beginning
+with `-----BEGIN PGP PRIVATE KEY BLOCK-----`. SSH keys are not supported. For new
+keys without GnuPG, [PGPainless](https://pgpainless.readthedocs.io/en/stable/pgpainless-cli/usage.html)
+provides a Java/Bouncy Castle OpenPGP tool. For publication, distribute the public
+key to a [keyserver supported by Central](https://central.sonatype.org/publish/requirements/gpg/#distributing-your-public-key).
+The [keys.openpgp.org upload form](https://keys.openpgp.org/upload) accepts public
+key files directly in the browser.
+
+Use `-Dgpg.keyFilePath=/absolute/path/to/private-key.asc` for a local key file
+outside the checkout. Supply its passphrase through `MAVEN_GPG_PASSPHRASE`, using
+your secret manager or a hidden terminal prompt. For example, enter the passphrase
+at the `read` command, then build and test the signed bundle:
+
+```sh
+read -r -s MAVEN_GPG_PASSPHRASE
+export MAVEN_GPG_PASSPHRASE
+make check/java/release MVN='mvn -Dgpg.keyFilePath=/absolute/path/to/private-key.asc'
+unset MAVEN_GPG_PASSPHRASE
+```
+
+For CI, supply the private key's full contents through `MAVEN_GPG_KEY` and its
+passphrase through `MAVEN_GPG_PASSPHRASE`, then run `make check/java/release`.
+The environment key takes precedence over the key file. If a file or environment
+key contains multiple keys, select the signing key with
+`-Dgpg.keyFingerprint=FINGERPRINT` or `MAVEN_GPG_KEY_FINGERPRINT`.
+The plugin rejects passphrases supplied as Maven properties or in `settings.xml`.
+
+Maintainers can use separate signing keys and publishing tokens. Each maintainer
+supplies their own key locally; the project does not pin a shared key or
+fingerprint. Each public key must be available from a supported keyserver, and
+each publisher needs access to `com.riverqueue` in the Central Portal.
+
+From `java/`, the equivalent target is `make package/release`. This performs a
+clean build, runs SQLite and CLI tests and formatting checks, signs the parent and
+both public modules, and writes `java/target/central-publishing/central-bundle.zip`.
+It neither uploads the bundle nor installs these artifacts into the local Maven
+repository.
+No Central account or publishing token is required for this check. It does require
+an exported signing key and, for an encrypted key, its passphrase.
+
+### Publishing setup
+
+Before uploading, verify the `com.riverqueue` namespace in the
+[Central Publisher Portal](https://central.sonatype.com) using a DNS TXT record
+on `riverqueue.com`, and create a
+[publishing token](https://central.sonatype.org/publish/generate-portal-token/).
+Merge this server entry into your local `~/.m2/settings.xml`, with the token's
+username and password supplied through environment variables:
+
+```xml
+<settings xmlns="http://maven.apache.org/SETTINGS/1.2.0">
+  <servers>
+    <server>
+      <id>central</id>
+      <username>${env.CENTRAL_USERNAME}</username>
+      <password>${env.CENTRAL_PASSWORD}</password>
+    </server>
+  </servers>
+</settings>
+```
+
+The profile defaults to `central.skipUpload=true`. With uploading enabled, Maven
+waits for Central validation; `autoPublish=false` leaves final publication to the
+Portal. Ordinary builds do not activate signing or Central publishing. See the
+[Central Maven plugin guide](https://central.sonatype.org/publish/publish-portal-maven/)
+for the upload and validation lifecycle.
+
+## Releasing a new version
+
+Run these commands from the repository root, in the same shell, with JDK 21 or 25,
+Maven, Go, `golangci-lint`, Python 3, and `gh` available. Complete the signing and
+publishing setup above first. Stop if any command fails. Java versions have no
+leading `v`; tags use `java/vX.Y.Z`.
+
+1. Start from a clean checkout, fetch changes and tags, and choose the release version:
+
+    ```sh
+    git checkout master && git pull --rebase
+    git fetch --tags
+    export VERSION=0.1.0-alpha.1
+    git checkout -b "$USER-java-$VERSION"
+    ```
+
+2. Update the POMs, CLI tests, documentation examples, and adapter version references together:
+
+    ```sh
+    python3 - <<'PY'
+    import json, os, pathlib, subprocess, xml.etree.ElementTree as ET
+    old = ET.parse("java/pom.xml").findtext("{http://maven.apache.org/POM/4.0.0}version")
+    files = subprocess.check_output([
+        "git", "grep", "-Il", "-F", old, "--", "java",
+        ":!java/CHANGELOG.md", ":!java/VALIDATION.md",
+        ":!java/conformance/src/main/resources/manifest.json",
+    ]).decode().splitlines()
+    for name in files:
+        path = pathlib.Path(name)
+        path.write_text(path.read_text().replace(old, os.environ["VERSION"]))
+    path = pathlib.Path("java/conformance/src/main/resources/manifest.json")
+    manifest = json.loads(path.read_text())
+    manifest["implementations"]["java"]["version"] = os.environ["VERSION"]
+    path.write_text(json.dumps(manifest, indent=2) + "\n")
+    PY
+    git diff -- java
+    ```
+
+    Move `java/CHANGELOG.md` entries from `Unreleased` into a `[$VERSION] - YYYY-MM-DD` section. For the first release, describe the initial library and CLI; for a stable release, remove "Prerelease" from the README introduction.
+
+3. Check the release and open a PR. Keep CI enabled and have the PR reviewed and merged after the Java checks pass:
+
+    ```sh
+    make lint/java test/java/sqlite check/java/package
+    git add java
+    git commit -m "[java] Release v$VERSION"
+    git push -u origin HEAD
+    gh pr create --fill
+    ```
+
+4. After merge, pull the release commit into a clean checkout, confirm its version, and create the local tag:
+
+    ```sh
+    git checkout master && git pull --rebase &&
+    test -z "$(git status --porcelain)" &&
+    test "$(python3 -c 'import xml.etree.ElementTree as E; print(E.parse("java/pom.xml").findtext("{http://maven.apache.org/POM/4.0.0}version"))')" = "$VERSION" &&
+    git tag "java/v$VERSION" -m "release java/v$VERSION"
+    ```
+
+5. Load your private key, then enter its passphrase, the Central token username, and the Central token password at the three `read` commands. Build, test, sign, and upload the release for validation:
+
+    ```sh
+    export MAVEN_GPG_KEY="$(cat /absolute/path/to/private-key.asc)"
+    read -r -s MAVEN_GPG_PASSPHRASE
+    read -r CENTRAL_USERNAME
+    read -r -s CENTRAL_PASSWORD
+    export MAVEN_GPG_PASSPHRASE CENTRAL_USERNAME CENTRAL_PASSWORD
+    test -z "$(git status --porcelain)" &&
+    test "$(git rev-parse HEAD)" = "$(git rev-parse "java/v$VERSION^{commit}")" &&
+    make generate/fixtures verify/java-migrations &&
+    ./java/bin/check-maven-warnings.sh mvn --batch-mode --no-transfer-progress \
+      -Dstyle.color=never -f java/pom.xml -Prelease clean deploy \
+      -Driver.test.database=sqlite -DexcludedGroups=postgres \
+      -Dmaven.install.skip=true -Dcentral.skipUpload=false
+    unset MAVEN_GPG_KEY MAVEN_GPG_PASSPHRASE CENTRAL_USERNAME CENTRAL_PASSWORD
+    ```
+
+6. In the [Central Portal deployments page](https://central.sonatype.com/publishing/deployments), open the validated deployment, confirm it contains `river-java`, `river`, and `river-cli` at `$VERSION`, and click **Publish**. Wait for **Published**. If uploading timed out, check this page before retrying.
+
+7. Verify the published CLI and its transitive library/parent dependencies using a fresh Maven cache. If Central has not propagated the release yet, wait and rerun with a new temporary directory:
+
+    ```sh
+    export JAVA_RELEASE_CHECK_DIR="$(mktemp -d)"
+    (cd "$JAVA_RELEASE_CHECK_DIR" && mvn --batch-mode --no-transfer-progress \
+      -Dmaven.repo.local="$JAVA_RELEASE_CHECK_DIR/m2" dependency:get \
+      -Dartifact="com.riverqueue:river-cli:$VERSION:jar:all") &&
+    java -jar "$JAVA_RELEASE_CHECK_DIR/m2/com/riverqueue/river-cli/$VERSION/river-cli-$VERSION-all.jar" --version &&
+    git push origin "java/v$VERSION"
+    ```
+
+8. Create a [GitHub release](https://github.com/riverqueue/river/releases/new) for `java/v$VERSION`, copy that version's Java changelog notes into the body, and attach the downloaded `river-cli-$VERSION-all.jar`. Mark alpha, beta, and RC versions as prereleases.
 
 ## Tests and checks
 
@@ -94,6 +280,12 @@ complete build output, preserves command failures, and rejects Maven warning
 messages from packaging and other plugins. Local checks and CI use these same
 targets. Direct Maven invocations also reject compiler warnings through the
 parent POM's `failOnWarning` setting.
+
+Javadoc also fails on warnings. Its doclint configuration checks references,
+syntax, HTML, and accessibility, but permits missing comments and tags because
+the existing API documentation does not annotate every parameter and return value.
+Automatic external documentation links are disabled so Javadoc generation does
+not depend on another documentation site being reachable.
 
 Executable JARs merge dependency `META-INF/LICENSE` and `META-INF/NOTICE` text,
 retain service registrations, and generate their own executable manifests.

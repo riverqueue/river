@@ -14,7 +14,7 @@
     "postgres-full-v1",
     "sqlite-runtime-v1"
   ],
-  "version": "0.48.0-alpha.1",
+  "version": "0.1.0-alpha.1",
   "start_options": [
     "elect_interval_ms",
     "rescuer_interval_ms",
