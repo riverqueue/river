@@ -838,10 +838,10 @@ module River
     end
 
     private def run_periodic(now)
-      due = @periodic_jobs.due(now) do |job, error|
+      due = @periodic_jobs.__due_with_times(now) do |job, error|
         @config.logger.error("River periodic job schedule failed (id=#{job.id.inspect}): #{error.full_message}")
       end
-      due.each do |periodic_job|
+      due.each do |periodic_job, scheduled_at|
         value = periodic_job.constructor.call
         next unless value
 
@@ -849,7 +849,7 @@ module River
         opts = (opts || InsertOpts.new).dup
         opts.metadata = (opts.metadata || {}).merge("periodic" => true)
         opts.metadata["river:periodic_job_id"] = periodic_job.id if periodic_job.id && !periodic_job.id.empty?
-        @client.insert(args, insert_opts: opts)
+        @client.__insert_with_default_scheduled_at(args, opts, scheduled_at)
       rescue => error
         @config.logger.error("River periodic job failed to insert: #{error.full_message}")
       end

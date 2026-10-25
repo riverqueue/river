@@ -55,6 +55,49 @@ RSpec.describe River::Client do
   let!(:driver) { River::Driver::Sequel.new(available_test_database) }
   let(:client) { River::Client.new(driver) }
 
+  describe "#__insert_with_default_scheduled_at" do
+    [
+      ["occurrence", nil, nil, 9],
+      ["argument", 13, nil, 13],
+      ["constructor", 13, 14, 14]
+    ].each do |source, argument_hour, constructor_hour, expected_hour|
+      it "resolves the #{source} schedule before period uniqueness and insertion hooks" do
+        now = Time.utc(2026, 1, 1, 12, 30)
+        fallback = Time.utc(2026, 1, 1, 9, 15)
+        argument_schedule = Time.utc(2026, 1, 1, argument_hour, 15) if argument_hour
+        constructor_schedule = Time.utc(2026, 1, 1, constructor_hour, 15) if constructor_hour
+        argument_options = River::InsertOpts.new(scheduled_at: argument_schedule).freeze
+        options = River::InsertOpts.new(scheduled_at: constructor_schedule,
+          unique_opts: River::UniqueOpts.new(by_period: 3_600)).freeze
+        reads = 0
+        args = SimpleArgs.new(job_num: 1).tap do |value|
+          value.define_singleton_method(:insert_opts) do
+            reads += 1
+            argument_options
+          end
+          value.freeze
+        end
+        observed = nil
+        plugin = Object.new
+        plugin.define_singleton_method(:insert_begin) { |params| observed = [params.args, params.scheduled_at, params.unique_key] }
+        client = River::Client.new(driver, config: River::Config.new(plugins: [plugin]))
+        client.instance_variable_set(:@time_now_utc, -> { now })
+
+        row = client.__insert_with_default_scheduled_at(args, options, fallback).job
+
+        expected_schedule = Time.utc(2026, 1, 1, expected_hour, 15)
+        expected_key = Digest::SHA256.digest("&kind=simple&period=2026-01-01T#{format("%02d", expected_hour)}:00:00Z")
+        expect(row.scheduled_at).to eq(expected_schedule)
+        expect(row.unique_key).to eq(expected_key)
+        expect(observed).to eq([args, expected_schedule, expected_key])
+        expect(observed.first).to equal(args)
+        expect(reads).to eq(1)
+        expect(argument_options.scheduled_at).to eq(argument_schedule)
+        expect(options.scheduled_at).to eq(constructor_schedule)
+      end
+    end
+  end
+
   describe "#insert" do
     it "normalizes symbolic kinds and argument-level options before calling plugins and drivers" do
       args = SimpleArgsWithInsertOpts.new(job_num: 1)
