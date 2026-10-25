@@ -845,7 +845,11 @@ func TestPeriodicJobEnqueuer(t *testing.T) {
 		var periodicJobKeepAliveAndReapMockCalled bool
 		bundle.pilotMock.PeriodicJobKeepAliveAndReapMock = func(ctx context.Context, exec riverdriver.Executor, params *riverpilot.PeriodicJobKeepAliveAndReapParams) ([]*riverpilot.PeriodicJob, error) {
 			periodicJobKeepAliveAndReapMockCalled = true
-			require.ElementsMatch(t, []string{"pilot_startup_new_job", "pilot_startup_durable_1h", "pilot_startup_durable_2h"}, params.ID)
+			// The first keep-alive tick can run before or after the startup
+			// upsert commits, so the new job may or may not be included.
+			require.Subset(t, []string{"pilot_startup_new_job", "pilot_startup_durable_1h", "pilot_startup_durable_2h"}, params.ID)
+			require.Contains(t, params.ID, "pilot_startup_durable_1h")
+			require.Contains(t, params.ID, "pilot_startup_durable_2h")
 			require.Equal(t, bundle.schema, params.Schema)
 			return nil, nil
 		}
@@ -915,9 +919,62 @@ func TestPeriodicJobEnqueuer(t *testing.T) {
 				UpdatedAt: now,
 			}},
 			Schema: bundle.schema,
-		})
+		}, nil)
 
 		require.False(t, periodicJobUpsertManyMockCalled)
+	})
+
+	// Runs a durable batch through a real database transaction. A job becomes
+	// eligible for keep-alive only when its insertion and next run time
+	// commit together; a rolled back batch leaves no job and no eligibility.
+	t.Run("InsertBatchKeepsAliveOnlyAfterCommit", func(t *testing.T) {
+		t.Parallel()
+
+		for _, committed := range []bool{false, true} {
+			t.Run(fmt.Sprintf("Committed=%t", committed), func(t *testing.T) {
+				t.Parallel()
+
+				svc, bundle := setup(t)
+
+				bundle.pilotMock.PeriodicJobUpsertManyMock = func(ctx context.Context, exec riverdriver.Executor, params *riverpilot.PeriodicJobUpsertManyParams) ([]*riverpilot.PeriodicJob, error) {
+					if !committed {
+						return nil, errors.New("upsert failed after job insert")
+					}
+					return nil, nil
+				}
+
+				periodicJob := &PeriodicJob{
+					ID:              "insert_batch_keep_alive",
+					ConstructorFunc: jobConstructorFunc("insert_batch_keep_alive", false),
+					ScheduleFunc:    periodicIntervalSchedule(time.Hour),
+				}
+				handle, err := svc.AddSafely(periodicJob)
+				require.NoError(t, err)
+
+				insertParams, err := periodicJob.ConstructorFunc()
+				require.NoError(t, err)
+
+				now := time.Now().UTC()
+				svc.insertBatch(ctx, []*rivertype.JobInsertParams{insertParams}, &riverpilot.PeriodicJobUpsertManyParams{
+					Jobs: []*riverpilot.PeriodicJobUpsertParams{{
+						ID:        periodicJob.ID,
+						NextRunAt: now.Add(time.Hour),
+						UpdatedAt: now,
+					}},
+					Schema: bundle.schema,
+				}, map[rivertype.PeriodicJobHandle]*PeriodicJob{handle: periodicJob})
+
+				expectedNumJobs := 0
+				if committed {
+					expectedNumJobs = 1
+				}
+				requireNJobs(t, bundle, "insert_batch_keep_alive", expectedNumJobs)
+
+				svc.mu.RLock()
+				defer svc.mu.RUnlock()
+				require.Equal(t, committed, periodicJob.keepAlive)
+			})
+		}
 	})
 
 	t.Run("InvokesPilotDueDurableJobRunsOnce", func(t *testing.T) {

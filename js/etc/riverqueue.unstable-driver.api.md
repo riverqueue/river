@@ -1154,22 +1154,21 @@ export interface PeerOutcome {
 
 ```ts
 /**
- * A pilot's durable storage for periodic job schedules, so the next run of
- * a periodic job with an `id` survives leader changes and restarts. It
- * mirrors River for Go's periodic-job pilot operations.
+ * A pilot's durable storage for periodic schedules. A job with an `id` keeps
+ * its next run time across leader changes and restarts.
  *
- * The leader calls `getAll` when it starts enqueuing periodic jobs and seeds
- * each job's next run from the matching record; calls `upsertMany` inside the
- * same transaction that inserts each batch of periodic jobs; and calls
- * `keepAliveAndReap` with the registered IDs every ten minutes so the store
- * can delete records for jobs no client registers anymore.
+ * At startup, the leader loads saved run times with `getAll`. It writes new
+ * times through `upsertMany` in the same transaction as periodic insertions.
+ * Every ten minutes, the leader calls `keepAliveAndReap` with the IDs whose
+ * run times were loaded at startup or committed since. The store refreshes
+ * those records and reaps expired ones, even when the list is empty.
  */
 export interface PeriodicJobStore<Transaction = unknown> {
-  /** Return every durable periodic job record. */
+  /** Return saved schedules that have not expired. */
   getAll(options: {
     readonly signal: AbortSignal;
   }): PromiseLike<readonly DurablePeriodicJob[]>;
-  /** Refresh records for `ids` and delete records not refreshed recently. */
+  /** Refresh records for `ids` and reap expired records, even when `ids` is empty. */
   keepAliveAndReap(
     ids: readonly string[],
     options: {
