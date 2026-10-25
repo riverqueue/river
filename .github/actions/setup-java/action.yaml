@@ -15,3 +15,13 @@ runs:
         java-version: ${{ inputs.java-version }}
         cache: maven
         cache-dependency-path: "java/**/pom.xml"
+
+    # The immutable Maven cache also contains Central's mutable namespace index.
+    # Resolver can reuse that local index for the rest of the day, even after a
+    # new namespace is published, producing warnings that fail our strict policy.
+    # Remove only the auto-discovered Central index before any Maven build starts;
+    # its next process downloads a fresh index while retaining cached artifacts,
+    # user-defined filters, and our strict Maven warning policy.
+    - name: Refresh Maven Central repository prefixes
+      shell: bash
+      run: rm -f "$HOME/.m2/repository/.meta/prefixes-central.txt"
