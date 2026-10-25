@@ -109,10 +109,48 @@ Portal. Ordinary builds do not activate signing or Central publishing. See the
 [Central Maven plugin guide](https://central.sonatype.org/publish/publish-portal-maven/)
 for the upload and validation lifecycle.
 
+### Credentials for a terminal or agent release
+
+The same commands below work for a human or an agent. A human prepares credentials
+in a terminal with hidden prompts, using the **generated publishing-token username
+and password** from [Central](https://central.sonatype.com/usertoken):
+
+```sh
+JAVA_RELEASE_CREDENTIALS=$(python3 java/bin/release-credentials.py prepare \
+  --key-file /absolute/path/to/private-key.asc) &&
+export JAVA_RELEASE_CREDENTIALS &&
+printf '%s\n' "$JAVA_RELEASE_CREDENTIALS"
+```
+
+The helper copies the private-key export and saves the passphrase and token in
+mode-600 files inside a mode-700 temporary directory outside the checkout. These
+are local plaintext credentials protected by filesystem permissions. For an
+existing GnuPG keyring, replace `--key-file ...` with
+`--gpg-homedir "$HOME/.gnupg" --fingerprint PRIMARY_KEY_FINGERPRINT` (use your
+custom home directory if applicable). This invokes GnuPG once to export the key;
+Maven signing still uses Bouncy Castle. `--fingerprint` also works with `--key-file`.
+
+For an agent release, give the agent only the printed directory path and ask it
+to set `JAVA_RELEASE_CREDENTIALS` to that path. The agent must use the helper's
+`run` command to supply secrets to publishing tools; never print the handoff's
+contents or dump its environment. `run` injects credentials into the child
+environment and redacts their values from stdout and stderr. Use trusted commands
+without debug logging. The helper refuses prompts when hidden terminal input is unavailable.
+
+If Central returns `401: Invalid token`, the human can replace just the token:
+
+```sh
+python3 java/bin/release-credentials.py update-token "$JAVA_RELEASE_CREDENTIALS"
+```
+
+Keep the directory until the release finishes, then run the cleanup in step 9.
+Run cleanup as well if the release is abandoned; it removes the temporary copies,
+leaving the original key and keyring intact.
+
 ## Releasing a new version
 
 Run these commands from the repository root, in the same shell, with JDK 21 or 25,
-Maven, Go, `golangci-lint`, Python 3, and `gh` available. Complete the signing and
+Maven, Go, `golangci-lint`, Python 3.9+, and `gh` available. Complete the signing and
 publishing setup above first. Stop if any command fails. Java versions have no
 leading `v`; tags use `java/vX.Y.Z`.
 
@@ -168,25 +206,22 @@ leading `v`; tags use `java/vX.Y.Z`.
     git tag "java/v$VERSION" -m "release java/v$VERSION"
     ```
 
-5. Load your private key, then enter its passphrase, the Central token username, and the Central token password at the three `read` commands. Build, test, sign, and upload the release for validation:
+5. Prepare `JAVA_RELEASE_CREDENTIALS` as described above. The human or agent can then build, test, sign, and upload the release for validation:
 
     ```sh
-    export MAVEN_GPG_KEY="$(cat /absolute/path/to/private-key.asc)"
-    read -r -s MAVEN_GPG_PASSPHRASE
-    read -r CENTRAL_USERNAME
-    read -r -s CENTRAL_PASSWORD
-    export MAVEN_GPG_PASSPHRASE CENTRAL_USERNAME CENTRAL_PASSWORD
     test -z "$(git status --porcelain)" &&
     test "$(git rev-parse HEAD)" = "$(git rev-parse "java/v$VERSION^{commit}")" &&
     make generate/fixtures verify/java-migrations &&
-    ./java/bin/check-maven-warnings.sh mvn --batch-mode --no-transfer-progress \
+    python3 java/bin/release-credentials.py run "$JAVA_RELEASE_CREDENTIALS" -- \
+      ./java/bin/check-maven-warnings.sh mvn --batch-mode --no-transfer-progress \
       -Dstyle.color=never -f java/pom.xml -Prelease clean deploy \
       -Driver.test.database=sqlite -DexcludedGroups=postgres \
       -Dmaven.install.skip=true -Dcentral.skipUpload=false
-    unset MAVEN_GPG_KEY MAVEN_GPG_PASSPHRASE CENTRAL_USERNAME CENTRAL_PASSWORD
     ```
 
 6. In the [Central Portal deployments page](https://central.sonatype.com/publishing/deployments), open the validated deployment, confirm it contains `river-java`, `river`, and `river-cli` at `$VERSION`, and click **Publish**. Wait for **Published**. If uploading timed out, check this page before retrying.
+
+    An agent can use the [Portal API](https://central.sonatype.org/publish/publish-portal-api/) through the credential helper's `run` command. Construct authorization headers from the child environment in memory, never in command arguments. Record the deployment ID; check its status and coordinates before publishing, then wait for `PUBLISHED`. Reuse an existing validated deployment or signed bundle when retrying; do not upload duplicates while publication is pending.
 
 7. Verify the published CLI and its transitive library/parent dependencies using a fresh Maven cache. If Central has not propagated the release yet, wait and rerun with a new temporary directory:
 
@@ -199,12 +234,21 @@ leading `v`; tags use `java/vX.Y.Z`.
     git push origin "java/v$VERSION"
     ```
 
+    If Maven reports a stale Central prefixes file or `prefixes: Path ... NOT allowed`, retry the download with `-Daether.remoteRepositoryFilter.prefixes.resolvePrefixFiles.central=false`. This skips Central's automatic prefix index for that invocation; see [Maven's filter configuration](https://maven.apache.org/resolver/configuration.html).
+
 8. Create a [GitHub release](https://github.com/riverqueue/river/releases/new) for `java/v$VERSION`, copy that version's Java changelog notes into the body, and attach the downloaded `river-cli-$VERSION-all.jar`. Mark alpha, beta, and RC versions as prereleases.
+
+9. Remove the temporary credential handoff:
+
+    ```sh
+    python3 java/bin/release-credentials.py cleanup "$JAVA_RELEASE_CREDENTIALS"
+    unset JAVA_RELEASE_CREDENTIALS
+    ```
 
 ## Tests and checks
 
 From the repository root, with Go (the version in `go.work`), JDK 21 or 25,
-and Maven installed:
+Maven, and Python 3.9+ installed:
 
 ```sh
 make test/java/conformance
@@ -255,6 +299,7 @@ include their tests and lint checks; `make test/java/tools` and
 `make lint/java/tools` run only the tool checks. From `java/`, use `make test/tools`
 and `make lint/tools`. These checks run in Java CI, separately from the root
 Go-only `make test` and `make lint` targets.
+The tool tests also cover the Python release credential helper.
 The legacy adapter is not installed or deployed as a Maven artifact.
 `java/go.mod` excludes this directory from Go module archives and package
 discovery. The Make targets invoke the Go tools by file from the root workspace;

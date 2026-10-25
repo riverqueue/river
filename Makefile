@@ -193,8 +193,9 @@ test/java/sqlite: generate/fixtures verify/java-migrations
 	$(java_mvn) -f java/pom.xml verify -Driver.test.database=sqlite -DexcludedGroups=postgres
 
 .PHONY: test/java/tools
-test/java/tools: ## Test Java maintenance tools and Maven warning enforcement
+test/java/tools: ## Test Java maintenance tools, credential handoff, and Maven warning enforcement
 	bash java/bin/check-maven-warnings_test.sh
+	python3 -m unittest discover -s java/bin -p '*_test.py'
 	go test ./java/bin/check-packages/*.go
 	go test ./java/bin/sync-migrations/*.go
 
