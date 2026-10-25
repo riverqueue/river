@@ -175,9 +175,11 @@ export interface PeriodicJobsStartParams {
 }
 
 interface PeriodicEntry {
+  generation: number;
   readonly handle: number;
   initialized: boolean;
   readonly job: PeriodicJob;
+  keepAlive: boolean;
   nextRun: Temporal.Instant | null;
 }
 
@@ -194,6 +196,8 @@ export interface DuePeriodicBatch {
     readonly id: string;
     readonly nextRunAt: Temporal.Instant;
   }[];
+  /** Marks this batch's registrations safe to refresh after its transaction commits. */
+  markPersisted(): void;
   readonly occurrences: readonly DuePeriodicOccurrence[];
 }
 
@@ -273,9 +277,11 @@ export class PeriodicJobs {
     const handles = jobs.map((job) => {
       const value = this.#nextHandle++;
       this.#entries.set(value, {
+        generation: 0,
         handle: value,
         initialized: false,
         job,
+        keepAlive: false,
         nextRun: null,
       });
       return Object.freeze({ "~periodicJobHandle": value });
@@ -355,12 +361,27 @@ export function setPeriodicJobsChangeHandler(
   registryInternals(registry).setChangeHandler(change);
 }
 
-/** @internal Forget all scheduling state when leadership starts or ends. */
-export function resetPeriodicJobs(registry: PeriodicJobs): void {
+/** @internal Reset scheduling state and seed registrations already saved at startup. */
+export function resetPeriodicJobs(
+  registry: PeriodicJobs,
+  durableNextRuns?: ReadonlyMap<string, Temporal.Instant>
+): void {
   for (const entry of registryInternals(registry).entries.values()) {
+    entry.generation += 1;
     entry.initialized = false;
+    entry.keepAlive =
+      entry.job.id !== null && durableNextRuns?.has(entry.job.id) === true;
     entry.nextRun = null;
   }
+}
+
+/** @internal IDs whose saved positions can safely be kept alive. */
+export function periodicJobKeepAliveIds(
+  registry: PeriodicJobs
+): readonly string[] {
+  return [...registryInternals(registry).entries.values()].flatMap(
+    ({ job, keepAlive }) => (job.id !== null && keepAlive ? [job.id] : [])
+  );
 }
 
 /** @internal IDs of registered periodic jobs, for durable keep-alive. */
@@ -410,8 +431,10 @@ export function advancePeriodicJobs(
 ): DuePeriodicBatch {
   const occurrences: DuePeriodicOccurrence[] = [];
   const durableUpdates: { id: string; nextRunAt: Temporal.Instant }[] = [];
+  const entriesToPersist = new Map<PeriodicEntry, number>();
+  const registryEntries = registryInternals(registry).entries;
   const dueBefore = now.add(DUE_MARGIN);
-  const entries = [...registryInternals(registry).entries.values()].sort(
+  const entries = [...registryEntries.values()].sort(
     (left, right) => left.handle - right.handle
   );
   for (const entry of entries) {
@@ -424,6 +447,7 @@ export function advancePeriodicJobs(
         seeded ?? safeNextOccurrence(entry.job, now, onScheduleError);
       if (id !== null && entry.nextRun !== null) {
         durableUpdates.push({ id, nextRunAt: entry.nextRun });
+        entriesToPersist.set(entry, entry.generation);
       }
       if (entry.job.runOnStart) {
         occurrences.push({ job: entry.job, scheduledAt: now });
@@ -444,9 +468,23 @@ export function advancePeriodicJobs(
     );
     if (id !== null && entry.nextRun !== null) {
       durableUpdates.push({ id, nextRunAt: entry.nextRun });
+      entriesToPersist.set(entry, entry.generation);
     }
   }
-  return { durableUpdates, occurrences };
+  return {
+    durableUpdates,
+    markPersisted: () => {
+      for (const [entry, generation] of entriesToPersist) {
+        if (
+          registryEntries.get(entry.handle) === entry &&
+          entry.generation === generation
+        ) {
+          entry.keepAlive = true;
+        }
+      }
+    },
+    occurrences,
+  };
 }
 
 /**

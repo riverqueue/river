@@ -14,6 +14,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Wait for committed run times before refreshing periodic registrations. Failed startup writes can no longer make abandoned schedules appear current. [PR #1540](https://github.com/riverqueue/river/pull/1540).
 - Fail retries that omit a saved cursor-only step, while preserving their checkpoints for recovery. Jobs with an existing step marker retain their behavior, including legacy stale cursor entries. [PR #1534](https://github.com/riverqueue/river/pull/1534).
 
 - Fixed SQLite metadata updates recursively merging nested objects and deleting keys set to JSON null. Updates now replace whole top-level values, matching Postgres and preventing completed resumable cursor steps from running again on later retries. [PR #1533](https://github.com/riverqueue/river/pull/1533).

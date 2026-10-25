@@ -206,6 +206,98 @@ describe("RuntimeServices", () => {
     ]);
   });
 
+  it.each([
+    { outcome: "commit failure", saved: true },
+    { outcome: "committed", saved: true },
+    { outcome: "upsert failure", saved: false },
+    { outcome: "upsert failure", saved: true },
+  ] as const)(
+    "keeps only saved periodic registrations alive after $outcome (saved row: $saved)",
+    async ({ outcome, saved }) => {
+      const shared = new SharedLeadership();
+      const definition = defineJob<{ n: number }>()({ kind: "periodic" });
+      const now = Temporal.Instant.from("2026-08-30T12:00:00Z");
+      const kept: (readonly string[])[] = [];
+      const driver: RuntimeDriver = {
+        ...serviceDriver(shared),
+        operationScope: async <T>(
+          _tx: unknown,
+          callback: (tx: unknown) => Promise<T>
+        ) => {
+          const result = await callback("tx");
+          if (outcome === "commit failure") throw new Error("commit failed");
+          return result;
+        },
+      };
+      const periodicJobs = new PeriodicJobs([
+        periodicJob({
+          args: { n: 1 },
+          every: { hours: 2 },
+          id: "fresh",
+          job: definition,
+        }),
+        periodicJob({
+          args: { n: 2 },
+          every: { hours: 1 },
+          id: "pending",
+          job: definition,
+        }),
+      ]);
+      const services = new RuntimeServices({
+        client: { insertMany: () => Promise.resolve([]) } as unknown as Client,
+        clientId: "leader",
+        driver,
+        emit: () => Promise.resolve(),
+        logger: { error: () => {}, warn: () => {} },
+        maintenance: {
+          electionIntervalMs: 5,
+          jobCleanerIntervalMs: 60_000,
+          queueCleanerIntervalMs: 60_000,
+          rescuerIntervalMs: 60_000,
+          schedulerIntervalMs: 60_000,
+        },
+        now: () => now,
+        onPeriodicJobsStart: () => Promise.resolve(),
+        periodicJobStore: {
+          getAll: () =>
+            Promise.resolve(
+              saved
+                ? [
+                    {
+                      createdAt: now,
+                      id: "fresh",
+                      nextRunAt: now.add({ hours: 2 }),
+                      updatedAt: now,
+                    },
+                  ]
+                : []
+            ),
+          keepAliveAndReap: (ids) => {
+            kept.push(ids);
+            return Promise.resolve();
+          },
+          upsertMany: () =>
+            outcome === "upsert failure"
+              ? Promise.reject(new Error("upsert failed"))
+              : Promise.resolve(),
+        },
+        periodicJobs,
+        rescue: () => Promise.resolve(null),
+      });
+      const controller = new AbortController();
+      const running = services.run(controller.signal);
+      try {
+        await waitUntil(() => kept.length > 0);
+      } finally {
+        controller.abort();
+        await running;
+      }
+      expect(kept).toEqual([
+        outcome === "committed" ? ["fresh", "pending"] : saved ? ["fresh"] : [],
+      ]);
+    }
+  );
+
   it("resigns its own term once maintenance fails to start three times, like Go", async () => {
     const shared = new SharedLeadership();
     const base = serviceDriver(shared);
