@@ -326,6 +326,12 @@ messages from packaging and other plugins. Local checks and CI use these same
 targets. Direct Maven invocations also reject compiler warnings through the
 parent POM's `failOnWarning` setting.
 
+`java/.mvn/maven.config` disables automatic discovery of Central's repository
+prefix index. The index can lag newly published namespaces, rejecting available
+River artifacts or emitting warnings that fail these checks. This applies to
+Make targets and direct Maven builds; explicit local prefix filters and other
+repositories retain their normal behavior. See [Maven's filter configuration](https://maven.apache.org/resolver/configuration.html).
+
 Javadoc also fails on warnings. Its doclint configuration checks references,
 syntax, HTML, and accessibility, but permits missing comments and tags because
 the existing API documentation does not annotate every parameter and return value.
