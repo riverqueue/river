@@ -57,11 +57,11 @@ RSpec.describe River::Client do
 
   describe "#__insert_with_default_scheduled_at" do
     [
-      ["occurrence", nil, nil, 9],
-      ["argument", 13, nil, 13],
-      ["constructor", 13, 14, 14]
-    ].each do |source, argument_hour, constructor_hour, expected_hour|
-      it "resolves the #{source} schedule before period uniqueness and insertion hooks" do
+      ["occurrence", nil, nil, 9, 12],
+      ["argument", 13, nil, 13, 13],
+      ["constructor", 13, 14, 14, 14]
+    ].each do |source, argument_hour, constructor_hour, expected_hour, period_hour|
+      it "preserves the #{source} schedule and prepared uniqueness key" do
         now = Time.utc(2026, 1, 1, 12, 30)
         fallback = Time.utc(2026, 1, 1, 9, 15)
         argument_schedule = Time.utc(2026, 1, 1, argument_hour, 15) if argument_hour
@@ -86,7 +86,7 @@ RSpec.describe River::Client do
         row = client.__insert_with_default_scheduled_at(args, options, fallback).job
 
         expected_schedule = Time.utc(2026, 1, 1, expected_hour, 15)
-        expected_key = Digest::SHA256.digest("&kind=simple&period=2026-01-01T#{format("%02d", expected_hour)}:00:00Z")
+        expected_key = Digest::SHA256.digest("&kind=simple&period=2026-01-01T#{format("%02d", period_hour)}:00:00Z")
         expect(row.scheduled_at).to eq(expected_schedule)
         expect(row.unique_key).to eq(expected_key)
         expect(observed).to eq([args, expected_schedule, expected_key])
@@ -95,6 +95,20 @@ RSpec.describe River::Client do
         expect(argument_options.scheduled_at).to eq(argument_schedule)
         expect(options.scheduled_at).to eq(constructor_schedule)
       end
+    end
+
+    it "keeps the prepared state and uniqueness key with a future fallback" do
+      now = Time.utc(2026, 1, 1, 12, 30)
+      fallback = Time.utc(2026, 1, 1, 14, 15)
+      options = River::InsertOpts.new(unique_opts: River::UniqueOpts.new(by_period: 3_600))
+      client.instance_variable_set(:@time_now_utc, -> { now })
+
+      row = client.__insert_with_default_scheduled_at(SimpleArgs.new(job_num: 1), options, fallback).job
+
+      expected_key = Digest::SHA256.digest("&kind=simple&period=2026-01-01T12:00:00Z")
+      expect(row.scheduled_at).to eq(fallback)
+      expect(row.state).to eq(River::JOB_STATE_AVAILABLE)
+      expect(row.unique_key).to eq(expected_key)
     end
   end
 

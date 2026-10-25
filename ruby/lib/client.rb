@@ -49,8 +49,8 @@ module River
       @runtime.finish_claimed(row, error)
     end
 
-    # Internal insertion entry point for schedulers. Resolve the fallback
-    # after argument-level options, before uniqueness and insert hooks.
+    # Internal scheduler entry point. Prepare ordinary insertion options and
+    # uniqueness before applying an occurrence fallback to the stored schedule.
     def __insert_with_default_scheduled_at(args, insert_opts, default_scheduled_at)
       insert_params = make_insert_params(args, insert_opts, default_scheduled_at)
       run_insert_plugins([insert_params]) { [insert_and_check_unique_job(insert_params)] }.first
@@ -452,7 +452,7 @@ module River
       queue = (insert_opts.queue || args_insert_opts.queue || QUEUE_DEFAULT).to_s
       raise ArgumentError, "invalid queue name: #{queue.inspect}" unless queue.match?(QUEUE_NAME_REGEX) && queue.length < 128
 
-      scheduled_at = insert_opts.scheduled_at || args_insert_opts.scheduled_at || default_scheduled_at
+      scheduled_at = insert_opts.scheduled_at || args_insert_opts.scheduled_at
       now = @time_now_utc.call
       state = validate_insert_state(insert_opts.state || args_insert_opts.state || ((scheduled_at && scheduled_at > now) ? JOB_STATE_SCHEDULED : JOB_STATE_AVAILABLE))
 
@@ -476,6 +476,9 @@ module River
         insert_params.unique_states = unique_states
       end
 
+      if scheduled_at.nil? && default_scheduled_at
+        insert_params.scheduled_at = default_scheduled_at.getutc
+      end
       insert_params
     end
 

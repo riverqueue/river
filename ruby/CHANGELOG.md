@@ -20,7 +20,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
-- Default periodic jobs to their occurrence time, preserving constructor and argument-level schedules. Resolve the effective schedule before calculating period-based uniqueness keys. [PR #1537](https://github.com/riverqueue/river/pull/1537).
+- Default periodic jobs to their occurrence time, preserving constructor and argument-level schedules. [PR #1537](https://github.com/riverqueue/river/pull/1537).
 
 - Fail retries that omit a saved cursor-only step, while preserving their checkpoints for recovery. Jobs with an existing step marker retain their behavior, including legacy stale cursor entries. [PR #1534](https://github.com/riverqueue/river/pull/1534).
 
