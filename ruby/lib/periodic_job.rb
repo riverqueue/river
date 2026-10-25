@@ -76,7 +76,10 @@ module River
       raise ArgumentError, "periodic jobs require leader election" if !@enabled && !jobs.empty?
 
       now = Time.now.utc
-      entries = jobs.map { |job| {job: job, next_at: job.run_on_start ? now : job.next_at(now)} }
+      entries = jobs.map do |job|
+        run_on_start = job.run_on_start
+        {job: job, next_at: run_on_start ? now : job.next_at(now), run_on_start: run_on_start}
+      end
       handles = @mutex.synchronize do
         ids = @jobs.values.to_h { |entry| [entry[:job].id, true] }
         jobs.each do |job|
@@ -100,7 +103,9 @@ module River
       self
     end
 
-    def due(now)
+    # Internal scheduler entry point that retains each claimed occurrence's
+    # time even after advancing its registration.
+    def __due_with_times(now)
       # Application schedules may reenter the registry, so evaluate outside its
       # lock and only advance registrations that haven't been removed or claimed.
       entries = @mutex.synchronize { @jobs.map { |handle, entry| [handle, entry, entry[:next_at]] } }
@@ -110,14 +115,20 @@ module River
         following = entry[:job].next_at(now)
         @mutex.synchronize do
           next unless @jobs[handle].equal?(entry) && entry[:next_at] == next_at
+          scheduled_at = entry[:run_on_start] ? now : next_at
+          entry[:run_on_start] = false
           entry[:next_at] = following
-          entry[:job]
+          [entry[:job], scheduled_at]
         end
       rescue => error
         raise unless block_given?
         yield(entry[:job], error)
         nil
       end
+    end
+
+    def due(now, &block)
+      __due_with_times(now, &block).map(&:first)
     end
 
     # Returns true when the bundle has no registered periodic jobs.

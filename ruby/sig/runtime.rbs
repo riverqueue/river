@@ -337,6 +337,7 @@ module River
     @next_handle: Integer
     @wake: untyped
     def initialize: (Array[PeriodicJob], wake: untyped, ?enabled: bool) -> void
+    def __due_with_times: (Time) ?{ (PeriodicJob, StandardError) -> void } -> Array[[PeriodicJob, Time]]
     def add: (PeriodicJob) -> Integer
     def add_many: (Array[PeriodicJob]) -> Array[Integer]
     def clear: () -> self
