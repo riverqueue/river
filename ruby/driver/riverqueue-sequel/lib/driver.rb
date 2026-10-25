@@ -155,7 +155,7 @@ module River::Driver
     private_constant :SQLITE_CONFLICT_WHERE, :SQLITE_JOB_COLUMNS, :UNIQUE_INSERT_METADATA_KEY
 
     private def format_time(time)
-      time.getutc.round(3).strftime("%Y-%m-%d %H:%M:%S.%3N")
+      normalize_time(time).strftime("%Y-%m-%d %H:%M:%S.%3N")
     end
 
     private def postgres_insert_params_to_hash(insert_params, nonce)

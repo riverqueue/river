@@ -5,10 +5,17 @@ require "time"
 module River::Driver
   # Database operations used by River's worker runtime. Driver gems implement a
   # small set of raw SQL primitives and include this module so the state machine
-  # stays identical across ActiveRecord and Sequel.
+  # stays identical across ActiveRecord and Sequel. Those private primitives
+  # provide execution, quoting, row access, and connection management inside
+  # driver modules; callers use the driver's public operations and Ruby values.
   module Runtime
     def init_driver
       postgres_capabilities if runtime_postgres?
+    end
+
+    # Returns the UTC timestamp that writing and reading +time+ preserves.
+    def normalize_time(time)
+      runtime_postgres? ? time.getutc.floor(6) : time.getutc.round(3)
     end
 
     def postgres_capabilities
@@ -471,6 +478,11 @@ module River::Driver
       runtime_query_rows(sql)
     end
 
+    # Smallest timestamp increment preserved by this driver, in seconds.
+    def time_precision
+      runtime_postgres? ? Rational(1, 1_000_000) : Rational(1, 1_000)
+    end
+
     private def runtime_append_error(error)
       value = error.respond_to?(:to_h) ? error.to_h : error
       if runtime_postgres?
@@ -782,9 +794,9 @@ module River::Driver
 
       cast = runtime_postgres? ? "::timestamptz" : ""
       encoded = if runtime_postgres?
-        value.getutc.iso8601(6)
+        normalize_time(value).iso8601(6)
       else
-        value.getutc.round(3).strftime("%Y-%m-%d %H:%M:%S.%3N")
+        normalize_time(value).strftime("%Y-%m-%d %H:%M:%S.%3N")
       end
       "#{runtime_quote(encoded)}#{cast}"
     end

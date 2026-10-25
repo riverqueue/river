@@ -1,5 +1,7 @@
 # frozen_string_literal: true
 
+require "delegate"
+
 class DriverRuntimeArgs
   def initialize(value)
     @value = value
@@ -8,6 +10,55 @@ class DriverRuntimeArgs
   def kind = "driver_runtime"
 
   def to_json = JSON.dump(value: @value)
+end
+
+RSpec.shared_examples "driver timestamp precision" do
+  let(:client) { River::Client.new(driver) }
+
+  describe "timestamp precision" do
+    it "exposes timestamp operations through a delegating driver" do
+      delegated = SimpleDelegator.new(driver)
+      time = Time.utc(2026, 10, 25) + Rational(123_500_001, 1_000_000_000)
+
+      expect(delegated.normalize_time(time)).to eq(driver.normalize_time(time))
+      expect(delegated.time_precision).to eq(driver.time_precision)
+    end
+
+    [
+      ["a timestamp just below the millisecond rounding boundary", 123_499_999, Rational(123_499, 1_000_000), Rational(123, 1_000)],
+      ["a timestamp just above the millisecond rounding boundary", 123_500_001, Rational(123_500, 1_000_000), Rational(124, 1_000)],
+      ["a timestamp just before a second rollover", 999_999_999, Rational(999_999, 1_000_000), 1]
+    ].each do |name, nanoseconds, postgres_fraction, sqlite_fraction|
+      it "normalizes #{name} to its persisted UTC value" do
+        midnight = Time.utc(2026, 10, 25)
+        expected_fraction = (driver.migration_backend == :sqlite) ? sqlite_fraction : postgres_fraction
+        time = (midnight + Rational(nanoseconds, 1_000_000_000)).getlocal("+05:30")
+        expected = midnight + expected_fraction
+        normalized = driver.normalize_time(time)
+        driver.queue_upsert("precision", now: time)
+
+        expect(normalized).to eq(expected)
+        expect(normalized).to be_utc
+        expect(driver.normalize_time(normalized)).to eq(normalized)
+        expect(driver.queue_get("precision").created_at).to eq(expected)
+        inserted = client.insert(DriverRuntimeArgs.new(1), scheduled_at: time).job
+        expect(client.job_get(inserted.id).scheduled_at).to eq(expected)
+      end
+    end
+
+    it "preserves one timestamp increment when written and read back" do
+      expected = (driver.migration_backend == :sqlite) ? Rational(1, 1_000) : Rational(1, 1_000_000)
+      expect(driver.time_precision).to be_a(Rational)
+      expect(driver.time_precision).to eq(expected)
+      time = driver.normalize_time(Time.utc(2026, 10, 25) + Rational(123_500_001, 1_000_000_000))
+      driver.queue_upsert("precision", now: time)
+      driver.queue_update("precision", metadata: {}, now: time + driver.time_precision)
+
+      queue = driver.queue_get("precision")
+      expect(queue.updated_at.to_r - queue.created_at.to_r).to eq(driver.time_precision)
+      expect(queue.updated_at).to be > queue.created_at
+    end
+  end
 end
 
 RSpec.shared_examples "overflowing metadata counters" do
@@ -43,6 +94,7 @@ RSpec.shared_examples "overflowing metadata counters" do
 end
 
 RSpec.shared_examples "driver job state machine" do
+  it_behaves_like "driver timestamp precision"
   it_behaves_like "overflowing metadata counters"
 
   let(:client) { River::Client.new(driver) }
