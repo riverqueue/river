@@ -18,7 +18,7 @@ class ExecutableIT {
             List.of(
                 Path.of(System.getProperty("java.home"), "bin", "java").toString(),
                 "-jar",
-                "target/river-cli-0.48.0-alpha.1-all.jar"));
+                "target/river-cli-0.1.0-alpha.1-all.jar"));
     command.addAll(List.of(args));
     var output = directory.resolve("process.log").toFile();
     var builder = new ProcessBuilder(command).redirectErrorStream(true).redirectOutput(output);
@@ -36,7 +36,7 @@ class ExecutableIT {
 
   @Test
   void bundledJarRunsWithoutExternalClasspath() throws Exception {
-    assertTrue(command("--version").contains("0.48.0-alpha.1"));
+    assertTrue(command("--version").contains("0.1.0-alpha.1"));
     assertTrue(command("migrate-up").contains("008 [up]"));
     assertTrue(command("migrate-list").contains("applied"));
     assertTrue(command("migrate-down", "--target-version", "0").contains("001 [down]"));

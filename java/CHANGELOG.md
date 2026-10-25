@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.0-alpha.1] - 2026-10-24
+
+### Added
+
+- First alpha release of River for Java. `com.riverqueue:river` provides a Java 21 client and worker runtime for Postgres and SQLite, sharing River's database schema and job protocol with other River clients. Includes typed jobs, virtual-thread workers, transactional inserts, unique, scheduled, periodic, and resumable jobs, queue management, hooks, middleware, events, and migrations.
+- Standalone migration CLI, published as `com.riverqueue:river-cli` with classifier `all`. The executable JAR bundles both JDBC drivers and supports applying, reverting, listing, and exporting migrations.
+
 ### Changed
 
 - **Breaking:** Replaced `Extension` and `Client.withExtension` with operation-specific hook and middleware interfaces, matching River for Go: `HookInsertBegin`, `HookPeriodicJobsStart`, `HookWorkBegin`, `HookWorkEnd`, `JobInsertMiddleware`, and `WorkerMiddleware`. Register them with `Client.withPlugins` to activate all interfaces an instance implements, or with `withHooks` and `withMiddleware` to activate only that side. Plugins run before separately registered hooks and middleware. Each operation-specific interface supports lambdas and checked exceptions. The `afterClaim` callback was removed; use worker middleware for work before the handler. [PR #1519](https://github.com/riverqueue/river/pull/1519).

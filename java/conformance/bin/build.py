@@ -13,9 +13,9 @@ artifacts.mkdir(parents=True, exist_ok=True)
 with (artifacts.parent / "build.lock").open("w") as lock:
     fcntl.flock(lock, fcntl.LOCK_EX)
     subprocess.run(["mvn", "-q", "-f", str(root / "pom.xml"), "package", "-DskipTests"], check=True)
-    jar = root / "conformance/target/river-conformance-0.48.0-alpha.1.jar"
+    jar = root / "conformance/target/river-conformance-0.1.0-alpha.1.jar"
     # A stale shaded jar can otherwise silently retain an older dependency's classes.
-    with zipfile.ZipFile(root / "river/target/river-0.48.0-alpha.1.jar") as library, zipfile.ZipFile(jar) as bundled:
+    with zipfile.ZipFile(root / "river/target/river-0.1.0-alpha.1.jar") as library, zipfile.ZipFile(jar) as bundled:
         for entry in library.namelist():
             if entry.startswith("com/riverqueue/") and not entry.endswith("/"):
                 if library.read(entry) != bundled.read(entry):

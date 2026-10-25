@@ -1,9 +1,14 @@
 <project xmlns="http://maven.apache.org/POM/4.0.0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
   <modelVersion>4.0.0</modelVersion>
-  <parent><groupId>com.riverqueue</groupId><artifactId>river-java</artifactId><version>0.48.0-alpha.1</version></parent>
+  <parent><groupId>com.riverqueue</groupId><artifactId>river-java</artifactId><version>0.1.0-alpha.1</version></parent>
   <artifactId>river-conformance</artifactId>
   <!-- This is a development adapter, not a publishable River artifact. -->
-  <properties><maven.install.skip>true</maven.install.skip><maven.deploy.skip>true</maven.deploy.skip></properties>
+  <properties>
+    <gpg.skip>true</gpg.skip>
+    <maven.install.skip>true</maven.install.skip>
+    <maven.deploy.skip>true</maven.deploy.skip>
+    <maven.javadoc.skip>true</maven.javadoc.skip>
+  </properties>
   <dependencies>
     <dependency><groupId>com.zaxxer</groupId><artifactId>HikariCP</artifactId><version>7.1.0</version></dependency>
     <dependency><groupId>com.riverqueue</groupId><artifactId>river</artifactId><version>${project.version}</version></dependency>

@@ -6,13 +6,13 @@ retry, or work them using the same database.
 
 ## Installation
 
-Java 21 or newer is required. Add `com.riverqueue:river:0.48.0-alpha.1` and a JDBC driver to your application's dependencies. Jackson 3 is included transitively.
+Java 21 or newer is required. Add `com.riverqueue:river:0.1.0-alpha.1` and a JDBC driver to your application's dependencies. Jackson 3 is included transitively.
 
 ```xml
 <dependency>
   <groupId>com.riverqueue</groupId>
   <artifactId>river</artifactId>
-  <version>0.48.0-alpha.1</version>
+  <version>0.1.0-alpha.1</version>
 </dependency>
 <dependency>
   <groupId>org.postgresql</groupId>
@@ -83,7 +83,7 @@ runs with Java 21 or newer. It needs no application classpath.
 For a local build, see the [development guide](docs/development.md#building-from-source). Set `RIVER_CLI` to the executable JAR, then run:
 
 ```sh
-RIVER_CLI=/path/to/river-cli-0.48.0-alpha.1-all.jar
+RIVER_CLI=/path/to/river-cli-0.1.0-alpha.1-all.jar
 export DATABASE_URL=postgres://localhost/myapp
 # For SQLite: export DATABASE_URL=jdbc:sqlite:/absolute/path/myapp.db
 
@@ -94,7 +94,7 @@ java -jar "$RIVER_CLI" migrate-up
 ```
 
 The Maven executable artifact is `com.riverqueue:river-cli` with version
-`0.48.0-alpha.1` and classifier `all`. Copy that single JAR into your deployment image to run
+`0.1.0-alpha.1` and classifier `all`. Copy that single JAR into your deployment image to run
 migrations before starting workers. `--database-url URL` overrides `DATABASE_URL`.
 `--schema background_jobs` selects a Postgres schema; an actual migration up
 creates it if needed. Listing and dry runs do not create schemas or migration tables.
