@@ -207,7 +207,10 @@ RSpec.shared_examples "Postgres rescue concurrency" do
 end
 
 RSpec.shared_examples "SQL scheduling concurrency" do
-  it "skips locked jobs without overwriting a concurrent reschedule" do
+  # Like Go, the scheduler waits for a row that another transaction has
+  # locked. After the lock is released, Postgres rechecks the row, so a job
+  # rescheduled into the future stays scheduled.
+  it "waits for locked jobs without overwriting a concurrent reschedule" do
     client = River::Client.new(@driver)
     now = Time.now.utc
     first, second = [now - 2, now - 1].map do |scheduled_at|
@@ -225,15 +228,19 @@ RSpec.shared_examples "SQL scheduling concurrency" do
     end
 
     Timeout.timeout(5) { locked.pop }
-    expect(@driver.job_schedule(now: now, max: 1)).to eq(1)
-    expect(@driver.job_get_by_id(second.id).state).to eq("available")
+    scheduler = Thread.new { @driver.job_schedule(now: now) }
+    expect(scheduler.join(0.5)).to be_nil
     release << true
     writer.value
+
+    expect(scheduler.value).to eq(1)
     expect(@driver.job_get_by_id(first.id)).to have_attributes(state: "scheduled", scheduled_at: be_within(0.001).of(now + 60))
+    expect(@driver.job_get_by_id(second.id).state).to eq("available")
     expect(@driver.job_schedule(now: now)).to eq(0)
   ensure
     release << true if release
     writer&.join
+    scheduler&.join
   end
 end
 

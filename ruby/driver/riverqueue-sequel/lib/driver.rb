@@ -89,11 +89,13 @@ module River::Driver
       end
     end
 
-    # Runs the block in a Sequel transaction or savepoint and returns the
-    # block's result.
+    # Runs the block in a Sequel transaction and returns the block's result.
+    # Joins an open transaction instead of opening a savepoint, unless that
+    # transaction uses Sequel's `auto_savepoint`.
     def transaction
       block_error = nil
-      @db.transaction(savepoint: true) do
+      options = runtime_legacy_subtransactions? ? {savepoint: true} : {}
+      @db.transaction(**options) do
         yield
       rescue ArgumentError => error
         block_error = error
@@ -240,10 +242,6 @@ module River::Driver
       @db.literal(value)
     end
 
-    private def runtime_unique_violation_class
-      ::Sequel::UniqueConstraintViolation
-    end
-
     private def runtime_value(row, key)
       row[key] || row[key.to_s]
     end
@@ -272,7 +270,7 @@ module River::Driver
     # matching migration 007 and newer River databases.
     private def sqlite_job_insert_many(insert_params_array)
       nonces = sqlite_insert_nonces(insert_params_array)
-      @db.transaction(savepoint: true) do
+      transaction do
         jobs = insert_params_array.zip(nonces).map { |param, nonce| sqlite_insert_params_to_hash(param, nonce) }
         inserted_nonces = nonces.to_h { |nonce| [nonce, true] }
 

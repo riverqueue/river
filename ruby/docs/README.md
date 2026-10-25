@@ -184,8 +184,8 @@ For simple jobs, `River::JobArgsHash.new(:kind, hash)` avoids defining an argume
 
 ### [Transactional enqueueing](https://riverqueue.com/docs/transactional-enqueueing)
 
-Insertion hooks and middleware execute inside the insertion transaction. If
-they raise, their database writes and the enqueue roll back together. Postgres
+Insertion hooks and middleware execute inside the insertion transaction, so
+their database writes and the enqueue commit or roll back together. Postgres
 insert notifications are delivered only when the surrounding transaction commits.
 
 Inserts automatically join a transaction opened through the same Active Record connection or Sequel database object. A rollback also rolls back the job:
@@ -205,6 +205,13 @@ end
 ```
 
 The equivalent works inside `ActiveRecord::Base.transaction` with the Active Record driver.
+
+River calls inside an open transaction run in that transaction and open no
+savepoint of their own. If a River call raises, it may leave partial changes,
+so roll back the transaction. To recover from the error and continue the
+transaction, wrap the call in your own savepoint, such as
+`DB.transaction(savepoint: true)` or
+`ApplicationRecord.transaction(requires_new: true)`.
 
 ### Transactional completion
 

@@ -110,10 +110,17 @@ module River::Driver
       end
     end
 
-    # Runs the block in a new Active Record transaction or savepoint and returns
-    # the block's result.
+    # Runs the block in an Active Record transaction and returns the block's
+    # result. Joins an open, joinable transaction instead of opening a
+    # savepoint.
     def transaction(&)
-      @connection_class.transaction(requires_new: true, &)
+      legacy = runtime_legacy_subtransactions?
+      # A joined Active Record block swallows ActiveRecord::Rollback without
+      # rolling anything back. Yield directly so that the transaction's owner
+      # receives it and rolls back, as Sequel does with Sequel::Rollback.
+      return yield if !legacy && @connection_class.connection.current_transaction.joinable?
+
+      @connection_class.transaction(requires_new: legacy, &)
     end
 
     SQLITE_CONFLICT_WHERE = <<~SQL.chomp.freeze
@@ -278,10 +285,6 @@ module River::Driver
       @connection_class.connection.quote(value)
     end
 
-    private def runtime_unique_violation_class
-      ::ActiveRecord::RecordNotUnique
-    end
-
     private def runtime_value(row, key)
       row[key.to_s] || row[key]
     end
@@ -310,7 +313,7 @@ module River::Driver
     # matching migration 007 and newer River databases.
     private def sqlite_job_insert_many(insert_params_many)
       nonces = sqlite_insert_nonces(insert_params_many)
-      @connection_class.transaction(requires_new: true) do
+      transaction do
         jobs = insert_params_many.zip(nonces).map { |param, nonce| sqlite_insert_params_to_hash(param, nonce) }
         inserted_nonces = nonces.to_h { |nonce| [nonce, true] }
 
