@@ -15,22 +15,128 @@ mvn --batch-mode --no-transfer-progress -f java/pom.xml install
 
 The executable migration CLI is built at `java/cli/target/river-cli-0.1.0-alpha.1-all.jar`. For a build without running tests, use `make build/java`.
 
-## Maven Central artifacts
+## Release artifacts
 
-Normal builds attach sources and Javadoc JARs for the library and CLI. The
-`release` Maven profile additionally signs the artifacts and builds a Central
-Publisher Portal bundle with checksums. It includes three coordinates, all under
-`com.riverqueue` and using the version in `java/pom.xml`:
+GitHub releases tagged `java/vVERSION` are the publication source for
+`https://riverqueue.com/maven`. The proxy imports the complete asset set into R2
+and serves it anonymously to Maven and Gradle. Publishers use `gh`; no Sonatype
+account, OpenPGP key, or Cloudflare credential is needed.
 
-| Artifact | Contents |
+| Artifact | GitHub attachments |
 | --- | --- |
-| `river-java` | Parent POM with shared dependencies and publication metadata |
-| `river` | Library, sources, Javadoc, and POM |
-| `river-cli` | Thin CLI, executable `all` JAR, sources, Javadoc, and POM |
+| `river-java` | Parent POM |
+| `river` | POM, library JAR, sources JAR, Javadoc JAR |
+| `river-cli` | POM, thin JAR, executable `all` JAR, sources JAR, Javadoc JAR |
 
-The parent POM must be published with its children so consumers can resolve their
-dependencies. `river-conformance` is explicitly excluded from Central publication
-and skips signing, Javadoc, and local installation.
+Publish all ten files together. The parent POM is required by this release's
+library and CLI; the conformance adapter is excluded. The proxy generates
+checksums and preserves imported versions, so publish a new version to change
+bytes or attachments.
+
+## Releasing a new version
+
+Run from a clean checkout with JDK 21 or 25, Maven 3.9+, Go, `golangci-lint`,
+Python 3.9+, and `gh`. A human runs `gh auth login` in their terminal once; a human
+or local agent can then use the same authenticated `gh` session. Keep tokens out
+of chat, shell arguments, and release files. No additional credential handoff is
+needed. Stop if a command fails. Versions omit `v`; tags use `java/vVERSION`.
+
+1. Start from a clean checkout, fetch changes and tags, and choose the release version:
+
+    ```sh
+    git checkout master && git pull --rebase
+    git fetch --tags
+    export VERSION=0.1.0-alpha.2
+    git checkout -b "$USER-java-$VERSION"
+    ```
+
+2. Update the POMs, CLI tests, documentation examples, and adapter version references together:
+
+    ```sh
+    python3 - <<'PY'
+    import json, os, pathlib, subprocess, xml.etree.ElementTree as ET
+    old = ET.parse("java/pom.xml").findtext("{http://maven.apache.org/POM/4.0.0}version")
+    files = subprocess.check_output([
+        "git", "grep", "-Il", "-F", old, "--", "java",
+        ":!java/CHANGELOG.md", ":!java/VALIDATION.md",
+        ":!java/conformance/src/main/resources/manifest.json",
+    ]).decode().splitlines()
+    for name in files:
+        path = pathlib.Path(name)
+        path.write_text(path.read_text().replace(old, os.environ["VERSION"]))
+    path = pathlib.Path("java/conformance/src/main/resources/manifest.json")
+    manifest = json.loads(path.read_text())
+    manifest["implementations"]["java"]["version"] = os.environ["VERSION"]
+    path.write_text(json.dumps(manifest, indent=2) + "\n")
+    PY
+    git diff -- java
+    ```
+
+    Move `java/CHANGELOG.md` entries from `Unreleased` into a `[$VERSION] - YYYY-MM-DD` section. For the first release, describe the initial library and CLI; for a stable release, remove "Prerelease" from the README introduction.
+
+3. Check the release and open a PR. Keep CI enabled and have the PR reviewed and merged after the Java checks pass:
+
+    ```sh
+    make lint/java test/java/tools test/java/sqlite check/java/package
+    git add java
+    git commit -m "[java] Release v$VERSION"
+    git push -u origin HEAD
+    gh pr create --fill
+    ```
+
+4. After merge, pull the release commit into a clean checkout, confirm its version, and create the local tag:
+
+    ```sh
+    git checkout master && git pull --rebase &&
+    test -z "$(git status --porcelain)" &&
+    test "$(python3 -c 'import xml.etree.ElementTree as E; print(E.parse("java/pom.xml").findtext("{http://maven.apache.org/POM/4.0.0}version"))')" = "$VERSION" &&
+    git tag "java/v$VERSION" -m "release java/v$VERSION"
+    ```
+
+5. Build, test, and stage the complete release. This uses a temporary **local file repository**, without signing, uploading, or installing release artifacts into your normal Maven cache:
+
+    ```sh
+    python3 java/bin/github-release.py prepare
+    python3 - <<'PYNOTES'
+    import os, pathlib, re
+    text = pathlib.Path("java/CHANGELOG.md").read_text()
+    match = re.search(r"^## \[" + re.escape(os.environ["VERSION"]) + r"\][^\n]*\n(.*?)(?=^## |\Z)", text, re.M | re.S)
+    if not match:
+        raise SystemExit("Version missing from Java changelog")
+    pathlib.Path("java/target/github-release-notes.md").write_text(match.group(1).strip() + "\n")
+    PYNOTES
+    ```
+
+6. Push the tag and upload all artifacts to a draft. The script checks the local/remote tag against the build commit, resumes matching draft uploads, and refuses changed assets or an already published release:
+
+    ```sh
+    git push origin "java/v$VERSION"
+    python3 java/bin/github-release.py upload \
+      --notes-file java/target/github-release-notes.md
+    gh release view "java/v$VERSION" --repo riverqueue/river
+    ```
+
+7. Publish the verified draft. Alpha, beta, and RC versions are marked as prereleases automatically:
+
+    ```sh
+    gh release edit "java/v$VERSION" --repo riverqueue/river --draft=false
+    ```
+
+8. Verify the public proxy, all asset checksums, fresh Maven dependency resolution, a compiled consumer, and the executable CLI. This also checks that Maven obtained River artifacts from the proxy rather than Central. If discovery has not caught up, wait a minute and retry:
+
+    ```sh
+    python3 java/bin/github-release.py verify --version "$VERSION" \
+      --directory java/target/github-release
+    ```
+
+    To test a dev deployment, add `--repository https://mod-workers-dev.riverqueue.workers.dev/maven`. To verify an existing release without a local build, omit `--directory`.
+
+## Optional Maven Central publication
+
+The GitHub/proxy release path above does not use Central publication. The existing
+`release` Maven profile remains available for separately publishing to Central;
+it signs the same public coordinates and creates a Portal bundle. A version
+published to both repositories must use the same artifact bytes.
 
 ### Local tooling and signing
 
@@ -109,102 +215,10 @@ Portal. Ordinary builds do not activate signing or Central publishing. See the
 [Central Maven plugin guide](https://central.sonatype.org/publish/publish-portal-maven/)
 for the upload and validation lifecycle.
 
-## Releasing a new version
-
-Run these commands from the repository root, in the same shell, with JDK 21 or 25,
-Maven, Go, `golangci-lint`, Python 3, and `gh` available. Complete the signing and
-publishing setup above first. Stop if any command fails. Java versions have no
-leading `v`; tags use `java/vX.Y.Z`.
-
-1. Start from a clean checkout, fetch changes and tags, and choose the release version:
-
-    ```sh
-    git checkout master && git pull --rebase
-    git fetch --tags
-    export VERSION=0.1.0-alpha.1
-    git checkout -b "$USER-java-$VERSION"
-    ```
-
-2. Update the POMs, CLI tests, documentation examples, and adapter version references together:
-
-    ```sh
-    python3 - <<'PY'
-    import json, os, pathlib, subprocess, xml.etree.ElementTree as ET
-    old = ET.parse("java/pom.xml").findtext("{http://maven.apache.org/POM/4.0.0}version")
-    files = subprocess.check_output([
-        "git", "grep", "-Il", "-F", old, "--", "java",
-        ":!java/CHANGELOG.md", ":!java/VALIDATION.md",
-        ":!java/conformance/src/main/resources/manifest.json",
-    ]).decode().splitlines()
-    for name in files:
-        path = pathlib.Path(name)
-        path.write_text(path.read_text().replace(old, os.environ["VERSION"]))
-    path = pathlib.Path("java/conformance/src/main/resources/manifest.json")
-    manifest = json.loads(path.read_text())
-    manifest["implementations"]["java"]["version"] = os.environ["VERSION"]
-    path.write_text(json.dumps(manifest, indent=2) + "\n")
-    PY
-    git diff -- java
-    ```
-
-    Move `java/CHANGELOG.md` entries from `Unreleased` into a `[$VERSION] - YYYY-MM-DD` section. For the first release, describe the initial library and CLI; for a stable release, remove "Prerelease" from the README introduction.
-
-3. Check the release and open a PR. Keep CI enabled and have the PR reviewed and merged after the Java checks pass:
-
-    ```sh
-    make lint/java test/java/sqlite check/java/package
-    git add java
-    git commit -m "[java] Release v$VERSION"
-    git push -u origin HEAD
-    gh pr create --fill
-    ```
-
-4. After merge, pull the release commit into a clean checkout, confirm its version, and create the local tag:
-
-    ```sh
-    git checkout master && git pull --rebase &&
-    test -z "$(git status --porcelain)" &&
-    test "$(python3 -c 'import xml.etree.ElementTree as E; print(E.parse("java/pom.xml").findtext("{http://maven.apache.org/POM/4.0.0}version"))')" = "$VERSION" &&
-    git tag "java/v$VERSION" -m "release java/v$VERSION"
-    ```
-
-5. Load your private key, then enter its passphrase, the Central token username, and the Central token password at the three `read` commands. Build, test, sign, and upload the release for validation:
-
-    ```sh
-    export MAVEN_GPG_KEY="$(cat /absolute/path/to/private-key.asc)"
-    read -r -s MAVEN_GPG_PASSPHRASE
-    read -r CENTRAL_USERNAME
-    read -r -s CENTRAL_PASSWORD
-    export MAVEN_GPG_PASSPHRASE CENTRAL_USERNAME CENTRAL_PASSWORD
-    test -z "$(git status --porcelain)" &&
-    test "$(git rev-parse HEAD)" = "$(git rev-parse "java/v$VERSION^{commit}")" &&
-    make generate/fixtures verify/java-migrations &&
-    ./java/bin/check-maven-warnings.sh mvn --batch-mode --no-transfer-progress \
-      -Dstyle.color=never -f java/pom.xml -Prelease clean deploy \
-      -Driver.test.database=sqlite -DexcludedGroups=postgres \
-      -Dmaven.install.skip=true -Dcentral.skipUpload=false
-    unset MAVEN_GPG_KEY MAVEN_GPG_PASSPHRASE CENTRAL_USERNAME CENTRAL_PASSWORD
-    ```
-
-6. In the [Central Portal deployments page](https://central.sonatype.com/publishing/deployments), open the validated deployment, confirm it contains `river-java`, `river`, and `river-cli` at `$VERSION`, and click **Publish**. Wait for **Published**. If uploading timed out, check this page before retrying.
-
-7. Verify the published CLI and its transitive library/parent dependencies using a fresh Maven cache. If Central has not propagated the release yet, wait and rerun with a new temporary directory:
-
-    ```sh
-    export JAVA_RELEASE_CHECK_DIR="$(mktemp -d)"
-    (cd "$JAVA_RELEASE_CHECK_DIR" && mvn --batch-mode --no-transfer-progress \
-      -Dmaven.repo.local="$JAVA_RELEASE_CHECK_DIR/m2" dependency:get \
-      -Dartifact="com.riverqueue:river-cli:$VERSION:jar:all") &&
-    java -jar "$JAVA_RELEASE_CHECK_DIR/m2/com/riverqueue/river-cli/$VERSION/river-cli-$VERSION-all.jar" --version &&
-    git push origin "java/v$VERSION"
-    ```
-
-8. Create a [GitHub release](https://github.com/riverqueue/river/releases/new) for `java/v$VERSION`, copy that version's Java changelog notes into the body, and attach the downloaded `river-cli-$VERSION-all.jar`. Mark alpha, beta, and RC versions as prereleases.
-
 ## Tests and checks
 
 From the repository root, with Go (the version in `go.work`), JDK 21 or 25,
-and Maven installed:
+Maven, and Python 3.9+ installed:
 
 ```sh
 make test/java/conformance
@@ -251,7 +265,7 @@ canonical Go drivers. `verify/java-migrations` detects changed, missing, or extr
 migrations. `check/java/package` checks the library and CLI archives, including
 source JARs, for development content and verifies bundled runtime resources.
 The Go maintenance tools live in `java/bin/`. `make test/java` and `make lint/java`
-include their tests and lint checks; `make test/java/tools` and
+include their tests and lint checks; the tool tests also cover GitHub release staging and upload guards; `make test/java/tools` and
 `make lint/java/tools` run only the tool checks. From `java/`, use `make test/tools`
 and `make lint/tools`. These checks run in Java CI, separately from the root
 Go-only `make test` and `make lint` targets.

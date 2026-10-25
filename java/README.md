@@ -9,6 +9,15 @@ retry, or work them using the same database.
 Java 21 or newer is required. Add `com.riverqueue:river:0.1.0-alpha.1` and a JDBC driver to your application's dependencies. Jackson 3 is included transitively.
 
 ```xml
+<repositories>
+  <repository>
+    <id>river</id>
+    <url>https://riverqueue.com/maven</url>
+    <releases><checksumPolicy>fail</checksumPolicy></releases>
+    <snapshots><enabled>false</enabled></snapshots>
+  </repository>
+</repositories>
+
 <dependency>
   <groupId>com.riverqueue</groupId>
   <artifactId>river</artifactId>
@@ -20,6 +29,8 @@ Java 21 or newer is required. Add `com.riverqueue:river:0.1.0-alpha.1` and a JDB
   <version>42.7.12</version>
 </dependency>
 ```
+
+The River repository is public and requires no credentials. Maven Central supplies third-party dependencies.
 
 For SQLite, replace the Postgres JDBC dependency with `org.xerial:sqlite-jdbc:3.53.4.0`. To install a local copy of River from source, see the [development guide](docs/development.md#building-from-source).
 
@@ -80,7 +91,7 @@ for each operation. River never closes an application-owned data source. An
 
 The `river-cli` executable JAR includes Postgres and SQLite JDBC drivers and
 runs with Java 21 or newer. It needs no application classpath.
-For a local build, see the [development guide](docs/development.md#building-from-source). Set `RIVER_CLI` to the executable JAR, then run:
+Download `river-cli-VERSION-all.jar` from the [Java GitHub releases](https://github.com/riverqueue/river/releases?q=java%2Fv), or build it using the [development guide](docs/development.md#building-from-source). Set `RIVER_CLI` to the executable JAR, then run:
 
 ```sh
 RIVER_CLI=/path/to/river-cli-0.1.0-alpha.1-all.jar
