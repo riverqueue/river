@@ -108,6 +108,8 @@ impl<T: Clone> Recorder<T> {
 enum Claim {
     /// River's claim in the session's own transaction.
     Standard,
+    /// River's claim with an extension's smaller maximum.
+    Capped(usize),
     /// River's claim, returning its first job twice.
     Duplicate,
     /// River's claim, reporting its first job as still available.
@@ -131,6 +133,7 @@ enum Claim {
 #[derive(Clone)]
 struct SessionPilot {
     claim: Claim,
+    claims: Arc<Recorder<usize>>,
     configurations: Arc<Recorder<ProducerConfiguration>>,
     finished: Arc<Recorder<i64>>,
 }
@@ -139,6 +142,7 @@ impl SessionPilot {
     fn new(claim: Claim) -> Self {
         Self {
             claim,
+            claims: Arc::default(),
             configurations: Arc::default(),
             finished: Arc::default(),
         }
@@ -173,8 +177,15 @@ impl PilotProducer for SessionPilot {
             transaction.commit().await?;
             return Ok(jobs);
         }
-        let mut jobs = next.claim(transaction.connection()).await?;
+        let mut jobs = match self.claim {
+            Claim::Capped(maximum) => {
+                next.claim_at_most(transaction.connection(), maximum)
+                    .await?
+            }
+            _ => next.claim(transaction.connection()).await?,
+        };
         transaction.commit().await?;
+        self.claims.push(jobs.len());
         let first = jobs.first().and_then(ClaimedJob::job).cloned();
         match (self.claim, first) {
             (Claim::Duplicate, Some(first)) => jobs.push(first.into()),
@@ -310,6 +321,38 @@ async fn assert_every_attempt_finishes_once(builder: riverqueue::ClientBuilder) 
             JobState::Completed
         };
         assert_eq!(client.jobs().get(*id).await.unwrap().state, expected);
+    }
+}
+
+/// A companion extension can narrow the ordinary claim, but never widen
+/// River's original limit. Zero leaves every job available.
+async fn assert_standard_claim_cap(builder: riverqueue::ClientBuilder, maximum: usize) {
+    let pilot = SessionPilot::new(Claim::Capped(maximum));
+    let client = builder
+        .pilot(pilot.clone())
+        .without_leader_election()
+        .queue("default", fast_queue(3))
+        .workers(workers())
+        .build()
+        .unwrap();
+    let inserted = client
+        .insert_many((0..3).map(|_| SessionArgs { fail: false }))
+        .await
+        .unwrap();
+    let mut run = client.start().unwrap();
+    pilot
+        .claims
+        .wait_until("the first capped claim", |claims| !claims.is_empty())
+        .await;
+    run.stop().await.unwrap();
+    assert_eq!(pilot.claims.snapshot()[0], maximum.min(3));
+    if maximum == 0 {
+        for inserted in inserted {
+            assert_eq!(
+                client.jobs().get(inserted.id()).await.unwrap().state,
+                JobState::Available
+            );
+        }
     }
 }
 
@@ -708,6 +751,15 @@ mod postgres {
     }
 
     #[tokio::test(flavor = "multi_thread")]
+    async fn caps_standard_claims() {
+        for maximum in [0, 1, usize::MAX] {
+            let schema = PostgresSchema::new("session_claim_cap").await;
+            assert_standard_claim_cap(builder(&schema), maximum).await;
+            schema.cleanup().await;
+        }
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
     async fn cancellation_during_claim_reaches_the_attempt() {
         let schema = PostgresSchema::new("session_claim_cancel").await;
         assert_cancellation_during_claim_reaches_the_attempt(builder(&schema)).await;
@@ -798,6 +850,15 @@ mod sqlite {
         let (pool, path) = sqlite_file_pool(4).await;
         assert_abandoned_attempts_finish(Client::builder(pool.clone())).await;
         sqlite_cleanup(pool, path).await;
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn caps_standard_claims() {
+        for maximum in [0, 1, usize::MAX] {
+            let (pool, path) = sqlite_file_pool(4).await;
+            assert_standard_claim_cap(Client::builder(pool.clone()), maximum).await;
+            sqlite_cleanup(pool, path).await;
+        }
     }
 
     #[tokio::test(flavor = "multi_thread")]
