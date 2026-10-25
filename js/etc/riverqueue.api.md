@@ -2353,10 +2353,14 @@ export type ReindexerSchedule = (after: Temporal.Instant) => Temporal.Instant;
 export declare class Resumable {
   /**
    * Run a named step unless an earlier failed attempt completed it.
-   * Await steps sequentially; nested steps are supported, concurrent steps are not.
+   * Await steps sequentially. Steps cannot be nested inside other step callbacks.
    */
   step(name: string, callback: () => PromiseLike<void> | void): Promise<void>;
-  /** Run a named cursor step with the last JSON cursor, or null initially. */
+  /**
+   * Run a named cursor step with the last JSON cursor, or null initially.
+   * Steps cannot be nested inside other step callbacks. A saved cursor-only
+   * step must be reached before the attempt completes or another step checkpoints.
+   */
   stepWithCursor(
     name: string,
     callback: (cursor: JsonValue | null) => PromiseLike<void> | void

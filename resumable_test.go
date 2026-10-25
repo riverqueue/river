@@ -15,6 +15,73 @@ import (
 	"github.com/riverqueue/river/rivertype"
 )
 
+func TestResumableNestedStep(t *testing.T) {
+	t.Parallel()
+
+	for _, testCase := range []struct {
+		name         string
+		childCursor  bool
+		parentCursor bool
+		parentName   string
+	}{
+		{name: "CursorInCursor", childCursor: true, parentCursor: true, parentName: "parent"},
+		{name: "CursorInPlain", childCursor: true, parentName: "parent"},
+		{name: "EmptyParentName"},
+		{name: "PlainInCursor", parentCursor: true, parentName: "parent"},
+		{name: "PlainInPlain", parentName: "parent"},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+
+			updates := make(map[string]any)
+			ctx := context.WithValue(context.Background(), jobexecutor.ContextKeyMetadataUpdates, updates)
+			job := &rivertype.JobRow{Metadata: []byte(`{}`)}
+
+			err := (&riverplugin.ResumableMiddleware{}).Work(ctx, job, func(ctx context.Context) error {
+				ResumableStep(ctx, "before", nil, func(context.Context) error { return nil })
+				parentFunc := func(ctx context.Context) {
+					if testCase.childCursor {
+						ResumableStepCursor(ctx, "child", nil, func(context.Context, int) error {
+							t.Fatal("nested child must not run")
+							return nil
+						})
+					} else {
+						ResumableStep(ctx, "child", nil, func(context.Context) error {
+							t.Fatal("nested child must not run")
+							return nil
+						})
+					}
+				}
+				if testCase.parentCursor {
+					ResumableStepCursor(ctx, testCase.parentName, nil, func(ctx context.Context, _ int) error {
+						require.NoError(t, ResumableSetCursor(ctx, 1))
+						parentFunc(ctx)
+						return nil
+					})
+				} else {
+					ResumableStep(ctx, testCase.parentName, nil, func(ctx context.Context) error {
+						parentFunc(ctx)
+						return nil
+					})
+				}
+				ResumableStep(ctx, "after", nil, func(context.Context) error {
+					t.Fatal("steps after the nesting error must not run")
+					return nil
+				})
+				return nil
+			})
+			require.EqualError(t, err, "river: resumable steps cannot be nested")
+			metadata, err := json.Marshal(updates)
+			require.NoError(t, err)
+			if testCase.parentCursor {
+				require.JSONEq(t, `{"river:resumable_step":"before","river:resumable_cursor":{"parent":1}}`, string(metadata))
+			} else {
+				require.JSONEq(t, `{"river:resumable_step":"before"}`, string(metadata))
+			}
+		})
+	}
+}
+
 func TestResumableStep(t *testing.T) {
 	t.Parallel()
 

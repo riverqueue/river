@@ -11,6 +11,7 @@ module River
     attr_accessor :completed_step
     attr_reader :cursors
     attr_accessor :cursors_dirty
+    attr_reader :pending_cursor_steps
     attr_accessor :resume_matched
     attr_reader :resume_step
     attr_accessor :step_name
@@ -24,6 +25,8 @@ module River
       @step_name = nil
 
       @resume_matched = @resume_step.to_s.empty?
+      # Step markers may accompany stale cursors from older clients.
+      @pending_cursor_steps = @resume_matched ? @cursors.keys.sort : []
     end
 
     def register(name)
@@ -37,6 +40,9 @@ module River
     # Internal runtime boundary: attach progress only to attempts that did not
     # complete, matching River Go's persisted metadata format.
     def __capture_resumable_metadata!
+      # Keep missing cursor steps reachable when the worker restores them.
+      return unless @resumable_state.pending_cursor_steps.empty?
+
       if @resumable_state.cursors_dirty
         @metadata_updates[RESUMABLE_CURSOR_METADATA_KEY] = @resumable_state.cursors.empty? ? nil : @resumable_state.cursors.dup
       end
@@ -49,6 +55,9 @@ module River
     # Internal runtime boundary: validate that the recorded resume point still
     # exists in the worker after it has returned.
     def __finish_resumable_work!
+      if (pending = @resumable_state.pending_cursor_steps.first)
+        raise Error, "resumable cursor step #{pending.inspect} not found in worker"
+      end
       if @resumable_state.resume_step && !@resumable_state.resume_matched
         raise Error, "resumable step #{@resumable_state.resume_step.inspect} not found in worker"
       end
@@ -56,7 +65,8 @@ module River
 
     # Immediately checkpoints the current step and cursor progress. Wrap the
     # call in Driver#transaction alongside application writes when an atomic
-    # checkpoint is needed.
+    # checkpoint is needed. When resuming cursor-only progress, reach its saved
+    # cursor step before checkpointing another step.
     #
     # Commit the transaction before the step block returns
     # successfully, and let transaction and commit errors propagate out of it.
@@ -66,6 +76,10 @@ module River
       step_name = @resumable_state.step_name
       raise Error, "resumable step can only be persisted inside a resumable step" unless step_name
       raise Error, "job must be running" unless row.state == JOB_STATE_RUNNING
+
+      if (pending = @resumable_state.pending_cursor_steps.first)
+        raise Error, "resumable checkpoint cannot precede saved cursor step #{pending.inspect}"
+      end
 
       cursors = @resumable_state.cursors.dup
       cursors[step_name] = JSON.parse(JSON.generate(cursor)) unless cursor.equal?(RESUMABLE_CURSOR_UNSET)
@@ -122,6 +136,9 @@ module River
     private def run_resumable_step(name, cursor:, default:)
       raise Error, "resumable steps cannot be nested" if @resumable_state.step_name
       raise ArgumentError, "resumable step name must be non-empty" if name.empty?
+      if !cursor && @resumable_state.pending_cursor_steps.include?(name)
+        raise Error, "resumable cursor step #{name.inspect} requires a cursor step"
+      end
       @resumable_state.register(name)
 
       unless @resumable_state.resume_matched
@@ -137,6 +154,7 @@ module River
       @resumable_state.step_name = name
       begin
         value = (cursor && @resumable_state.cursors.key?(name)) ? @resumable_state.cursors[name] : default
+        @resumable_state.pending_cursor_steps.delete(name) if cursor
         result = cursor ? yield(value) : yield
         @resumable_state.completed_step = name
         if cursor && @resumable_state.cursors.key?(name)

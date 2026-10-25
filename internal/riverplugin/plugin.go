@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
+	"slices"
 
 	"github.com/tidwall/gjson"
 
@@ -50,6 +52,14 @@ func (*ResumableMiddleware) Work(ctx context.Context, job *rivertype.JobRow, doI
 		}
 	}
 
+	// Cursor-only progress has no skip boundary. Track its targets separately
+	// so a missing step cannot turn partially processed work into a success.
+	// Older jobs with a step marker may contain stale cursors; preserve their
+	// existing behavior rather than interpreting every cursor as unfinished.
+	if state.ResumeStep == "" {
+		state.PendingCursorSteps = slices.Sorted(maps.Keys(state.Cursors))
+	}
+
 	ctx = context.WithValue(ctx, ResumableContextKey{}, state)
 
 	err := doInner(ctx)
@@ -59,10 +69,14 @@ func (*ResumableMiddleware) Work(ctx context.Context, job *rivertype.JobRow, doI
 			err = state.Err
 		case state.ResumeStep != "" && !state.ResumeMatched:
 			err = fmt.Errorf("river: resumable step %q not found in Worker", state.ResumeStep)
+		case len(state.PendingCursorSteps) > 0:
+			err = fmt.Errorf("river: resumable cursor step %q not found in Worker", state.PendingCursorSteps[0])
 		}
 	}
 
-	if err != nil {
+	// Advancing the skip boundary before finding the cursor could make that
+	// step unreachable even after the worker restores it on a later attempt.
+	if err != nil && len(state.PendingCursorSteps) == 0 {
 		if state.CursorsDirty && len(state.Cursors) > 0 {
 			metadataUpdates[rivercommon.MetadataKeyResumableCursor] = state.Cursors
 		} else if state.CursorsDirty {
@@ -87,9 +101,12 @@ type ResumableState struct {
 	Cursors       map[string]json.RawMessage
 	CursorsDirty  bool
 	Err           error
-	ResumeMatched bool
-	ResumeStep    string
-	StepName      string
+	// PendingCursorSteps contains unmatched targets from cursor-only metadata.
+	PendingCursorSteps []string
+	ResumeMatched      bool
+	ResumeStep         string
+	StepActive         bool
+	StepName           string
 }
 
 // ResumableContextKey is the context key for ResumableState.

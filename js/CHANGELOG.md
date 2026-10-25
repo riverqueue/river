@@ -15,11 +15,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Breaking:** Resumable steps can no longer be nested. Calls fail before running child callbacks, preventing unreachable resume points and rolled-back parent checkpoints from being saved again. [PR #1534](https://github.com/riverqueue/river/pull/1534).
 - Like River for Go, `insertMany` rejects an empty batch with a `ValidationError` instead of returning an empty result. [PR #1504](https://github.com/riverqueue/river/pull/1504).
 - Like River for Go, the client no longer caps `maxAttempts` at 32767: SQLite stores wider attempt counts, and the Postgres and Prisma drivers clamp `maxAttempts` to their 16-bit column on insert instead of failing. [PR #1504](https://github.com/riverqueue/river/pull/1504).
 - Like River for Go's `ResumableStep`, a failed resumable step records the step's own error as the attempt's error instead of wrapping it in a `LifecycleError`. [PR #1504](https://github.com/riverqueue/river/pull/1504).
 
 ### Fixed
+
+- Fail retries that omit a saved cursor-only step, while preserving their checkpoints for recovery. Jobs with an existing step marker retain their behavior, including legacy stale cursor entries. [PR #1534](https://github.com/riverqueue/river/pull/1534).
 
 - Replace whole top-level metadata values on SQLite, including JSON null, matching Postgres. Completed resumable cursor steps no longer run again because of stale cursor entries. [PR #1533](https://github.com/riverqueue/river/pull/1533).
 

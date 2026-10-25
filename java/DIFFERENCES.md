@@ -39,9 +39,6 @@
   reproducing Go's nonterminating date loop.
 - SQL is kept in dialect-specific resource catalogs. The Go sqlc driver seam is
   not part of the Java API.
-- Resumable steps cannot be nested in Java. Each attempt has one active step and
-  checkpoint scope, so rejecting nesting avoids ambiguous resume order and
-  checkpoint ownership. Go currently permits nested steps.
 - Transactional checkpoints require the job to still be running with the same
   `attempt` and `attempted_at`. Go updates by job ID alone. Java rejects a stale
   attempt's checkpoint to prevent it from changing a replacement attempt.

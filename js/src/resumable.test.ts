@@ -80,21 +80,6 @@ describe("Resumable", () => {
     expect(resumable.finish(false).error).toBeNull();
   });
 
-  it("restores the enclosing step after a nested step", async () => {
-    const resumable = new Resumable(client(), job({}));
-    await resumable
-      .stepWithCursor("outer", async () => {
-        await resumable.step("inner", () => undefined);
-        resumable.setCursor({ offset: 7 });
-        throw new Error("retry outer");
-      })
-      .catch(() => undefined);
-    expect(resumable.finish(false).metadata).toEqual({
-      "river:resumable_step": "inner",
-      "river:resumable_cursor": { outer: { offset: 7 } },
-    });
-  });
-
   it("retains progress and the step's own error when it is caught", async () => {
     const resumable = new Resumable(client(), job({}));
     const cause = new Error("service unavailable");

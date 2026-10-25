@@ -28,8 +28,8 @@ const workers = new Workers().add(
 ```
 
 If `storage` fails, the retry skips `billing` and runs `storage` again. Steps
-must be awaited one at a time (nested steps are fine, concurrent ones are
-not), and names must stay stable across deploys because they are persisted.
+must be awaited one at a time and cannot be nested inside other step callbacks.
+Names must stay stable across deploys because they are persisted.
 Catching a step's error doesn't make the attempt succeed: River still fails
 the attempt and keeps the checkpoint.
 
@@ -62,6 +62,14 @@ const workers = new Workers().add(exportRows, async ({ resumable }) => {
   });
 });
 ```
+
+A saved cursor without a step marker keeps the existing replay behavior: the
+retry starts from the beginning and supplies the cursor at its named step.
+That step must still be reached through `stepWithCursor()`. If it is omitted,
+renamed, or replaced by `step()`, the attempt fails and retains its original
+checkpoint so restoring the step can recover. Transactional checkpoints in
+other steps must wait until the saved cursor step is reached. Existing step
+markers keep their current behavior, including legacy stale cursor entries.
 
 The cursor is any JSON value and is saved when the attempt ends. To save
 progress immediately, and atomically with the step's own writes, call

@@ -241,6 +241,28 @@ RSpec.shared_examples "client driver end to end" do
   it_behaves_like "cancellation while draining"
   it_behaves_like "externally claimed job finalization"
   it_behaves_like "transactional job completion"
+  it "keeps an omitted cursor-only step recoverable" do
+    received = []
+    worker.define_method(:work) do |job|
+      if job.attempt > 1
+        job.resumable_step_cursor(:loop) do |cursor|
+          received << cursor
+          job.client.driver.transaction { job.resumable_checkpoint(cursor: 1) }
+        end
+      end
+      job.resumable_step(:later) {}
+    end
+    metadata = {River::RESUMABLE_CURSOR_METADATA_KEY => {"loop" => 0}}
+    row = client.insert(River::JobArgsHash.new("driver_e2e", {}), insert_opts: River::InsertOpts.new(metadata: metadata, queue: "driver_e2e")).job
+    failed = River::Testing.perform_job(client, row.id)
+    expect(failed.outcome).to eq(:retried)
+    expect(failed.job.metadata).to include(metadata)
+    expect(failed.job.metadata).not_to have_key(River::RESUMABLE_STEP_METADATA_KEY)
+    client.job_retry row.id
+    expect(River::Testing.perform_job(client, row.id).outcome).to eq(:completed)
+    expect(received).to eq([0])
+  end
+
   [false, true].product([false, true]).each do |with_cursor, rollback|
     it "resumes after a #{rollback ? "rolled-back" : "committed"} #{with_cursor ? "cursor" : "step"} checkpoint" do
       received = []

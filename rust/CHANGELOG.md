@@ -16,9 +16,12 @@ Changes to River for Go are recorded in the [repository changelog](../CHANGELOG.
 
 ### Changed
 
+- **Breaking:** Resumable steps can no longer be nested. Calls fail before running child callbacks, preventing unreachable resume points and rolled-back parent checkpoints from being saved again. [PR #1534](https://github.com/riverqueue/river/pull/1534).
 - **Breaking:** Attempt counts are now `i32` instead of `i16`, like River for Go's `int`: `JobRow::attempt` and `max_attempts`, `AttemptError::attempt` and `AttemptError::new`, `InsertOpts::max_attempts` and `with_max_attempts`, `InsertParams::max_attempts`, `ClientBuilder::default_max_attempts`, `MAX_ATTEMPTS_DEFAULT`, and `riverqueue-test`'s builders. On SQLite, which stores native integers, a job with more than 32,767 maximum attempts inserts and reads back unchanged, as in Go. On Postgres, whose columns are 16-bit, an insert clamps `max_attempts` to 32,767 like Go's drivers instead of failing. [PR #1504](https://github.com/riverqueue/river/pull/1504).
 
 ### Fixed
+
+- Fail retries that omit a saved cursor-only step, while preserving their checkpoints for recovery. Jobs with an existing step marker retain their behavior, including legacy stale cursor entries. [PR #1534](https://github.com/riverqueue/river/pull/1534).
 
 - Replace whole top-level metadata values on SQLite, including JSON null, matching Postgres. Completed resumable cursor steps no longer run again because of stale cursor entries. [PR #1533](https://github.com/riverqueue/river/pull/1533).
 
