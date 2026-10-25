@@ -1,0 +1,127 @@
+# Jobs with the same Go version and dependencies share setup-go's default cache.
+# If a migration job saves it first, the archive lacks builds needed by tests.
+# Later test jobs cannot update that saved archive, so they rebuild each run.
+# Share downloaded modules, but give each workload a build cache that can refresh
+# after source changes. Keep this policy here rather than repeating it in jobs.
+name: Set up Go for CI
+description: Install Go with shared module downloads and workload-specific build caches
+
+# Composite action inputs are strings, unlike typed workflow_call inputs. Pass
+# "true" or "false" for the boolean-like flags below; quote literals in callers.
+inputs:
+  build-cache-scope:
+    description: >-
+      Free-form workload identifier, such as "postgres-18-race" or "sqlite-standard";
+      defaults to the workflow name and job ID. Test scopes must include backend/version
+      and race mode because Go also caches test results.
+    required: false
+  check-latest:
+    description: >-
+      String flag ("true" or "false"): "true" checks for the latest matching Go
+      version; "false" prefers an already installed matching version.
+    default: "false"
+    required: false
+  go-version:
+    description: Go version or selector, such as "1.27" or "stable"; takes precedence over go-version-file
+    required: false
+  go-version-file:
+    description: Repository-relative go.mod or go.work file to read when go-version is omitted
+    required: false
+  save-module-cache:
+    description: >-
+      String flag ("true" or "false"): "true" also saves downloads after a successful
+      job; "false" only restores them. Enable for a full-suite job, or the only Go
+      workload on a platform, so a smaller job cannot freeze a partial archive.
+    default: "false"
+    required: false
+
+runs:
+  using: composite
+  steps:
+    - name: Install Go
+      id: go
+      uses: actions/setup-go@v7
+      with:
+        # This action manages module and build caches separately below.
+        cache: false
+        check-latest: ${{ inputs.check-latest }}
+        go-version: ${{ inputs.go-version }}
+        go-version-file: ${{ inputs.go-version-file }}
+
+    # Keep key components in step outputs so they do not leak into later steps.
+    # actions/cache remembers the primary key in its own private post-job state,
+    # but reads its path input again when saving. Only paths use GITHUB_ENV: nested
+    # composite outputs are unavailable when post inputs are resolved. These two
+    # names are job-wide, so prefix them and invoke this action once per job.
+    - name: Prepare cache paths and keys
+      id: cache-config
+      shell: bash
+      env:
+        BUILD_CACHE_SCOPE: ${{ inputs.build-cache-scope || format('{0}-{1}', github.workflow, github.job) }}
+        DEPENDENCY_HASH: ${{ hashFiles('**/go.mod', '**/go.sum', 'go.work', 'go.work.sum') }}
+        GO_VERSION: ${{ steps.go.outputs.go-version }}
+        SOURCE_HASH: ${{ hashFiles('**/*.go', '**/*.sql', '**/testdata/**', 'Makefile', '.github/actions/setup-go-ci/**', '.github/workflows/*.yaml') }}
+      run: |
+        module_cache_prefix="go-mod-v1-${RUNNER_OS}-${RUNNER_ARCH}"
+        build_cache_prefix="go-build-v1-${RUNNER_OS}-${RUNNER_ARCH}-${ImageOS:-$RUNNER_OS}-${GO_VERSION}-${BUILD_CACHE_SCOPE}"
+
+        {
+          echo "RIVER_GO_BUILD_CACHE=$(go env GOCACHE)"
+          echo "RIVER_GO_MOD_CACHE=$(go env GOMODCACHE)"
+        } >> "$GITHUB_ENV"
+
+        {
+          echo "build-prefix=$build_cache_prefix"
+          echo "dependency-hash=$DEPENDENCY_HASH"
+          echo "module-prefix=$module_cache_prefix"
+          echo "source-hash=$SOURCE_HASH"
+        } >> "$GITHUB_OUTPUT"
+
+    # Module caches contain downloads, not compiled code, so Go versions and race
+    # modes can share them. Hash every module's go.mod AND go.sum: version selection
+    # can change while go.sum still contains all the old checksums. Include workspace
+    # metadata too: go.work can select different local modules or replacements.
+    # The v1 prefix is our cache-layout version, independent of the action version.
+    #
+    # Full-suite jobs save this immutable archive; Windows has only the CLI job,
+    # so it saves its own downloads. A small Linux CLI/migration job would freeze
+    # an incomplete graph. Separate save/restore steps
+    # are deliberate: actions/cache saves in a post step; cache/restore never saves.
+    - name: Restore and save module cache
+      if: inputs.save-module-cache == 'true'
+      uses: actions/cache@v5
+      with:
+        path: ${{ env.RIVER_GO_MOD_CACHE }}
+        key: ${{ steps.cache-config.outputs.module-prefix }}-${{ steps.cache-config.outputs.dependency-hash }}
+        # Reuse older downloads after dependency changes; Go still selects the
+        # requested versions and verifies checksums, fetching anything missing.
+        restore-keys: |
+          ${{ steps.cache-config.outputs.module-prefix }}-
+
+    - name: Restore module cache
+      if: inputs.save-module-cache != 'true'
+      uses: actions/cache/restore@v5
+      with:
+        path: ${{ env.RIVER_GO_MOD_CACHE }}
+        key: ${{ steps.cache-config.outputs.module-prefix }}-${{ steps.cache-config.outputs.dependency-hash }}
+        restore-keys: |
+          ${{ steps.cache-config.outputs.module-prefix }}-
+
+    # Builds are scoped by OS, architecture, runner image, exact Go version, and
+    # workload. Separate race/non-race scopes keep both warm; Go itself can safely
+    # distinguish their artifacts. Database-version scopes also isolate cached
+    # test results because Go cannot detect changes to an external database.
+    - name: Restore and save build cache
+      uses: actions/cache@v5
+      with:
+        path: ${{ env.RIVER_GO_BUILD_CACHE }}
+        # Archives cannot be updated in place. A new Go/CI input hash lets the job
+        # save its fresh artifacts. SQL/testdata hashes cover embedded migrations and
+        # fixtures too; unrelated port implementation/docs edits keep the same key.
+        key: ${{ steps.cache-config.outputs.build-prefix }}-${{ steps.cache-config.outputs.dependency-hash }}-${{ steps.cache-config.outputs.source-hash }}
+        # Search from most to least specific: first drop the source hash, then
+        # the dependency hash. Both fallbacks retain toolchain/workload scope;
+        # Go validates its own inputs and rebuilds anything that no longer matches.
+        restore-keys: |
+          ${{ steps.cache-config.outputs.build-prefix }}-${{ steps.cache-config.outputs.dependency-hash }}-
+          ${{ steps.cache-config.outputs.build-prefix }}-

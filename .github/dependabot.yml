@@ -28,7 +28,7 @@ updates:
     patterns:
       - "*"
   - package-ecosystem: "github-actions"
-    # The JavaScript workflows' composite actions live under .github/actions.
+    # Scan every local composite action as well as the workflows.
     directories:
       - "/"
       - "/.github/actions/*"
