@@ -18,6 +18,76 @@ struct Args {}
 
 #[cfg(feature = "sqlite")]
 #[tokio::test]
+async fn cursor_only_sqlite_step_remains_recoverable() {
+    let (_pool, client, _, _) = setup().await;
+    assert_cursor_only_recovery(&client).await;
+}
+
+#[cfg(all(feature = "postgres", river_postgres_tests))]
+#[tokio::test]
+async fn cursor_only_postgres_step_remains_recoverable() {
+    let database = support::PostgresSchema::new("cursor_only").await;
+    let client = Client::builder(
+        riverqueue::database::PostgresDatabase::new(database.pool.clone())
+            .with_schema(database.schema.clone()),
+    )
+    .build()
+    .unwrap();
+    assert_cursor_only_recovery(&client).await;
+    database.cleanup().await;
+}
+
+async fn assert_cursor_only_recovery(client: &Client) {
+    let inserted = client.insert(Args {}).await.unwrap();
+    let metadata = json!({"river:resumable_cursor": {"loop": 0}});
+    client
+        .jobs()
+        .update(
+            inserted.job.row.id,
+            JobUpdateParams::default().metadata(metadata.as_object().unwrap().clone()),
+        )
+        .await
+        .unwrap();
+    let (row, context) = __private::claim_job_for_test(client, inserted.job.row.id)
+        .await
+        .unwrap();
+    context
+        .resumable_step("later", || async { Ok::<(), BoxError>(()) })
+        .await
+        .unwrap();
+    assert!(
+        __private::work_context_resumable_finish(&context, false)
+            .unwrap()
+            .to_string()
+            .contains("resumable cursor step \"loop\" not found")
+    );
+    let saved = client
+        .jobs()
+        .update(
+            row.id,
+            JobUpdateParams::default().metadata(__private::work_context_metadata_updates(&context)),
+        )
+        .await
+        .unwrap();
+    let saved_metadata = serde_json::to_value(&saved.metadata).unwrap();
+    assert_eq!(
+        saved_metadata["river:resumable_cursor"],
+        metadata["river:resumable_cursor"]
+    );
+    assert!(saved_metadata.get("river:resumable_step").is_none());
+    let retry = __private::work_context_for_job(&saved);
+    retry
+        .resumable_step_with_cursor("loop", |cursor: Value| async move {
+            assert_eq!(cursor, json!(0));
+            Ok::<(), BoxError>(())
+        })
+        .await
+        .unwrap();
+    assert!(__private::work_context_resumable_finish(&retry, false).is_none());
+}
+
+#[cfg(feature = "sqlite")]
+#[tokio::test]
 async fn committed_parent_cursor_is_preserved() {
     assert_parent_checkpoint(true).await;
 }

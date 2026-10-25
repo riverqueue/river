@@ -31,6 +31,7 @@ export class Resumable {
   readonly #client: Client;
   readonly #cursors = new Map<string, JsonValue>();
   readonly #job: JobRow;
+  readonly #pendingCursorSteps = new Set<string>();
   readonly #resumeStep: string | null;
   #completedStep: string | null = null;
   #cursorsDirty = false;
@@ -65,6 +66,12 @@ export class Resumable {
         if (cursor !== undefined) this.#cursors.set(name, cursor);
       }
     }
+    // A step marker may accompany stale cursors written by older clients.
+    // Require only targets from cursor-only checkpoints.
+    if (this.#resumeStep === null) {
+      for (const name of this.#cursors.keys())
+        this.#pendingCursorSteps.add(name);
+    }
   }
 
   /**
@@ -90,7 +97,8 @@ export class Resumable {
 
   /**
    * Run a named cursor step with the last JSON cursor, or null initially.
-   * Steps cannot be nested inside other step callbacks.
+   * Steps cannot be nested inside other step callbacks. A saved cursor-only
+   * step must be reached before the attempt completes or another step checkpoints.
    */
   async stepWithCursor(
     name: string,
@@ -98,6 +106,7 @@ export class Resumable {
   ): Promise<void> {
     if (!this.#begin(name, true)) return;
     try {
+      this.#pendingCursorSteps.delete(name);
       await callback(this.#cursors.get(name) ?? null);
       if (this.#failure !== null) return;
       this.#completedStep = name;
@@ -136,6 +145,12 @@ export class Resumable {
         "resumable checkpoint can only be set inside a resumable step"
       );
     }
+    const pending = this.#pendingCursorStep();
+    if (pending !== undefined) {
+      throw new LifecycleError(
+        `resumable checkpoint cannot precede saved cursor step ${JSON.stringify(pending)}`
+      );
+    }
     const cursors = new Map(this.#cursors);
     if (options.cursor !== undefined) {
       cursors.set(this.#stepName, toJsonValue(options.cursor));
@@ -170,6 +185,17 @@ export class Resumable {
         `resumable step ${JSON.stringify(this.#resumeStep)} not found in worker`
       );
     }
+    const pending = this.#pendingCursorStep();
+    if (pending !== undefined) {
+      if (!workerFailed && this.#failure === null) {
+        this.#failure = new LifecycleError(
+          `resumable cursor step ${JSON.stringify(pending)} not found in worker`
+        );
+      }
+      // Preserve the original cursor-only checkpoint so restoring the missing
+      // step can recover; later steps must not advance its skip boundary.
+      return { error: this.#failure, metadata: {} };
+    }
     if (!workerFailed && this.#failure === null) {
       return { error: null, metadata: {} };
     }
@@ -186,6 +212,12 @@ export class Resumable {
     if (this.#failure !== null) throw this.#failure;
     if (this.#stepName !== null) {
       this.#failure = new LifecycleError("resumable steps cannot be nested");
+      throw this.#failure;
+    }
+    if (!cursorStep && this.#pendingCursorSteps.has(name)) {
+      this.#failure = new LifecycleError(
+        `resumable cursor step ${JSON.stringify(name)} requires a cursor step`
+      );
       throw this.#failure;
     }
     if (this.#allNames.has(name)) {
@@ -215,6 +247,10 @@ export class Resumable {
           : null;
     }
     return metadata;
+  }
+
+  #pendingCursorStep(): string | undefined {
+    return [...this.#pendingCursorSteps].sort()[0];
   }
 }
 

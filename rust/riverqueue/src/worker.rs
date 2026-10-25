@@ -1,7 +1,7 @@
 //! Typed worker interfaces and registration.
 
 use std::{
-    collections::{HashMap, HashSet},
+    collections::{BTreeSet, HashMap, HashSet},
     error::Error as StdError,
     future::Future,
     sync::{Arc, Mutex, MutexGuard, PoisonError},
@@ -250,6 +250,7 @@ impl WorkContext {
                 return Err(state.fail_step(name, Box::new(error)));
             }
         };
+        self.lock_resumable().pending_cursor_steps.remove(name);
         let result = step(cursor).await;
         let mut state = guard.finish();
         if let Some(failure) = &state.failure {
@@ -382,6 +383,7 @@ impl WorkContext {
     }
 
     /// Returns checkpoint metadata without changing deferred progress.
+    /// A cursor-only target must be reached before another step checkpoints.
     fn resumable_checkpoint<T: Serialize>(
         &self,
         cursor: Option<&T>,
@@ -393,6 +395,12 @@ impl WorkContext {
                 "resumable checkpoint must be set inside a resumable step".to_owned(),
             )
         })?;
+        if let Some(pending) = state.pending_cursor_steps.first() {
+            return Err(Error::runtime_context(
+                "worker context",
+                format!("resumable checkpoint cannot precede saved cursor step {pending:?}"),
+            ));
+        }
         let mut cursors = state.cursors.clone();
         if let Some(cursor) = cursor {
             cursors.insert(step_name.clone(), serde_json::to_value(cursor)?);
@@ -430,6 +438,14 @@ impl WorkContext {
         }
         if state.step_name.is_some() {
             let message = "resumable steps cannot be nested".to_owned();
+            state.failure = Some(WorkError::new(Box::new(Error::runtime_context(
+                "worker context",
+                message.clone(),
+            ))));
+            return Err(Error::runtime_context("worker context", message));
+        }
+        if !cursor_step && state.pending_cursor_steps.contains(name) {
+            let message = format!("resumable cursor step {name:?} requires a cursor step");
             state.failure = Some(WorkError::new(Box::new(Error::runtime_context(
                 "worker context",
                 message.clone(),
@@ -535,6 +551,21 @@ impl WorkContext {
                 )))
             })
         });
+        let failure = failure.or_else(|| {
+            (!worker_failed)
+                .then(|| state.pending_cursor_steps.first())
+                .flatten()
+                .map(|pending| {
+                    WorkError::new(Box::new(Error::runtime_context(
+                        "worker context",
+                        format!("resumable cursor step {pending:?} not found in worker"),
+                    )))
+                })
+        });
+        // Unmatched cursor-only steps must stay reachable on the next attempt.
+        if !state.pending_cursor_steps.is_empty() {
+            return failure;
+        }
         if worker_failed || failure.is_some() {
             let mut updates = self.lock_metadata();
             if let Some(completed_step) = &state.completed_step {
@@ -576,6 +607,7 @@ struct ResumableState {
     cursors: Map<String, Value>,
     cursors_dirty: bool,
     failure: Option<WorkError>,
+    pending_cursor_steps: BTreeSet<String>,
     resume_matched: bool,
     resume_step: Option<String>,
     step_name: Option<String>,
@@ -589,6 +621,7 @@ impl Default for ResumableState {
             cursors: Map::new(),
             cursors_dirty: false,
             failure: None,
+            pending_cursor_steps: BTreeSet::new(),
             resume_matched: true,
             resume_step: None,
             step_name: None,
@@ -621,6 +654,10 @@ impl ResumableState {
                 ))));
             }
             _ => {}
+        }
+        // Step markers may accompany stale cursors from older clients.
+        if state.resume_step.is_none() {
+            state.pending_cursor_steps = state.cursors.keys().cloned().collect();
         }
         state
     }
@@ -1141,6 +1178,128 @@ mod tests {
                 .unwrap();
             assert!(ran);
             assert!(context.resumable_finish(false).is_none());
+        }
+    }
+
+    #[tokio::test]
+    async fn resumable_cursor_only_checkpoint_in_target() {
+        let mut row = job_row(FunctionJobArgs::KIND, false);
+        row.metadata = json!({"river:resumable_cursor": {"loop": 0}})
+            .as_object()
+            .unwrap()
+            .clone()
+            .into();
+        let context = WorkContext::for_test_job(&row);
+        context
+            .resumable_step_with_cursor("loop", |cursor: Value| {
+                assert_eq!(cursor, json!(0));
+                assert_eq!(
+                    Value::Object(context.resumable_checkpoint(Some(&7)).unwrap()),
+                    json!({"river:resumable_step": "loop", "river:resumable_cursor": {"loop": 7}})
+                );
+                std::future::ready(Ok::<(), Error>(()))
+            })
+            .await
+            .unwrap();
+        assert!(context.resumable_finish(false).is_none());
+    }
+
+    #[tokio::test]
+    async fn resumable_cursor_only_conformance() {
+        let fixture: Value = serde_json::from_str(
+            &std::fs::read_to_string(
+                std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                    .join("../../conformance/testdata/resumable_cursor_only.json"),
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        for case in fixture["cases"].as_array().unwrap() {
+            let mut row = job_row(FunctionJobArgs::KIND, false);
+            row.metadata = case["metadata"].as_object().unwrap().clone().into();
+            let context = WorkContext::for_test_job(&row);
+            let mut runs = Vec::new();
+            let mut failure = None;
+            for action in case["actions"].as_array().unwrap() {
+                let name = action["name"].as_str().unwrap();
+                let kind = action["kind"].as_str().unwrap();
+                let mut callback = || {
+                    runs.push(name);
+                    if kind == "checkpoint" {
+                        context.resumable_checkpoint::<Value>(None)?;
+                    }
+                    if action["set_cursor"].as_bool().unwrap() {
+                        context.resumable_set_cursor(&7)?;
+                    }
+                    if action["fail"].as_bool().unwrap() {
+                        return Err(Error::invalid_job("step interrupted"));
+                    }
+                    Ok::<(), Error>(())
+                };
+                let result = if kind == "cursor" {
+                    context
+                        .resumable_step_with_cursor(name, |cursor: Value| {
+                            assert_eq!(
+                                cursor,
+                                case["metadata"][crate::METADATA_KEY_RESUMABLE_CURSOR][name]
+                            );
+                            std::future::ready(callback())
+                        })
+                        .await
+                } else {
+                    context
+                        .resumable_step(name, || std::future::ready(callback()))
+                        .await
+                };
+                if let Err(error) = result {
+                    failure = Some(error);
+                    break;
+                }
+            }
+            if failure.is_none() && case["worker_error"].as_bool().unwrap() {
+                failure = Some(Error::invalid_job("worker interrupted"));
+            }
+            let finished = context.resumable_finish(failure.is_some());
+            let actual_error = failure
+                .map(|error| crate::error::Chain(&error).to_string())
+                .or_else(|| finished.map(|error| crate::error::Chain(&error).to_string()));
+            let expected_error = case["expected_error"].as_str().unwrap();
+            if expected_error.is_empty() {
+                assert!(actual_error.is_none(), "{case:?}: {actual_error:?}");
+            } else {
+                assert!(
+                    actual_error.as_ref().unwrap().contains(expected_error),
+                    "{case:?}: {actual_error:?}"
+                );
+            }
+            assert_eq!(
+                serde_json::to_value(runs).unwrap(),
+                case["expected_runs"],
+                "{}",
+                case["name"]
+            );
+            assert_eq!(
+                Value::Object(context.metadata_updates()),
+                case["expected_updates"],
+                "{}",
+                case["name"]
+            );
+            if !expected_error.is_empty() && context.metadata_updates().is_empty() {
+                let retry = WorkContext::for_test_job(&row);
+                for (name, expected) in case["metadata"][crate::METADATA_KEY_RESUMABLE_CURSOR]
+                    .as_object()
+                    .unwrap()
+                {
+                    retry
+                        .resumable_step_with_cursor(name, |cursor: Value| {
+                            assert_eq!(&cursor, expected);
+                            std::future::ready(Ok::<(), Error>(()))
+                        })
+                        .await
+                        .unwrap();
+                }
+                assert!(retry.resumable_finish(false).is_none());
+            }
         }
     }
 

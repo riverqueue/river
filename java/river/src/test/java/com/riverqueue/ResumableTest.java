@@ -21,6 +21,53 @@ class ResumableTest {
   @RegisterExtension final TestDatabase databases = new TestDatabase();
   @TempDir Path directory;
 
+  @Test
+  @SuppressWarnings("try") // Resources intentionally scope background activity.
+  void cursorOnlyStepRemainsRecoverableAfterItIsOmitted() throws Exception {
+    var client = new Client(databases.open(directory.resolve("cursor-only.db")));
+    var events = new LinkedBlockingQueue<Workers.Event>();
+    var received = new LinkedBlockingQueue<Integer>();
+    try (var workers =
+            client
+                .workers()
+                .queue("default", 1)
+                .pollOnly(true)
+                .leadership(false)
+                .retryPolicy(job -> Duration.ofDays(1))
+                .stopTimeout(Duration.ofSeconds(5))
+                .add(
+                    TYPE,
+                    context -> {
+                      if (context.job().attempt() > 1)
+                        context.stepWithCursor(
+                            "loop",
+                            cursor -> {
+                              received.add(cursor.asInt());
+                              context.transaction(connection -> context.checkpoint(connection, 1));
+                            });
+                      context.step("later", () -> {});
+                    })
+                .start();
+        var subscription = workers.subscribe(events::add)) {
+      var metadata = Map.of(Protocol.METADATA_RESUMABLE_CURSOR, Map.of("loop", 0));
+      var inserted =
+          client.insert(TYPE, "work", InsertOptions.builder().metadata(metadata).build()).job();
+      var failed = events.poll(5, TimeUnit.SECONDS);
+      assertNotNull(failed);
+      assertEquals(Workers.EventKind.JOB_FAILED, failed.kind());
+      var savedMetadata = client.get(inserted.id()).metadata();
+      assertEquals(
+          Json.tree(metadata).path(Protocol.METADATA_RESUMABLE_CURSOR),
+          savedMetadata.path(Protocol.METADATA_RESUMABLE_CURSOR));
+      assertFalse(savedMetadata.has(Protocol.METADATA_RESUMABLE_STEP));
+      client.retry(inserted.id());
+      var completed = events.poll(5, TimeUnit.SECONDS);
+      assertNotNull(completed);
+      assertEquals(Workers.EventKind.JOB_COMPLETED, completed.kind());
+      assertEquals(java.util.List.of(0), java.util.List.copyOf(received));
+    }
+  }
+
   @ParameterizedTest
   @CsvSource({
     "false,false,false",

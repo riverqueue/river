@@ -54,6 +54,28 @@ type resumableCases struct {
 	Comment string          `json:"$comment"`
 }
 
+type resumableCursorOnlyAction struct {
+	Fail      bool   `json:"fail"`
+	Kind      string `json:"kind"`
+	Name      string `json:"name"`
+	SetCursor bool   `json:"set_cursor"`
+}
+
+type resumableCursorOnlyCase struct {
+	Actions         []resumableCursorOnlyAction `json:"actions"`
+	ExpectedError   string                      `json:"expected_error"`
+	ExpectedRuns    []string                    `json:"expected_runs"`
+	ExpectedUpdates map[string]any              `json:"expected_updates"`
+	Metadata        map[string]any              `json:"metadata"`
+	Name            string                      `json:"name"`
+	WorkerError     bool                        `json:"worker_error"`
+}
+
+type resumableCursorOnlyCases struct {
+	Cases   []resumableCursorOnlyCase `json:"cases"`
+	Comment string                    `json:"$comment"`
+}
+
 func makeResumableCases() (resumableCases, error) {
 	fixture := resumableCases{Comment: generatedComment("River resumable steps and transactional checkpoints")}
 	for _, name := range []string{
@@ -109,4 +131,43 @@ func makeResumableCases() (resumableCases, error) {
 		fixture.Cases = append(fixture.Cases, resumableCase{ExpectedMetadata: metadata, Name: name})
 	}
 	return fixture, nil
+}
+
+func makeResumableCursorOnlyCases() resumableCursorOnlyCases {
+	const (
+		cursorKey = "river:resumable_cursor"
+		stepKey   = "river:resumable_step"
+	)
+	cursorOnly := func(value any) map[string]any {
+		return map[string]any{cursorKey: map[string]any{"loop": value}}
+	}
+	cases := []resumableCursorOnlyCase{
+		{Actions: []resumableCursorOnlyAction{{Kind: "checkpoint", Name: "later"}}, ExpectedError: `resumable checkpoint cannot precede saved cursor step "loop"`, ExpectedRuns: []string{"later"}, Metadata: cursorOnly(0), Name: "CheckpointBeforeCursor"},
+		{Actions: []resumableCursorOnlyAction{{Fail: true, Kind: "plain", Name: "before"}}, ExpectedError: "step interrupted", ExpectedRuns: []string{"before"}, Metadata: cursorOnly(0), Name: "EarlierError"},
+		{Actions: []resumableCursorOnlyAction{{Kind: "cursor", Name: "loop"}}, ExpectedError: "worker interrupted", ExpectedRuns: []string{"loop"}, ExpectedUpdates: map[string]any{cursorKey: nil, stepKey: "loop"}, Metadata: map[string]any{cursorKey: map[string]any{"loop": nil}, stepKey: ""}, Name: "EmptyStepMarker", WorkerError: true},
+		{Actions: []resumableCursorOnlyAction{{Kind: "plain", Name: "done"}, {Kind: "plain", Name: "later"}}, ExpectedRuns: []string{"later"}, Metadata: map[string]any{cursorKey: map[string]any{"loop": 0}, stepKey: "done"}, Name: "LegacyStaleCursor"},
+		{Actions: []resumableCursorOnlyAction{{Kind: "plain", Name: "later"}}, ExpectedError: `resumable cursor step "loop" not found`, ExpectedRuns: []string{"later"}, Metadata: cursorOnly(0), Name: "MissingAfterLaterStep"},
+		{Actions: []resumableCursorOnlyAction{{Kind: "cursor", Name: "new", SetCursor: true}}, ExpectedError: `resumable cursor step "loop" not found`, ExpectedRuns: []string{"new"}, Metadata: cursorOnly(0), Name: "MissingAfterNewCursor"},
+		{ExpectedError: `resumable cursor step "loop" not found`, Metadata: cursorOnly(nil), Name: "MissingNull"},
+		{ExpectedError: `resumable cursor step "loop" not found`, Metadata: cursorOnly(0), Name: "MissingZero"},
+		{Actions: []resumableCursorOnlyAction{{Kind: "cursor", Name: "b"}, {Kind: "cursor", Name: "a"}}, ExpectedError: "worker interrupted", ExpectedRuns: []string{"b", "a"}, ExpectedUpdates: map[string]any{cursorKey: nil, stepKey: "a"}, Metadata: map[string]any{cursorKey: map[string]any{"a": 0, "b": nil}}, Name: "MultipleCursors", WorkerError: true},
+		{Actions: []resumableCursorOnlyAction{{Kind: "cursor", Name: "loop"}}, ExpectedError: "worker interrupted", ExpectedRuns: []string{"loop"}, ExpectedUpdates: map[string]any{cursorKey: nil, stepKey: "loop"}, Metadata: cursorOnly(nil), Name: "NullValueResumes", WorkerError: true},
+		{Actions: []resumableCursorOnlyAction{{Kind: "plain", Name: "loop"}}, ExpectedError: `resumable cursor step "loop" requires a cursor step`, Metadata: cursorOnly(0), Name: "PlainReplacement"},
+		{Actions: []resumableCursorOnlyAction{{Kind: "plain", Name: "before"}, {Kind: "cursor", Name: "loop"}}, ExpectedError: "worker interrupted", ExpectedRuns: []string{"before", "loop"}, ExpectedUpdates: map[string]any{cursorKey: nil, stepKey: "loop"}, Metadata: cursorOnly(0), Name: "ResumesAfterEarlierStep", WorkerError: true},
+		{Actions: []resumableCursorOnlyAction{{Kind: "plain", Name: "before"}, {Fail: true, Kind: "cursor", Name: "loop", SetCursor: true}}, ExpectedError: "step interrupted", ExpectedRuns: []string{"before", "loop"}, ExpectedUpdates: map[string]any{cursorKey: map[string]any{"loop": 7}, stepKey: "before"}, Metadata: cursorOnly(0), Name: "TargetError"},
+		{Actions: []resumableCursorOnlyAction{{Kind: "plain", Name: "later"}}, ExpectedError: "worker interrupted", ExpectedRuns: []string{"later"}, Metadata: cursorOnly(0), Name: "WorkerError", WorkerError: true},
+		{Actions: []resumableCursorOnlyAction{{Kind: "cursor", Name: "loop"}}, ExpectedError: "worker interrupted", ExpectedRuns: []string{"loop"}, ExpectedUpdates: map[string]any{cursorKey: nil, stepKey: "loop"}, Metadata: cursorOnly(0), Name: "ZeroValueResumes", WorkerError: true},
+	}
+	for i := range cases {
+		if cases[i].Actions == nil {
+			cases[i].Actions = []resumableCursorOnlyAction{}
+		}
+		if cases[i].ExpectedRuns == nil {
+			cases[i].ExpectedRuns = []string{}
+		}
+		if cases[i].ExpectedUpdates == nil {
+			cases[i].ExpectedUpdates = map[string]any{}
+		}
+	}
+	return resumableCursorOnlyCases{Cases: cases, Comment: generatedComment("River cursor-only checkpoint compatibility and validation")}
 }

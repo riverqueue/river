@@ -61,6 +61,7 @@ func run() error {
 		{"cron_schedules.json", cronSchedules},
 		{"protocol_values.json", protocolValues},
 		{"resumable.json", resumable},
+		{"resumable_cursor_only.json", makeResumableCursorOnlyCases()},
 		{"snooze_counters.json", makeSnoozeCounters()},
 		{"unique_keys.json", uniqueKeys},
 	} {

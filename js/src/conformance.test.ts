@@ -137,6 +137,88 @@ describe("Go resumable fixtures", () => {
   });
 });
 
+const cursorOnlyCases = (await readFixture(
+  "resumable_cursor_only"
+)) as unknown as {
+  readonly cases: readonly {
+    readonly actions: readonly {
+      readonly fail: boolean;
+      readonly kind: string;
+      readonly name: string;
+      readonly set_cursor: boolean;
+    }[];
+    readonly expected_error: string;
+    readonly expected_runs: readonly string[];
+    readonly expected_updates: JsonObject;
+    readonly metadata: JsonObject;
+    readonly name: string;
+    readonly worker_error: boolean;
+  }[];
+};
+
+describe("Go cursor-only checkpoint fixtures", () => {
+  it.each(cursorOnlyCases.cases)("$name", async (fixture) => {
+    const update = vi.fn();
+    const client = { jobs: { update } } as unknown as Client;
+    const resumable = new Resumable(client, {
+      ...job(),
+      metadata: fixture.metadata,
+    });
+    const runs: string[] = [];
+    let failure: unknown;
+    try {
+      for (const action of fixture.actions) {
+        const callback = async () => {
+          runs.push(action.name);
+          if (action.kind === "checkpoint")
+            await resumable.checkpoint({ tx: {} });
+          if (action.set_cursor) resumable.setCursor(7);
+          if (action.fail) throw new Error("step interrupted");
+        };
+        if (action.kind === "cursor") {
+          await resumable.stepWithCursor(action.name, async (cursor) => {
+            expect(cursor).toEqual(
+              (fixture.metadata["river:resumable_cursor"] as JsonObject)[
+                action.name
+              ] ?? null
+            );
+            await callback();
+          });
+        } else await resumable.step(action.name, callback);
+      }
+      if (fixture.worker_error) throw new Error("worker interrupted");
+    } catch (error: unknown) {
+      failure = error;
+    }
+    const finished = resumable.finish(failure !== undefined);
+    const error = failure ?? finished.error;
+    if (fixture.expected_error.length > 0) {
+      expect(error).toBeInstanceOf(Error);
+      expect((error as Error).message).toContain(fixture.expected_error);
+    } else expect(error).toBeNull();
+    expect(finished.metadata).toEqual(fixture.expected_updates);
+    expect(runs).toEqual(fixture.expected_runs);
+    expect(update).not.toHaveBeenCalled();
+    if (
+      fixture.expected_error.length > 0 &&
+      Object.keys(fixture.expected_updates).length === 0
+    ) {
+      const retry = new Resumable(client, {
+        ...job(),
+        metadata: { ...fixture.metadata, ...finished.metadata },
+      });
+      for (const [name, expected] of Object.entries(
+        fixture.metadata["river:resumable_cursor"] as JsonObject
+      )) {
+        await retry.stepWithCursor(name, (cursor) => {
+          expect(cursor).toEqual(expected);
+        });
+      }
+      expect(retry.finish(false).error).toBeNull();
+    }
+  });
+});
+
 describe("Go unique-key fixtures", () => {
   it.each(uniqueKeys.cases)("$name", (fixture) => {
     const now = Temporal.Instant.from(fixture.now);

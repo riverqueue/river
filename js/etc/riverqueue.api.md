@@ -2358,7 +2358,8 @@ export declare class Resumable {
   step(name: string, callback: () => PromiseLike<void> | void): Promise<void>;
   /**
    * Run a named cursor step with the last JSON cursor, or null initially.
-   * Steps cannot be nested inside other step callbacks.
+   * Steps cannot be nested inside other step callbacks. A saved cursor-only
+   * step must be reached before the attempt completes or another step checkpoints.
    */
   stepWithCursor(
     name: string,

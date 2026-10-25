@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 
 	"github.com/riverqueue/river/internal/riverplugin"
 )
@@ -65,6 +66,10 @@ func ResumableStep(ctx context.Context, name string, opts *StepOpts, stepFunc fu
 	if !registerResumableStepName(state, name) {
 		return
 	}
+	if slices.Contains(state.PendingCursorSteps, name) {
+		state.Err = fmt.Errorf("river: resumable cursor step %q requires a cursor step", name)
+		return
+	}
 
 	if !state.ResumeMatched {
 		if name == state.ResumeStep {
@@ -96,6 +101,8 @@ func ResumableStep(ctx context.Context, name string, opts *StepOpts, stepFunc fu
 // cursor value from an earlier failed attempt, if one was recorded with
 // ResumableSetCursor. If no step has completed yet, the retry starts at the
 // beginning and supplies the saved cursor when it reaches its named step.
+// A cursor-only checkpoint must be reached through ResumableStepCursor before
+// the attempt can complete or another step can persist a transactional checkpoint.
 // Step names must be unique across all ResumableStep and ResumableStepCursor
 // calls in the same Worker execution.
 // Steps cannot be nested inside other step callbacks.
@@ -154,6 +161,8 @@ func ResumableStepCursor[TCursor any](ctx context.Context, name string, opts *St
 		state.StepActive = false
 		state.StepName = ""
 	}()
+
+	state.PendingCursorSteps = slices.DeleteFunc(state.PendingCursorSteps, func(pending string) bool { return pending == name })
 
 	if err := stepFunc(ctx, cursor); err != nil {
 		state.Err = err

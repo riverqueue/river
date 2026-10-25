@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"maps"
 
 	"github.com/riverqueue/river/internal/execution"
@@ -25,6 +26,8 @@ import (
 //
 // Must be called from within a ResumableStep or ResumableStepCursor callback.
 // The current step name to persist is read from context.
+// On a cursor-only retry, checkpointing another step returns an error until
+// the saved cursor step is reached.
 //
 // Commit tx before the step callback returns successfully, and return any
 // transaction or commit error from that callback. A successful callback marks
@@ -47,6 +50,8 @@ func ResumableSetStepTx[TDriver riverdriver.Driver[TTx], TTx any, TArgs JobArgs]
 //
 // Must be called from within a ResumableStepCursor callback. The current step
 // name to persist is read from context.
+// On a cursor-only retry, checkpointing another step returns an error until
+// the saved cursor step is reached.
 //
 // Commit tx before the step callback returns successfully, and return any
 // transaction or commit error from that callback. A successful callback marks
@@ -71,6 +76,10 @@ func resumableSetStepTx[TTx any, TArgs JobArgs](ctx context.Context, tx TTx, job
 	}
 	if state.StepName == "" {
 		return nil, errors.New("not inside a resumable step; must be called from within ResumableStep or ResumableStepCursor")
+	}
+
+	if len(state.PendingCursorSteps) > 0 {
+		return nil, fmt.Errorf("river: resumable checkpoint cannot precede saved cursor step %q", state.PendingCursorSteps[0])
 	}
 
 	step := state.StepName

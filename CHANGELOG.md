@@ -9,11 +9,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Breaking:** Resumable steps can no longer be nested. Calls fail before running child callbacks, preventing unreachable resume points and rolled-back parent checkpoints from being saved again. [PR #1534](https://github.com/riverqueue/river/pull/1534).
 - Job deletion through `Client.JobDelete`, `Client.JobDeleteMany`, their `Tx` variants, and the job cleaner now goes through optional pilot hooks, so a pilot can take part in deletes as it already can in cancels and retries. Behavior with the standard pilot is unchanged. [PR #1500](https://github.com/riverqueue/river/pull/1500).
 
 ### Fixed
 
-- Reject nested resumable steps before running child callbacks, preventing unreachable resume points and rolled-back parent checkpoints from being saved again. [PR #1534](https://github.com/riverqueue/river/pull/1534).
+- Fail retries that omit a saved cursor-only step, while preserving their checkpoints for recovery. Jobs with an existing step marker retain their behavior, including legacy stale cursor entries. [PR #1534](https://github.com/riverqueue/river/pull/1534).
 
 - Fixed SQLite metadata updates recursively merging nested objects and deleting keys set to JSON null. Updates now replace whole top-level values, matching Postgres and preventing completed resumable cursor steps from running again on later retries. [PR #1533](https://github.com/riverqueue/river/pull/1533).
 

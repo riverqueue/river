@@ -51,6 +51,54 @@ RSpec.describe "resumable job execution" do
     River::Job.new(Struct.new(:driver).new(driver), row)
   end
 
+  fixtures = JSON.parse(File.read(File.expand_path("../../conformance/testdata/resumable_cursor_only.json", __dir__)))
+  fixtures.fetch("cases").each do |fixture|
+    it "matches cursor-only checkpoint fixture #{fixture.fetch("name")}" do
+      metadata = fixture.fetch("metadata")
+      job = build_job(row: build_row(metadata: metadata))
+      runs = []
+      failure = nil
+      begin
+        fixture.fetch("actions").each do |action|
+          name = action.fetch("name")
+          callback = proc do
+            runs << name
+            job.resumable_checkpoint if action.fetch("kind") == "checkpoint"
+            job.resumable_set_cursor(7) if action.fetch("set_cursor")
+            raise "step interrupted" if action.fetch("fail")
+          end
+          if action.fetch("kind") == "cursor"
+            job.resumable_step_cursor(name) do |cursor|
+              expect(cursor).to eq(metadata.fetch(River::RESUMABLE_CURSOR_METADATA_KEY)[name])
+              callback.call
+            end
+          else
+            job.resumable_step(name, &callback)
+          end
+        end
+        raise "worker interrupted" if fixture.fetch("worker_error")
+        job.__finish_resumable_work!
+      rescue => error
+        failure = error
+      end
+      if fixture.fetch("expected_error").empty?
+        expect(failure).to be_nil
+      else
+        expect(failure.message).to include(fixture.fetch("expected_error"))
+      end
+      job.__capture_resumable_metadata! if failure
+      expect(runs).to eq(fixture.fetch("expected_runs"))
+      expect(job.metadata_updates).to eq(fixture.fetch("expected_updates"))
+      if failure && job.metadata_updates.empty?
+        retry_job = build_job(row: build_row(metadata: metadata))
+        metadata.fetch(River::RESUMABLE_CURSOR_METADATA_KEY).each do |name, expected|
+          retry_job.resumable_step_cursor(name) { |cursor| expect(cursor).to eq(expected) }
+        end
+        expect { retry_job.__finish_resumable_work! }.not_to raise_error
+      end
+    end
+  end
+
   it "runs named steps in order and returns their values" do
     job = build_job
     calls = []

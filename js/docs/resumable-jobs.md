@@ -63,6 +63,14 @@ const workers = new Workers().add(exportRows, async ({ resumable }) => {
 });
 ```
 
+A saved cursor without a step marker keeps the existing replay behavior: the
+retry starts from the beginning and supplies the cursor at its named step.
+That step must still be reached through `stepWithCursor()`. If it is omitted,
+renamed, or replaced by `step()`, the attempt fails and retains its original
+checkpoint so restoring the step can recover. Transactional checkpoints in
+other steps must wait until the saved cursor step is reached. Existing step
+markers keep their current behavior, including legacy stale cursor entries.
+
 The cursor is any JSON value and is saved when the attempt ends. To save
 progress immediately, and atomically with the step's own writes, call
 `resumable.checkpoint({ cursor, tx })` inside the step with your database

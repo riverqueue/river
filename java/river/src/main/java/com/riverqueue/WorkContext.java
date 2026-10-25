@@ -4,6 +4,8 @@ import java.sql.Connection;
 import java.time.Duration;
 import java.util.HashSet;
 import java.util.Set;
+import java.util.SortedSet;
+import java.util.TreeSet;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.atomic.AtomicReference;
 import tools.jackson.databind.JsonNode;
@@ -25,6 +27,7 @@ public final class WorkContext<A> {
   private final Client client;
   private Workers runtime;
   final java.util.Map<Long, Peer> peers;
+  private final SortedSet<String> pendingCursorSteps = new TreeSet<>();
   private ObjectNode previousCursors;
   private String previousStep;
   private final Set<String> steps = new HashSet<>();
@@ -52,6 +55,8 @@ public final class WorkContext<A> {
     if (validate && cursors.isArray())
       throw new IllegalArgumentException("Invalid resumable cursor metadata");
     this.cursors = cursors.isObject() ? (ObjectNode) cursors.deepCopy() : Json.object();
+    // Step markers may accompany stale cursors written by older clients.
+    if (resumeMatched) this.cursors.propertyNames().forEach(pendingCursorSteps::add);
   }
 
   public A args() {
@@ -197,6 +202,15 @@ public final class WorkContext<A> {
     if (stepFailure != null) failure = stepFailure;
     if (failure == null && !resumeMatched)
       failure = new IllegalArgumentException("Saved resumable step was not found");
+    if (!pendingCursorSteps.isEmpty()) {
+      // Do not move the checkpoint past an unmatched cursor-only step.
+      return failure != null
+          ? failure
+          : new IllegalArgumentException(
+              "resumable cursor step "
+                  + Json.encode(pendingCursorSteps.first())
+                  + " not found in worker");
+    }
     if (failure != null && (completedStep != null || cursorsChanged))
       metadata.setAll(resumableMetadata(completedStep, cursors));
     if (failure == null || completedStep != null || cursorsChanged)
@@ -212,6 +226,10 @@ public final class WorkContext<A> {
     if (currentStep == null)
       throw new IllegalStateException("Checkpoint requires an active resumable step");
     if (job.state() != Job.State.RUNNING) throw new IllegalStateException("Job must be running");
+    if (!pendingCursorSteps.isEmpty())
+      throw new IllegalStateException(
+          "resumable checkpoint cannot precede saved cursor step "
+              + Json.encode(pendingCursorSteps.first()));
     // Only this step's progress belongs to the caller's transaction. Completion restores the
     // prior buffered progress if the checkpoint rolled back, without replacing a committed one.
     checkpointStep = currentStep;
@@ -312,6 +330,12 @@ public final class WorkContext<A> {
   private void executeStep(String name, boolean withCursor, CursorStep action) throws Exception {
     if (stepFailure != null) throw stepFailure;
     if (currentStep != null) throw new IllegalStateException("Resumable steps cannot be nested");
+    if (!withCursor && pendingCursorSteps.contains(name)) {
+      stepFailure =
+          new IllegalArgumentException(
+              "resumable cursor step " + Json.encode(name) + " requires a cursor step");
+      throw stepFailure;
+    }
     if (name.isEmpty() || !steps.add(name)) {
       stepFailure = new IllegalArgumentException("duplicate resumable step or empty name: " + name);
       throw stepFailure;
@@ -327,6 +351,7 @@ public final class WorkContext<A> {
     previousCursors = cursors.deepCopy();
     currentStep = name;
     try {
+      if (withCursor) pendingCursorSteps.remove(name);
       action.run(cursors.path(name));
       completedStep = name;
       cursors.remove(name);

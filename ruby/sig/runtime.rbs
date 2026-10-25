@@ -137,6 +137,7 @@ module River
     attr_accessor completed_step: String?
     attr_reader cursors: Hash[String, untyped]
     attr_accessor cursors_dirty: bool
+    attr_reader pending_cursor_steps: Array[String]
     attr_accessor resume_matched: bool
     attr_reader resume_step: String?
     attr_accessor step_name: String?

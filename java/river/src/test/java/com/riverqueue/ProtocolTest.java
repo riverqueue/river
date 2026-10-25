@@ -359,6 +359,75 @@ class ProtocolTest {
     return tests.stream();
   }
 
+  @TestFactory
+  Stream<DynamicTest> resumableCursorOnlyConformance() throws Exception {
+    var tests = new ArrayList<DynamicTest>();
+    for (var fixture : Conformance.fixture("resumable_cursor_only.json").required("cases")) {
+      tests.add(
+          DynamicTest.dynamicTest(
+              fixture.required("name").asString(),
+              () -> {
+                var metadata = fixture.required("metadata");
+                var work = context(42, metadata);
+                var runs = new ArrayList<String>();
+                Exception failure = null;
+                try {
+                  for (var action : fixture.required("actions")) {
+                    String name = action.required("name").asString();
+                    String kind = action.required("kind").asString();
+                    WorkContext.Step callback =
+                        () -> {
+                          runs.add(name);
+                          if (kind.equals("checkpoint")) work.checkpoint(null);
+                          if (action.required("set_cursor").asBoolean()) work.cursor(7);
+                          if (action.required("fail").asBoolean())
+                            throw new Exception("step interrupted");
+                        };
+                    if (kind.equals("cursor"))
+                      work.stepWithCursor(
+                          name,
+                          cursor -> {
+                            var expected =
+                                metadata.path(Protocol.METADATA_RESUMABLE_CURSOR).path(name);
+                            assertEquals(
+                                expected.isMissingNode() ? Json.tree(null) : expected,
+                                cursor.isMissingNode() ? Json.tree(null) : cursor);
+                            callback.run();
+                          });
+                    else work.step(name, callback);
+                  }
+                  if (fixture.required("worker_error").asBoolean())
+                    throw new Exception("worker interrupted");
+                } catch (Exception error) {
+                  failure = error;
+                }
+                failure = work.finish(failure);
+                String expectedError = fixture.required("expected_error").asString();
+                if (expectedError.isEmpty()) assertNull(failure);
+                else {
+                  assertNotNull(failure);
+                  assertTrue(failure.getMessage().contains(expectedError), failure.toString());
+                }
+                assertEquals(fixture.required("expected_runs"), Json.tree(runs));
+                assertEquals(fixture.required("expected_updates"), work.metadataUpdates());
+                if (!expectedError.isEmpty() && work.metadataUpdates().isEmpty()) {
+                  var retry = context(42, metadata);
+                  for (String name :
+                      metadata.required(Protocol.METADATA_RESUMABLE_CURSOR).propertyNames()) {
+                    retry.stepWithCursor(
+                        name,
+                        cursor ->
+                            assertEquals(
+                                metadata.path(Protocol.METADATA_RESUMABLE_CURSOR).path(name),
+                                cursor));
+                  }
+                  assertNull(retry.finish(null));
+                }
+              }));
+    }
+    return tests.stream();
+  }
+
   @Test
   void resumableFirstStepCursor() throws Exception {
     var context = context(42, Json.object());

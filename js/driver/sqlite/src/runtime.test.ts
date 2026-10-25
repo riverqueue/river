@@ -331,6 +331,62 @@ describe("SqliteDriver runtime", () => {
     }
   });
 
+  test("keeps an omitted cursor-only step recoverable", async () => {
+    const { database, driver } = await setup();
+    const definition = defineJob({ kind: "cursor_only_recovery" });
+    const queue = "cursor_only_recovery";
+    const received: unknown[] = [];
+    let restored = false;
+    const client = new Client(driver, {
+      completionBatchSize: 1,
+      leaderElectionDisabled: true,
+      queues: {
+        [queue]: {
+          maxWorkers: 1,
+          fetchCooldown: { milliseconds: 1 },
+          pollInterval: { milliseconds: 5 },
+        },
+      },
+      retryPolicy: (_job, now) => now.add({ hours: 1 }),
+      workers: new Workers().add(definition, async ({ resumable }) => {
+        if (restored)
+          await resumable.stepWithCursor("loop", async (cursor) => {
+            received.push(cursor);
+            database.exec("BEGIN IMMEDIATE");
+            try {
+              await resumable.checkpoint({ cursor: 1, tx: database });
+              database.exec("COMMIT");
+            } finally {
+              if (database.isTransaction) database.exec("ROLLBACK");
+            }
+          });
+        await resumable.step("later", () => undefined);
+      }),
+    });
+    const metadata = { "river:resumable_cursor": { loop: 0 } };
+    const inserted = await client.insert(definition, {}, { metadata, queue });
+    const runtime = await client.start();
+    try {
+      await expect
+        .poll(async () => (await client.jobs.get(inserted.job.id))?.state)
+        .toBe("retryable");
+      const failed = await client.jobs.get(inserted.job.id);
+      expect(failed?.metadata).toMatchObject(metadata);
+      expect(failed?.metadata["river:resumable_step"]).toBeUndefined();
+      expect(failed?.errors.at(-1)?.error).toContain(
+        'resumable cursor step "loop" not found'
+      );
+      restored = true;
+      await client.jobs.retry(inserted.job.id);
+      await expect
+        .poll(async () => (await client.jobs.get(inserted.job.id))?.state)
+        .toBe("completed");
+      expect(received).toEqual([0]);
+    } finally {
+      await runtime.stop();
+    }
+  });
+
   test("persists resumable checkpoints on failed SQLite attempts", async () => {
     const { driver } = await setup();
     const definition = defineJob({ kind: "sqlite_runtime_resumable_retry" });
