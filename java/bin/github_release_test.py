@@ -20,7 +20,12 @@ class GitHubReleaseTest(unittest.TestCase):
         self.temporary = tempfile.TemporaryDirectory()
         self.addCleanup(self.temporary.cleanup)
         self.root = Path(self.temporary.name)
-        self.version = "0.1.0-alpha.1"
+        self.prepare_version("99.88.77-alpha.4")
+        self.notes = self.root / "notes.md"
+        self.notes.write_text("Release notes")
+
+    def prepare_version(self, version):
+        self.version = version
         self.manifest = {
             "schema_version": 1,
             "version": self.version,
@@ -45,8 +50,6 @@ class GitHubReleaseTest(unittest.TestCase):
             }
             for name, data in self.manifest["files"].items()
         ]
-        self.notes = self.root / "notes.md"
-        self.notes.write_text("Release notes")
 
     def write_manifest(self):
         (self.root / "manifest.json").write_text(json.dumps(self.manifest))
@@ -121,30 +124,43 @@ class GitHubReleaseTest(unittest.TestCase):
             release.resolved_from_proxy(f"different.jar>river-release-check=\n", name)
         )
 
-    def test_upload_creates_prerelease_draft_for_annotated_tag(self):
-        before = {"draft": True, "assets": []}
-        after = {"draft": True, "assets": self.assets}
-        remote = [
-            {"object": {"type": "tag", "sha": "b" * 40}},
-            {"object": {"type": "commit", "sha": self.manifest["commit"]}},
-        ]
-        with (
-            patch.object(release, "git", side_effect=self.mock_git),
-            patch.object(release, "gh_json", side_effect=remote),
-            patch.object(release, "release_details", side_effect=[None, before, after]),
-            patch.object(release, "command") as command,
-            contextlib.redirect_stdout(io.StringIO()),
-        ):
-            release.upload(self.root, "riverqueue/river", self.notes)
-        create, upload = [call.args[0] for call in command.call_args_list]
-        self.assertEqual(
-            create[:4], ["gh", "release", "create", "java/v" + self.version]
-        )
-        for flag in ("--draft", "--verify-tag", "--prerelease", "--latest=false"):
-            self.assertIn(flag, create)
-        self.assertEqual(create[create.index("--notes-file") + 1], str(self.notes))
-        self.assertEqual(upload[:3], ["gh", "release", "upload"])
-        self.assertEqual(len(upload[6:]), 10)
+    def test_upload_creates_drafts_without_replacing_latest(self):
+        for version, prerelease in (("99.88.77-alpha.4", True), ("99.88.77", False)):
+            with self.subTest(version=version):
+                self.prepare_version(version)
+                before = {"draft": True, "assets": []}
+                after = {"draft": True, "assets": self.assets}
+                remote = [
+                    {"object": {"type": "tag", "sha": "b" * 40}},
+                    {"object": {"type": "commit", "sha": self.manifest["commit"]}},
+                ]
+                output = io.StringIO()
+                with (
+                    patch.object(release, "git", side_effect=self.mock_git),
+                    patch.object(release, "gh_json", side_effect=remote),
+                    patch.object(
+                        release, "release_details", side_effect=[None, before, after]
+                    ),
+                    patch.object(release, "command") as command,
+                    contextlib.redirect_stdout(output),
+                ):
+                    release.upload(self.root, "riverqueue/river", self.notes)
+                create, upload = [call.args[0] for call in command.call_args_list]
+                self.assertEqual(
+                    create[:4], ["gh", "release", "create", "java/v" + version]
+                )
+                for flag in ("--draft", "--verify-tag", "--latest=false"):
+                    self.assertIn(flag, create)
+                self.assertEqual("--prerelease" in create, prerelease)
+                self.assertEqual(
+                    create[create.index("--notes-file") + 1], str(self.notes)
+                )
+                self.assertEqual(upload[:3], ["gh", "release", "upload"])
+                self.assertEqual(len(upload[6:]), 10)
+                self.assertIn(
+                    f"gh release edit java/v{version} --repo riverqueue/river --draft=false --latest=false",
+                    output.getvalue(),
+                )
 
     def test_upload_resumes_matching_draft_and_never_clobbers(self):
         before = {"draft": True, "assets": self.assets[:2]}

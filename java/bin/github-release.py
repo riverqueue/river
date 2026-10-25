@@ -258,13 +258,14 @@ def upload(directory, repo, notes_file):
             repo,
             "--verify-tag",
             "--draft",
+            "--latest=false",
             "--title",
             tag,
             "--notes-file",
             str(notes_file),
         ]
         if "-" in manifest["version"]:
-            args += ["--prerelease", "--latest=false"]
+            args += ["--prerelease"]
         command(args)
         release = release_details(repo, tag)
     if not release["draft"]:
@@ -286,7 +287,9 @@ def upload(directory, repo, notes_file):
         )
     verify_assets(release_details(repo, tag)["assets"], manifest)
     print(f"All {len(manifest['files'])} assets verified on draft {tag}.")
-    print(f"Publish with: gh release edit {tag} --repo {repo} --draft=false")
+    print(
+        f"Publish with: gh release edit {tag} --repo {repo} --draft=false --latest=false"
+    )
 
 
 def validate_artifact(data, artifact, filename, version):

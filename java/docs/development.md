@@ -59,6 +59,7 @@ needed. Stop if a command fails. Versions omit `v`; tags use `java/vVERSION`.
     files = subprocess.check_output([
         "git", "grep", "-Il", "-F", old, "--", "java",
         ":!java/CHANGELOG.md", ":!java/VALIDATION.md",
+        ":!java/bin/github_release_test.py",
         ":!java/conformance/src/main/resources/manifest.json",
     ]).decode().splitlines()
     for name in files:
@@ -116,10 +117,10 @@ needed. Stop if a command fails. Versions omit `v`; tags use `java/vVERSION`.
     gh release view "java/v$VERSION" --repo riverqueue/river
     ```
 
-7. Publish the verified draft. Alpha, beta, and RC versions are marked as prereleases automatically:
+7. Publish the verified draft. Alpha, beta, and RC versions are marked as prereleases automatically. Keep `--latest=false` for every Java release, including stable versions, so the repository's Latest release remains the Go release:
 
     ```sh
-    gh release edit "java/v$VERSION" --repo riverqueue/river --draft=false
+    gh release edit "java/v$VERSION" --repo riverqueue/river --draft=false --latest=false
     ```
 
 8. Verify the public proxy, all asset checksums, fresh Maven dependency resolution, a compiled consumer, and the executable CLI. This also checks that Maven obtained River artifacts from the proxy rather than Central. If discovery has not caught up, wait a minute and retry:
