@@ -135,7 +135,10 @@ jobs:
       # The packed examples that need a database use its default schema.
       - run: node cli/dist/bin.js migrate-up --database-url "$DATABASE_URL"
 
-      - run: pnpm run package:check
+      # The packed CLI suite launches the installed executable with NODE_OPTIONS
+      # cleared, exercising its own Temporal setup on Node 24.
+      - name: Verify package archives and standalone CLI
+        run: pnpm run package:check
 
   examples:
     name: Examples

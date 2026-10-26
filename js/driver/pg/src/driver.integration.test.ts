@@ -63,7 +63,9 @@ function insertParams(
     metadata: {},
     priority: 1,
     queue: "default",
-    scheduledAt: Temporal.Now.instant(),
+    // The polyfill's clock can be fractionally ahead of Postgres. Default
+    // fixtures should already be due when a test immediately claims them.
+    scheduledAt: Temporal.Now.instant().subtract({ seconds: 1 }),
     state: "available",
     tags: [],
     uniqueKey: null,

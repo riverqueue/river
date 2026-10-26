@@ -6,10 +6,10 @@
   "sideEffects": [
     "./dist/index.js",
     "./dist/unstable-driver.js",
-    "./dist/internal/temporal.js",
+    "./dist/internal/runtime-check.js",
     "./src/index.ts",
     "./src/unstable-driver.ts",
-    "./src/internal/temporal.ts"
+    "./src/internal/runtime-check.ts"
   ],
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
@@ -79,9 +79,6 @@
     "access": "public",
     "provenance": true
   },
-  "dependencies": {
-    "@js-temporal/polyfill": "^0.5.1"
-  },
   "peerDependencies": {
     "@types/node": ">=24"
   },
@@ -93,6 +90,7 @@
   "devDependencies": {
     "@arethetypeswrong/cli": "^0.18.5",
     "@eslint/js": "^10.0.1",
+    "@js-temporal/polyfill": "^0.5.1",
     "@types/node": "^26.6.5",
     "@types/pg": "^8.23.1",
     "@vitest/coverage-v8": "^4.1.12",

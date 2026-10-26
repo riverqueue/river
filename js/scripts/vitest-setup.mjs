@@ -13,9 +13,8 @@ import {
 import fc from "fast-check";
 import { afterAll, afterEach, beforeAll } from "vitest";
 
-// Tests also import internal modules directly, bypassing the public entries
-// that initialize Temporal for applications.
-import "../src/internal/temporal.ts";
+// Vitest isolates each test file's globals from the process preload.
+import "./temporal-setup.mjs";
 
 // Property tests are deterministic by default. Set FAST_CHECK_SEED to an
 // integer to replay a reported failure or explore another region of the

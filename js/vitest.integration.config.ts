@@ -22,6 +22,12 @@ export default defineConfig({
     ],
   },
   test: {
+    // Vitest filters the parent's execArgv. Preload explicitly so River's
+    // worker threads inherit the same application-provided Temporal setup.
+    execArgv: [
+      "--import",
+      path.resolve(import.meta.dirname, "scripts/temporal-setup.mjs"),
+    ],
     // Every Postgres integration fixture owns the canonical River tables.
     // Keep files sequential so one fixture cannot truncate another's rows.
     fileParallelism: false,

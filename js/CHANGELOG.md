@@ -11,7 +11,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Add `@riverqueue/driver-knex` for inserting jobs on Postgres inside Knex transactions, including batches, unique jobs, and nested savepoints. Configure its `knexTransactionAdapter` on `PgDriver` to use native Knex transactions with `completeTx` in workers. [PR #1516](https://github.com/riverqueue/river/pull/1516).
 - Support native Prisma interactive transactions with `completeTx` in workers and `{ tx }` on Postgres client operations. Configure `prismaTransactionAdapter` from `@riverqueue/driver-prisma` on `PgDriver` to commit application writes and job completion together. [PR #1517](https://github.com/riverqueue/river/pull/1517).
-- Support Node.js 24 across all packages. River automatically installs a `Temporal` polyfill when the runtime has no native implementation, preserving native `Temporal` on Node.js 26.
+- Support Node.js 24 across all packages. On runtimes without native `Temporal`, preload an application-provided polyfill before importing River, including in worker threads. River validates runtime support on library import and never installs or replaces a global polyfill. The standalone `riverqueue` CLI supplies its own polyfill when needed. Node.js 26 uses native `Temporal`.
 
 ### Changed
 

@@ -9,10 +9,9 @@ the same jobs in the same database.
 
 - **Node.js 24 or newer.** River uses `Temporal.Instant` for
   timestamps and `bigint` for IDs, so no value read from the database is lost.
-  Importing River automatically installs
-  [`@js-temporal/polyfill`](https://github.com/js-temporal/temporal-polyfill)
-  globally when `Temporal` is absent, including in worker threads. Node.js 26
-  uses its native implementation. No extra imports or runtime flags are needed.
+  Node.js 26 provides native `Temporal`. On runtimes without it, including
+  Node.js 24, preload a polyfill as described below. River checks for Temporal
+  on import and never installs or replaces it.
 - **TypeScript 6.0 or newer**, if you use TypeScript. Install `@types/node`
   24 or newer (and `@types/pg` with `@riverqueue/driver-pg`) and list `"node"`
   in `compilerOptions.types`. JavaScript users need neither.
@@ -23,6 +22,54 @@ the same jobs in the same database.
 
 Keep every `@riverqueue/*` package on the same version as `riverqueue`; the
 packages declare that as an exact peer dependency.
+
+### Temporal on Node.js 24
+
+Install a Temporal polyfill of your choice. For example:
+
+```sh
+npm install @js-temporal/polyfill
+```
+
+Create `temporal-setup.mjs` in your application:
+
+```js
+if (globalThis.Temporal === undefined) {
+  const { Temporal } = await import("@js-temporal/polyfill");
+  Object.defineProperty(globalThis, "Temporal", {
+    configurable: true,
+    value: Temporal,
+    writable: true,
+  });
+}
+```
+
+Preload it before your application starts:
+
+```sh
+node --import ./temporal-setup.mjs app.mjs
+```
+
+Node also preloads this module in worker threads, including those started by
+`@riverqueue/worker-threads`. Setting a global only in your main application
+module does not initialize worker threads. A plain import of
+`@js-temporal/polyfill` does not install a global either.
+
+For package scripts, use an absolute path in `NODE_OPTIONS`:
+
+```sh
+NODE_OPTIONS="--import=/absolute/path/temporal-setup.mjs" npm start
+```
+
+The standalone `riverqueue` CLI supplies its own polyfill and needs no preload.
+Importing `@riverqueue/cli` programmatically uses the application's Temporal,
+just like the other library packages.
+
+Use the same global Temporal constructors throughout your application when
+passing values to River. Instances from another polyfill or a separate copy
+may fail River's `instanceof` checks. Choose the implementation before importing
+River and keep it in place for the lifetime of the process. Node.js 26 needs
+no polyfill or preload.
 
 ## Quickstart with Postgres
 

@@ -93,9 +93,9 @@ external service and exercises the complete runtime.
 
 ## Requirements
 
-Node.js 24 or newer. River automatically installs a global `Temporal`
-polyfill when the runtime has no native implementation; Node.js 26 uses
-native `Temporal`.
+Node.js 24 or newer with a global `Temporal` implementation. Node.js 26
+provides it natively; on Node.js 24, [preload a polyfill](../README.md#temporal-on-nodejs-24)
+before importing River, including in worker threads. River never installs one.
 
 Install `riverqueue` at exactly this package's version. It is a peer dependency,
 so npm rejects a mismatched pair instead of loading two copies.

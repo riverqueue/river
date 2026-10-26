@@ -15,14 +15,18 @@ describe("assertRuntimeSupport", () => {
     ).toBe("2026-08-30T18:00:00.123456Z");
   });
 
-  it("points runtimes without Temporal at the requirements", () => {
-    vi.stubGlobal("Temporal", undefined);
+  it.each([undefined, null, {}, { Instant: {} }])(
+    "points runtimes with missing or incomplete Temporal (%j) at the requirements",
+    (temporal) => {
+      vi.stubGlobal("Temporal", temporal);
 
-    expect(() => assertRuntimeSupport()).toThrow(ConfigurationError);
-    expect(() => assertRuntimeSupport()).toThrow(
-      /Temporal API.*river\/tree\/master\/js#requirements/u
-    );
-  });
+      expect(() => assertRuntimeSupport()).toThrow(ConfigurationError);
+      expect(() => assertRuntimeSupport()).toThrow(
+        /preload a Temporal polyfill before importing River.*river\/tree\/master\/js#temporal-on-nodejs-24/u
+      );
+      expect(Reflect.get(globalThis, "Temporal")).toBe(temporal);
+    }
+  );
 
   it("rejects Node versions older than 24", () => {
     vi.stubGlobal("process", {

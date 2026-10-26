@@ -1,16 +1,16 @@
-import "./internal/temporal.js";
-
 import { ConfigurationError } from "./errors.js";
 
 const REQUIREMENTS_URL =
   "https://github.com/riverqueue/river/tree/master/js#requirements";
+const TEMPORAL_SETUP_URL =
+  "https://github.com/riverqueue/river/tree/master/js#temporal-on-nodejs-24";
 
 /**
  * Verify the runtime features River relies on before database work begins.
  *
- * River provides a Temporal polyfill when the runtime has no native
- * implementation. This check gives unsupported runtimes a useful failure
- * instead of a later `ReferenceError` or a lossy timestamp fallback.
+ * Runtimes without native Temporal must preload an application-provided
+ * polyfill before importing River, including in worker threads. River checks
+ * these requirements on import and when constructing a client.
  */
 export function assertRuntimeSupport(): void {
   const major = Number.parseInt(process.versions.node.split(".")[0] ?? "", 10);
@@ -29,17 +29,18 @@ export function assertRuntimeSupport(): void {
         };
         Now?: { instant?: unknown };
       }
+    | null
     | undefined;
   if (
-    temporal === undefined ||
+    temporal == null ||
     typeof temporal.Instant?.from !== "function" ||
     typeof temporal.Instant.fromEpochNanoseconds !== "function" ||
     typeof temporal.Now?.instant !== "function"
   ) {
     throw new ConfigurationError(
-      "River requires the Temporal API; keep the native implementation " +
-        "or the polyfill installed by River available on globalThis " +
-        `(see ${REQUIREMENTS_URL})`
+      "River requires the Temporal API on globalThis; use a runtime with " +
+        "native Temporal or preload a Temporal polyfill before importing River " +
+        `(see ${TEMPORAL_SETUP_URL})`
     );
   }
 

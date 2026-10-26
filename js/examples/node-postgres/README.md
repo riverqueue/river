@@ -1,5 +1,9 @@
 # River TypeScript Example: node-postgres
 
+On Node.js 24, [set up Temporal](../../README.md#temporal-on-nodejs-24) and
+set `NODE_OPTIONS` to preload it before running the commands below. Node.js 26
+provides Temporal natively.
+
 A minimal example demonstrating how to use the [River](https://github.com/riverqueue/river/tree/master/js) TypeScript client with `node-postgres` (`pg`) to insert background jobs into Postgres.
 
 The example defines typed jobs and shows single insertion, scheduling, batch

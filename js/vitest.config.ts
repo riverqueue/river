@@ -45,6 +45,12 @@ export default defineConfig({
       // Runs with `node --test` against packed tarballs in package:check.
       "scripts/packed-tests/**",
     ],
+    // Vitest filters the parent's execArgv. Preload explicitly so River's
+    // worker threads inherit the same application-provided Temporal setup.
+    execArgv: [
+      "--import",
+      path.resolve(import.meta.dirname, "scripts/temporal-setup.mjs"),
+    ],
     setupFiles: ["./scripts/vitest-setup.mjs"],
   },
 });

@@ -49,6 +49,7 @@
     "provenance": true
   },
   "dependencies": {
+    "@js-temporal/polyfill": "^0.5.1",
     "@riverqueue/driver-pg": "workspace:0.2.0",
     "@riverqueue/migrate": "workspace:0.2.0",
     "pg": "^8.23.1",
