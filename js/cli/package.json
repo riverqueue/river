@@ -51,7 +51,7 @@
   "dependencies": {
     "@riverqueue/driver-pg": "workspace:0.2.0",
     "@riverqueue/migrate": "workspace:0.2.0",
-    "pg": "^8.22.0",
+    "pg": "^8.23.1",
     "riverqueue": "workspace:0.2.0"
   },
   "peerDependencies": {
@@ -71,7 +71,7 @@
     }
   },
   "devDependencies": {
-    "@types/node": "^26.1.1",
+    "@types/node": "^26.6.5",
     "@types/pg": "^8.23.1",
     "typescript": "^6.0.3"
   },
