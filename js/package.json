@@ -94,7 +94,7 @@
     "@arethetypeswrong/cli": "^0.18.5",
     "@eslint/js": "^10.0.1",
     "@types/node": "^26.1.1",
-    "@types/pg": "^8.20.0",
+    "@types/pg": "^8.23.1",
     "@vitest/coverage-v8": "^4.1.11",
     "eslint": "^10.8.0",
     "eslint-config-prettier": "^10.1.8",

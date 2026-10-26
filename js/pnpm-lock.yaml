@@ -29,8 +29,8 @@ importers:
         specifier: ^26.1.1
         version: 26.1.1
       '@types/pg':
-        specifier: ^8.20.0
-        version: 8.20.0
+        specifier: ^8.23.1
+        version: 8.23.1
       '@vitest/coverage-v8':
         specifier: ^4.1.11
         version: 4.1.11(vitest@4.1.11)
@@ -108,8 +108,8 @@ importers:
         specifier: ^26.1.1
         version: 26.1.1
       '@types/pg':
-        specifier: ^8.20.0
-        version: 8.20.0
+        specifier: ^8.23.1
+        version: 8.23.1
       typescript:
         specifier: ^6.0.3
         version: 6.0.3
@@ -136,8 +136,8 @@ importers:
         version: 3.0.4
     devDependencies:
       '@types/pg':
-        specifier: ^8.20.0
-        version: 8.20.0
+        specifier: ^8.23.1
+        version: 8.23.1
       pg:
         specifier: ^8.22.0
         version: 8.22.0
@@ -241,8 +241,8 @@ importers:
         specifier: ^26.1.1
         version: 26.1.1
       '@types/pg':
-        specifier: ^8.20.0
-        version: 8.20.0
+        specifier: ^8.23.1
+        version: 8.23.1
       typescript:
         specifier: ^6.0.3
         version: 6.0.3
@@ -266,8 +266,8 @@ importers:
         specifier: ^26.1.1
         version: 26.1.1
       '@types/pg':
-        specifier: ^8.11.0
-        version: 8.20.0
+        specifier: ^8.23.1
+        version: 8.23.1
       typescript:
         specifier: ^6.0.3
         version: 6.0.3
@@ -294,8 +294,8 @@ importers:
         specifier: ^26.1.1
         version: 26.1.1
       '@types/pg':
-        specifier: ^8.20.0
-        version: 8.20.0
+        specifier: ^8.23.1
+        version: 8.23.1
       typescript:
         specifier: ^6.0.3
         version: 6.0.3
@@ -328,8 +328,8 @@ importers:
         specifier: ^26.1.1
         version: 26.1.1
       '@types/pg':
-        specifier: ^8.20.0
-        version: 8.20.0
+        specifier: ^8.23.1
+        version: 8.23.1
       prisma:
         specifier: 7.9.1
         version: 7.9.1(@types/node@26.1.1)(@types/react@19.2.18)(magicast@0.5.5)(react-dom@19.2.8(react@19.2.8))(react@19.2.8)(typescript@6.0.3)
@@ -1249,8 +1249,8 @@ packages:
   '@types/node@26.6.5':
     resolution: {integrity: sha512-uMzsv9stDdofIZBx4UGh4Z9ZgXnGC9seRDscilBcTHAeOFk67MZg/k9bWVfO+bk4qZmG+l52hRnLwUiH2LnJTg==}
 
-  '@types/pg@8.20.0':
-    resolution: {integrity: sha512-bEPFOaMAHTEP1EzpvHTbmwR8UsFyHSKsRisLIHVMXnpNefSbGA1bD6CVy+qKjGSqmZqNqBDV2azOBo8TgkcVow==}
+  '@types/pg@8.23.1':
+    resolution: {integrity: sha512-fKVHpikPdg4GKks3JuLEhvwSyvwzF23hnabPy6DD8ljVbC7+6J5dQzdv4arV6jqq57djnMgs1HKBxX4P8aBI3A==}
 
   '@types/react@19.2.18':
     resolution: {integrity: sha512-AnzbBERsrLKtk2XSfTbYRLjQPdy116Sty4q+T+Bp3IC4l6jNBvreVPAHmpq9qhXQM7CXZPjLVmGMw9sy+hxQ3w==}
@@ -3563,7 +3563,7 @@ snapshots:
   '@prisma/adapter-pg@7.9.1':
     dependencies:
       '@prisma/driver-adapter-utils': 7.9.1
-      '@types/pg': 8.20.0
+      '@types/pg': 8.23.1
       pg: 8.22.0
       postgres-array: 3.0.4
     transitivePeerDependencies:
@@ -3914,7 +3914,7 @@ snapshots:
     dependencies:
       undici-types: 8.9.0
 
-  '@types/pg@8.20.0':
+  '@types/pg@8.23.1':
     dependencies:
       '@types/node': 26.1.1
       pg-protocol: 1.13.0
