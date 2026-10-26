@@ -57,7 +57,7 @@
   },
   "devDependencies": {
     "@types/pg": "^8.23.1",
-    "pg": "^8.22.0",
+    "pg": "^8.23.1",
     "riverqueue": "workspace:0.2.0",
     "typescript": "^6.0.3"
   },

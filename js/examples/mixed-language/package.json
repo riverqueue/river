@@ -12,12 +12,12 @@
   },
   "dependencies": {
     "@riverqueue/driver-pg": "workspace:*",
-    "pg": "^8.22.0",
+    "pg": "^8.23.1",
     "riverqueue": "workspace:*",
-    "zod": "^4.6.5"
+    "zod": "^4.6.7"
   },
   "devDependencies": {
-    "@types/node": "^26.1.1",
+    "@types/node": "^26.6.5",
     "@types/pg": "^8.23.1",
     "typescript": "^6.0.3"
   }
