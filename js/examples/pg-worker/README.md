@@ -1,5 +1,9 @@
 # Postgres worker example
 
+On Node.js 24, [set up Temporal](../../README.md#temporal-on-nodejs-24) and
+set `NODE_OPTIONS` to preload it before running the commands below. Node.js 26
+provides Temporal natively.
+
 This example migrates a Postgres database, inserts a job, and works it in
 the same process: the handler snoozes once as if a payment provider were busy,
 then succeeds and inserts a follow-up job through the worker's own client. It

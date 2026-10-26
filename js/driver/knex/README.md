@@ -111,7 +111,8 @@ response when `queryContext?.river` is true. River needs the Postgres response's
 
 ## Requirements
 
-Knex 3.1 or newer within the 3.x line, `pg` 8.x, and Node.js 24 or newer. This
+Knex 3.1 or newer within the 3.x line, `pg` 8.x, and Node.js 24 or newer with
+a global `Temporal` implementation ([Node.js 24 setup](../../README.md#temporal-on-nodejs-24)). This
 adapter supports Knex's Postgres client (`client: "pg"` or `"postgresql"`).
 For SQLite, use `@riverqueue/driver-sqlite`.
 

@@ -14,10 +14,6 @@ overrides:
 importers:
 
   .:
-    dependencies:
-      '@js-temporal/polyfill':
-        specifier: ^0.5.1
-        version: 0.5.1
     devDependencies:
       '@arethetypeswrong/cli':
         specifier: ^0.18.5
@@ -25,6 +21,9 @@ importers:
       '@eslint/js':
         specifier: ^10.0.1
         version: 10.0.1(eslint@10.13.0(jiti@2.7.0))
+      '@js-temporal/polyfill':
+        specifier: ^0.5.1
+        version: 0.5.1
       '@types/node':
         specifier: ^26.6.5
         version: 26.6.5
@@ -91,6 +90,9 @@ importers:
 
   cli:
     dependencies:
+      '@js-temporal/polyfill':
+        specifier: ^0.5.1
+        version: 0.5.1
       '@riverqueue/driver-pg':
         specifier: workspace:0.2.0
         version: link:../driver/pg

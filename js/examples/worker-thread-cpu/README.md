@@ -1,5 +1,9 @@
 # CPU worker-thread example
 
+On Node.js 24, [set up Temporal](../../README.md#temporal-on-nodejs-24) and
+set `NODE_OPTIONS` to preload it before running the commands below. Node.js 26
+provides Temporal natively.
+
 This self-contained SQLite example routes a CPU-heavy prime calculation through
 the bounded `@riverqueue/worker-threads` executor. The main event loop remains
 available for River's database, completion, cancellation, and shutdown work.

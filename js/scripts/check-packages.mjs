@@ -14,7 +14,7 @@ import {
 import { tmpdir } from "node:os";
 import { dirname, join, posix, relative, resolve } from "node:path";
 import process from "node:process";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { promisify } from "node:util";
 
 import { build as buildWithVite } from "vite";
@@ -272,8 +272,19 @@ function inspectDependencies(packageSpec, packageJson) {
       `${label} makes ${name} an optional peer`
     );
   }
-  if (label === "riverqueue") return;
+  if (label === "riverqueue") {
+    assert.equal(
+      dependencies["@js-temporal/polyfill"],
+      undefined,
+      "riverqueue leaves Temporal installation to the application"
+    );
+    return;
+  }
   if (label === "@riverqueue/cli") {
+    assert.ok(
+      dependencies["@js-temporal/polyfill"],
+      "the CLI declares its own Temporal polyfill dependency"
+    );
     assert.equal(
       packageJson.dependencies?.riverqueue,
       packageJson.version,
@@ -359,10 +370,9 @@ async function verifyConsumers(archiveByPackageName) {
   const consumerDirectory = join(temporaryDirectory, "consumer");
   await mkdir(consumerDirectory);
   const dependencies = Object.fromEntries(
-    [...archiveByPackageName].map(([name, archivePath]) => [
-      name,
-      `file:${archivePath}`,
-    ])
+    [...archiveByPackageName]
+      .filter(([name]) => name !== "@riverqueue/cli")
+      .map(([name, archivePath]) => [name, `file:${archivePath}`])
   );
   await writeFile(
     join(consumerDirectory, "package.json"),
@@ -378,22 +388,19 @@ async function verifyConsumers(archiveByPackageName) {
       2
     )}\n`
   );
-  // Install without type packages first: JavaScript consumers must not need
-  // them, and the published metadata must not pull them in.
+  // Install libraries before the CLI, which owns a polyfill for its executable.
+  // Libraries must not install type packages or a Temporal implementation.
   await npmInstall(consumerDirectory);
-  for (const typesPackage of ["@types/node", "@types/pg"]) {
-    await assert.rejects(
-      stat(join(consumerDirectory, "node_modules", typesPackage)),
-      { code: "ENOENT" },
-      `packed packages do not install ${typesPackage}`
-    );
-  }
+  await assert.rejects(
+    stat(join(consumerDirectory, "node_modules", "@js-temporal/polyfill")),
+    { code: "ENOENT" },
+    "packed libraries do not install a Temporal polyfill"
+  );
 
   await writeFile(
     join(consumerDirectory, "import.mjs"),
     `
 import * as river from "riverqueue";
-import * as cli from "@riverqueue/cli";
 import * as knexDriver from "@riverqueue/driver-knex";
 import * as pg from "@riverqueue/driver-pg";
 import * as prisma from "@riverqueue/driver-prisma";
@@ -402,7 +409,7 @@ import * as migrate from "@riverqueue/migrate";
 import * as testing from "@riverqueue/test";
 import * as workerThreads from "@riverqueue/worker-threads";
 
-for (const packageNamespace of [river, cli, knexDriver, pg, prisma, sqlite, migrate, testing, workerThreads]) {
+for (const packageNamespace of [river, knexDriver, pg, prisma, sqlite, migrate, testing, workerThreads]) {
   if (Object.keys(packageNamespace).length === 0) throw new Error("empty package namespace");
 }
 
@@ -417,16 +424,40 @@ if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed) ||
 }
 `
   );
-  await run(process.execPath, [join(consumerDirectory, "import.mjs")]);
+  // Native runtimes must work with no polyfill package installed at all.
+  if (typeof globalThis.Temporal !== "undefined") {
+    await run(process.execPath, [join(consumerDirectory, "import.mjs")]);
+  }
+  // Add the CLI only after proving the library packages work without a
+  // polyfill dependency. Programmatic CLI imports are checked below too.
+  const packagePath = join(consumerDirectory, "package.json");
+  const packageJson = JSON.parse(await readFile(packagePath, "utf8"));
+  packageJson.dependencies["@riverqueue/cli"] =
+    `file:${archiveByPackageName.get("@riverqueue/cli")}`;
+  await writeFile(packagePath, `${JSON.stringify(packageJson, null, 2)}\n`);
+  await npmInstall(consumerDirectory);
+  for (const dependency of ["@types/node", "@types/pg"]) {
+    await assert.rejects(
+      stat(join(consumerDirectory, "node_modules", dependency)),
+      { code: "ENOENT" },
+      `packed packages do not install ${dependency}`
+    );
+  }
 
-  // A bundler must retain Temporal initialization even when most exports
-  // are unused. Exercise the published sideEffects metadata on Node 24 too.
+  // Library consumers still explicitly choose and preload their implementation.
+  await installTemporalSetup(consumerDirectory);
+  await run(process.execPath, [join(consumerDirectory, "import.mjs")], {
+    temporalDirectory: consumerDirectory,
+  });
+
+  // A bundler must retain runtime validation even when most exports are
+  // unused. Exercise the published sideEffects metadata on Node 24 too.
   await writeFile(
     join(consumerDirectory, "bundle-entry.mjs"),
     `import { cron } from "riverqueue";
 const start = Temporal.Instant.from("2026-10-11T12:34:56Z");
 if (cron("@every 1s").next(start).toString() !== "2026-10-11T12:34:57Z") {
-  throw new Error("bundled River did not initialize Temporal");
+  throw new Error("bundled River did not use the application Temporal");
 }
 `
   );
@@ -439,10 +470,25 @@ if (cron("@every 1s").next(start).toString() !== "2026-10-11T12:34:57Z") {
     configFile: false,
     logLevel: "error",
     root: consumerDirectory,
-    ssr: { noExternal: ["riverqueue", "@js-temporal/polyfill", "jsbi"] },
+    ssr: { noExternal: ["riverqueue"] },
   });
+  await run(
+    process.execPath,
+    [join(consumerDirectory, "bundled", "bundle-entry.js")],
+    { temporalDirectory: consumerDirectory }
+  );
   await run(process.execPath, [
-    join(consumerDirectory, "bundled", "bundle-entry.js"),
+    "--input-type=module",
+    "-e",
+    `
+import assert from "node:assert/strict";
+delete globalThis.Temporal;
+await assert.rejects(import(${JSON.stringify(pathToFileURL(join(consumerDirectory, "bundled", "bundle-entry.js")).href)}), {
+  name: "ConfigurationError",
+  code: "configuration",
+});
+assert.equal(globalThis.Temporal, undefined);
+`,
   ]);
 
   await writeFile(
@@ -475,11 +521,14 @@ import("riverqueue").then((imported) => {
 });
 `
   );
-  await run(process.execPath, [join(consumerDirectory, "require.cjs")]);
+  await run(process.execPath, [join(consumerDirectory, "require.cjs")], {
+    temporalDirectory: consumerDirectory,
+  });
 
   const { stdout: cliVersion } = await run(
     join(consumerDirectory, "node_modules", ".bin", "riverqueue"),
-    ["--version"]
+    ["--version"],
+    { env: { ...process.env, NODE_OPTIONS: "", NO_COLOR: "1" } }
   );
   assert.match(
     cliVersion,
@@ -524,7 +573,9 @@ driver.close();
 if (!completed) throw new Error("packed SQLite worker did not complete its job");
 `
   );
-  await run(process.execPath, [join(consumerDirectory, "sqlite-worker.mjs")]);
+  await run(process.execPath, [join(consumerDirectory, "sqlite-worker.mjs")], {
+    temporalDirectory: consumerDirectory,
+  });
 
   // Exercise real behavior through the installed tarballs with Node's own
   // test runner, so no transpiler or workspace alias can hide a packaging
@@ -537,7 +588,7 @@ if (!completed) throw new Error("packed SQLite worker did not complete its job")
   await run(
     process.execPath,
     ["--test", "--test-reporter=spec", "packed-tests/*.test.mjs"],
-    { cwd: consumerDirectory }
+    { cwd: consumerDirectory, temporalDirectory: consumerDirectory }
   );
 
   await writeFile(
@@ -884,7 +935,9 @@ main().catch((error: unknown) => {
       /require\("riverqueue"\)/u,
       `${compilerPackage} ${moduleMode} emits require() for riverqueue`
     );
-    await run(process.execPath, [join(outDir, "commonjs-consumer.cjs")]);
+    await run(process.execPath, [join(outDir, "commonjs-consumer.cjs")], {
+      temporalDirectory: consumerDirectory,
+    });
   }
 }
 
@@ -995,6 +1048,7 @@ async function verifyExamples(archiveByPackageName) {
     )}\n`
   );
   await npmInstall(examplesRoot);
+  await installTemporalSetup(examplesRoot);
 
   const runDatabaseExamples =
     typeof process.env.DATABASE_URL === "string" &&
@@ -1006,9 +1060,26 @@ async function verifyExamples(archiveByPackageName) {
     if (!spec.requiresDatabase || runDatabaseExamples) {
       await run("npm", ["run", "start", "--workspace", spec.name], {
         cwd: examplesRoot,
+        temporalDirectory: examplesRoot,
       });
     }
   }
+}
+
+async function installTemporalSetup(directory) {
+  const packagePath = join(directory, "package.json");
+  const packageJson = JSON.parse(await readFile(packagePath, "utf8"));
+  packageJson.dependencies = {
+    ...packageJson.dependencies,
+    "@js-temporal/polyfill":
+      rootPackageJson.devDependencies["@js-temporal/polyfill"],
+  };
+  await writeFile(packagePath, `${JSON.stringify(packageJson, null, 2)}\n`);
+  await npmInstall(directory);
+  await copyFile(
+    resolve(repositoryRoot, "scripts", "temporal-setup.mjs"),
+    join(directory, "temporal-setup.mjs")
+  );
 }
 
 async function listFiles(root) {
@@ -1053,12 +1124,26 @@ function npmInstall(cwd, args = [], options = {}) {
   );
 }
 
-async function run(command, args, { quiet = false, ...options } = {}) {
+async function run(
+  command,
+  args,
+  { quiet = false, temporalDirectory, ...options } = {}
+) {
   try {
     return await execFileAsync(command, args, {
       env: {
         ...process.env,
         NO_COLOR: "1",
+        ...(temporalDirectory === undefined
+          ? {}
+          : {
+              NODE_OPTIONS: [
+                process.env.NODE_OPTIONS,
+                `--import=${pathToFileURL(join(temporalDirectory, "temporal-setup.mjs")).href}`,
+              ]
+                .filter(Boolean)
+                .join(" "),
+            }),
         npm_config_cache: join(temporaryDirectory, "npm-cache"),
       },
       maxBuffer: 10 * 1024 * 1024,

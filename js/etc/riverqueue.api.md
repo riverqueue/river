@@ -12,9 +12,9 @@ declarations, and file layout are omitted.
 /**
  * Verify the runtime features River relies on before database work begins.
  *
- * River provides a Temporal polyfill when the runtime has no native
- * implementation. This check gives unsupported runtimes a useful failure
- * instead of a later `ReferenceError` or a lossy timestamp fallback.
+ * Runtimes without native Temporal must preload an application-provided
+ * polyfill before importing River, including in worker threads. River checks
+ * these requirements on import and when constructing a client.
  */
 export declare function assertRuntimeSupport(): void;
 ```

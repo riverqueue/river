@@ -2,7 +2,7 @@
 // The public declarations use the global `Temporal` types. The preserved
 // reference loads them for TypeScript consumers without a `lib` setting.
 
-import "./internal/temporal.js";
+import "./internal/runtime-check.js";
 
 /**
  * Explicitly unstable semantic SPI for first-party River backend packages.

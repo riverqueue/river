@@ -30,7 +30,60 @@ const SATELLITES = [
 ];
 
 describe("packed package graph", () => {
-  it("initializes Temporal from every entry point and preserves native constructors", async () => {
+  it("fails helpfully without installing Temporal from any entry point", async () => {
+    for (const name of [
+      "riverqueue",
+      "riverqueue/unstable-driver",
+      ...SATELLITES,
+    ]) {
+      await execFileAsync(
+        process.execPath,
+        [
+          "--input-type=module",
+          "-e",
+          `import assert from "node:assert/strict";
+delete globalThis.Temporal;
+await assert.rejects(import(${JSON.stringify(name)}), (error) => {
+  assert.equal(error.name, "ConfigurationError");
+  assert.equal(error.code, "configuration");
+  assert.match(error.message, /preload a Temporal polyfill before importing River/);
+  return true;
+});
+assert.equal(globalThis.Temporal, undefined);
+`,
+        ],
+        { cwd: consumerDirectory }
+      );
+    }
+  });
+
+  it("preserves an application-provided polyfill from every entry point", async () => {
+    for (const name of [
+      "riverqueue",
+      "riverqueue/unstable-driver",
+      ...SATELLITES,
+    ]) {
+      await execFileAsync(
+        process.execPath,
+        [
+          "--input-type=module",
+          "-e",
+          `import assert from "node:assert/strict";
+import { Temporal } from "@js-temporal/polyfill";
+Object.defineProperty(globalThis, "Temporal", { configurable: true, value: Temporal, writable: false });
+const descriptor = Object.getOwnPropertyDescriptor(globalThis, "Temporal");
+await import(${JSON.stringify(name)});
+assert.deepEqual(Object.getOwnPropertyDescriptor(globalThis, "Temporal"), descriptor);
+const { defineJob } = await import("riverqueue");
+defineJob({ kind: "application_polyfill", defaults: { scheduledAt: Temporal.Instant.from("2026-10-11T12:34:56Z") } });
+`,
+        ],
+        { cwd: consumerDirectory }
+      );
+    }
+  });
+
+  it("preserves the runtime's Temporal from every entry point", async () => {
     for (const name of [
       "riverqueue",
       "riverqueue/unstable-driver",
@@ -45,7 +98,7 @@ describe("packed package graph", () => {
 const original = globalThis.Temporal;
 await import(${JSON.stringify(name)});
 assert.equal(typeof Temporal, "object");
-if (original) assert.equal(Temporal, original);
+assert.equal(Temporal, original);
 const instant = Temporal.Instant.from("2026-10-11T12:34:56.123456789Z");
 assert.equal(instant.toString(), "2026-10-11T12:34:56.123456789Z");
 assert.equal(Temporal.Duration.from({ seconds: 2 }).total("milliseconds"), 2000);
