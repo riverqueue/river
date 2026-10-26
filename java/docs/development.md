@@ -135,14 +135,14 @@ needed. Stop if a command fails. Versions omit `v`; tags use `java/vVERSION`.
     gh release edit "java/v$VERSION" --repo riverqueue/river --draft=false --latest=false
     ```
 
-8. Verify the public proxy, all asset checksums, fresh Maven dependency resolution, a compiled consumer, and thin CLI SQLite migrations. This also checks that Maven obtained River artifacts from the proxy rather than Central. If discovery has not caught up, wait a minute and retry:
+8. Verify the public proxy, all asset checksums, fresh Maven dependency resolution, a compiled consumer, and thin CLI SQLite migrations. This also checks that Maven obtained River artifacts from the proxy rather than Central. The proxy imports on a schedule; requests do not trigger discovery. If the release is not visible yet, wait a minute and retry:
 
     ```sh
     python3 java/bin/github-release.py verify --version "$VERSION" \
       --directory java/target/github-release
     ```
 
-    To test a dev deployment, add `--repository https://mod-workers-dev.riverqueue.workers.dev/maven`. To verify an existing release without a local build, omit `--directory`.
+    To test a dev deployment, wait for its scheduled import, then add `--repository https://mod-workers-dev.riverqueue.workers.dev/maven`. For local initialization, follow the [proxy refresh instructions](https://github.com/riverqueue/gomodproxy-workers/blob/master/docs/maven.md#configuration-and-development). To verify an existing release without a local build, omit `--directory`.
 
 ## Optional Maven Central publication
 
