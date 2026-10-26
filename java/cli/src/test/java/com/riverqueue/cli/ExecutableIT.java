@@ -2,6 +2,7 @@ package com.riverqueue.cli;
 
 import static org.junit.jupiter.api.Assertions.*;
 
+import java.io.File;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
@@ -17,8 +18,10 @@ class ExecutableIT {
         new ArrayList<>(
             List.of(
                 Path.of(System.getProperty("java.home"), "bin", "java").toString(),
-                "-jar",
-                "target/river-cli-0.1.0-alpha.1-all.jar"));
+                "--enable-native-access=ALL-UNNAMED",
+                "-cp",
+                "target/river-cli.jar" + File.pathSeparator + "target/dependency/*",
+                "com.riverqueue.cli.MigrationCli"));
     command.addAll(List.of(args));
     var output = directory.resolve("process.log").toFile();
     var builder = new ProcessBuilder(command).redirectErrorStream(true).redirectOutput(output);
@@ -35,7 +38,7 @@ class ExecutableIT {
   }
 
   @Test
-  void bundledJarRunsWithoutExternalClasspath() throws Exception {
+  void thinJarRunsWithRuntimeDependencies() throws Exception {
     assertTrue(command("--version").contains("0.1.0-alpha.1"));
     assertTrue(command("migrate-up").contains("008 [up]"));
     assertTrue(command("migrate-list").contains("applied"));

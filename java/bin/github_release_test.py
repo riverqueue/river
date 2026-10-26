@@ -57,11 +57,12 @@ class GitHubReleaseTest(unittest.TestCase):
     def mock_git(self, *args):
         return "" if args[0] == "status" else self.manifest["commit"]
 
-    def test_artifacts_include_parent_and_all_classifiers_without_conformance(self):
+    def test_artifacts_include_parent_without_fat_jar_or_conformance(self):
         names = {name for _, name in release.artifact_files(self.version)}
-        self.assertEqual(len(names), 10)
+        self.assertEqual(len(names), 9)
         self.assertIn("river-java-" + self.version + ".pom", names)
-        self.assertIn("river-cli-" + self.version + "-all.jar", names)
+        self.assertIn("river-cli-" + self.version + ".jar", names)
+        self.assertNotIn("river-cli-" + self.version + "-all.jar", names)
         self.assertFalse(any("conformance" in name for name in names))
 
     def test_manifest_rejects_missing_extra_changed_and_symlinked_files(self):
@@ -156,7 +157,7 @@ class GitHubReleaseTest(unittest.TestCase):
                     create[create.index("--notes-file") + 1], str(self.notes)
                 )
                 self.assertEqual(upload[:3], ["gh", "release", "upload"])
-                self.assertEqual(len(upload[6:]), 10)
+                self.assertEqual(len(upload[6:]), 9)
                 self.assertIn(
                     f"gh release edit java/v{version} --repo riverqueue/river --draft=false --latest=false",
                     output.getvalue(),
@@ -177,7 +178,7 @@ class GitHubReleaseTest(unittest.TestCase):
         args = command.call_args.args[0]
         self.assertEqual(args[:3], ["gh", "release", "upload"])
         self.assertNotIn("--clobber", args)
-        self.assertEqual(len(args[6:]), 8)
+        self.assertEqual(len(args[6:]), 7)
 
     def test_upload_refuses_dirty_build_wrong_tag_and_published_release(self):
         self.manifest["clean"] = False

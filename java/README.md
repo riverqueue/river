@@ -89,24 +89,30 @@ for each operation. River never closes an application-owned data source. An
 
 ## Migration CLI
 
-The `river-cli` executable JAR includes Postgres and SQLite JDBC drivers and
-runs with Java 21 or newer. It needs no application classpath.
-Download `river-cli-VERSION-all.jar` from the [Java GitHub releases](https://github.com/riverqueue/river/releases?q=java%2Fv), or build it using the [development guide](docs/development.md#building-from-source). Set `RIVER_CLI` to the executable JAR, then run:
+The CLI runs with Java 21 or newer. [JBang](https://www.jbang.dev/documentation/jbang/latest/installation.html)
+resolves the thin CLI JAR and its dependencies and installs a reusable command:
 
 ```sh
-RIVER_CLI=/path/to/river-cli-0.1.0-alpha.1-all.jar
+jbang app install --name river-java --java 21 \
+  --java-options=--enable-native-access=ALL-UNNAMED \
+  --repos https://riverqueue.com/maven \
+  --main com.riverqueue.cli.MigrationCli \
+  com.riverqueue:river-cli:0.1.0-alpha.1
+export PATH="$HOME/.jbang/bin:$PATH"
 export DATABASE_URL=postgres://localhost/myapp
 # For SQLite: export DATABASE_URL=jdbc:sqlite:/absolute/path/myapp.db
 
-java -jar "$RIVER_CLI" --help
-java -jar "$RIVER_CLI" migrate-list
-java -jar "$RIVER_CLI" migrate-up --dry-run
-java -jar "$RIVER_CLI" migrate-up
+river-java --help
+river-java migrate-list
+river-java migrate-up --dry-run
+river-java migrate-up
 ```
 
-The Maven executable artifact is `com.riverqueue:river-cli` with version
-`0.1.0-alpha.1` and classifier `all`. Copy that single JAR into your deployment image to run
-migrations before starting workers. `--database-url URL` overrides `DATABASE_URL`.
+Dependencies, including both JDBC drivers, are downloaded once and cached. No
+`all` classifier is needed. For containers or installations with Maven and a JDK,
+use the [Maven-only instructions](#running-with-maven-and-java) below, or
+[build from source](docs/development.md#building-from-source).
+`--database-url URL` overrides `DATABASE_URL`.
 `--schema background_jobs` selects a Postgres schema; an actual migration up
 creates it if needed. Listing and dry runs do not create schemas or migration tables.
 
@@ -124,10 +130,10 @@ version `0` explicitly removes the entire migration line. A zero `--max-steps`
 uses the command's default: all pending up migrations or one down migration.
 
 ```sh
-java -jar "$RIVER_CLI" migrate-down --max-steps 2 --dry-run --show-sql
-java -jar "$RIVER_CLI" migrate-up --target-version 8
-java -jar "$RIVER_CLI" migrate-get --version 3 --up > river_3.up.sql
-java -jar "$RIVER_CLI" migrate-get --driver sqlite --all --up > river_sqlite.up.sql
+river-java migrate-down --max-steps 2 --dry-run --show-sql
+river-java migrate-up --target-version 8
+river-java migrate-get --version 3 --up > river_3.up.sql
+river-java migrate-get --driver sqlite --all --up > river_sqlite.up.sql
 ```
 
 SQL export defaults to Postgres without a database URL. Use `--driver sqlite`
@@ -146,6 +152,31 @@ System.out.println("Applied migrations: " + result.applied());
 var preview = new Migrator(database).migrate(Migrator.Direction.DOWN,
     Migrator.Options.defaults().maxSteps(2).dryRun(true));
 ```
+
+### Running with Maven and Java
+
+In an empty directory, create this consumer POM and download the runtime JARs:
+
+```sh
+cat > pom.xml <<'EOF'
+<project>
+  <modelVersion>4.0.0</modelVersion>
+  <groupId>local</groupId><artifactId>river-cli-install</artifactId><version>1</version>
+  <repositories><repository><id>river</id><url>https://riverqueue.com/maven</url></repository></repositories>
+  <dependencies><dependency><groupId>com.riverqueue</groupId><artifactId>river-cli</artifactId><version>0.1.0-alpha.1</version></dependency></dependencies>
+</project>
+EOF
+mvn --batch-mode --no-transfer-progress \
+  org.apache.maven.plugins:maven-dependency-plugin:3.11.0:copy-dependencies \
+  -DincludeScope=runtime
+java --enable-native-access=ALL-UNNAMED -cp 'target/dependency/*' \
+  com.riverqueue.cli.MigrationCli --help
+```
+
+Replace `--help` with any migration command above. Copy the entire
+`target/dependency` directory into a deployment image and adjust the classpath to
+its location. Running it needs only Java; Maven and network access are needed
+when downloading the dependencies.
 
 ## Transactional enqueueing
 

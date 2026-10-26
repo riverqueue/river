@@ -13,7 +13,17 @@ make generate/fixtures
 mvn --batch-mode --no-transfer-progress -f java/pom.xml install
 ```
 
-The executable migration CLI is built at `java/cli/target/river-cli-0.1.0-alpha.1-all.jar`. For a build without running tests, use `make build/java`.
+The CLI is built at `java/cli/target/river-cli.jar`, with its runtime dependencies
+in `java/cli/target/dependency/`. Run it with:
+
+```sh
+java --enable-native-access=ALL-UNNAMED \
+  -cp 'java/cli/target/river-cli.jar:java/cli/target/dependency/*' \
+  com.riverqueue.cli.MigrationCli --help
+```
+
+On Windows, use `;` instead of `:` between classpath entries. For a build without
+running tests, use `make build/java`.
 
 ## Release artifacts
 
@@ -26,12 +36,14 @@ account, OpenPGP key, or Cloudflare credential is needed.
 | --- | --- |
 | `river-java` | Parent POM |
 | `river` | POM, library JAR, sources JAR, Javadoc JAR |
-| `river-cli` | POM, thin JAR, executable `all` JAR, sources JAR, Javadoc JAR |
+| `river-cli` | POM, thin JAR, sources JAR, Javadoc JAR |
 
-Publish all ten files together. The parent POM is required by this release's
+Publish all nine files together. The parent POM is required by this release's
 library and CLI; the conformance adapter is excluded. The proxy generates
 checksums and preserves imported versions, so publish a new version to change
-bytes or attachments.
+bytes or attachments. New releases do not build or upload a shaded `-all.jar`.
+Use [JBang or Maven](../README.md#migration-cli) to resolve CLI dependencies;
+older published standalone JARs remain available.
 
 ## Releasing a new version
 
@@ -123,7 +135,7 @@ needed. Stop if a command fails. Versions omit `v`; tags use `java/vVERSION`.
     gh release edit "java/v$VERSION" --repo riverqueue/river --draft=false --latest=false
     ```
 
-8. Verify the public proxy, all asset checksums, fresh Maven dependency resolution, a compiled consumer, and the executable CLI. This also checks that Maven obtained River artifacts from the proxy rather than Central. If discovery has not caught up, wait a minute and retry:
+8. Verify the public proxy, all asset checksums, fresh Maven dependency resolution, a compiled consumer, and thin CLI SQLite migrations. This also checks that Maven obtained River artifacts from the proxy rather than Central. If discovery has not caught up, wait a minute and retry:
 
     ```sh
     python3 java/bin/github-release.py verify --version "$VERSION" \
@@ -302,11 +314,13 @@ the existing API documentation does not annotate every parameter and return valu
 Automatic external documentation links are disabled so Javadoc generation does
 not depend on another documentation site being reachable.
 
-Executable JARs merge dependency `META-INF/LICENSE` and `META-INF/NOTICE` text,
-retain service registrations, and generate their own executable manifests.
-Dependency module descriptors and signatures are excluded from these combined
-archives. Other overlapping classes or resources still produce warnings and fail
-the checked Make targets. Library and source JARs keep their normal packaging.
+The development-only conformance adapter JAR merges dependency
+`META-INF/LICENSE` and `META-INF/NOTICE` text, retains service registrations, and
+generates its own executable manifest.
+Dependency module descriptors and signatures are excluded from this combined
+archive. Other overlapping classes or resources still produce warnings and fail
+the checked Make targets. Library, CLI, and source JARs keep their normal
+packaging; CLI dependencies stay in separate JARs.
 
 ## Legacy cross-process harness
 

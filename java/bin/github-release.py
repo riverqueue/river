@@ -28,8 +28,6 @@ def artifact_files(version):
         suffixes = [".pom"]
         if artifact != "river-java":
             suffixes += [".jar", "-sources.jar", "-javadoc.jar"]
-        if artifact == "river-cli":
-            suffixes += ["-all.jar"]
         result.extend(
             (artifact, f"{artifact}-{version}{suffix}") for suffix in suffixes
         )
@@ -401,11 +399,11 @@ def verify(repository, version, directory=None):
             "-Dmaven.repo.local=" + str(work / "m2"),
         ]
         plugin = "org.apache.maven.plugins:maven-dependency-plugin:3.11.0"
-        for goals in (
-            [plugin + ":build-classpath", "-Dmdep.outputFile=classpath.txt"],
-            [plugin + ":get", f"-Dartifact={GROUP}:river-cli:{version}:jar:all"],
-        ):
-            command(args + goals, cwd=work, env=environment)
+        command(
+            args + [plugin + ":build-classpath", "-Dmdep.outputFile=classpath.txt"],
+            cwd=work,
+            env=environment,
+        )
         for artifact, filename in artifact_files(version):
             if "-sources.jar" in filename or "-javadoc.jar" in filename:
                 continue
@@ -429,14 +427,15 @@ def verify(repository, version, directory=None):
             cwd=work,
             env=environment,
         )
-        cli = (
-            work
-            / "m2/com/riverqueue/river-cli"
-            / version
-            / f"river-cli-{version}-all.jar"
-        )
+        cli = [
+            "java",
+            "--enable-native-access=ALL-UNNAMED",
+            "-cp",
+            classpath,
+            "com.riverqueue.cli.MigrationCli",
+        ]
         output = command(
-            ["java", "-jar", str(cli), "--version"],
+            cli + ["--version"],
             cwd=work,
             env=environment,
             capture_output=True,
@@ -444,8 +443,15 @@ def verify(repository, version, directory=None):
         ).stdout.strip()
         if output != "river " + version:
             raise ValueError(f"CLI version differs: {output}")
+        environment["DATABASE_URL"] = "jdbc:sqlite:" + str(work / "river.db")
+        for operation in (
+            ["migrate-up"],
+            ["migrate-list"],
+            ["migrate-down", "--target-version", "0"],
+        ):
+            command(cli + operation, cwd=work, env=environment)
         print(
-            f"Verified all 10 artifacts, fresh Maven resolution, consumer compilation, and {output}."
+            f"Verified all {len(downloaded)} artifacts, fresh Maven resolution, consumer compilation, and {output} with SQLite migrations."
         )
 
 
