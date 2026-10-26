@@ -1,6 +1,6 @@
 {
   "name": "@riverqueue/driver-sqlite",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "First-party node:sqlite backend for River.",
   "type": "module",
   "sideEffects": false,
@@ -46,7 +46,7 @@
   },
   "peerDependencies": {
     "@types/node": ">=24",
-    "riverqueue": "workspace:0.2.0"
+    "riverqueue": "workspace:0.3.0"
   },
   "peerDependenciesMeta": {
     "@types/node": {
@@ -54,9 +54,9 @@
     }
   },
   "devDependencies": {
-    "@riverqueue/migrate": "workspace:0.2.0",
+    "@riverqueue/migrate": "workspace:0.3.0",
     "@types/node": "^26.6.5",
-    "riverqueue": "workspace:0.2.0"
+    "riverqueue": "workspace:0.3.0"
   },
   "keywords": [
     "river",
