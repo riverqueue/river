@@ -1,11 +1,11 @@
 <project xmlns="http://maven.apache.org/POM/4.0.0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
   <modelVersion>4.0.0</modelVersion>
-  <parent><groupId>com.riverqueue</groupId><artifactId>river-java</artifactId><version>0.1.0</version><relativePath>../pom.xml</relativePath></parent>
-  <artifactId>river-cli</artifactId><version>0.1.0</version>
+  <parent><groupId>com.riverqueue</groupId><artifactId>river-java</artifactId><version>0.2.0</version><relativePath>../pom.xml</relativePath></parent>
+  <artifactId>river-cli</artifactId><version>0.2.0</version>
   <name>River Java migration CLI</name>
   <description>Executable database migration tool for River on Postgres and SQLite</description>
   <dependencies>
-    <dependency><groupId>com.riverqueue</groupId><artifactId>river</artifactId><version>0.1.0</version></dependency>
+    <dependency><groupId>com.riverqueue</groupId><artifactId>river</artifactId><version>0.2.0</version></dependency>
     <dependency><groupId>org.postgresql</groupId><artifactId>postgresql</artifactId></dependency>
     <dependency><groupId>org.xerial</groupId><artifactId>sqlite-jdbc</artifactId></dependency>
     <dependency><groupId>org.junit.jupiter</groupId><artifactId>junit-jupiter</artifactId><scope>test</scope></dependency>
