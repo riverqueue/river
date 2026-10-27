@@ -98,7 +98,6 @@ func run(root string) error {
 		{"river/target/river-" + project.Version + "-sources.jar", false},
 		{"cli/target/river-cli.jar", false},
 		{"cli/target/river-cli-sources.jar", false},
-		{"cli/target/river-cli-" + project.Version + "-all.jar", true},
 	} {
 		var resources string
 		if artifact.runtime {

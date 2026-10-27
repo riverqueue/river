@@ -193,8 +193,9 @@ test/java/sqlite: generate/fixtures verify/java-migrations
 	$(java_mvn) -f java/pom.xml verify -Driver.test.database=sqlite -DexcludedGroups=postgres
 
 .PHONY: test/java/tools
-test/java/tools: ## Test Java maintenance tools and Maven warning enforcement
+test/java/tools: ## Test Java maintenance tools, release tooling, and Maven warning enforcement
 	bash java/bin/check-maven-warnings_test.sh
+	python3 -m unittest discover -s java/bin -p '*_test.py'
 	go test ./java/bin/check-packages/*.go
 	go test ./java/bin/sync-migrations/*.go
 
@@ -277,6 +278,10 @@ doc/rust/docsrs: ## Build Rust API documentation as docs.rs does (nightly toolch
 check/java/package: ## Build and verify publishable Maven archives without publishing
 check/java/package: build/java
 	go run ./java/bin/check-packages/main.go
+
+.PHONY: check/java/github-release
+check/java/github-release: ## Build, test, and stage all Java GitHub release assets without publishing
+	python3 java/bin/github-release.py prepare
 
 .PHONY: check/java/release
 check/java/release: ## Build a signed Maven Central bundle without uploading (requires an OpenPGP key)
