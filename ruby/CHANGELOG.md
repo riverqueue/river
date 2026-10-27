@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.14.0] - 2026-10-26
+
 ### Added
 
 - Receive Postgres and SQLite notifications for insertions, queue controls, cancellation, and leadership handoffs, with reconnect recovery and a `poll_only` option. [PR #1496](https://github.com/riverqueue/river/pull/1496).
@@ -22,13 +24,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 
 - The scheduler no longer opens a savepoint for each due job to catch unique key conflicts. A pass that made more than 64 jobs available overflowed the Postgres subtransaction cache, which can slow queries across the server. The scheduler now finds conflicts with one statement on Postgres and checks before each write on SQLite. Conflicting jobs are still discarded with `unique_key_conflict: scheduler_discarded` metadata. On Postgres, the scheduler now waits for a due job that another transaction has locked, instead of skipping it. [PR #1544](https://github.com/riverqueue/river/pull/1544).
-
 - Default periodic jobs to their occurrence time, preserving constructor and argument-level schedules. [PR #1537](https://github.com/riverqueue/river/pull/1537).
-
 - Fail retries that omit a saved cursor-only step, while preserving their checkpoints for recovery. Jobs with an existing step marker retain their behavior, including legacy stale cursor entries. [PR #1534](https://github.com/riverqueue/river/pull/1534).
-
 - Support large SQLite metadata updates without reaching the expression-depth limit, preserving top-level replacement and JSON null values. [PR #1533](https://github.com/riverqueue/river/pull/1533).
-
 - A `River::Config` without an explicit `id:` generates its default client ID on first use in each process, so clients built before a fork (as with preloading Puma, Unicorn, or Pitchfork servers) no longer share one ID across forked workers. Explicit IDs are unchanged, and `Config#with` copies share the original's ID. [PR #1498](https://github.com/riverqueue/river/pull/1498).
 - Inserting a job stores its encoded args as given instead of decoding and re-encoding them in Ruby, which rewrote numbers like `1.10` as `1.1` and `1e3` as `1000.0` and rounded digits beyond `Float` precision. Postgres applies its usual `jsonb` normalization, and SQLite keeps the encoded bytes, matching River's Go drivers. Affects Active Record on Postgres and SQLite, and Sequel on SQLite. [PR #1503](https://github.com/riverqueue/river/pull/1503).
 - Wake workers when scheduled jobs become available or jobs are manually retried, including workers in other clients. [PR #1496](https://github.com/riverqueue/river/pull/1496).
@@ -158,7 +156,7 @@ Users should upgrade backends to River v0.12.0 before upgrading this library in 
 
   This updated implementation is significantly faster due to the removal of advisory locks in favor of an index-backed uniqueness system, while allowing some flexibility in which job states are considered. However, not all states may be removed from consideration when using the `by_state` option; pending, scheduled, available, and running states are required whenever customizing this list. [PR #32](https://github.com/riverqueue/riverqueue-ruby/pull/32).
 
-- Update REXML dependency. [PR #28](https://github.com/riverqueue/riverqueue-ruby/pull/36).
+- Update REXML dependency. [PR #36](https://github.com/riverqueue/riverqueue-ruby/pull/36).
 
 ## [0.7.0] - 2024-08-30
 
@@ -183,7 +181,7 @@ Users should upgrade backends to River v0.12.0 before upgrading this library in 
 ### Changed
 
 - Tag format is now checked on insert. Tags should be no more than 255 characters and match the regex `/\A[\w][\w\-]+[\w]\z/`. [PR #22](https://github.com/riverqueue/riverqueue-ruby/pull/22).
-- Returned jobs now have a `metadata` property. [PR #21](https://github.com/riverqueue/riverqueue-ruby/pull/22).
+- Returned jobs now have a `metadata` property. [PR #22](https://github.com/riverqueue/riverqueue-ruby/pull/22).
 
 ## [0.4.0] - 2024-04-28
 
