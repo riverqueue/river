@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.50.0] - 2026-10-26
+
 ### Changed
 
 - **Breaking:** Resumable steps can no longer be nested. Calls fail before running child callbacks, preventing unreachable resume points and rolled-back parent checkpoints from being saved again. [PR #1534](https://github.com/riverqueue/river/pull/1534).
@@ -16,11 +18,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Refresh a durable periodic job's saved row only after its next run time is loaded at startup or committed. When a startup write rolled back, keep-alive could revive an expired row, and the next leader enqueued every run since the row's old next run time. [PR #1540](https://github.com/riverqueue/river/pull/1540).
 - Fail retries that omit a saved cursor-only step, while preserving their checkpoints for recovery. Jobs with an existing step marker retain their behavior, including legacy stale cursor entries. [PR #1534](https://github.com/riverqueue/river/pull/1534).
-
 - Fixed SQLite metadata updates recursively merging nested objects and deleting keys set to JSON null. Updates now replace whole top-level values, matching Postgres and preventing completed resumable cursor steps from running again on later retries. [PR #1533](https://github.com/riverqueue/river/pull/1533).
-
-- Fixed resumable transactional checkpoints being saved again after rollback or a failed write, and first-step cursors being lost on error, snooze, or cooperative shutdown. After a successful checkpoint write, the caller's transaction owns that progress; rollback may replay earlier unpersisted steps. The Rust, JavaScript, and Java runtimes now share the applicable behavior, including preserving progress on snooze.
-
+- Fixed resumable transactional checkpoints being saved again after rollback or a failed write, and first-step cursors being lost on error, snooze, or cooperative shutdown. After a successful checkpoint write, the caller's transaction owns that progress; rollback may replay earlier unpersisted steps. The Rust, JavaScript, and Java runtimes now share the applicable behavior, including preserving progress on snooze. [PR #1521](https://github.com/riverqueue/river/pull/1521).
 - Fixed `AddWorkerSafely` leaving a worker's primary kind and earlier aliases registered when a later kind alias conflicts with an existing registration. Failed registrations now leave the worker registry unchanged. [PR #1440](https://github.com/riverqueue/river/pull/1440).
 - Fixed the notifier retrying without backoff and flooding logs when the context passed to `Client.Start` reaches its deadline. [PR #1495](https://github.com/riverqueue/river/pull/1495).
 - Fixed `JobSnooze` accepting negative durations despite documenting that they panic. [PR #1529](https://github.com/riverqueue/river/pull/1529).
