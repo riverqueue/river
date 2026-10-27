@@ -58,7 +58,7 @@
   "devDependencies": {
     "@riverqueue/driver-sqlite": "workspace:0.2.0",
     "@riverqueue/migrate": "workspace:0.2.0",
-    "@types/node": "^26.1.1",
+    "@types/node": "^26.6.5",
     "riverqueue": "workspace:0.2.0"
   },
   "keywords": [

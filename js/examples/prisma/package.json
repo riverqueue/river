@@ -13,18 +13,18 @@
     "start": "node dist/index.js"
   },
   "dependencies": {
-    "@prisma/adapter-pg": "7.9.1",
-    "@prisma/client": "7.9.1",
+    "@prisma/adapter-pg": "7.10.1",
+    "@prisma/client": "7.10.1",
     "@riverqueue/driver-pg": "workspace:*",
     "@riverqueue/driver-prisma": "workspace:*",
-    "pg": "^8.22.0",
+    "pg": "^8.23.1",
     "riverqueue": "workspace:*",
-    "zod": "^4.6.5"
+    "zod": "^4.6.7"
   },
   "devDependencies": {
-    "@types/node": "^26.1.1",
+    "@types/node": "^26.6.5",
     "@types/pg": "^8.23.1",
-    "prisma": "7.9.1",
-    "typescript": "^6.0.3"
+    "prisma": "7.10.1",
+    "typescript": "^7.0.2"
   }
 }
