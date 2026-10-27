@@ -4,6 +4,7 @@ import (
 	"context"
 	"sync/atomic"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/stretchr/testify/require"
@@ -18,6 +19,16 @@ import (
 	"github.com/riverqueue/river/rivershared/testfactory"
 	"github.com/riverqueue/river/rivertype"
 )
+
+type jobCleanerExecutorMock struct {
+	riverdriver.Executor
+
+	jobDeleteBeforeFunc func(context.Context, *riverdriver.JobDeleteBeforeParams) (int, error)
+}
+
+func (e *jobCleanerExecutorMock) JobDeleteBefore(ctx context.Context, params *riverdriver.JobDeleteBeforeParams) (int, error) {
+	return e.jobDeleteBeforeFunc(ctx, params)
+}
 
 type jobCleanerPilotSpy struct {
 	riverpilot.StandardPilot
@@ -278,16 +289,37 @@ func TestJobCleaner(t *testing.T) {
 	t.Run("CustomizableInterval", func(t *testing.T) {
 		t.Parallel()
 
-		cleaner, _ := setup(t)
-		cleaner.Config.Interval = 1 * time.Microsecond
+		// With a real microsecond ticker, the cleaner can fill the test signal
+		// buffer while the test goroutine is descheduled. Use fake time and an
+		// in-memory executor to check the interval deterministically.
+		synctest.Test(t, func(t *testing.T) {
+			var numCalls atomic.Int64
+			exec := &jobCleanerExecutorMock{
+				jobDeleteBeforeFunc: func(ctx context.Context, params *riverdriver.JobDeleteBeforeParams) (int, error) {
+					numCalls.Add(1)
+					return 0, nil
+				},
+			}
 
-		require.NoError(t, cleaner.Start(ctx))
+			const interval = time.Minute
+			cleaner := NewJobCleaner(riversharedtest.BaseServiceArchetype(t), &JobCleanerConfig{Interval: interval}, exec)
+			cleaner.StaggerStartupDisable(true)
+			t.Cleanup(cleaner.Stop)
 
-		// This should trigger ~immediately every time:
-		for i := range 5 {
-			t.Logf("Iteration %d", i)
-			cleaner.TestSignals.DeletedBatch.WaitOrTimeout()
-		}
+			require.NoError(t, cleaner.Start(ctx))
+			synctest.Wait()
+			require.Equal(t, int64(1), numCalls.Load()) // initial run
+
+			for i := range 5 {
+				time.Sleep(interval - time.Nanosecond)
+				synctest.Wait()
+				require.Equal(t, int64(i+1), numCalls.Load())
+
+				time.Sleep(time.Nanosecond)
+				synctest.Wait()
+				require.Equal(t, int64(i+2), numCalls.Load())
+			}
+		})
 	})
 
 	t.Run("StopsImmediately", func(t *testing.T) {
