@@ -1,6 +1,6 @@
 {
   "name": "@riverqueue/test",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "Typed test helpers for River jobs, workers, and clients.",
   "type": "module",
   "sideEffects": false,
@@ -44,10 +44,10 @@
     "provenance": true
   },
   "peerDependencies": {
-    "riverqueue": "workspace:0.2.0"
+    "riverqueue": "workspace:0.3.0"
   },
   "devDependencies": {
-    "riverqueue": "workspace:0.2.0"
+    "riverqueue": "workspace:0.3.0"
   },
   "keywords": [
     "river",

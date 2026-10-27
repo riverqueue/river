@@ -142,9 +142,14 @@ process.exitCode = await run(process.argv.slice(2), {
 
 ## Requirements
 
-Node.js 24 or newer. River automatically installs a global `Temporal`
-polyfill when the runtime has no native implementation; Node.js 26 uses
-native `Temporal`.
+Node.js 24 or newer. The `riverqueue` executable supplies its own Temporal
+polyfill when the global is absent and preserves native or application-provided
+Temporal. No preload is needed to run CLI commands.
+
+When importing `run` from `@riverqueue/cli` programmatically, the application
+must supply a global Temporal implementation, as with other River libraries.
+On Node.js 24, [preload a polyfill](../README.md#temporal-on-nodejs-24) before
+importing it. Programmatic imports never install a global.
 
 The CLI installs its own matching `riverqueue` and database packages.
 

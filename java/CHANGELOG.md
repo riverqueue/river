@@ -7,6 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-10-26
+
+### Changed
+
+- **Breaking:** Move runtime configuration to `Client.builder(database)` and startup to `Client.start()`, which returns an `AutoCloseable` `RunHandle` for `stop()`, `stopAndCancel()`, and runtime queue/periodic controls. `Workers` is now a handler registry supplied through `.workers(registry)`; `.worker(type, handler)` supports inline registration. Move subscriptions and event types to `Client`, allowing subscriptions before startup. A client allows one active run and can restart after shutdown completes. [PR #1555](https://github.com/riverqueue/river/pull/1555).
+
+## [0.1.0] - 2026-10-26
+
+### Changed
+
+- First non-prerelease release of River for Java.
+- Publish the parent POM, library, and CLI as complete GitHub release assets served anonymously through `https://riverqueue.com/maven`. Maven Central supplies third-party dependencies. [PR #1543](https://github.com/riverqueue/river/pull/1543).
+- **Breaking:** Replace the shaded CLI `-all.jar` with a thin JAR. Install `river-java` with JBang or use Maven to download the CLI and its runtime dependencies; both paths support Postgres and SQLite. Existing published alpha.1 standalone JARs remain available. See the [CLI installation instructions](https://github.com/riverqueue/river/blob/java/v0.1.0/java/README.md#migration-cli). [PR #1543](https://github.com/riverqueue/river/pull/1543).
+
+### Fixed
+
+- The thin CLI JAR now reports its release version and supports `java -jar` when the runtime JARs are in a sibling `dependency/` directory, as produced by a source build. [PR #1543](https://github.com/riverqueue/river/pull/1543).
+
 ## [0.1.0-alpha.1] - 2026-10-24
 
 ### Added

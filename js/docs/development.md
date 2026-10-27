@@ -9,8 +9,17 @@ which delegate to `pnpm -C js`.
 
 Use Node.js 24 or newer. The workspace's `.node-version` selects Node 26 for
 version managers such as fnm, nvm (`nvm use $(cat .node-version)`), and
-`actions/setup-node`. River installs a global Temporal polyfill when the
-runtime has no native implementation; the tests use the same initialization.
+`actions/setup-node`. River requires a global Temporal implementation. Test
+configurations explicitly preload `scripts/temporal-setup.mjs`, which installs the
+development polyfill when necessary in both the main process and worker
+threads. The polyfill is not a runtime dependency of the published library
+packages; the standalone CLI declares and initializes its own.
+For example commands on Node 24, preload it yourself:
+
+```sh
+export NODE_OPTIONS="--import=$(pwd)/scripts/temporal-setup.mjs"
+```
+
 Use the pnpm version pinned by `packageManager` in `package.json`:
 
     pnpm install
@@ -65,7 +74,9 @@ consumer with Node's built-in `node --test`, so plain JavaScript exercises the
 installed tarballs with no transpiler or workspace alias in between: SQLite and
 worker-thread jobs end to end with exact int64 args, one shared `riverqueue`
 instance and error class hierarchy across packages, `require(esm)`, subpath
-exports, the CLI, and the test helpers. Its Postgres tests run in a throwaway
+exports, the CLI, and the test helpers. CLI subprocesses clear `NODE_OPTIONS`
+to verify help, version, and SQLite migrations without an application preload.
+The same suite runs on Node 24 and Node 26 in CI. Its Postgres tests run in a throwaway
 schema when `DATABASE_URL` is set. Database-free examples also run in this
 gate. `package:examples` runs the same packed examples with Postgres when
 `DATABASE_URL` is set. Neither command publishes anything.

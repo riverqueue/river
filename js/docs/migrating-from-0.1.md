@@ -8,8 +8,9 @@ that still needs attention.
 ## Runtime requirements
 
 The package needs Node.js 24 or newer and ships as ESM; see
-[requirements](../README.md#requirements). River automatically installs a
-global `Temporal` polyfill when the runtime has no native implementation.
+[requirements](../README.md#requirements). On runtimes without native `Temporal`,
+[preload an application-provided polyfill](../README.md#temporal-on-nodejs-24)
+before importing River.
 
 ## Codemod
 

@@ -1,5 +1,9 @@
 # Hooks and metrics example
 
+On Node.js 24, [set up Temporal](../../README.md#temporal-on-nodejs-24) and
+set `NODE_OPTIONS` to preload it before running the commands below. Node.js 26
+provides Temporal natively.
+
 This SQLite example connects River's ordered hooks, Koa-style middleware, and
 after-commit events to a tiny in-memory metrics collector. A production service
 would replace the collector with its existing metrics or tracing SDK; River

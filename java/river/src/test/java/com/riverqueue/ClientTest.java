@@ -295,13 +295,13 @@ class ClientTest {
     var unknown = river.insert(peer, new Email("peer@example.com")).job();
     var worked = new CountDownLatch(1);
     try (var workers =
-        river
-            .workers()
+        river.toBuilder()
             .queue("default", 4)
             .leadership(false)
             .pollOnly(true)
             .fetchOnlyKnownKinds(true)
-            .add(EMAIL, context -> worked.countDown())
+            .worker(EMAIL, context -> worked.countDown())
+            .build()
             .start()) {
       river.insert(EMAIL, new Email("java@example.com"));
       assertTrue(worked.await(10, TimeUnit.SECONDS));
@@ -320,18 +320,18 @@ class ClientTest {
     var first = river.insert(EMAIL, new Email("first@example.com")).job();
     var second = river.insert(EMAIL, new Email("second@example.com")).job();
     try (var workers =
-        river
-            .workers()
+        river.toBuilder()
             .queue("default", 1)
             .leadership(false)
             .pollOnly(true)
-            .add(
+            .worker(
                 EMAIL,
                 context -> {
                   calls.incrementAndGet();
                   entered.countDown();
                   release.await();
                 })
+            .build()
             .start()) {
       assertTrue(entered.await(10, TimeUnit.SECONDS));
       var removal =
@@ -364,16 +364,15 @@ class ClientTest {
           return null;
         });
     var release = new CountDownLatch(1);
-    var done = new CompletableFuture<Workers.Event>();
+    var done = new CompletableFuture<Client.Event>();
     var failed = new CompletableFuture<Throwable>();
     try (var workers =
-        river
-            .workers()
+        river.toBuilder()
             .queue("default", 1)
             .leadership(false)
             .pollInterval(Duration.ofMillis(10))
             .errorHandler(failed::complete)
-            .add(
+            .worker(
                 EMAIL,
                 context -> {
                   release.await();
@@ -391,11 +390,14 @@ class ClientTest {
                         return context.complete(c);
                       });
                 })
+            .build()
             .start()) {
-      workers.subscribe(
-          event -> {
-            if (event.kind() == Workers.EventKind.JOB_COMPLETED) done.complete(event);
-          });
+      workers
+          .client()
+          .subscribe(
+              event -> {
+                if (event.kind() == Client.EventKind.JOB_COMPLETED) done.complete(event);
+              });
       var inserted = river.insert(EMAIL, new Email("one@example.com"));
       release.countDown();
       var completed = done.get(10, TimeUnit.SECONDS);
@@ -530,12 +532,12 @@ class ClientTest {
         new Client(
             TestDatabase.sqlite(directory.resolve("river.db")), Clock.fixed(NOW, ZoneOffset.UTC));
     try (var workers =
-            river
-                .workers()
+            river.toBuilder()
                 .queue("default", 1)
                 .leadership(false)
                 .pollOnly(true)
-                .add(EMAIL, ignored -> {})
+                .worker(EMAIL, ignored -> {})
+                .build()
                 .start();
         var connection = river.database().connection()) {
       connection.setAutoCommit(false);
@@ -560,15 +562,14 @@ class ClientTest {
   @SuppressWarnings("try") // Resources intentionally scope background activity.
   void committedCompletionWinsOverSubsequentHandlerFailure() throws Exception {
     var river = database();
-    var event = new CompletableFuture<Workers.Event>();
+    var event = new CompletableFuture<Client.Event>();
     var failedEvents = new java.util.concurrent.atomic.AtomicInteger();
     try (var workers =
-            river
-                .workers()
+            river.toBuilder()
                 .queue("default", 1)
                 .leadership(false)
                 .pollOnly(true)
-                .add(
+                .worker(
                     EMAIL,
                     context -> {
                       Job<Email> completed = context.transaction(context::complete);
@@ -576,11 +577,15 @@ class ClientTest {
                       assertEquals(Job.State.COMPLETED, completed.state());
                       throw new IllegalStateException("failure after committed completion");
                     })
+                .build()
                 .start();
-        var subscription = workers.subscribe(event::complete, Workers.EventKind.JOB_COMPLETED);
+        var subscription =
+            workers.client().subscribe(event::complete, Client.EventKind.JOB_COMPLETED);
         var failures =
-            workers.subscribe(
-                ignored -> failedEvents.incrementAndGet(), Workers.EventKind.JOB_FAILED)) {
+            workers
+                .client()
+                .subscribe(
+                    ignored -> failedEvents.incrementAndGet(), Client.EventKind.JOB_FAILED)) {
       var inserted = river.insert(EMAIL, new Email("one@example.com"));
       assertEquals(inserted.job().id(), event.get(10, TimeUnit.SECONDS).job().id());
     }
@@ -592,10 +597,9 @@ class ClientTest {
   void retryPolicyReceivesFailedAttemptSnapshot() throws Exception {
     var river = database();
     var observed = new CompletableFuture<Job<?>>();
-    var failed = new CompletableFuture<Workers.Event>();
+    var failed = new CompletableFuture<Client.Event>();
     try (var workers =
-            river
-                .workers()
+            river.toBuilder()
                 .queue("default", 1)
                 .leadership(false)
                 .pollOnly(true)
@@ -604,13 +608,15 @@ class ClientTest {
                       observed.complete(job);
                       return Duration.ofDays(1);
                     })
-                .add(
+                .worker(
                     EMAIL,
                     ignored -> {
                       throw new IllegalStateException("retry me");
                     })
+                .build()
                 .start();
-        var subscription = workers.subscribe(failed::complete, Workers.EventKind.JOB_FAILED)) {
+        var subscription =
+            workers.client().subscribe(failed::complete, Client.EventKind.JOB_FAILED)) {
       var inserted =
           river.insert(
               EMAIL,
@@ -633,18 +639,18 @@ class ClientTest {
     var type = JobType.of("k".repeat(127), Email.class);
     String oversized = "k".repeat(128);
     assertThrows(IllegalArgumentException.class, () -> JobType.of(oversized, Email.class));
-    var completed = new CompletableFuture<Workers.Event>();
+    var completed = new CompletableFuture<Client.Event>();
     var worked = new CompletableFuture<Job<Email>>();
     try (var workers =
-            client
-                .workers()
+            client.toBuilder()
                 .queue("default", 1)
                 .leadership(false)
                 .pollOnly(true)
-                .add(type, context -> worked.complete(context.job()))
+                .worker(type, context -> worked.complete(context.job()))
+                .build()
                 .start();
         var subscription =
-            workers.subscribe(completed::complete, Workers.EventKind.JOB_COMPLETED)) {
+            workers.client().subscribe(completed::complete, Client.EventKind.JOB_COMPLETED)) {
       var args = new Email("long-kind@example.com");
       var inserted = client.insert(type, args).job();
       assertEquals(type.kind(), inserted.kind());
@@ -696,19 +702,19 @@ class ClientTest {
     var entered = new CompletableFuture<WorkContext<Email>>();
     var release = new CountDownLatch(1);
     var workers =
-        river
-            .workers()
+        river.toBuilder()
             .queue("default", 1)
             .leadership(false)
             .pollOnly(true)
             .stopTimeout(Duration.ofMillis(100))
             .stuckThreshold(Duration.ofMinutes(1))
-            .add(
+            .worker(
                 EMAIL,
                 context -> {
                   entered.complete(context);
                   release.await();
                 })
+            .build()
             .start();
     try {
       river.insert(EMAIL, new Email("one@example.com"));

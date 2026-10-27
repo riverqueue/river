@@ -1,6 +1,6 @@
 <project xmlns="http://maven.apache.org/POM/4.0.0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
   <modelVersion>4.0.0</modelVersion>
-  <parent><groupId>com.riverqueue</groupId><artifactId>river-java</artifactId><version>0.1.0-alpha.1</version></parent>
+  <parent><groupId>com.riverqueue</groupId><artifactId>river-java</artifactId><version>0.2.0</version></parent>
   <artifactId>river-conformance</artifactId>
   <!-- This is a development adapter, not a publishable River artifact. -->
   <properties>
@@ -23,6 +23,7 @@
         <transformers>
           <!-- Preserve all dependency attribution text when resource paths overlap. -->
           <transformer implementation="org.apache.maven.plugins.shade.resource.AppendingTransformer"><resource>META-INF/LICENSE</resource></transformer>
+          <transformer implementation="org.apache.maven.plugins.shade.resource.AppendingTransformer"><resource>META-INF/LICENSE.txt</resource></transformer>
           <transformer implementation="org.apache.maven.plugins.shade.resource.AppendingTransformer"><resource>META-INF/NOTICE</resource></transformer>
           <transformer implementation="org.apache.maven.plugins.shade.resource.ServicesResourceTransformer"/>
           <transformer implementation="org.apache.maven.plugins.shade.resource.ManifestResourceTransformer">

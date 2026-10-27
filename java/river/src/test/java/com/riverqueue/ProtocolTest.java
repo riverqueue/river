@@ -494,7 +494,7 @@ class ProtocolTest {
               () ->
                   assertEquals(
                       fixture.required("expected_snoozes").asLong(),
-                      Workers.nextSnoozeCount(fixture.required("metadata")))));
+                      RunHandle.nextSnoozeCount(fixture.required("metadata")))));
     return tests.stream();
   }
 

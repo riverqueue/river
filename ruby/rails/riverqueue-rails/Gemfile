@@ -8,8 +8,9 @@ gem "riverqueue-activerecord", path: "../../driver/riverqueue-activerecord"
 %w[actionmailer activejob activerecord railties].each do |name|
   gem name, ENV.fetch("RAILS_VERSION", ">= 7.2"), "< 8.2"
 end
+gem "json", "< 3"
 gem "pg"
 gem "rspec-core"
 gem "rspec-expectations"
 gem "sqlite3"
-gem "standard"
+gem "standard", "< 1.57"

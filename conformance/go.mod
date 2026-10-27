@@ -8,10 +8,10 @@ go 1.26.0
 toolchain go1.26.6
 
 require (
-	github.com/riverqueue/river v0.49.0
-	github.com/riverqueue/river/riverdriver v0.49.0
-	github.com/riverqueue/river/rivershared v0.49.0
-	github.com/riverqueue/river/rivertype v0.49.0
+	github.com/riverqueue/river v0.50.0
+	github.com/riverqueue/river/riverdriver v0.50.0
+	github.com/riverqueue/river/rivershared v0.50.0
+	github.com/riverqueue/river/rivertype v0.50.0
 	github.com/robfig/cron/v3 v3.0.1
 	github.com/stretchr/testify v1.12.1
 	golang.org/x/mod v0.42.0

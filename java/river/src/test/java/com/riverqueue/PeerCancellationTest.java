@@ -61,14 +61,13 @@ class PeerCancellationTest {
     var completed = new CompletableFuture<Void>();
     var errors = new LinkedBlockingQueue<Throwable>();
     var workers =
-        client
-            .workers()
+        client.toBuilder()
             .queue("default", 1)
             .leadership(false)
             .pollOnly(true)
             .stopTimeout(Duration.ofSeconds(5))
             .errorHandler(errors::add)
-            .add(
+            .worker(
                 TYPE,
                 context -> {
                   parent.complete(context);
@@ -98,6 +97,7 @@ class PeerCancellationTest {
                   context.completePeer(peer, new InterruptedException("peer interrupted"));
                   completed.complete(null);
                 })
+            .build()
             .start();
     try {
       client.insert(TYPE, "parent");
@@ -143,7 +143,7 @@ class PeerCancellationTest {
     var entered = new CompletableFuture<Void>();
     var interrupted = new CompletableFuture<Void>();
     var release = new CountDownLatch(1);
-    var events = new LinkedBlockingQueue<Workers.Event>();
+    var events = new LinkedBlockingQueue<Client.Event>();
     var errors = new LinkedBlockingQueue<Throwable>();
     var database = databases.open(directory.resolve("river.db"));
     var client =
@@ -169,8 +169,7 @@ class PeerCancellationTest {
             .insert(TYPE, "peer", InsertOptions.builder().queue("peers").maxAttempts(1).build())
             .job();
     var workers =
-        client
-            .workers()
+        client.toBuilder()
             .queue("default", 1)
             .leadership(false)
             .pollOnly(true)
@@ -178,7 +177,7 @@ class PeerCancellationTest {
             .stuckThreshold(Duration.ofMillis(20))
             .stopTimeout(Duration.ofSeconds(5))
             .errorHandler(errors::add)
-            .add(
+            .worker(
                 TYPE,
                 new Workers.Handler<>() {
                   @Override
@@ -221,15 +220,16 @@ class PeerCancellationTest {
                     }
                   }
                 })
+            .build()
             .start();
-    try (var subscription = workers.subscribe(events::add)) {
+    try (var subscription = workers.client().subscribe(events::add)) {
       client.insert(TYPE, "parent", InsertOptions.builder().maxAttempts(1).build());
       entered.get(5, TimeUnit.SECONDS);
       interrupted.get(5, TimeUnit.SECONDS);
       for (int i = 0; i < 2; i++) {
         var event = events.poll(5, TimeUnit.SECONDS);
         assertNotNull(event);
-        assertEquals(Workers.EventKind.JOB_FAILED, event.kind());
+        assertEquals(Client.EventKind.JOB_FAILED, event.kind());
       }
       assertEquals(Job.State.DISCARDED, client.get(peerJob.id()).state());
     } finally {

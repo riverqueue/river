@@ -1,4 +1,4 @@
-.PHONY: test test/conformance test/postgres test/sqlite test/tools lint lint/tools format package package/release
+.PHONY: test test/conformance test/postgres test/sqlite test/tools lint lint/tools format package package/github-release package/release
 test:
 	$(MAKE) -C .. test/java
 test/conformance:
@@ -17,5 +17,7 @@ format:
 	mvn spotless:apply
 package:
 	$(MAKE) -C .. check/java/package
+package/github-release:
+	$(MAKE) -C .. check/java/github-release
 package/release:
 	$(MAKE) -C .. check/java/release

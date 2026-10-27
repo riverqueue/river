@@ -10,8 +10,8 @@ import org.junit.jupiter.params.provider.ValueSource;
 
 class IdentifierTest {
   private static final JobType<String> TYPE = JobType.of("identifier_test", String.class);
-  private final Workers.Builder workers =
-      new Client(Database.connect("jdbc:sqlite::memory:")).workers();
+  private final Client.Builder workers =
+      new Client(Database.connect("jdbc:sqlite::memory:")).toBuilder();
 
   @Test
   void acceptsAnonymousPeriodicJobs() {

@@ -25,20 +25,19 @@ class TimeoutTest {
     var client = new Client(databases.open(directory.resolve("river.db")));
     var calls = new AtomicInteger();
     var worked = new AtomicInteger();
-    var result = new CompletableFuture<Workers.Event>();
+    var result = new CompletableFuture<Client.Event>();
     var errors = new LinkedBlockingQueue<Throwable>();
     boolean invalid = java.util.Set.of("overflow", "throw").contains(mode);
     boolean completes = mode.equals("disabled") || mode.equals("longer");
     try (var workers =
-            client
-                .workers()
+            client.toBuilder()
                 .queue("default", 1)
                 .pollOnly(true)
                 .leadership(false)
                 .jobTimeout(mode.equals("override") ? Duration.ofHours(1) : Duration.ofNanos(1))
                 .stopTimeout(Duration.ofSeconds(5))
                 .errorHandler(errors::add)
-                .add(
+                .worker(
                     TYPE,
                     new Workers.Handler<>() {
                       @Override
@@ -68,12 +67,13 @@ class TimeoutTest {
                         }
                       }
                     })
+                .build()
                 .start();
-        var subscription = workers.subscribe(result::complete)) {
+        var subscription = workers.client().subscribe(result::complete)) {
       client.insert(TYPE, mode, InsertOptions.builder().maxAttempts(1).build());
       var event = result.get(5, TimeUnit.SECONDS);
       assertEquals(
-          completes ? Workers.EventKind.JOB_COMPLETED : Workers.EventKind.JOB_FAILED, event.kind());
+          completes ? Client.EventKind.JOB_COMPLETED : Client.EventKind.JOB_FAILED, event.kind());
       assertEquals(completes ? Job.State.COMPLETED : Job.State.DISCARDED, event.job().state());
       assertEquals(1, calls.get());
       assertEquals(invalid ? 0 : 1, worked.get());

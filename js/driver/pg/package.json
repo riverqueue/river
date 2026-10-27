@@ -1,6 +1,6 @@
 {
   "name": "@riverqueue/driver-pg",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "Complete node-postgres backend for River's TypeScript runtime.",
   "type": "module",
   "sideEffects": false,
@@ -48,7 +48,7 @@
   "peerDependencies": {
     "@types/pg": ">=8",
     "pg": ">=8.0.0",
-    "riverqueue": "workspace:0.2.0"
+    "riverqueue": "workspace:0.3.0"
   },
   "peerDependenciesMeta": {
     "@types/pg": {
@@ -58,8 +58,8 @@
   "devDependencies": {
     "@types/pg": "^8.23.1",
     "pg": "^8.23.1",
-    "riverqueue": "workspace:0.2.0",
-    "typescript": "^7.0.2"
+    "riverqueue": "workspace:0.3.0",
+    "typescript": "^6.0.3"
   },
   "keywords": [
     "river",

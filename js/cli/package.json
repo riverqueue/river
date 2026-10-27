@@ -1,6 +1,6 @@
 {
   "name": "@riverqueue/cli",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "Command-line migrations, benchmarks, and upgrade codemods for River TypeScript.",
   "type": "module",
   "sideEffects": [
@@ -49,10 +49,11 @@
     "provenance": true
   },
   "dependencies": {
-    "@riverqueue/driver-pg": "workspace:0.2.0",
-    "@riverqueue/migrate": "workspace:0.2.0",
+    "@js-temporal/polyfill": "^0.5.1",
+    "@riverqueue/driver-pg": "workspace:0.3.0",
+    "@riverqueue/migrate": "workspace:0.3.0",
     "pg": "^8.23.1",
-    "riverqueue": "workspace:0.2.0"
+    "riverqueue": "workspace:0.3.0"
   },
   "peerDependencies": {
     "@types/node": ">=24",
@@ -73,7 +74,7 @@
   "devDependencies": {
     "@types/node": "^26.6.5",
     "@types/pg": "^8.23.1",
-    "typescript": "^7.0.2"
+    "typescript": "^6.0.3"
   },
   "keywords": [
     "river",

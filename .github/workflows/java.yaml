@@ -60,14 +60,14 @@ jobs:
       - name: Compile, check formatting, and lint maintenance tools
         run: make lint/java
 
-      - name: Test Go maintenance tools
+      - name: Test maintenance and release tools
         run: make test/java/tools
 
       - name: Verify canonical migration mirror
         run: make verify/java-migrations
 
-      - name: Check publishable archives
-        run: make check/java/package
+      - name: Check and stage complete GitHub release archives
+        run: make check/java/github-release
 
   java_versions:
     name: Test (Java ${{ matrix.java-version }}, SQLite)

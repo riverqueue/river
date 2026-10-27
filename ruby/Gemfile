@@ -5,8 +5,9 @@ source "https://rubygems.org"
 gemspec
 
 group :development, :test do
-  gem "standard"
-  gem "steep"
+  gem "json", "< 3"
+  gem "standard", "< 1.57"
+  gem "steep", "< 2"
 end
 
 group :test do
