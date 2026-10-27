@@ -6,7 +6,7 @@ River is a fast, reliable background job system backed by Postgres or SQLite. It
 
 ```toml
 [dependencies]
-riverqueue = "0.3.0"
+riverqueue = "0.4.0"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "signal"] }
@@ -23,7 +23,7 @@ Rust version is 1.95.
 | `chrono-tz` | no | IANA zone names such as `America/New_York` in cron `CRON_TZ=` and `TZ=` prefixes |
 
 For SQLite alone, use
-`riverqueue = { version = "0.3.0", default-features = false, features = ["sqlite"] }`.
+`riverqueue = { version = "0.4.0", default-features = false, features = ["sqlite"] }`.
 
 River's API uses types from SQLx (pools and transactions), Chrono
 (timestamps), `serde_json` (metadata, outputs, and other JSON values), and

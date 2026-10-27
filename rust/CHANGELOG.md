@@ -10,8 +10,12 @@ Changes to River for Go are recorded in the [repository changelog](../CHANGELOG.
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-10-26
+
 ### Added
 
+- Extend the unstable extension API with peer work hooks, resolved insertion options, and bounded producer claims. Post-insert callbacks now include existing unique duplicates, requested metadata, and duplicate flags. [PR #1501](https://github.com/riverqueue/river/pull/1501).
+- Add optional pilot hooks for single-job, bulk, and cleaner-driven deletion. Hooks run within the deletion transaction and can extend or replace the standard deletion. [PR #1502](https://github.com/riverqueue/river/pull/1502).
 - A worker cancels its job with a reason by returning `JobCancelError`, like River for Go's `JobCancel(err)`. Anywhere in the worker error's source chain, it cancels the job whatever attempts it has left, skips the error handler, and records `JobCancelError: <reason>` on the attempt as Go does. `WorkOutcome::Cancel` still cancels without a reason. [PR #1504](https://github.com/riverqueue/river/pull/1504).
 
 ### Changed
@@ -21,11 +25,14 @@ Changes to River for Go are recorded in the [repository changelog](../CHANGELOG.
 
 ### Fixed
 
+- Preserve original error types through work-begin hooks and peer outcomes so error handlers can downcast them. A `JobCancelError` reported for a peer cancels it, matching worker cancellation. [PR #1501](https://github.com/riverqueue/river/pull/1501).
 - Fail retries that omit a saved cursor-only step, while preserving their checkpoints for recovery. Jobs with an existing step marker retain their behavior, including legacy stale cursor entries. [PR #1534](https://github.com/riverqueue/river/pull/1534).
-
 - Replace whole top-level metadata values on SQLite, including JSON null, matching Postgres. Completed resumable cursor steps no longer run again because of stale cursor entries. [PR #1533](https://github.com/riverqueue/river/pull/1533).
+- Preserve first-step resumable cursors on failure and step progress on snooze. Transactional checkpoints no longer leak into deferred updates after rollback or a failed write; rolling back a successful checkpoint write may replay earlier unpersisted steps. [PR #1521](https://github.com/riverqueue/river/pull/1521).
 
-- Preserve first-step resumable cursors on failure and step progress on snooze. Transactional checkpoints no longer leak into deferred updates after rollback or a failed write; rolling back a successful checkpoint write may replay earlier unpersisted steps.
+### Security
+
+- Update locked TLS and constant-time comparison dependencies (`rustls`, `rustls-webpki`, `webpki-roots`, and `ctutils`) to address security advisories. [PR #1505](https://github.com/riverqueue/river/pull/1505), [PR #1527](https://github.com/riverqueue/river/pull/1527), [PR #1521](https://github.com/riverqueue/river/pull/1521).
 
 ## [0.3.0] - 2026-10-07
 
