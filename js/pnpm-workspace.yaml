@@ -17,3 +17,6 @@ auditConfig:
     # license-checker-rseidelsohn's npm registry client, which the offline
     # `license:check` never uses.
     - GHSA-ch52-4w7c-c8xp
+    # pnpm audits the cli workspace path as the unrelated npm cli package.
+    # This workspace is @riverqueue/cli; no npm cli package is installed.
+    - GHSA-6cpc-mj5c-m9rq

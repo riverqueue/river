@@ -98,7 +98,7 @@
     "eslint-config-prettier": "^10.1.8",
     "fast-check": "^4.10.2",
     "knex": "^3.1.0",
-    "knip": "^6.42.0",
+    "knip": "^6.42.1",
     "license-checker-rseidelsohn": "^5.0.1",
     "pg": "^8.23.1",
     "pino": "^10.4.0",
@@ -117,10 +117,14 @@
   "pnpm": {
     "overrides": {
       "deepmerge-ts": "8.0.1",
+      "fast-uri@3.1.8": "3.1.9",
+      "ip-address@10.7.3": "10.7.4",
+      "markdown-it@14.3.1": "14.3.3",
       "mysql2": "3.24.4",
       "nanoid": "3.3.18",
       "postcss-selector-parser": "7.1.6",
-      "source-map-js": "1.2.2"
+      "source-map-js": "1.2.2",
+      "undici@6.29.0": "6.29.1"
     }
   },
   "keywords": [

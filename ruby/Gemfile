@@ -5,13 +5,14 @@ source "https://rubygems.org"
 gemspec
 
 group :development, :test do
-  gem "standard"
-  gem "steep"
+  gem "json", "< 3"
+  gem "standard", "< 1.57"
+  gem "steep", "< 2"
 end
 
 group :test do
   gem "debug"
-  gem "fugit", "~> 1.13", require: false
+  gem "fugit", "~> 1.14", require: false
   gem "minitest", require: false
   gem "pg"
   gem "rspec-core"

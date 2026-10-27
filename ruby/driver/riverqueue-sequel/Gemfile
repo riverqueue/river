@@ -5,8 +5,9 @@ source "https://rubygems.org"
 gemspec
 
 group :development, :test do
+  gem "json", "< 3"
   gem "riverqueue", path: "../.."
-  gem "standard"
+  gem "standard", "< 1.57"
 end
 
 group :test do
