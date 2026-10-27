@@ -27,32 +27,6 @@ Java exposes every Go helper. Stored values and protocol behavior still follow G
 | Driver, pool, transaction integration | `Database`, JDBC `DataSource`/`Connection` | Use existing Java database pools. Database drivers remain optional library dependencies. |
 | Errors and row types | `RiverException.Code`, `Job.State`, nested result records | Exceptions carry failures; enums model closed sets; records keep related values together. Missing rows throw `NOT_FOUND`. |
 
-## Migrating the lifecycle API from 0.1.0
-
-| 0.1.0 | Next release |
-| --- | --- |
-| `client.workers().queue(...).add(type, handler).start()` | `Client.builder(database).queue(...).workers(new Workers().add(type, handler)).build()`, then `client.start()` |
-| `Workers.Builder` runtime settings | `Client.Builder`; `worker(type, handler)` is also available for inline registration |
-| `Workers.stop/stopAndCancel/close` | The returned `RunHandle.stop/stopAndCancel/close` |
-| `Workers.subscribe`, `Workers.Event/EventKind/Subscription` | `Client.subscribe`, `Client.Event/EventKind/Subscription` |
-| `Workers.addQueue/removeQueue/periodicJobs/isLeader/id` | The same methods on `RunHandle`; `Client.id()` also exposes the stable client ID |
-
-Startup belongs to the client, as in Go, Ruby, JavaScript, and Rust. Shutdown
-belongs to a per-run handle, like JavaScript and Rust, with `AutoCloseable` for
-Java resource management. `Workers` only registers typed handlers. Insert-only
-clients can still use `new Client(database)` without starting anything.
-
-Each client permits one active run. A timed-out stop keeps the client reserved;
-call stop again to finish draining before restarting. Stopped handles cannot
-control later runs. Client subscriptions may be installed before startup and
-remain registered across restarts until closed. A restart restores configured
-queues and periodic jobs rather than carrying over changes to the previous run.
-
-`workers(registry)` copies registrations and `build()` snapshots configuration.
-`toBuilder()` and the `withHooks/withMiddleware/withPlugins/withPilot` methods
-create independent clients; configure these before startup. Each built client
-has its own runtime state, subscriptions, and local insert wakeups.
-
 ## Changes made before release
 
 - Replaced `Extension` and `withExtension` with separate hook and middleware
