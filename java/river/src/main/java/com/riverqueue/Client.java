@@ -269,6 +269,7 @@ public final class Client {
             "river_job_state_and_finalized_at_index",
             "river_job_unique_idx");
     Duration rescueAfter;
+    boolean rescueAfterConfigured;
     RetryPolicy retryPolicy = RetryPolicy.defaults();
     Duration serviceInterval = Duration.ofSeconds(1);
     Duration stopTimeout = Duration.ofSeconds(30);
@@ -306,6 +307,7 @@ public final class Client {
       queues.putAll(source.queues);
       retryPolicy = source.retryPolicy;
       rescueAfter = source.rescueAfter;
+      rescueAfterConfigured = source.rescueAfterConfigured;
       stopTimeout = source.stopTimeout;
       serviceInterval = source.serviceInterval;
       stuckThreshold = source.stuckThreshold;
@@ -316,7 +318,7 @@ public final class Client {
       if (!leadership && !periodic.isEmpty())
         throw new IllegalArgumentException("Periodic jobs require leader election");
       var config = new Builder(this);
-      if (config.rescueAfter == null)
+      if (!config.rescueAfterConfigured)
         config.rescueAfter =
             positive(
                 !jobTimeoutConfigured || jobTimeout.isNegative()
@@ -468,6 +470,7 @@ public final class Client {
      */
     public Builder rescueAfter(Duration value) {
       rescueAfter = positive(value, "rescueAfter");
+      rescueAfterConfigured = true;
       return this;
     }
 

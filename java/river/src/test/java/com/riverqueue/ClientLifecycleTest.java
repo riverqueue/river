@@ -85,6 +85,20 @@ class ClientLifecycleTest {
   }
 
   @Test
+  void copiedConfigurationRecomputesDefaultRescueDelay() {
+    var builder = Client.builder(Database.connect("jdbc:sqlite::memory:"));
+    var defaultClient = builder.build();
+    var explicitClient = builder.rescueAfter(Duration.ofHours(1)).build();
+    assertDoesNotThrow(() -> defaultClient.toBuilder().jobTimeout(Duration.ofHours(2)).build());
+    assertEquals(
+        "rescueAfter must not be less than jobTimeout",
+        assertThrows(
+                IllegalArgumentException.class,
+                () -> explicitClient.toBuilder().jobTimeout(Duration.ofHours(2)).build())
+            .getMessage());
+  }
+
+  @Test
   void failedDatabaseStartupCanBeRetried() throws Exception {
     var database = databases.open(directory.resolve("river.db"));
     var fail = new AtomicBoolean(true);
