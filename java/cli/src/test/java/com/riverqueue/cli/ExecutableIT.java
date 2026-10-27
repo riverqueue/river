@@ -52,7 +52,7 @@ class ExecutableIT {
   @ParameterizedTest
   @ValueSource(booleans = {false, true})
   void thinJarRunsWithRuntimeDependencies(boolean executableJar) throws Exception {
-    assertEquals("river 0.1.0-alpha.1", command(executableJar, "--version").strip());
+    assertEquals("river 0.1.0", command(executableJar, "--version").strip());
     assertTrue(command(executableJar, "migrate-up").contains("008 [up]"));
     assertTrue(command(executableJar, "migrate-list").contains("applied"));
     assertTrue(
