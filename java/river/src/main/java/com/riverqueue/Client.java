@@ -1,24 +1,36 @@
 package com.riverqueue;
 
+import java.nio.charset.StandardCharsets;
 import java.sql.Connection;
 import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.time.Clock;
+import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.HexFormat;
 import java.util.List;
+import java.util.Map;
 import java.util.Objects;
+import java.util.Set;
+import java.util.UUID;
+import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.locks.ReentrantLock;
+import java.util.function.Consumer;
 import java.util.stream.Stream;
 import tools.jackson.databind.JsonNode;
 
 /**
  * Transactional job storage. Connection overloads use the caller's transaction and never commit or
- * close it; other overloads own a transaction. Close the {@link Workers} returned by {@link
- * Workers.Builder#start()} to stop execution. The client owns no resources to close.
+ * close it; other overloads own a transaction. Configure workers with {@link #builder(Database)},
+ * then call {@link #start()}. Close the returned {@link RunHandle} to stop execution. The
+ * application owns its connection pool; inserting jobs does not require a running client.
  */
 public final class Client {
+  private final Builder config;
+  private final String id;
+  private final List<Consumer<Event>> subscribers = new CopyOnWriteArrayList<>();
   private final java.util.concurrent.CopyOnWriteArrayList<Runnable> insertListeners =
       new java.util.concurrent.CopyOnWriteArrayList<>();
   private final ThreadLocal<Commit> ownedCommit = new ThreadLocal<>();
@@ -32,12 +44,24 @@ public final class Client {
   private final List<Plugin> plugins;
   private final List<WorkerMiddleware> workerMiddleware;
 
+  private final ReentrantLock lifecycleLock = new ReentrantLock();
+  private RunHandle activeRun;
+
+  /** Creates an insert-only client using the system clock. */
   public Client(Database database) {
     this(database, Clock.systemUTC());
   }
 
+  /** Creates an insert-only client using the supplied clock for storage operations. */
   public Client(Database database, Clock clock) {
-    this(database, clock, List.of(), List.of(), List.of(), new Pilot() {});
+    this(
+        database,
+        clock,
+        List.of(),
+        List.of(),
+        List.of(),
+        new Pilot() {},
+        new Builder(database, clock));
   }
 
   private Client(
@@ -46,13 +70,20 @@ public final class Client {
       List<Hook> hooks,
       List<Middleware> middleware,
       List<Plugin> plugins,
-      Pilot pilot) {
+      Pilot pilot,
+      Builder config) {
+    this.config = new Builder(config);
+    this.id = config.id == null ? "java-" + UUID.randomUUID() : config.id;
     this.pilot = pilot;
     this.database = Objects.requireNonNull(database);
     this.clock = Objects.requireNonNull(clock);
     this.hooks = List.copyOf(hooks);
     this.middleware = List.copyOf(middleware);
     this.plugins = List.copyOf(plugins);
+    this.config.hooks = this.hooks;
+    this.config.middleware = this.middleware;
+    this.config.plugins = this.plugins;
+    this.config.pilot = pilot;
     this.allHooks =
         Stream.concat(this.plugins.stream(), this.hooks.stream())
             .filter(Hook.class::isInstance)
@@ -71,16 +102,88 @@ public final class Client {
             .toList();
   }
 
+  /** Creates a builder for a client using an application-owned database. */
+  public static Builder builder(Database database) {
+    return new Builder(database, Clock.systemUTC());
+  }
+
   public Database database() {
     return database;
+  }
+
+  /** Returns this client's ID, shared by its successive runs. */
+  public String id() {
+    return id;
   }
 
   public Queues queues() {
     return new Queues(this);
   }
 
-  public Workers.Builder workers() {
-    return new Workers.Builder(this);
+  /**
+   * Starts this client's configured runtime. Only one run may be active, including while a timed
+   * out stop is still draining. Once a stop call succeeds, the client can be started again. Each
+   * run starts with the configured queues and periodic jobs. At least one queue and handler are
+   * required; insertion does not require starting the client.
+   */
+  public RunHandle start() {
+    lifecycleLock.lock();
+    try {
+      if (activeRun != null) throw new IllegalStateException("Client already running or stopping");
+      var run = new RunHandle(this, config);
+      activeRun = run;
+      try {
+        pilot.starting(
+            config.leadership,
+            config.cancelledRetention,
+            config.completedRetention,
+            config.discardedRetention);
+        run.launch();
+        return run;
+      } catch (RuntimeException | Error error) {
+        try {
+          run.abortStart();
+        } catch (RuntimeException | Error cleanupError) {
+          error.addSuppressed(cleanupError);
+        }
+        throw error;
+      }
+    } finally {
+      lifecycleLock.unlock();
+    }
+  }
+
+  void stopped(RunHandle run) {
+    lifecycleLock.lock();
+    try {
+      if (activeRun == run) activeRun = null;
+    } finally {
+      lifecycleLock.unlock();
+    }
+  }
+
+  /**
+   * Subscribes before or during execution. Subscriptions belong to this client and survive restarts
+   * until closed. Callbacks run synchronously and should return promptly.
+   */
+  public Subscription subscribe(Consumer<Event> subscriber, EventKind... kinds) {
+    Objects.requireNonNull(subscriber, "subscriber");
+    Set<EventKind> selected = Set.copyOf(List.of(kinds));
+    Consumer<Event> filtered =
+        event -> {
+          if (selected.isEmpty() || selected.contains(event.kind())) subscriber.accept(event);
+        };
+    subscribers.add(filtered);
+    return () -> subscribers.remove(filtered);
+  }
+
+  List<Consumer<Event>> subscribers() {
+    return subscribers;
+  }
+
+  /** Copies configuration into a builder for an independent, unstarted client. */
+  public Builder toBuilder() {
+    return new Builder(config);
   }
 
   /**
@@ -90,7 +193,7 @@ public final class Client {
   public Client withHooks(Hook... hooks) {
     var all = new ArrayList<>(this.hooks);
     all.addAll(List.of(hooks));
-    return new Client(database, clock, all, middleware, plugins, pilot);
+    return new Client(database, clock, all, middleware, plugins, pilot, config);
   }
 
   /**
@@ -101,12 +204,13 @@ public final class Client {
   public Client withMiddleware(Middleware... middleware) {
     var all = new ArrayList<>(this.middleware);
     all.addAll(List.of(middleware));
-    return new Client(database, clock, hooks, all, plugins, pilot);
+    return new Client(database, clock, hooks, all, plugins, pilot, config);
   }
 
   /** Internal integration point used by River Pro; not a stable application API. */
   public Client withPilot(Pilot pilot) {
-    return new Client(database, clock, hooks, middleware, plugins, Objects.requireNonNull(pilot));
+    return new Client(
+        database, clock, hooks, middleware, plugins, Objects.requireNonNull(pilot), config);
   }
 
   /**
@@ -118,12 +222,306 @@ public final class Client {
   public Client withPlugins(Plugin... plugins) {
     var all = new ArrayList<>(this.plugins);
     all.addAll(List.of(plugins));
-    return new Client(database, clock, hooks, middleware, all, pilot);
+    return new Client(database, clock, hooks, middleware, all, pilot, config);
   }
 
   Runnable onInsertCommit(Runnable listener) {
     insertListeners.add(listener);
     return () -> insertListeners.remove(listener);
+  }
+
+  /** Mutable client configuration. Building a client snapshots its settings and handlers. */
+  public static final class Builder {
+    boolean cancelOnError;
+    Duration cancelledRetention = Duration.ofDays(1);
+    Clock clock;
+    Duration completedRetention = Duration.ofDays(1);
+    final Database database;
+    Duration discardedRetention = Duration.ofDays(7);
+    Consumer<Throwable> errorHandler =
+        error ->
+            System.getLogger("com.riverqueue")
+                .log(System.Logger.Level.WARNING, "River runtime failure", error);
+    boolean fetchOnlyKnownKinds;
+    final Map<String, Workers.Registration<?>> handlers = new java.util.LinkedHashMap<>();
+    List<Hook> hooks = List.of();
+    String id;
+    Duration jobTimeout = Duration.ofMinutes(1);
+    boolean jobTimeoutConfigured;
+    boolean leadership = true;
+    Duration maintenanceInterval = Duration.ofSeconds(5);
+    List<Middleware> middleware = List.of();
+    final List<Consumer<String>> observers = new ArrayList<>();
+    final List<PeriodicJob<?>> periodic = new ArrayList<>();
+    Pilot pilot = new Pilot() {};
+    List<Plugin> plugins = List.of();
+    Duration pollInterval = Duration.ofSeconds(1);
+    boolean pollOnly;
+    final Map<String, Integer> queues = new java.util.LinkedHashMap<>();
+    Duration reindexInterval;
+    List<String> reindexNames =
+        List.of(
+            "river_job_args_index",
+            "river_job_kind",
+            "river_job_metadata_index",
+            "river_job_pkey",
+            "river_job_prioritized_fetching_index",
+            "river_job_state_and_finalized_at_index",
+            "river_job_unique_idx");
+    Duration rescueAfter;
+    RetryPolicy retryPolicy = RetryPolicy.defaults();
+    Duration serviceInterval = Duration.ofSeconds(1);
+    Duration stopTimeout = Duration.ofSeconds(30);
+    Duration stuckThreshold = Duration.ofSeconds(5);
+
+    private Builder(Database database, Clock clock) {
+      this.database = Objects.requireNonNull(database, "database");
+      this.clock = Objects.requireNonNull(clock, "clock");
+    }
+
+    private Builder(Builder source) {
+      this(source.database, source.clock);
+      hooks = source.hooks;
+      middleware = source.middleware;
+      plugins = source.plugins;
+      pilot = source.pilot;
+      cancelledRetention = source.cancelledRetention;
+      completedRetention = source.completedRetention;
+      discardedRetention = source.discardedRetention;
+      reindexInterval = source.reindexInterval;
+      reindexNames = source.reindexNames;
+      cancelOnError = source.cancelOnError;
+      fetchOnlyKnownKinds = source.fetchOnlyKnownKinds;
+      errorHandler = source.errorHandler;
+      handlers.putAll(source.handlers);
+      id = source.id;
+      jobTimeout = source.jobTimeout;
+      jobTimeoutConfigured = source.jobTimeoutConfigured;
+      leadership = source.leadership;
+      maintenanceInterval = source.maintenanceInterval;
+      observers.addAll(source.observers);
+      periodic.addAll(source.periodic);
+      pollInterval = source.pollInterval;
+      pollOnly = source.pollOnly;
+      queues.putAll(source.queues);
+      retryPolicy = source.retryPolicy;
+      rescueAfter = source.rescueAfter;
+      stopTimeout = source.stopTimeout;
+      serviceInterval = source.serviceInterval;
+      stuckThreshold = source.stuckThreshold;
+    }
+
+    /** Builds a client without starting background work. */
+    public Client build() {
+      if (!leadership && !periodic.isEmpty())
+        throw new IllegalArgumentException("Periodic jobs require leader election");
+      var config = new Builder(this);
+      if (config.rescueAfter == null)
+        config.rescueAfter =
+            positive(
+                !jobTimeoutConfigured || jobTimeout.isNegative()
+                    ? Duration.ofHours(1)
+                    : jobTimeout.plus(Duration.ofHours(1)),
+                "rescueAfter");
+      if (config.rescueAfter.compareTo(jobTimeout) < 0)
+        throw new IllegalArgumentException("rescueAfter must not be less than jobTimeout");
+      return new Client(database, clock, hooks, middleware, plugins, pilot, config);
+    }
+
+    public Builder cancelOnError(boolean value) {
+      cancelOnError = value;
+      return this;
+    }
+
+    /** Uses the given clock for client operations. */
+    public Builder clock(Clock value) {
+      clock = Objects.requireNonNull(value, "clock");
+      return this;
+    }
+
+    static Duration duration(Duration value, String name) {
+      Objects.requireNonNull(value, name);
+      try {
+        value.toNanos();
+      } catch (ArithmeticException error) {
+        throw new IllegalArgumentException(name + " must fit in signed 64-bit nanoseconds", error);
+      }
+      return value;
+    }
+
+    /** Reports runtime failures. Failures in this callback are logged without stopping workers. */
+    public Builder errorHandler(Consumer<Throwable> value) {
+      errorHandler = Objects.requireNonNull(value, "errorHandler");
+      return this;
+    }
+
+    public Builder fetchOnlyKnownKinds(boolean value) {
+      fetchOnlyKnownKinds = value;
+      return this;
+    }
+
+    /** Replaces operation hooks; only hook interfaces are activated, after plugins. */
+    public Builder hooks(Hook... value) {
+      hooks = List.of(value);
+      return this;
+    }
+
+    /** Overrides the client ID (at most 100 UTF-8 bytes). Each client otherwise generates an ID. */
+    public Builder id(String value) {
+      if (value.isEmpty() || value.getBytes(StandardCharsets.UTF_8).length > 100)
+        throw new IllegalArgumentException("Invalid client ID");
+      id = value;
+      return this;
+    }
+
+    /** Sets the attempt timeout; a negative duration disables it, including during stop. */
+    public Builder jobTimeout(Duration value) {
+      duration(value, "jobTimeout");
+      if (value.isZero())
+        throw new IllegalArgumentException(
+            "Job timeout must be positive or negative to disable it");
+      jobTimeout = value;
+      jobTimeoutConfigured = true;
+      return this;
+    }
+
+    public Builder leadership(boolean value) {
+      leadership = value;
+      return this;
+    }
+
+    public Builder maintenanceInterval(Duration value) {
+      maintenanceInterval = positive(value, "maintenanceInterval");
+      return this;
+    }
+
+    /** Replaces operation middleware; the first middleware is outermost, after plugins. */
+    public Builder middleware(Middleware... value) {
+      middleware = List.of(value);
+      return this;
+    }
+
+    /** Observes runtime activity. Callback failures are reported without affecting execution. */
+    public Builder observe(Consumer<String> value) {
+      observers.add(Objects.requireNonNull(value, "observer"));
+      return this;
+    }
+
+    /** Registers a periodic definition before starting this runtime. */
+    public Builder periodic(PeriodicJob<?> job) {
+      Objects.requireNonNull(job, "job");
+      if (job.id() != null
+          && periodic.stream().anyMatch(existing -> job.id().equals(existing.id())))
+        throw new IllegalArgumentException("Duplicate periodic job ID: " + job.id());
+      periodic.add(job);
+      return this;
+    }
+
+    public <A> Builder periodic(
+        String id,
+        Schedule schedule,
+        JobType<A> type,
+        A args,
+        InsertOptions options,
+        boolean runOnStart) {
+      return periodic(new PeriodicJob<>(id, schedule, type, args, options, runOnStart));
+    }
+
+    /** Replaces plugins, enabling their hook and middleware interfaces before other callbacks. */
+    public Builder plugins(Plugin... value) {
+      plugins = List.of(value);
+      return this;
+    }
+
+    public Builder pollInterval(Duration value) {
+      pollInterval = positive(value, "pollInterval");
+      return this;
+    }
+
+    public Builder pollOnly(boolean value) {
+      pollOnly = value;
+      return this;
+    }
+
+    private static Duration positive(Duration value, String name) {
+      duration(value, name);
+      if (value.isNegative() || value.isZero())
+        throw new IllegalArgumentException(name + " must be positive");
+      return value;
+    }
+
+    public Builder queue(String name, int maxWorkers) {
+      RunHandle.validateQueue(name, maxWorkers);
+      queues.put(name, maxWorkers);
+      return this;
+    }
+
+    public Builder reindex(List<String> names, Duration interval) {
+      reindexNames = List.copyOf(names);
+      reindexInterval = interval == null ? null : positive(interval, "reindex interval");
+      return this;
+    }
+
+    /**
+     * Sets when abandoned jobs may be rescued. Must not be shorter than the attempt timeout.
+     * Defaults to one hour, plus an explicitly configured positive job timeout.
+     */
+    public Builder rescueAfter(Duration value) {
+      rescueAfter = positive(value, "rescueAfter");
+      return this;
+    }
+
+    public Builder retention(Duration cancelled, Duration completed, Duration discarded) {
+      cancelledRetention = duration(cancelled, "cancelled retention");
+      completedRetention = duration(completed, "completed retention");
+      discardedRetention = duration(discarded, "discarded retention");
+      return this;
+    }
+
+    public Builder retryPolicy(RetryPolicy value) {
+      retryPolicy = Objects.requireNonNull(value, "retryPolicy");
+      return this;
+    }
+
+    /**
+     * Sets the election and heartbeat interval; leadership leases include ten seconds of margin.
+     * Must be positive and shorter than one day so active queues do not expire between heartbeats.
+     */
+    public Builder serviceInterval(Duration value) {
+      positive(value, "serviceInterval");
+      if (value.compareTo(RunHandle.QUEUE_RETENTION) >= 0)
+        throw new IllegalArgumentException(
+            "serviceInterval must be shorter than the queue retention period of one day");
+      serviceInterval = value;
+      return this;
+    }
+
+    public Builder stopTimeout(Duration value) {
+      stopTimeout = positive(value, "stopTimeout");
+      return this;
+    }
+
+    public Builder stuckThreshold(Duration value) {
+      stuckThreshold = positive(value, "stuckThreshold");
+      return this;
+    }
+
+    /** Adds a worker handler for a job type. Each job kind may be added only once. */
+    public <A> Builder worker(JobType<A> type, Workers.Handler<A> handler) {
+      Objects.requireNonNull(type, "type");
+      Objects.requireNonNull(handler, "handler");
+      if (handlers.putIfAbsent(type.kind(), new Workers.Registration<>(type, handler)) != null)
+        throw new IllegalArgumentException("Duplicate worker kind");
+      return this;
+    }
+
+    /** Replaces the handler registry with a snapshot of the supplied workers. */
+    public Builder workers(Workers value) {
+      var registrations = Objects.requireNonNull(value, "workers").snapshot();
+      handlers.clear();
+      handlers.putAll(registrations);
+      return this;
+    }
   }
 
   private static final class Commit {
@@ -1005,6 +1403,29 @@ public final class Client {
         throw new IllegalArgumentException("Invalid tag: " + tag);
   }
 
+  /** A job or queue event. The payload corresponding to the event kind is non-null. */
+  public record Event(EventKind kind, Job<JsonNode> job, Queues.Queue queue) {
+    public Event(EventKind kind, Job<JsonNode> job) {
+      this(kind, job, null);
+    }
+  }
+
+  /** Event names shared with other River clients and the conformance protocol. */
+  public enum EventKind {
+    JOB_CANCELLED,
+    JOB_COMPLETED,
+    JOB_FAILED,
+    JOB_INTERRUPTED,
+    JOB_SNOOZED,
+    QUEUE_PAUSED,
+    QUEUE_RESUMED;
+
+    @com.fasterxml.jackson.annotation.JsonValue
+    public String value() {
+      return name().toLowerCase(java.util.Locale.ROOT);
+    }
+  }
+
   /** A job and its individual options in an atomic batch. */
   public record Submission<A>(JobType<A> type, A args, InsertOptions options) {
     public Submission {
@@ -1012,6 +1433,13 @@ public final class Client {
       Objects.requireNonNull(args, "args");
       Objects.requireNonNull(options, "options");
     }
+  }
+
+  /** An idempotent subscription handle whose close method cannot throw a checked exception. */
+  @FunctionalInterface
+  public interface Subscription extends AutoCloseable {
+    @Override
+    void close();
   }
 
   /** A callback run in the same JDBC transaction as the application's writes. */

@@ -37,13 +37,12 @@ class SchedulingTest {
     var worked = new CompletableFuture<Job<String>>();
     var errors = new LinkedBlockingQueue<Throwable>();
     try (var workers =
-        client
-            .workers()
+        client.toBuilder()
             .queue("default", 1)
             .pollOnly(true)
             .stopTimeout(Duration.ofSeconds(5))
             .errorHandler(errors::add)
-            .add(TYPE, context -> worked.complete(context.job()))
+            .worker(TYPE, context -> worked.complete(context.job()))
             .periodic(
                 new PeriodicJob<>(
                     null,
@@ -52,6 +51,7 @@ class SchedulingTest {
                     "args",
                     InsertOptions.defaults(),
                     true))
+            .build()
             .start()) {
       var job = worked.get(5, TimeUnit.SECONDS);
       assertTrue(job.metadata().path("periodic").asBoolean());
@@ -64,12 +64,12 @@ class SchedulingTest {
   void dynamicPeriodicJobsRequireLeadershipAndValidIds() throws Exception {
     var client = new Client(databases.open(directory.resolve("river.db")));
     try (var workers =
-        client
-            .workers()
+        client.toBuilder()
             .queue("default", 1)
             .pollOnly(true)
             .leadership(false)
-            .add(TYPE, context -> {})
+            .worker(TYPE, context -> {})
+            .build()
             .start()) {
       assertThrows(
           IllegalStateException.class,
@@ -85,7 +85,12 @@ class SchedulingTest {
                       true));
     }
     try (var workers =
-        client.workers().queue("default", 1).pollOnly(true).add(TYPE, context -> {}).start()) {
+        client.toBuilder()
+            .queue("default", 1)
+            .pollOnly(true)
+            .worker(TYPE, context -> {})
+            .build()
+            .start()) {
       for (var id : java.util.List.of("", "invalid id", "x".repeat(128)))
         assertThrows(
             IllegalArgumentException.class,
@@ -109,19 +114,18 @@ class SchedulingTest {
     var worked = new LinkedBlockingQueue<String>();
     var client = new Client(databases.open(directory.resolve("river.db")));
     var builder =
-        client
-            .workers()
+        client.toBuilder()
             .queue("default", 1)
             .pollOnly(true)
             .serviceInterval(Duration.ofMillis(20))
             .stopTimeout(Duration.ofSeconds(5))
             .errorHandler(errors::add)
-            .add(TYPE, context -> worked.add(context.args()));
-    var first = builder.observe(checks::add).start();
+            .worker(TYPE, context -> worked.add(context.args()));
+    var first = builder.observe(checks::add).build().start();
     try {
       assertEquals("leadership_check", checks.poll(5, TimeUnit.SECONDS));
       assertTrue(first.isLeader());
-      try (var second = builder.start()) {
+      try (var second = builder.build().start()) {
         second
             .periodicJobs()
             .add(
@@ -160,14 +164,14 @@ class SchedulingTest {
                   }
                 });
     var workers =
-        client
-            .workers()
+        client.toBuilder()
             .queue("default", 1)
             .pollOnly(true)
             .serviceInterval(Duration.ofHours(1))
             .stopTimeout(Duration.ofSeconds(5))
             .errorHandler(errors::add)
-            .add(TYPE, context -> worked.add(context.args()))
+            .worker(TYPE, context -> worked.add(context.args()))
+            .build()
             .start();
     try {
       entered.get(5, TimeUnit.SECONDS);
@@ -249,14 +253,13 @@ class SchedulingTest {
         "scheduled",
         InsertOptions.builder().scheduledAt(Instant.now().minusSeconds(1)).build());
     try (var workers =
-        client
-            .workers()
+        client.toBuilder()
             .queue("default", 1)
             .pollOnly(true)
             .serviceInterval(Duration.ofMillis(20))
             .stopTimeout(Duration.ofSeconds(5))
             .errorHandler(errors::add)
-            .add(TYPE, context -> worked.add(context.args()))
+            .worker(TYPE, context -> worked.add(context.args()))
             .periodic(
                 "broken",
                 after -> {
@@ -275,6 +278,7 @@ class SchedulingTest {
                 "periodic",
                 InsertOptions.defaults(),
                 true)
+            .build()
             .start()) {
       var first = worked.poll(5, TimeUnit.SECONDS);
       var second = worked.poll(5, TimeUnit.SECONDS);
@@ -309,14 +313,13 @@ class SchedulingTest {
               default -> Optional.of(after.plusDays(1));
             };
     try (var workers =
-        client
-            .workers()
+        client.toBuilder()
             .queue("default", 1)
             .pollOnly(true)
             .serviceInterval(Duration.ofMillis(20))
             .stopTimeout(Duration.ofSeconds(5))
             .errorHandler(errors::add)
-            .add(TYPE, context -> {})
+            .worker(TYPE, context -> {})
             .periodic(
                 "retry",
                 schedule,
@@ -324,6 +327,7 @@ class SchedulingTest {
                 "args",
                 InsertOptions.builder().queue("periodic").build(),
                 false)
+            .build()
             .start()) {
       maintained.get(5, TimeUnit.SECONDS);
       assertEquals(1, client.list(JobQuery.all()).jobs().size());
@@ -357,15 +361,15 @@ class SchedulingTest {
           return Optional.of(after.plusDays(1));
         };
     try (var workers =
-        client
-            .workers()
+        client.toBuilder()
             .queue("default", 1)
             .pollOnly(true)
             .serviceInterval(Duration.ofMillis(20))
             .stopTimeout(Duration.ofSeconds(5))
             .errorHandler(errors::add)
-            .add(TYPE, context -> worked.complete(context.job()))
+            .worker(TYPE, context -> worked.complete(context.job()))
             .periodic("cadence", schedule, TYPE, "args", InsertOptions.defaults(), false)
+            .build()
             .start()) {
       var actual = nextFrom.get(5, TimeUnit.SECONDS);
       assertEquals(planned.get(), actual);
@@ -408,15 +412,15 @@ class SchedulingTest {
       TimeZone.setDefault(TimeZone.getTimeZone(zone));
       var client = new Client(databases.open(directory.resolve("river.db")));
       try (var workers =
-          client
-              .workers()
+          client.toBuilder()
               .queue("default", 1)
               .pollOnly(true)
               .serviceInterval(Duration.ofMillis(20))
               .stopTimeout(Duration.ofSeconds(5))
               .errorHandler(errors::add)
-              .add(TYPE, context -> {})
+              .worker(TYPE, context -> {})
               .periodic("local-zone", schedule, TYPE, "args", InsertOptions.defaults(), runOnStart)
+              .build()
               .start()) {
         for (int i = 0; i < (runOnStart ? 1 : 2); i++) {
           var reference = calls.poll(5, TimeUnit.SECONDS);
@@ -447,13 +451,13 @@ class SchedulingTest {
                   }
                 });
     var workers =
-        client
-            .workers()
+        client.toBuilder()
             .queue("default", 1)
             .pollOnly(true)
             .stopTimeout(Duration.ofSeconds(5))
             .errorHandler(errors::add)
-            .add(TYPE, context -> {})
+            .worker(TYPE, context -> {})
+            .build()
             .start();
     try {
       var handle =

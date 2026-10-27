@@ -75,8 +75,7 @@ class LeadershipTest {
                   }
                 });
     try (var workers =
-        client
-            .workers()
+        client.toBuilder()
             .queue("default", 1)
             .pollOnly(true)
             .serviceInterval(Duration.ofHours(1))
@@ -86,7 +85,8 @@ class LeadershipTest {
                   errors.add(error);
                   reported.join();
                 })
-            .add(TYPE, context -> {})
+            .worker(TYPE, context -> {})
+            .build()
             .start()) {
       try {
         assertNotNull(errors.poll(5, TimeUnit.SECONDS));
@@ -139,8 +139,7 @@ class LeadershipTest {
     var ready = new CountDownLatch(1);
     var interval = Duration.ofSeconds(seconds);
     try (var workers =
-        client
-            .workers()
+        client.toBuilder()
             .queue("default", 1)
             .serviceInterval(interval)
             .stopTimeout(Duration.ofSeconds(5))
@@ -150,7 +149,8 @@ class LeadershipTest {
                   if (event.equals("listen_ready")) ready.countDown();
                   if (event.equals("leadership_check")) checked.add(event);
                 })
-            .add(TYPE, context -> {})
+            .worker(TYPE, context -> {})
+            .build()
             .start()) {
       assertTrue(ready.await(5, TimeUnit.SECONDS));
       assertNotNull(checked.poll(5, TimeUnit.SECONDS));
@@ -198,14 +198,14 @@ class LeadershipTest {
               }
             });
     try (var workers =
-        client
-            .workers()
+        client.toBuilder()
             .queue("default", 1)
             .pollOnly(true)
             .serviceInterval(Duration.ofMillis(20))
             .stopTimeout(Duration.ofSeconds(5))
             .errorHandler(errors::add)
-            .add(TYPE, context -> {})
+            .worker(TYPE, context -> {})
+            .build()
             .start()) {
       assertNotNull(starts.poll(5, TimeUnit.SECONDS));
       var original = lease(client);
@@ -235,8 +235,7 @@ class LeadershipTest {
     var secondCheck = new CountDownLatch(1);
     var errors = new LinkedBlockingQueue<Throwable>();
     var first =
-        client
-            .workers()
+        client.toBuilder()
             .queue("default", 1)
             .id("first")
             .serviceInterval(Duration.ofHours(1))
@@ -247,7 +246,8 @@ class LeadershipTest {
                   if (event.equals("listen_ready")) ready.countDown();
                   if (event.equals("leadership_check")) firstCheck.countDown();
                 })
-            .add(TYPE, context -> {})
+            .worker(TYPE, context -> {})
+            .build()
             .start();
     try (first) {
       assertTrue(firstCheck.await(5, TimeUnit.SECONDS));
@@ -260,8 +260,7 @@ class LeadershipTest {
                 }
               });
       try (var second =
-          follower
-              .workers()
+          follower.toBuilder()
               .queue("default", 1)
               .id("second")
               .serviceInterval(Duration.ofHours(1))
@@ -272,7 +271,8 @@ class LeadershipTest {
                     if (event.equals("listen_ready")) ready.countDown();
                     if (event.equals("leadership_check")) secondCheck.countDown();
                   })
-              .add(TYPE, context -> {})
+              .worker(TYPE, context -> {})
+              .build()
               .start()) {
         assertTrue(ready.await(5, TimeUnit.SECONDS));
         assertTrue(secondCheck.await(5, TimeUnit.SECONDS));
@@ -312,8 +312,7 @@ class LeadershipTest {
               }
             });
     var first =
-        blocked
-            .workers()
+        blocked.toBuilder()
             .queue("default", 1)
             .id("old-leader")
             .serviceInterval(Duration.ofHours(1))
@@ -323,7 +322,8 @@ class LeadershipTest {
                 event -> {
                   if (event.equals("listen_ready")) ready.countDown();
                 })
-            .add(TYPE, context -> {})
+            .worker(TYPE, context -> {})
+            .build()
             .start();
     try {
       assertTrue(ready.await(5, TimeUnit.SECONDS));
@@ -338,14 +338,15 @@ class LeadershipTest {
                 }
               });
       try (var second =
-          peer.workers()
+          peer.toBuilder()
               .queue("default", 1)
               .id("new-leader")
               .pollOnly(true)
               .serviceInterval(Duration.ofMillis(20))
               .stopTimeout(Duration.ofSeconds(5))
               .errorHandler(errors::add)
-              .add(TYPE, context -> {})
+              .worker(TYPE, context -> {})
+              .build()
               .start()) {
         base.requestResign();
         assertTrue(elected.await(5, TimeUnit.SECONDS));
@@ -379,14 +380,14 @@ class LeadershipTest {
                   }
                 });
     try (var workers =
-        client
-            .workers()
+        client.toBuilder()
             .queue("default", 1)
             .pollOnly(true)
             .serviceInterval(Duration.ofMillis(20))
             .stopTimeout(Duration.ofSeconds(5))
             .errorHandler(errors::add)
-            .add(TYPE, context -> {})
+            .worker(TYPE, context -> {})
+            .build()
             .start()) {
       assertTrue(started.await(5, TimeUnit.SECONDS));
       assertTrue(workers.isLeader());
@@ -419,8 +420,7 @@ class LeadershipTest {
                   }
                 });
     var workers =
-        client
-            .workers()
+        client.toBuilder()
             .queue("default", 1)
             .pollOnly(true)
             .serviceInterval(Duration.ofHours(1))
@@ -429,7 +429,8 @@ class LeadershipTest {
                 event -> {
                   if (event.equals("leadership_check")) checked.countDown();
                 })
-            .add(TYPE, context -> {})
+            .worker(TYPE, context -> {})
+            .build()
             .start();
     try {
       assertTrue(checked.await(5, TimeUnit.SECONDS));

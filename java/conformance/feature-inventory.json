@@ -7,7 +7,7 @@
       "id": "client.Driver",
       "rationale": "Unstable Go accessor for the internal driver seam.",
       "source": "client.go:river.Client.Driver",
-      "java_surface": "Client, Workers, Queues, Database"
+      "java_surface": "Client, RunHandle, Workers, Queues, Database"
     },
     {
       "applicability": "api_equivalent",
@@ -16,7 +16,7 @@
       "id": "client.ID",
       "rationale": "Accessor for the configured or generated client ID (see config.ID).",
       "source": "client.go:river.Client.ID",
-      "java_surface": "Client, Workers, Queues, Database"
+      "java_surface": "Client, RunHandle, Workers, Queues, Database"
     },
     {
       "applicability": "api_equivalent",
@@ -29,7 +29,7 @@
         "reference_insert_candidate_work"
       ],
       "source": "client.go:river.Client.Insert",
-      "java_surface": "Client, Workers, Queues, Database"
+      "java_surface": "Client, RunHandle, Workers, Queues, Database"
     },
     {
       "applicability": "api_equivalent",
@@ -41,7 +41,7 @@
         "typed_batch_insertion"
       ],
       "source": "client.go:river.Client.InsertMany",
-      "java_surface": "Client, Workers, Queues, Database"
+      "java_surface": "Client, RunHandle, Workers, Queues, Database"
     },
     {
       "applicability": "not_applicable",
@@ -50,7 +50,7 @@
       "id": "client.InsertManyFast",
       "rationale": "Ports don't offer fast insertion yet; batches use ordinary typed insertion.",
       "source": "client.go:river.Client.InsertManyFast",
-      "java_surface": "Client, Workers, Queues, Database"
+      "java_surface": "Client, RunHandle, Workers, Queues, Database"
     },
     {
       "applicability": "not_applicable",
@@ -59,7 +59,7 @@
       "id": "client.InsertManyFastTx",
       "rationale": "Ports don't offer fast insertion yet; batches use ordinary typed insertion.",
       "source": "client.go:river.Client.InsertManyFastTx",
-      "java_surface": "Client, Workers, Queues, Database"
+      "java_surface": "Client, RunHandle, Workers, Queues, Database"
     },
     {
       "applicability": "api_equivalent",
@@ -71,7 +71,7 @@
         "transactional_batch_insertion"
       ],
       "source": "client.go:river.Client.InsertManyTx",
-      "java_surface": "Client, Workers, Queues, Database"
+      "java_surface": "Client, RunHandle, Workers, Queues, Database"
     },
     {
       "applicability": "api_equivalent",
@@ -84,7 +84,7 @@
         "transaction_rollback_visibility"
       ],
       "source": "client.go:river.Client.InsertTx",
-      "java_surface": "Client, Workers, Queues, Database"
+      "java_surface": "Client, RunHandle, Workers, Queues, Database"
     },
     {
       "applicability": "api_equivalent",
@@ -98,7 +98,7 @@
         "remote_cancel_notification"
       ],
       "source": "client.go:river.Client.JobCancel",
-      "java_surface": "Client, Workers, Queues, Database"
+      "java_surface": "Client, RunHandle, Workers, Queues, Database"
     },
     {
       "applicability": "api_equivalent",
@@ -110,7 +110,7 @@
         "transactional_cross_language_cancel"
       ],
       "source": "client.go:river.Client.JobCancelTx",
-      "java_surface": "Client, Workers, Queues, Database"
+      "java_surface": "Client, RunHandle, Workers, Queues, Database"
     },
     {
       "applicability": "api_equivalent",
@@ -122,7 +122,7 @@
         "differential_job_crud"
       ],
       "source": "client.go:river.Client.JobDelete",
-      "java_surface": "Client, Workers, Queues, Database"
+      "java_surface": "Client, RunHandle, Workers, Queues, Database"
     },
     {
       "applicability": "api_equivalent",
@@ -134,7 +134,7 @@
         "bulk_delete_safety"
       ],
       "source": "client.go:river.Client.JobDeleteMany",
-      "java_surface": "Client, Workers, Queues, Database"
+      "java_surface": "Client, RunHandle, Workers, Queues, Database"
     },
     {
       "applicability": "api_equivalent",
@@ -146,7 +146,7 @@
         "transactional_crud_commit_rollback"
       ],
       "source": "client.go:river.Client.JobDeleteManyTx",
-      "java_surface": "Client, Workers, Queues, Database"
+      "java_surface": "Client, RunHandle, Workers, Queues, Database"
     },
     {
       "applicability": "api_equivalent",
@@ -158,7 +158,7 @@
         "transactional_crud_commit_rollback"
       ],
       "source": "client.go:river.Client.JobDeleteTx",
-      "java_surface": "Client, Workers, Queues, Database"
+      "java_surface": "Client, RunHandle, Workers, Queues, Database"
     },
     {
       "applicability": "api_equivalent",
@@ -170,7 +170,7 @@
         "differential_job_crud"
       ],
       "source": "client.go:river.Client.JobGet",
-      "java_surface": "Client, Workers, Queues, Database"
+      "java_surface": "Client, RunHandle, Workers, Queues, Database"
     },
     {
       "applicability": "api_equivalent",
@@ -182,7 +182,7 @@
         "transactional_crud_commit_rollback"
       ],
       "source": "client.go:river.Client.JobGetTx",
-      "java_surface": "Client, Workers, Queues, Database"
+      "java_surface": "Client, RunHandle, Workers, Queues, Database"
     },
     {
       "applicability": "api_equivalent",
@@ -194,7 +194,7 @@
         "differential_job_list_filters_and_cursors"
       ],
       "source": "client.go:river.Client.JobList",
-      "java_surface": "Client, Workers, Queues, Database"
+      "java_surface": "Client, RunHandle, Workers, Queues, Database"
     },
     {
       "applicability": "api_equivalent",
@@ -206,7 +206,7 @@
         "transactional_crud_commit_rollback"
       ],
       "source": "client.go:river.Client.JobListTx",
-      "java_surface": "Client, Workers, Queues, Database"
+      "java_surface": "Client, RunHandle, Workers, Queues, Database"
     },
     {
       "applicability": "api_equivalent",
@@ -219,7 +219,7 @@
         "differential_job_crud"
       ],
       "source": "client.go:river.Client.JobRetry",
-      "java_surface": "Client, Workers, Queues, Database"
+      "java_surface": "Client, RunHandle, Workers, Queues, Database"
     },
     {
       "applicability": "api_equivalent",
@@ -231,7 +231,7 @@
         "transactional_crud_commit_rollback"
       ],
       "source": "client.go:river.Client.JobRetryTx",
-      "java_surface": "Client, Workers, Queues, Database"
+      "java_surface": "Client, RunHandle, Workers, Queues, Database"
     },
     {
       "applicability": "api_equivalent",
@@ -243,7 +243,7 @@
         "differential_job_crud"
       ],
       "source": "client.go:river.Client.JobUpdate",
-      "java_surface": "Client, Workers, Queues, Database"
+      "java_surface": "Client, RunHandle, Workers, Queues, Database"
     },
     {
       "applicability": "api_equivalent",
@@ -255,7 +255,7 @@
         "transactional_crud_commit_rollback"
       ],
       "source": "client.go:river.Client.JobUpdateTx",
-      "java_surface": "Client, Workers, Queues, Database"
+      "java_surface": "Client, RunHandle, Workers, Queues, Database"
     },
     {
       "applicability": "api_equivalent",
@@ -267,7 +267,7 @@
         "mixed_request_resign_terms"
       ],
       "source": "client.go:river.Client.Notify",
-      "java_surface": "Client, Workers, Queues, Database"
+      "java_surface": "Client, RunHandle, Workers, Queues, Database"
     },
     {
       "applicability": "api_equivalent",
@@ -276,7 +276,7 @@
       "id": "client.PeriodicJobs",
       "rationale": "Language-native API to add or remove periodic jobs at runtime; the enqueue behavior itself is classified under config.PeriodicJobs.",
       "source": "client.go:river.Client.PeriodicJobs",
-      "java_surface": "Workers.periodicJobs, PeriodicJobBundle"
+      "java_surface": "RunHandle.periodicJobs, PeriodicJobBundle"
     },
     {
       "applicability": "not_applicable",
@@ -285,7 +285,7 @@
       "id": "client.Pilot",
       "rationale": "Unstable Go accessor for the extension seam.",
       "source": "client.go:river.Client.Pilot",
-      "java_surface": "Client, Workers, Queues, Database"
+      "java_surface": "Client, RunHandle, Workers, Queues, Database"
     },
     {
       "applicability": "api_equivalent",
@@ -297,7 +297,7 @@
         "differential_queue_crud"
       ],
       "source": "client.go:river.Client.QueueGet",
-      "java_surface": "Client, Workers, Queues, Database"
+      "java_surface": "Client, RunHandle, Workers, Queues, Database"
     },
     {
       "applicability": "api_equivalent",
@@ -309,7 +309,7 @@
         "transactional_queue_operations"
       ],
       "source": "client.go:river.Client.QueueGetTx",
-      "java_surface": "Client, Workers, Queues, Database"
+      "java_surface": "Client, RunHandle, Workers, Queues, Database"
     },
     {
       "applicability": "api_equivalent",
@@ -321,7 +321,7 @@
         "differential_queue_crud"
       ],
       "source": "client.go:river.Client.QueueList",
-      "java_surface": "Client, Workers, Queues, Database"
+      "java_surface": "Client, RunHandle, Workers, Queues, Database"
     },
     {
       "applicability": "api_equivalent",
@@ -333,7 +333,7 @@
         "transactional_queue_operations"
       ],
       "source": "client.go:river.Client.QueueListTx",
-      "java_surface": "Client, Workers, Queues, Database"
+      "java_surface": "Client, RunHandle, Workers, Queues, Database"
     },
     {
       "applicability": "api_equivalent",
@@ -345,7 +345,7 @@
         "pause_resume_notification"
       ],
       "source": "client.go:river.Client.QueuePause",
-      "java_surface": "Client, Workers, Queues, Database"
+      "java_surface": "Client, RunHandle, Workers, Queues, Database"
     },
     {
       "applicability": "api_equivalent",
@@ -357,7 +357,7 @@
         "transactional_queue_operations"
       ],
       "source": "client.go:river.Client.QueuePauseTx",
-      "java_surface": "Client, Workers, Queues, Database"
+      "java_surface": "Client, RunHandle, Workers, Queues, Database"
     },
     {
       "applicability": "api_equivalent",
@@ -369,7 +369,7 @@
         "pause_resume_notification"
       ],
       "source": "client.go:river.Client.QueueResume",
-      "java_surface": "Client, Workers, Queues, Database"
+      "java_surface": "Client, RunHandle, Workers, Queues, Database"
     },
     {
       "applicability": "api_equivalent",
@@ -381,7 +381,7 @@
         "transactional_queue_operations"
       ],
       "source": "client.go:river.Client.QueueResumeTx",
-      "java_surface": "Client, Workers, Queues, Database"
+      "java_surface": "Client, RunHandle, Workers, Queues, Database"
     },
     {
       "applicability": "api_equivalent",
@@ -393,7 +393,7 @@
         "differential_queue_crud"
       ],
       "source": "client.go:river.Client.QueueUpdate",
-      "java_surface": "Client, Workers, Queues, Database"
+      "java_surface": "Client, RunHandle, Workers, Queues, Database"
     },
     {
       "applicability": "api_equivalent",
@@ -405,7 +405,7 @@
         "transactional_queue_operations"
       ],
       "source": "client.go:river.Client.QueueUpdateTx",
-      "java_surface": "Client, Workers, Queues, Database"
+      "java_surface": "Client, RunHandle, Workers, Queues, Database"
     },
     {
       "applicability": "api_equivalent",
@@ -417,7 +417,7 @@
         "dynamic_queue_add_reconfigure_remove"
       ],
       "source": "client.go:river.Client.Queues",
-      "java_surface": "Client, Workers, Queues, Database"
+      "java_surface": "Client, RunHandle, Workers, Queues, Database"
     },
     {
       "applicability": "api_equivalent",
@@ -426,7 +426,7 @@
       "id": "client.Schema",
       "rationale": "Accessor for the configured schema (see config.Schema).",
       "source": "client.go:river.Client.Schema",
-      "java_surface": "Client, Workers, Queues, Database"
+      "java_surface": "Client, RunHandle, Workers, Queues, Database"
     },
     {
       "applicability": "api_equivalent",
@@ -438,7 +438,7 @@
         "sqlite_runtime_lifecycle_shutdown"
       ],
       "source": "client.go:river.Client.Start",
-      "java_surface": "Client, Workers, Queues, Database"
+      "java_surface": "Client, RunHandle, Workers, Queues, Database"
     },
     {
       "applicability": "api_equivalent",
@@ -450,7 +450,7 @@
         "sqlite_runtime_lifecycle_shutdown"
       ],
       "source": "client.go:river.Client.Stop",
-      "java_surface": "Client, Workers, Queues, Database"
+      "java_surface": "Client, RunHandle, Workers, Queues, Database"
     },
     {
       "applicability": "api_equivalent",
@@ -462,7 +462,7 @@
         "ignored_cancellation_hard_abort"
       ],
       "source": "client.go:river.Client.StopAndCancel",
-      "java_surface": "Client, Workers, Queues, Database"
+      "java_surface": "Client, RunHandle, Workers, Queues, Database"
     },
     {
       "applicability": "api_equivalent",
@@ -471,8 +471,8 @@
       "id": "client.Stopped",
       "rationale": "Go channel closed when the client has fully stopped; other languages signal completion in their own idiom.",
       "source": "client.go:river.Client.Stopped",
-      "java_surface": "Client, Workers, Queues, Database",
-      "java_difference": "Workers.close and stop await shutdown directly; applications can run either through CompletableFuture if they need a completion handle."
+      "java_surface": "Client, RunHandle, Workers, Queues, Database",
+      "java_difference": "RunHandle.close and stop await shutdown directly; applications can run either through CompletableFuture if they need a completion handle."
     },
     {
       "applicability": "api_equivalent",
@@ -485,7 +485,7 @@
         "sqlite_runtime_extensions_resumable_subscriptions"
       ],
       "source": "client.go:river.Client.Subscribe",
-      "java_surface": "Client, Workers, Queues, Database"
+      "java_surface": "Client, RunHandle, Workers, Queues, Database"
     },
     {
       "applicability": "not_applicable",
@@ -494,7 +494,7 @@
       "id": "client.SubscribeConfig",
       "rationale": "Go-specific variant of Subscribe that overrides the channel buffer size.",
       "source": "client.go:river.Client.SubscribeConfig",
-      "java_surface": "Client, Workers, Queues, Database"
+      "java_surface": "Client, RunHandle, Workers, Queues, Database"
     },
     {
       "applicability": "not_applicable",
@@ -503,7 +503,7 @@
       "id": "config.AdvisoryLockPrefix",
       "rationale": "Copied into the periodic job enqueuer's configuration but not used to derive any lock key in this version; it has no persisted or cross-process effect to match.",
       "source": "client.go:river.Config.AdvisoryLockPrefix",
-      "java_surface": "Workers.Builder, JobType, Hook, Middleware, Database"
+      "java_surface": "Client.Builder, JobType, Hook, Middleware, Database"
     },
     {
       "applicability": "protocol_visible",
@@ -515,7 +515,7 @@
         "maintenance_job_cleaner_retention"
       ],
       "source": "client.go:river.Config.CancelledJobRetentionPeriod",
-      "java_surface": "Workers.Builder, JobType, Hook, Middleware, Database"
+      "java_surface": "Client.Builder, JobType, Hook, Middleware, Database"
     },
     {
       "applicability": "protocol_visible",
@@ -527,7 +527,7 @@
         "maintenance_job_cleaner_retention"
       ],
       "source": "client.go:river.Config.CompletedJobRetentionPeriod",
-      "java_surface": "Workers.Builder, JobType, Hook, Middleware, Database"
+      "java_surface": "Client.Builder, JobType, Hook, Middleware, Database"
     },
     {
       "applicability": "protocol_visible",
@@ -539,7 +539,7 @@
         "maintenance_job_cleaner_retention"
       ],
       "source": "client.go:river.Config.DiscardedJobRetentionPeriod",
-      "java_surface": "Workers.Builder, JobType, Hook, Middleware, Database"
+      "java_surface": "Client.Builder, JobType, Hook, Middleware, Database"
     },
     {
       "applicability": "api_equivalent",
@@ -551,7 +551,7 @@
         "error_handler_cancel_override"
       ],
       "source": "client.go:river.Config.ErrorHandler",
-      "java_surface": "Workers.Builder, JobType, Hook, Middleware, Database"
+      "java_surface": "Client.Builder, JobType, Hook, Middleware, Database"
     },
     {
       "applicability": "api_equivalent",
@@ -560,7 +560,7 @@
       "id": "config.FetchCooldown",
       "rationale": "Per-client minimum interval between fetches (a throughput throttle), which also suppresses a client's repeated insert notification for a queue within the interval on every backend. Implementations expose an equivalent client-level knob with the same default and minimum. Rows are unaffected; the reference adapter's 1 ms setting keeps notification scenarios deterministic.",
       "source": "client.go:river.Config.FetchCooldown",
-      "java_surface": "Workers.Builder, JobType, Hook, Middleware, Database",
+      "java_surface": "Client.Builder, JobType, Hook, Middleware, Database",
       "java_difference": "Wakeups are coalesced; Java does not expose a separate fetch cooldown knob."
     },
     {
@@ -570,7 +570,7 @@
       "id": "config.FetchOnlyKnownKinds",
       "rationale": "Restricts a client's claims to the kinds of its registered workers, including aliases, so jobs of other kinds stay available without using attempts. The filter is local to the claiming client; implementations expose an equivalent option, and the jobs it leaves are ordinary available rows any client may work.",
       "source": "client.go:river.Config.FetchOnlyKnownKinds",
-      "java_surface": "Workers.Builder, JobType, Hook, Middleware, Database"
+      "java_surface": "Client.Builder, JobType, Hook, Middleware, Database"
     },
     {
       "applicability": "api_equivalent",
@@ -583,7 +583,7 @@
         "notification_only_wakeups"
       ],
       "source": "client.go:river.Config.FetchPollInterval",
-      "java_surface": "Workers.Builder, JobType, Hook, Middleware, Database"
+      "java_surface": "Client.Builder, JobType, Hook, Middleware, Database"
     },
     {
       "applicability": "api_equivalent",
@@ -605,7 +605,7 @@
         "sqlite_runtime_attempted_by_ordering"
       ],
       "source": "client.go:river.Config.ID",
-      "java_surface": "Workers.Builder, JobType, Hook, Middleware, Database"
+      "java_surface": "Client.Builder, JobType, Hook, Middleware, Database"
     },
     {
       "applicability": "internal",
@@ -614,7 +614,7 @@
       "id": "config.JobCleanerTimeout",
       "rationale": "Timeout for individual job cleaner queries; bounds local work only and changes no persisted outcome.",
       "source": "client.go:river.Config.JobCleanerTimeout",
-      "java_surface": "Workers.Builder, JobType, Hook, Middleware, Database"
+      "java_surface": "Client.Builder, JobType, Hook, Middleware, Database"
     },
     {
       "applicability": "not_applicable",
@@ -623,7 +623,7 @@
       "id": "config.JobInsertMiddleware",
       "rationale": "Deprecated Go field superseded by Plugins. The insert-middleware concept is classified under extension.rivertype.JobInsertMiddleware.",
       "source": "client.go:river.Config.JobInsertMiddleware",
-      "java_surface": "Workers.Builder, JobType, Hook, Middleware, Database"
+      "java_surface": "Client.Builder, JobType, Hook, Middleware, Database"
     },
     {
       "applicability": "api_equivalent",
@@ -635,7 +635,7 @@
         "stuck_job_detection"
       ],
       "source": "client.go:river.Config.JobStuckHandler",
-      "java_surface": "Workers.Builder, JobType, Hook, Middleware, Database"
+      "java_surface": "Client.Builder, JobType, Hook, Middleware, Database"
     },
     {
       "applicability": "api_equivalent",
@@ -647,7 +647,7 @@
         "stuck_job_detection"
       ],
       "source": "client.go:river.Config.JobStuckThreshold",
-      "java_surface": "Workers.Builder, JobType, Hook, Middleware, Database"
+      "java_surface": "Client.Builder, JobType, Hook, Middleware, Database"
     },
     {
       "applicability": "protocol_visible",
@@ -659,7 +659,7 @@
         "timeout_cancellation"
       ],
       "source": "client.go:river.Config.JobTimeout",
-      "java_surface": "Workers.Builder, JobType, Hook, Middleware, Database"
+      "java_surface": "Client.Builder, JobType, Hook, Middleware, Database"
     },
     {
       "applicability": "protocol_visible",
@@ -673,7 +673,7 @@
         "sqlite_runtime_leader_election_disabled"
       ],
       "source": "client.go:river.Config.LeaderElectionDisabled",
-      "java_surface": "Workers.Builder, JobType, Hook, Middleware, Database"
+      "java_surface": "Client.Builder, JobType, Hook, Middleware, Database"
     },
     {
       "applicability": "api_equivalent",
@@ -682,8 +682,8 @@
       "id": "config.Logger",
       "rationale": "Each implementation uses its own logging facility.",
       "source": "client.go:river.Config.Logger",
-      "java_surface": "Workers.Builder, JobType, Hook, Middleware, Database",
-      "java_difference": "Uses System.Logger and Workers.Builder.errorHandler instead of a logger object on the client."
+      "java_surface": "Client.Builder, JobType, Hook, Middleware, Database",
+      "java_difference": "Uses System.Logger and Client.Builder.errorHandler instead of a logger object on the client."
     },
     {
       "applicability": "protocol_visible",
@@ -696,7 +696,7 @@
         "reference_insert_candidate_work"
       ],
       "source": "client.go:river.Config.MaxAttempts",
-      "java_surface": "Workers.Builder, JobType, Hook, Middleware, Database",
+      "java_surface": "Client.Builder, JobType, Hook, Middleware, Database",
       "java_difference": "Configure insert defaults on JobType instead of a process-wide client default."
     },
     {
@@ -721,7 +721,7 @@
         "sqlite_runtime_periodic_scheduler"
       ],
       "source": "client.go:river.Config.PeriodicJobs",
-      "java_surface": "Workers.Builder, JobType, Hook, Middleware, Database"
+      "java_surface": "Client.Builder, JobType, Hook, Middleware, Database"
     },
     {
       "applicability": "api_equivalent",
@@ -747,7 +747,7 @@
         "sqlite_runtime_poll_only_recovery"
       ],
       "source": "client.go:river.Config.PollOnly",
-      "java_surface": "Workers.Builder, JobType, Hook, Middleware, Database"
+      "java_surface": "Client.Builder, JobType, Hook, Middleware, Database"
     },
     {
       "applicability": "protocol_visible",
@@ -760,7 +760,7 @@
         "dynamic_queue_add_reconfigure_remove"
       ],
       "source": "client.go:river.Config.Queues",
-      "java_surface": "Workers.Builder, JobType, Hook, Middleware, Database"
+      "java_surface": "Client.Builder, JobType, Hook, Middleware, Database"
     },
     {
       "applicability": "protocol_visible",
@@ -772,7 +772,7 @@
         "maintenance_reindexer_skips_artifacts"
       ],
       "source": "client.go:river.Config.ReindexerIndexNames",
-      "java_surface": "Workers.Builder, JobType, Hook, Middleware, Database"
+      "java_surface": "Client.Builder, JobType, Hook, Middleware, Database"
     },
     {
       "applicability": "protocol_visible",
@@ -784,7 +784,7 @@
         "maintenance_reindexer_skips_artifacts"
       ],
       "source": "client.go:river.Config.ReindexerSchedule",
-      "java_surface": "Workers.Builder, JobType, Hook, Middleware, Database",
+      "java_surface": "Client.Builder, JobType, Hook, Middleware, Database",
       "java_difference": "Supports a duration override or the default daily UTC schedule; arbitrary reindex cron schedules are not exposed."
     },
     {
@@ -794,7 +794,7 @@
       "id": "config.ReindexerTimeout",
       "rationale": "Per-reindex operation timeout; bounds local work only.",
       "source": "client.go:river.Config.ReindexerTimeout",
-      "java_surface": "Workers.Builder, JobType, Hook, Middleware, Database"
+      "java_surface": "Client.Builder, JobType, Hook, Middleware, Database"
     },
     {
       "applicability": "protocol_visible",
@@ -808,7 +808,7 @@
         "reference_process_kill_candidate_rescue"
       ],
       "source": "client.go:river.Config.RescueStuckJobsAfter",
-      "java_surface": "Workers.Builder, JobType, Hook, Middleware, Database"
+      "java_surface": "Client.Builder, JobType, Hook, Middleware, Database"
     },
     {
       "applicability": "protocol_visible",
@@ -821,7 +821,7 @@
         "deterministic_retry_clock_rng"
       ],
       "source": "client.go:river.Config.RetryPolicy",
-      "java_surface": "Workers.Builder, JobType, Hook, Middleware, Database"
+      "java_surface": "Client.Builder, JobType, Hook, Middleware, Database"
     },
     {
       "applicability": "protocol_visible",
@@ -834,7 +834,7 @@
         "custom_schema_reference_migrate_candidate_work"
       ],
       "source": "client.go:river.Config.Schema",
-      "java_surface": "Workers.Builder, JobType, Hook, Middleware, Database"
+      "java_surface": "Client.Builder, JobType, Hook, Middleware, Database"
     },
     {
       "applicability": "api_equivalent",
@@ -843,7 +843,7 @@
       "id": "config.SkipJobKindValidation",
       "rationale": "Deprecated escape hatch that skips kind-format validation at insert time; implementations may offer an equivalent legacy-kind option.",
       "source": "client.go:river.Config.SkipJobKindValidation",
-      "java_surface": "Workers.Builder, JobType, Hook, Middleware, Database",
+      "java_surface": "Client.Builder, JobType, Hook, Middleware, Database",
       "java_difference": "New JobType values require the Go-compatible kind format; no legacy validation bypass is exposed."
     },
     {
@@ -856,7 +856,7 @@
         "mixed_unknown_kind_error"
       ],
       "source": "client.go:river.Config.SkipUnknownJobCheck",
-      "java_surface": "Workers.Builder, JobType, Hook, Middleware, Database",
+      "java_surface": "Client.Builder, JobType, Hook, Middleware, Database",
       "java_difference": "Inserts are independent of worker registrations, which permits inserting jobs owned by other languages."
     },
     {
@@ -869,7 +869,7 @@
         "hard_shutdown_soft_stop_classification"
       ],
       "source": "client.go:river.Config.SoftStopTimeout",
-      "java_surface": "Workers.Builder, JobType, Hook, Middleware, Database"
+      "java_surface": "Client.Builder, JobType, Hook, Middleware, Database"
     },
     {
       "applicability": "not_applicable",
@@ -878,7 +878,7 @@
       "id": "config.Test",
       "rationale": "Go test-environment settings (time generator, unique enforcement toggle). Conformance drives time through the adapter's clock_set instead.",
       "source": "client.go:river.Config.Test",
-      "java_surface": "Workers.Builder, JobType, Hook, Middleware, Database"
+      "java_surface": "Client.Builder, JobType, Hook, Middleware, Database"
     },
     {
       "applicability": "not_applicable",
@@ -887,7 +887,7 @@
       "id": "config.TestOnly",
       "rationale": "Go test-suite switch that removes startup jitter; not part of any production behavior.",
       "source": "client.go:river.Config.TestOnly",
-      "java_surface": "Workers.Builder, JobType, Hook, Middleware, Database"
+      "java_surface": "Client.Builder, JobType, Hook, Middleware, Database"
     },
     {
       "applicability": "not_applicable",
@@ -896,7 +896,7 @@
       "id": "config.WorkerMiddleware",
       "rationale": "Deprecated Go field superseded by Plugins. The worker-middleware concept is classified under extension.rivertype.WorkerMiddleware.",
       "source": "client.go:river.Config.WorkerMiddleware",
-      "java_surface": "Workers.Builder, JobType, Hook, Middleware, Database"
+      "java_surface": "Client.Builder, JobType, Hook, Middleware, Database"
     },
     {
       "applicability": "api_equivalent",
@@ -905,7 +905,7 @@
       "id": "config.Workers",
       "rationale": "Language-native worker registry mapping kinds to handlers.",
       "source": "client.go:river.Config.Workers",
-      "java_surface": "Workers.Builder, JobType, Hook, Middleware, Database"
+      "java_surface": "Client.Builder, JobType, Hook, Middleware, Database"
     },
     {
       "applicability": "driver_specific",
@@ -1773,7 +1773,7 @@
       "id": "event_kind.job_cancelled",
       "rationale": "Local subscription event in each implementation's idiom; not yet asserted by a shared scenario.",
       "source": "event.go:river.EventKindJobCancelled",
-      "java_surface": "Workers.Event and Workers.subscribe"
+      "java_surface": "Client.Event and Client.subscribe"
     },
     {
       "applicability": "api_equivalent",
@@ -1785,7 +1785,7 @@
         "sqlite_runtime_extensions_resumable_subscriptions"
       ],
       "source": "event.go:river.EventKindJobCompleted",
-      "java_surface": "Workers.Event and Workers.subscribe"
+      "java_surface": "Client.Event and Client.subscribe"
     },
     {
       "applicability": "api_equivalent",
@@ -1797,7 +1797,7 @@
         "sqlite_runtime_extensions_resumable_subscriptions"
       ],
       "source": "event.go:river.EventKindJobFailed",
-      "java_surface": "Workers.Event and Workers.subscribe"
+      "java_surface": "Client.Event and Client.subscribe"
     },
     {
       "applicability": "api_equivalent",
@@ -1806,7 +1806,7 @@
       "id": "event_kind.job_interrupted",
       "rationale": "Local subscription event in each implementation's idiom; not yet asserted by a shared scenario.",
       "source": "event.go:river.EventKindJobInterrupted",
-      "java_surface": "Workers.Event and Workers.subscribe"
+      "java_surface": "Client.Event and Client.subscribe"
     },
     {
       "applicability": "api_equivalent",
@@ -1815,7 +1815,7 @@
       "id": "event_kind.job_snoozed",
       "rationale": "Local subscription event in each implementation's idiom; not yet asserted by a shared scenario.",
       "source": "event.go:river.EventKindJobSnoozed",
-      "java_surface": "Workers.Event and Workers.subscribe"
+      "java_surface": "Client.Event and Client.subscribe"
     },
     {
       "applicability": "api_equivalent",
@@ -1828,7 +1828,7 @@
         "sqlite_runtime_remote_queue_subscription_events"
       ],
       "source": "event.go:river.EventKindQueuePaused",
-      "java_surface": "Workers.Event and Workers.subscribe"
+      "java_surface": "Client.Event and Client.subscribe"
     },
     {
       "applicability": "api_equivalent",
@@ -1841,7 +1841,7 @@
         "sqlite_runtime_remote_queue_subscription_events"
       ],
       "source": "event.go:river.EventKindQueueResumed",
-      "java_surface": "Workers.Event and Workers.subscribe"
+      "java_surface": "Client.Event and Client.subscribe"
     },
     {
       "applicability": "internal",
@@ -2621,7 +2621,7 @@
         "reserved_metadata_cross_engine"
       ],
       "source": "riverdriver/riverpgxv5/internal/dbsqlc/river_job.sql:JobCancel, riverdriver/riversqlite/internal/dbsqlc/river_job.sql:JobCancel",
-      "java_surface": "WorkContext, Workers, Client"
+      "java_surface": "WorkContext, RunHandle, Workers, Client"
     },
     {
       "applicability": "protocol_visible",
@@ -2634,7 +2634,7 @@
         "reserved_metadata_cross_engine"
       ],
       "source": "client.go:river.Client.jobUpdate, recorded_output.go:river.RecordOutput, rivertype/river_type.go:rivertype.MetadataKeyOutput",
-      "java_surface": "WorkContext, Workers, Client"
+      "java_surface": "WorkContext, RunHandle, Workers, Client"
     },
     {
       "applicability": "protocol_visible",
@@ -2646,7 +2646,7 @@
         "periodic_run_on_start"
       ],
       "source": "internal/maintenance/periodic_job_enqueuer.go:maintenance.PeriodicJobEnqueuer.insertParamsFromConstructor",
-      "java_surface": "WorkContext, Workers, Client"
+      "java_surface": "WorkContext, RunHandle, Workers, Client"
     },
     {
       "applicability": "protocol_visible",
@@ -2658,7 +2658,7 @@
         "reserved_metadata_cross_engine"
       ],
       "source": "riverlog/river_log.go:riverlog.Middleware.Work, riverlog/river_log.go:riverlog.appendLogDataWithCap, riverlog/river_log.go:riverlog.metadataKey, riverlog/river_log.go:riverlog.metadataWithLog",
-      "java_surface": "WorkContext, Workers, Client"
+      "java_surface": "WorkContext, RunHandle, Workers, Client"
     },
     {
       "applicability": "protocol_visible",
@@ -2671,7 +2671,7 @@
         "sqlite_runtime_periodic_scheduler"
       ],
       "source": "internal/maintenance/periodic_job_enqueuer.go:maintenance.PeriodicJobEnqueuer.insertParamsFromConstructor, internal/rivercommon/river_common.go:rivercommon.MetadataKeyPeriodicJobID",
-      "java_surface": "WorkContext, Workers, Client"
+      "java_surface": "WorkContext, RunHandle, Workers, Client"
     },
     {
       "applicability": "protocol_visible",
@@ -2683,7 +2683,7 @@
         "reserved_metadata_cross_engine"
       ],
       "source": "internal/rivercommon/river_common.go:rivercommon.MetadataKeyRescueCount, riverdriver/riverpgxv5/internal/dbsqlc/river_job.sql:JobRescueMany, riverdriver/riversqlite/internal/dbsqlc/river_job.sql:JobRescue",
-      "java_surface": "WorkContext, Workers, Client"
+      "java_surface": "WorkContext, RunHandle, Workers, Client"
     },
     {
       "applicability": "protocol_visible",
@@ -2696,7 +2696,7 @@
         "resumable_validation"
       ],
       "source": "internal/rivercommon/river_common.go:rivercommon.MetadataKeyResumableCursor, internal/riverplugin/plugin.go:riverplugin.ResumableMiddleware.Work, resumable_step_tx.go:river.resumableSetStepTx",
-      "java_surface": "WorkContext, Workers, Client"
+      "java_surface": "WorkContext, RunHandle, Workers, Client"
     },
     {
       "applicability": "protocol_visible",
@@ -2710,7 +2710,7 @@
         "resumable_validation"
       ],
       "source": "internal/rivercommon/river_common.go:rivercommon.MetadataKeyResumableStep, internal/riverplugin/plugin.go:riverplugin.ResumableMiddleware.Work, resumable_step_tx.go:river.resumableSetStepTx",
-      "java_surface": "WorkContext, Workers, Client"
+      "java_surface": "WorkContext, RunHandle, Workers, Client"
     },
     {
       "applicability": "protocol_visible",
@@ -2723,7 +2723,7 @@
         "sqlite_insert_get_unique_cross_language"
       ],
       "source": "riverdriver/unique_insert.go:riverdriver.UniqueInsertMetadataKey",
-      "java_surface": "WorkContext, Workers, Client"
+      "java_surface": "WorkContext, RunHandle, Workers, Client"
     },
     {
       "applicability": "protocol_visible",
@@ -2736,7 +2736,7 @@
         "snooze_once_metadata_transition"
       ],
       "source": "internal/jobexecutor/job_executor.go:jobexecutor.JobExecutor.reportResult",
-      "java_surface": "WorkContext, Workers, Client"
+      "java_surface": "WorkContext, RunHandle, Workers, Client"
     },
     {
       "applicability": "internal",
@@ -2745,7 +2745,7 @@
       "id": "metadata_key.unique_key_conflict",
       "rationale": "Diagnostic marker the scheduler writes when it discards a scheduled or retryable job whose unique key conflicts with a live job. No reader acts on it and no shared scenario covers scheduler-time unique conflicts yet; promote to protocol_visible when one exists.",
       "source": "riverdriver/riverpgxv5/internal/dbsqlc/river_job.sql:JobSchedule, riverdriver/riversqlite/internal/dbsqlc/river_job.sql:JobScheduleSetDiscarded",
-      "java_surface": "WorkContext, Workers, Client"
+      "java_surface": "WorkContext, RunHandle, Workers, Client"
     },
     {
       "applicability": "protocol_visible",
@@ -2967,7 +2967,7 @@
         "remote_queue_subscription_events"
       ],
       "source": "producer.go:river.controlEventPayload",
-      "java_surface": "Client, Queues, Workers"
+      "java_surface": "Client, Queues, RunHandle"
     },
     {
       "applicability": "protocol_visible",
@@ -2980,7 +2980,7 @@
         "transactional_cross_language_cancel"
       ],
       "source": "producer.go:river.controlActionCancel",
-      "java_surface": "Client, Queues, Workers"
+      "java_surface": "Client, Queues, RunHandle"
     },
     {
       "applicability": "protocol_visible",
@@ -2992,7 +2992,7 @@
         "differential_queue_crud"
       ],
       "source": "producer.go:river.controlActionMetadataChanged",
-      "java_surface": "Client, Queues, Workers"
+      "java_surface": "Client, Queues, RunHandle"
     },
     {
       "applicability": "protocol_visible",
@@ -3005,7 +3005,7 @@
         "remote_queue_subscription_events"
       ],
       "source": "producer.go:river.controlActionPause",
-      "java_surface": "Client, Queues, Workers"
+      "java_surface": "Client, Queues, RunHandle"
     },
     {
       "applicability": "protocol_visible",
@@ -3018,7 +3018,7 @@
         "remote_queue_subscription_events"
       ],
       "source": "producer.go:river.controlActionResume",
-      "java_surface": "Client, Queues, Workers"
+      "java_surface": "Client, Queues, RunHandle"
     },
     {
       "applicability": "protocol_visible",
@@ -3031,7 +3031,7 @@
         "transactional_insert_notification_commit_only"
       ],
       "source": "producer.go:river.insertPayload",
-      "java_surface": "Client, Queues, Workers"
+      "java_surface": "Client, Queues, RunHandle"
     },
     {
       "applicability": "protocol_visible",
@@ -3044,7 +3044,7 @@
         "mixed_request_resign_terms"
       ],
       "source": "internal/leadership/elector.go:leadership.DBNotification",
-      "java_surface": "Client, Queues, Workers"
+      "java_surface": "Client, Queues, RunHandle"
     },
     {
       "applicability": "protocol_visible",
@@ -3056,7 +3056,7 @@
         "mixed_request_resign_terms"
       ],
       "source": "internal/leadership/elector.go:leadership.DBNotificationKindRequestResign",
-      "java_surface": "Client, Queues, Workers"
+      "java_surface": "Client, Queues, RunHandle"
     },
     {
       "applicability": "protocol_visible",
@@ -3069,7 +3069,7 @@
         "mixed_request_resign_terms"
       ],
       "source": "internal/leadership/elector.go:leadership.DBNotificationKindResigned",
-      "java_surface": "Client, Queues, Workers"
+      "java_surface": "Client, Queues, RunHandle"
     },
     {
       "applicability": "protocol_visible",
@@ -3082,7 +3082,7 @@
         "transactional_cross_language_cancel"
       ],
       "source": "riverdriver/riverpgxv5/internal/dbsqlc/river_job.sql:JobCancel",
-      "java_surface": "Client, Queues, Workers"
+      "java_surface": "Client, Queues, RunHandle"
     },
     {
       "applicability": "protocol_visible",
@@ -3094,7 +3094,7 @@
         "mixed_leader_failover_both_directions"
       ],
       "source": "riverdriver/riverpgxv5/internal/dbsqlc/river_leader.sql:LeaderResign",
-      "java_surface": "Client, Queues, Workers"
+      "java_surface": "Client, Queues, RunHandle"
     },
     {
       "applicability": "protocol_visible",
@@ -3107,7 +3107,7 @@
         "remote_cancel_notification"
       ],
       "source": "internal/notifier/notifier.go:notifier.NotificationTopicControl",
-      "java_surface": "Client, Queues, Workers"
+      "java_surface": "Client, Queues, RunHandle"
     },
     {
       "applicability": "protocol_visible",
@@ -3120,7 +3120,7 @@
         "transactional_insert_notification_commit_only"
       ],
       "source": "internal/notifier/notifier.go:notifier.NotificationTopicInsert",
-      "java_surface": "Client, Queues, Workers"
+      "java_surface": "Client, Queues, RunHandle"
     },
     {
       "applicability": "protocol_visible",
@@ -3133,7 +3133,7 @@
         "mixed_request_resign_terms"
       ],
       "source": "internal/notifier/notifier.go:notifier.NotificationTopicLeadership",
-      "java_surface": "Client, Queues, Workers"
+      "java_surface": "Client, Queues, RunHandle"
     },
     {
       "applicability": "protocol_visible",
@@ -3146,7 +3146,7 @@
         "sqlite_runtime_periodic_scheduler"
       ],
       "source": "periodic_job.go:river.PeriodicJobOpts.ID",
-      "java_surface": "Workers.Builder.periodic"
+      "java_surface": "Client.Builder.periodic"
     },
     {
       "applicability": "protocol_visible",
@@ -3158,7 +3158,7 @@
         "periodic_run_on_start"
       ],
       "source": "periodic_job.go:river.PeriodicJobOpts.RunOnStart",
-      "java_surface": "Workers.Builder.periodic"
+      "java_surface": "Client.Builder.periodic"
     },
     {
       "applicability": "api_equivalent",
@@ -3167,7 +3167,7 @@
       "id": "queue_config.FetchCooldown",
       "rationale": "Per-queue override of config.FetchCooldown for fetching only; local throughput throttle. Insert notifications always use the client-level cooldown.",
       "source": "client.go:river.QueueConfig.FetchCooldown",
-      "java_surface": "Workers.Builder.queue and Workers.addQueue",
+      "java_surface": "Client.Builder.queue and RunHandle.addQueue",
       "java_difference": "Wakeups are coalesced; Java does not expose a separate per-queue cooldown knob."
     },
     {
@@ -3177,7 +3177,7 @@
       "id": "queue_config.FetchPollInterval",
       "rationale": "Per-queue override of config.FetchPollInterval; local polling fallback.",
       "source": "client.go:river.QueueConfig.FetchPollInterval",
-      "java_surface": "Workers.Builder.queue and Workers.addQueue",
+      "java_surface": "Client.Builder.queue and RunHandle.addQueue",
       "java_difference": "Polling is configured per worker runtime; use separate runtimes for different polling policies."
     },
     {
@@ -3190,7 +3190,7 @@
         "dynamic_queue_add_reconfigure_remove"
       ],
       "source": "client.go:river.QueueConfig.MaxWorkers",
-      "java_surface": "Workers.Builder.queue and Workers.addQueue"
+      "java_surface": "Client.Builder.queue and RunHandle.addQueue"
     },
     {
       "applicability": "api_equivalent",

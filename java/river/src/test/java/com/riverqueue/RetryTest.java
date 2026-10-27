@@ -112,8 +112,7 @@ class RetryTest {
     var worked = new CompletableFuture<Job<String>>();
     var errors = new LinkedBlockingQueue<Throwable>();
     try (var workers =
-        client
-            .workers()
+        client.toBuilder()
             .queue("urgent", 1)
             .leadership(false)
             .pollOnly(mode.equals("local"))
@@ -125,16 +124,17 @@ class RetryTest {
                   if (event.equals("listen_ready")) listening.complete(null);
                 })
             .errorHandler(errors::add)
-            .add(
+            .worker(
                 TYPE,
                 context -> {
                   listening.get(5, TimeUnit.SECONDS);
                   if (context.args().equals("retry")) worked.complete(context.job());
                 })
+            .build()
             .start()) {
       // Completing the warmup drains startup wake-ups before testing retry's notification.
       idle.get(5, TimeUnit.SECONDS);
-      var actor = mode.equals("local") ? client : new Client(database);
+      var actor = mode.equals("local") ? workers.client() : new Client(database);
       if (mode.equals("transaction")) {
         try (var connection = database.connection()) {
           connection.setAutoCommit(false);

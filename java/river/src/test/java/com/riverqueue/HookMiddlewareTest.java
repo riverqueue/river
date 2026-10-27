@@ -202,9 +202,10 @@ class HookMiddlewareTest {
                         trace.add("after");
                       }
                     });
-    var completed = new CompletableFuture<Workers.Event>();
-    try (var workers = workers(river).add(TYPE, context -> trace.add("handler")).start();
-        var subscription = workers.subscribe(completed::complete)) {
+    var completed = new CompletableFuture<Client.Event>();
+    try (var workers =
+            workers(river).worker(TYPE, context -> trace.add("handler")).build().start();
+        var subscription = workers.client().subscribe(completed::complete)) {
       river.insert(TYPE, "one", InsertOptions.builder().maxAttempts(1).build());
       assertEquals(Job.State.DISCARDED, completed.get(5, TimeUnit.SECONDS).job().state());
     }
@@ -270,10 +271,10 @@ class HookMiddlewareTest {
                     }
                   });
     }
-    var completed = new CompletableFuture<Workers.Event>();
+    var completed = new CompletableFuture<Client.Event>();
     try (var workers =
             workers(river)
-                .add(
+                .worker(
                     TYPE,
                     context -> {
                       trace.add("handler");
@@ -284,8 +285,9 @@ class HookMiddlewareTest {
                         default -> {}
                       }
                     })
+                .build()
                 .start();
-        var subscription = workers.subscribe(completed::complete)) {
+        var subscription = workers.client().subscribe(completed::complete)) {
       river.insert(TYPE, "one", InsertOptions.builder().maxAttempts(1).build());
       var expected =
           action.equals("clear") || (outcome.equals("success") && action.equals("preserve"))
@@ -302,9 +304,8 @@ class HookMiddlewareTest {
     if (action.equals("clear")) assertNull(observed.get());
   }
 
-  private Workers.Builder workers(Client river) {
-    return river
-        .workers()
+  private Client.Builder workers(Client river) {
+    return river.toBuilder()
         .queue("default", 1)
         .leadership(false)
         .pollOnly(true)

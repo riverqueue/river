@@ -6,8 +6,8 @@ Java exposes every Go helper. Stored values and protocol behavior still follow G
 
 | Go surface | Java surface | Reason for the shape |
 | --- | --- | --- |
-| `NewClient`, `Config`, `Start`, `Stop`, `StopAndCancel` | `Client`, `Workers.Builder`, `start`, `stop`, `stopAndCancel` | A client can insert without starting anything. A running `Workers` owns threads and implements `AutoCloseable`. |
-| `JobArgs`, `Job[T]`, worker interfaces and registration | `JobType<A>`, `Job<A>`, `add(type, lambda)` | Records need no River interface; explicit kinds stay stable when Java classes are renamed. |
+| `NewClient`, `Config`, `Start`, `Stop`, `StopAndCancel` | `Client.builder`, `Client.start`, `RunHandle.stop/stopAndCancel` | A client can insert without starting anything. A `RunHandle` owns one execution and implements `AutoCloseable`. |
+| `JobArgs`, `Job[T]`, worker interfaces and registration | `JobType<A>`, `Job<A>`, `Workers.add(type, lambda)`, `Client.Builder.worker` | Records need no River interface; explicit kinds stay stable when Java classes are renamed. |
 | `Insert`, `InsertTx`, `InsertMany`, `InsertManyTx` | `insert`, `insertMany`, connection-first overloads | Arguments are typed; results contain persisted `Job<JsonNode>` rows, including cross-kind duplicates. Mixed batches use `JobType.submission`. |
 | `InsertOpts`, `UniqueOpts`, struct tags | `InsertOptions`, `Unique`, `JobType.uniqueBy` | Named builders and fluent options avoid positional flags. Explicit JSON paths replace struct tags. |
 | `JobGet`, `JobList`, cursor/order/filter params | `get`, `JobQuery`, `JobQuery.Page` | Raw reads use `JsonNode`; `get(id, type)` checks the kind and decodes a known argument type. Pagination remains explicit. |
@@ -19,13 +19,39 @@ Java exposes every Go helper. Stored values and protocol behavior still follow G
 | `ResumableSetStepTx`, `ResumableSetStepCursorTx` | `WorkContext.checkpoint(connection[, cursor])` | Checkpoints commit with application writes; failed transactions leave the last committed progress intact. |
 | Worker timeout | `Workers.Handler.timeout(job)` | A default method preserves lambda handlers; per-job overrides also govern rescue decisions. |
 | Retry policy | `RetryPolicy` | A lambda receives the full job and returns `Duration`; the default uses the same error-count backoff and jitter. |
-| `Queues`, queue CRUD/control APIs | `Workers.addQueue/removeQueue`, `Client.queues()` | Runtime concurrency and persisted queue state have separate owners. Reads and mutations support caller transactions. |
-| `Subscribe`, `EventKind`, `Event` | `Workers.subscribe`, `EventKind`, `Event`, `Subscription` | Enum filters and an `AutoCloseable` subscription replace channels. Callbacks are synchronous; queue events include their queue. |
-| Periodic jobs and schedules | `Workers.Builder.periodic`, `Workers.periodicJobs()`, `PeriodicJobBundle`, `PeriodicJob`, `Schedule` | Java time types and a functional scheduling interface; cron implementation details are package-private. |
-| Leadership notifications and maintenance config | `requestResign`, worker builder settings | Coordination stays in the database; operational durations use `Duration`. |
+| `Queues`, queue CRUD/control APIs | `RunHandle.addQueue/removeQueue`, `Client.queues()` | Runtime concurrency and persisted queue state have separate owners. Reads and mutations support caller transactions. |
+| `Subscribe`, `EventKind`, `Event` | `Client.subscribe`, `EventKind`, `Event`, `Subscription` | Enum filters and an `AutoCloseable` subscription replace channels. Callbacks are synchronous; queue events include their queue. |
+| Periodic jobs and schedules | `Client.Builder.periodic`, `RunHandle.periodicJobs()`, `PeriodicJobBundle`, `PeriodicJob`, `Schedule` | Java time types and a functional scheduling interface; cron implementation details are package-private. |
+| Leadership notifications and maintenance config | `requestResign`, client builder settings | Coordination stays in the database; operational durations use `Duration`. |
 | `rivermigrate` | `Migrator`, `Direction`, `Options`, executable CLI | Named options replace booleans and sentinel target versions. Down defaults to one migration; explicit target zero removes the line. |
 | Driver, pool, transaction integration | `Database`, JDBC `DataSource`/`Connection` | Use existing Java database pools. Database drivers remain optional library dependencies. |
 | Errors and row types | `RiverException.Code`, `Job.State`, nested result records | Exceptions carry failures; enums model closed sets; records keep related values together. Missing rows throw `NOT_FOUND`. |
+
+## Migrating the lifecycle API from 0.1.0
+
+| 0.1.0 | Next release |
+| --- | --- |
+| `client.workers().queue(...).add(type, handler).start()` | `Client.builder(database).queue(...).workers(new Workers().add(type, handler)).build()`, then `client.start()` |
+| `Workers.Builder` runtime settings | `Client.Builder`; `worker(type, handler)` is also available for inline registration |
+| `Workers.stop/stopAndCancel/close` | The returned `RunHandle.stop/stopAndCancel/close` |
+| `Workers.subscribe`, `Workers.Event/EventKind/Subscription` | `Client.subscribe`, `Client.Event/EventKind/Subscription` |
+| `Workers.addQueue/removeQueue/periodicJobs/isLeader/id` | The same methods on `RunHandle`; `Client.id()` also exposes the stable client ID |
+
+Startup belongs to the client, as in Go, Ruby, JavaScript, and Rust. Shutdown
+belongs to a per-run handle, like JavaScript and Rust, with `AutoCloseable` for
+Java resource management. `Workers` only registers typed handlers. Insert-only
+clients can still use `new Client(database)` without starting anything.
+
+Each client permits one active run. A timed-out stop keeps the client reserved;
+call stop again to finish draining before restarting. Stopped handles cannot
+control later runs. Client subscriptions may be installed before startup and
+remain registered across restarts until closed. A restart restores configured
+queues and periodic jobs rather than carrying over changes to the previous run.
+
+`workers(registry)` copies registrations and `build()` snapshots configuration.
+`toBuilder()` and the `withHooks/withMiddleware/withPlugins/withPilot` methods
+create independent clients; configure these before startup. Each built client
+has its own runtime state, subscriptions, and local insert wakeups.
 
 ## Changes made before release
 
@@ -37,7 +63,7 @@ Java exposes every Go helper. Stored values and protocol behavior still follow G
 - Added the common `Plugin` marker and `withPlugins` registration to install all
   of an implementation's hooks and middleware together. Renamed the internal Pro
   storage interface and registration from `Plugin`/`withPlugin` to `Pilot`/`withPilot`.
-- Removed no-op `Client.close()`. Close `Workers` and the application-owned pool.
+- Removed no-op `Client.close()`. Close the `RunHandle` returned by `Client.start()` and the application-owned pool.
 - Added typed retrieval and typed transactional completion, including running-state validation.
 - Unified bulk insertion around typed homogeneous lists and mixed-kind submissions,
   with both owned and caller-owned transactions.
@@ -79,8 +105,9 @@ configuration code.
 - `JobType.uniqueBy("account_id", "address")` selects top-level JSON fields without
   nested lists. The existing component-list overload handles nested paths and
   retains literal dots in field names.
-- Reusing a worker builder generates a separate runtime ID on each `start()`;
-  an explicit `id` remains the caller's responsibility to keep unique.
+- Reusing a client builder generates a separate client ID on each `build()`.
+  Restarting one client retains its ID; an explicit `id` remains the caller's
+  responsibility to keep unique.
 - Observer and subscriber failures are reported without losing a worker slot,
   changing the attempt outcome, or preventing delivery to the remaining callbacks.
   Failures in the error handler fall back to the system logger. These callbacks

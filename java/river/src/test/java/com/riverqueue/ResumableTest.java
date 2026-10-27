@@ -25,17 +25,16 @@ class ResumableTest {
   @SuppressWarnings("try") // Resources intentionally scope background activity.
   void cursorOnlyStepRemainsRecoverableAfterItIsOmitted() throws Exception {
     var client = new Client(databases.open(directory.resolve("cursor-only.db")));
-    var events = new LinkedBlockingQueue<Workers.Event>();
+    var events = new LinkedBlockingQueue<Client.Event>();
     var received = new LinkedBlockingQueue<Integer>();
     try (var workers =
-            client
-                .workers()
+            client.toBuilder()
                 .queue("default", 1)
                 .pollOnly(true)
                 .leadership(false)
                 .retryPolicy(job -> Duration.ofDays(1))
                 .stopTimeout(Duration.ofSeconds(5))
-                .add(
+                .worker(
                     TYPE,
                     context -> {
                       if (context.job().attempt() > 1)
@@ -47,14 +46,15 @@ class ResumableTest {
                             });
                       context.step("later", () -> {});
                     })
+                .build()
                 .start();
-        var subscription = workers.subscribe(events::add)) {
+        var subscription = workers.client().subscribe(events::add)) {
       var metadata = Map.of(Protocol.METADATA_RESUMABLE_CURSOR, Map.of("loop", 0));
       var inserted =
           client.insert(TYPE, "work", InsertOptions.builder().metadata(metadata).build()).job();
       var failed = events.poll(5, TimeUnit.SECONDS);
       assertNotNull(failed);
-      assertEquals(Workers.EventKind.JOB_FAILED, failed.kind());
+      assertEquals(Client.EventKind.JOB_FAILED, failed.kind());
       var savedMetadata = client.get(inserted.id()).metadata();
       assertEquals(
           Json.tree(metadata).path(Protocol.METADATA_RESUMABLE_CURSOR),
@@ -63,7 +63,7 @@ class ResumableTest {
       client.retry(inserted.id());
       var completed = events.poll(5, TimeUnit.SECONDS);
       assertNotNull(completed);
-      assertEquals(Workers.EventKind.JOB_COMPLETED, completed.kind());
+      assertEquals(Client.EventKind.JOB_COMPLETED, completed.kind());
       assertEquals(java.util.List.of(0), java.util.List.copyOf(received));
     }
   }
@@ -83,20 +83,19 @@ class ResumableTest {
   void checkpointCommitsWithApplicationWrites(
       boolean priorCheckpoint, boolean rollback, boolean withCursor) throws Exception {
     var client = new Client(databases.open(directory.resolve("river.db")));
-    var events = new LinkedBlockingQueue<Workers.Event>();
+    var events = new LinkedBlockingQueue<Client.Event>();
     var errors = new LinkedBlockingQueue<Throwable>();
     var preparations = new AtomicInteger();
     var steps = new LinkedBlockingQueue<Integer>();
     try (var workers =
-            client
-                .workers()
+            client.toBuilder()
                 .queue("default", 1)
                 .pollOnly(true)
                 .leadership(false)
                 .retryPolicy(job -> Duration.ofDays(1))
                 .stopTimeout(Duration.ofSeconds(5))
                 .errorHandler(errors::add)
-                .add(
+                .worker(
                     TYPE,
                     context -> {
                       if (priorCheckpoint)
@@ -146,8 +145,9 @@ class ResumableTest {
                       if (withCursor) context.stepWithCursor("process", action);
                       else context.step("process", () -> action.run(Json.object().path("missing")));
                     })
+                .build()
                 .start();
-        var subscription = workers.subscribe(events::add)) {
+        var subscription = workers.client().subscribe(events::add)) {
       var inserted =
           client
               .insert(
@@ -159,7 +159,7 @@ class ResumableTest {
               .job();
       var failed = events.poll(5, TimeUnit.SECONDS);
       assertNotNull(failed);
-      assertEquals(Workers.EventKind.JOB_FAILED, failed.kind());
+      assertEquals(Client.EventKind.JOB_FAILED, failed.kind());
       var saved = client.get(inserted.id());
       assertEquals(
           rollback ? "prepare" : "process",
@@ -174,7 +174,7 @@ class ResumableTest {
       client.retry(inserted.id());
       var completed = events.poll(5, TimeUnit.SECONDS);
       assertNotNull(completed);
-      assertEquals(Workers.EventKind.JOB_COMPLETED, completed.kind());
+      assertEquals(Client.EventKind.JOB_COMPLETED, completed.kind());
       assertEquals(1, preparations.get());
       assertEquals(
           rollback || withCursor ? java.util.List.of(1, 2) : java.util.List.of(1),
@@ -289,22 +289,21 @@ class ResumableTest {
   @SuppressWarnings("try") // Resources intentionally scope background activity.
   void cursorDoesNotCompleteFailedSteps(String mode) throws Exception {
     var client = new Client(databases.open(directory.resolve("river.db")));
-    var events = new LinkedBlockingQueue<Workers.Event>();
+    var events = new LinkedBlockingQueue<Client.Event>();
     var errors = new LinkedBlockingQueue<Throwable>();
     var prepares = new AtomicInteger();
     var calls = new AtomicInteger();
     boolean first = mode.startsWith("first");
     boolean nullCursor = mode.contains("null");
     try (var workers =
-            client
-                .workers()
+            client.toBuilder()
                 .queue("default", 1)
                 .pollOnly(true)
                 .leadership(false)
                 .retryPolicy(job -> Duration.ofDays(1))
                 .stopTimeout(Duration.ofSeconds(5))
                 .errorHandler(errors::add)
-                .add(
+                .worker(
                     TYPE,
                     context -> {
                       if (!first)
@@ -325,12 +324,13 @@ class ResumableTest {
                         context.step("process", () -> action.run(Json.tree(null)));
                       else context.stepWithCursor("process", action);
                     })
+                .build()
                 .start();
-        var subscription = workers.subscribe(events::add)) {
+        var subscription = workers.client().subscribe(events::add)) {
       var job = client.insert(TYPE, "args").job();
       var failed = events.poll(5, TimeUnit.SECONDS);
       assertNotNull(failed);
-      assertEquals(Workers.EventKind.JOB_FAILED, failed.kind());
+      assertEquals(Client.EventKind.JOB_FAILED, failed.kind());
       var metadata = client.get(job.id()).metadata();
       assertEquals(
           first ? "" : "prepare", metadata.path(Protocol.METADATA_RESUMABLE_STEP).asString(""));
@@ -338,7 +338,7 @@ class ResumableTest {
       client.retry(job.id());
       var completed = events.poll(5, TimeUnit.SECONDS);
       assertNotNull(completed);
-      assertEquals(Workers.EventKind.JOB_COMPLETED, completed.kind());
+      assertEquals(Client.EventKind.JOB_COMPLETED, completed.kind());
       assertEquals(2, calls.get());
       assertEquals(first ? 0 : 1, prepares.get());
     }
@@ -379,19 +379,18 @@ class ResumableTest {
   @SuppressWarnings("try") // Resources intentionally scope background activity.
   void cursorMapsReplaceCompletedStepsAndPreserveNullValues() throws Exception {
     var client = new Client(databases.open(directory.resolve("river.db")));
-    var events = new LinkedBlockingQueue<Workers.Event>();
+    var events = new LinkedBlockingQueue<Client.Event>();
     var errors = new LinkedBlockingQueue<Throwable>();
     var firstCalls = new AtomicInteger();
     try (var workers =
-            client
-                .workers()
+            client.toBuilder()
                 .queue("default", 1)
                 .pollOnly(true)
                 .leadership(false)
                 .retryPolicy(job -> Duration.ofDays(1))
                 .stopTimeout(Duration.ofSeconds(5))
                 .errorHandler(errors::add)
-                .add(
+                .worker(
                     TYPE,
                     context -> {
                       context.stepWithCursor(
@@ -417,14 +416,15 @@ class ResumableTest {
                             assertTrue(cursor.path("nested").path("value").isNull());
                           });
                     })
+                .build()
                 .start();
-        var subscription = workers.subscribe(events::add)) {
+        var subscription = workers.client().subscribe(events::add)) {
       var job = client.insert(TYPE, "args").job();
       for (int attempt = 1; attempt <= 3; attempt++) {
         var event = events.poll(5, TimeUnit.SECONDS);
         assertNotNull(event);
         assertEquals(
-            attempt == 3 ? Workers.EventKind.JOB_COMPLETED : Workers.EventKind.JOB_FAILED,
+            attempt == 3 ? Client.EventKind.JOB_COMPLETED : Client.EventKind.JOB_FAILED,
             event.kind());
         if (attempt == 2) {
           var cursors = client.get(job.id()).metadata().path(Protocol.METADATA_RESUMABLE_CURSOR);

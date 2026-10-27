@@ -110,18 +110,18 @@ class PluginTest {
                     .withPlugins(first)
                     .withPlugins(second))
             .withPilot(new Pilot() {});
-    var completed = new CompletableFuture<Workers.Event>();
+    var completed = new CompletableFuture<Client.Event>();
     try (var workers =
-            river
-                .workers()
+            river.toBuilder()
                 .queue("default", 1)
                 .leadership(false)
                 .pollOnly(true)
                 .pollInterval(Duration.ofMillis(10))
                 .stopTimeout(Duration.ofSeconds(5))
-                .add(TYPE, context -> trace.add("handler"))
+                .worker(TYPE, context -> trace.add("handler"))
+                .build()
                 .start();
-        var subscription = workers.subscribe(completed::complete)) {
+        var subscription = workers.client().subscribe(completed::complete)) {
       river.insert(TYPE, "one");
       assertEquals(Job.State.COMPLETED, completed.get(5, TimeUnit.SECONDS).job().state());
     }
@@ -162,13 +162,13 @@ class PluginTest {
             .withHooks((HookPeriodicJobsStart) () -> started.add("explicit"))
             .withPlugins(first, second);
     try (var workers =
-        river
-            .workers()
+        river.toBuilder()
             .queue("default", 1)
             .pollOnly(true)
             .serviceInterval(Duration.ofHours(1))
             .stopTimeout(Duration.ofSeconds(5))
-            .add(TYPE, context -> {})
+            .worker(TYPE, context -> {})
+            .build()
             .start()) {
       assertEquals("first", started.poll(5, TimeUnit.SECONDS));
       assertEquals("second", started.poll(5, TimeUnit.SECONDS));
