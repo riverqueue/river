@@ -87,13 +87,13 @@ class NotificationCleanupTest {
               }
             });
     try (var workers =
-        client
-            .workers()
+        client.toBuilder()
             .queue("default", 1)
-            .add(JobType.of("unused", String.class), context -> {})
+            .worker(JobType.of("unused", String.class), context -> {})
             .pollOnly(true)
             .serviceInterval(Duration.ofHours(1))
             .errorHandler(errors::add)
+            .build()
             .start()) {
       assertEquals(List.of(2L), cleaned.get(5, TimeUnit.SECONDS));
     }

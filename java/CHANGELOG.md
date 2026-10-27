@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **Breaking:** Move runtime configuration to `Client.builder(database)` and startup to `Client.start()`, which returns an `AutoCloseable` `RunHandle` for `stop()`, `stopAndCancel()`, and runtime queue/periodic controls. `Workers` is now a handler registry supplied through `.workers(registry)`; `.worker(type, handler)` supports inline registration. Move subscriptions and event types to `Client`, allowing subscriptions before startup. A client allows one active run and can restart after shutdown completes. [PR #1555](https://github.com/riverqueue/river/pull/1555).
+
 ## [0.1.0] - 2026-10-26
 
 ### Changed

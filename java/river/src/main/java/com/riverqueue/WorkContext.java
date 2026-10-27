@@ -25,7 +25,7 @@ public final class WorkContext<A> {
   private final Job<A> job;
   private final ObjectNode metadata = Json.object();
   private final Client client;
-  private Workers runtime;
+  private RunHandle runtime;
   final java.util.Map<Long, Peer> peers;
   private final SortedSet<String> pendingCursorSteps = new TreeSet<>();
   private ObjectNode previousCursors;
@@ -80,7 +80,7 @@ public final class WorkContext<A> {
     runtime.completePeer(this, peer, failure);
   }
 
-  void attach(Workers runtime, WorkContext<?> parent) {
+  void attach(RunHandle runtime, WorkContext<?> parent) {
     this.runtime = runtime;
     if (parent != null && parent.cancellation() != null) requestCancellation(parent.cancellation());
   }

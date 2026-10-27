@@ -19,9 +19,14 @@
 - Transaction variants use connection-first overloads instead of `Tx` suffixes.
   Storage failures are unchecked `RiverException` values with a stable code and
   original cause; JDBC callbacks may throw checked exceptions.
+- `Client.start()` returns an `AutoCloseable` `RunHandle`; shutdown is on that
+  handle, as in JavaScript and Rust, instead of on `Client` as in Go and Ruby.
+  `Workers` only registers handlers. Each client permits one active run and can
+  restart after shutdown completes; an old handle cannot stop a later run.
 - Runtime events use enum kinds and are process-local callbacks. They are not a durable delivery
   mechanism. A callback should finish quickly, and callback failures are sent to
-  the runtime error handler.
+  the runtime error handler. Subscribe through `Client` before startup to avoid
+  missing early events; subscriptions survive restarts until closed.
 - Retry policies return relative `Duration` values. Exceptions and null, negative,
   or overflowing retry delays are reported and fall back to the default backoff.
 - Explicit retries that update a job send a standard insert notification in the
@@ -63,9 +68,9 @@ replace process-wide insert defaults.
 
 Insertion is independent of worker registration so a client can enqueue jobs
 owned by another language. New job kinds always use Go's validated kind syntax;
-the legacy bypass is omitted. `Workers.stop()` (also called by `close()`) and
-`Workers.stopAndCancel()` wait for attempts to finish instead of exposing a
-Go-style stopped channel. `Workers.Builder.stopTimeout` configures their waits.
+the legacy bypass is omitted. `RunHandle.stop()` (also called by `close()`) and
+`RunHandle.stopAndCancel()` wait for attempts to finish instead of exposing a
+Go-style stopped channel. `Client.Builder.stopTimeout` configures their waits.
 
 The [feature inventory](conformance/feature-inventory.json) accounts for all 304
 entries in the pinned upstream inventory, including internal driver details

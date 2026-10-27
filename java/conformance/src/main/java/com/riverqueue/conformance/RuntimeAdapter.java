@@ -11,11 +11,11 @@ import com.riverqueue.JobInsertMiddleware;
 import com.riverqueue.JobType;
 import com.riverqueue.Json;
 import com.riverqueue.RiverException;
+import com.riverqueue.RunHandle;
 import com.riverqueue.Schedule;
 import com.riverqueue.Unique;
 import com.riverqueue.WorkContext;
 import com.riverqueue.WorkerMiddleware;
-import com.riverqueue.Workers;
 import java.sql.Connection;
 import java.time.Duration;
 import java.util.List;
@@ -34,7 +34,8 @@ final class RuntimeAdapter {
       JobType.of("conformance_echo", Adapter.Echo.class);
   private final Map<String, CountDownLatch> barriers = new ConcurrentHashMap<>();
   private Probe probe = new Probe();
-  private Workers workers;
+  private RunHandle workers;
+  private Client.Subscription subscription;
   private volatile CountDownLatch claimBarrier;
   private final java.util.concurrent.atomic.AtomicBoolean firstClaim =
       new java.util.concurrent.atomic.AtomicBoolean();
@@ -148,10 +149,12 @@ final class RuntimeAdapter {
   void stop(boolean cancel) {
     if (workers == null) return;
     if (claimBarrier != null) claimBarrier.countDown();
-    Workers previous = workers;
-    workers = null;
+    RunHandle previous = workers;
     if (cancel) previous.stopAndCancel();
     else previous.stop();
+    workers = null;
+    subscription.close();
+    subscription = null;
   }
 
   private CountDownLatch barrier(String name) {
@@ -161,7 +164,7 @@ final class RuntimeAdapter {
     return value;
   }
 
-  private Workers requireWorkers() {
+  private RunHandle requireWorkers() {
     if (workers == null) throw new IllegalArgumentException("No client running");
     return workers;
   }
@@ -180,11 +183,10 @@ final class RuntimeAdapter {
     if (unique && !periodic)
       throw new IllegalArgumentException("periodic_unique requires periodic_run_on_start");
     var builder =
-        river
-            .workers()
+        river.toBuilder()
             .id(params.path("client_id").asString())
             .queue(params.path("queue").asString("default"), params.path("max_workers").asInt(1))
-            .add(ECHO, this::work)
+            .worker(ECHO, this::work)
             .pollOnly(params.path("poll_only").asBoolean(false))
             .pollInterval(Duration.ofMillis(params.path("fetch_poll_interval_ms").asLong(10)))
             .leadership(!params.path("leader_election_disabled").asBoolean(false))
@@ -237,14 +239,22 @@ final class RuntimeAdapter {
             InsertOptions.defaults(),
             true);
     }
-    workers = builder.start();
-    workers.subscribe(
-        event -> {
-          probe.events.add(event.kind().value());
-          if (params.path("error_handler_cancel").asBoolean(false)
-              && event.kind() == Workers.EventKind.JOB_CANCELLED)
-            probe.errorHandlerCalls.incrementAndGet();
-        });
+    var client = builder.build();
+    subscription =
+        client.subscribe(
+            event -> {
+              probe.events.add(event.kind().value());
+              if (params.path("error_handler_cancel").asBoolean(false)
+                  && event.kind() == Client.EventKind.JOB_CANCELLED)
+                probe.errorHandlerCalls.incrementAndGet();
+            });
+    try {
+      workers = client.start();
+    } catch (RuntimeException | Error error) {
+      subscription.close();
+      subscription = null;
+      throw error;
+    }
   }
 
   private JsonNode waitFor(Client river, JsonNode params) throws Exception {

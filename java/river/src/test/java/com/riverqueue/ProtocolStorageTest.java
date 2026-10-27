@@ -34,12 +34,11 @@ class ProtocolStorageTest {
     var claimed = new CompletableFuture<Job<String>>();
     var errors = new LinkedBlockingQueue<Throwable>();
     try (var workers =
-        client
-            .workers()
+        client.toBuilder()
             .queue("default", 1)
             .pollOnly(true)
             .errorHandler(errors::add)
-            .add(TYPE, context -> claimed.complete(context.job()))
+            .worker(TYPE, context -> claimed.complete(context.job()))
             .periodic(
                 "conformance_periodic",
                 Schedule.every(Duration.ofDays(1)),
@@ -47,6 +46,7 @@ class ProtocolStorageTest {
                 "periodic",
                 InsertOptions.builder().metadata(Map.of("source", "conformance")).build(),
                 true)
+            .build()
             .start()) {
       var job = claimed.get(5, TimeUnit.SECONDS);
       var metadata = client.get(job.id()).metadata();
@@ -110,12 +110,11 @@ class ProtocolStorageTest {
         fixture.required("attempt_error"),
         Json.tree(client.get(inserted.id()).errors().getFirst()));
 
-    var completed = new CompletableFuture<Workers.Event>();
+    var completed = new CompletableFuture<Client.Event>();
     var writeFailure = new CompletableFuture<java.sql.SQLException>();
     var errors = new LinkedBlockingQueue<Throwable>();
     try (var workers =
-            client
-                .workers()
+            client.toBuilder()
                 .queue("default", 1)
                 .pollOnly(true)
                 .errorHandler(errors::add)
@@ -136,10 +135,11 @@ class ProtocolStorageTest {
                       }
                       return Duration.ofDays(1);
                     })
-                .add(TYPE, context -> context.output(Map.of("ok", true)))
+                .worker(TYPE, context -> context.output(Map.of("ok", true)))
+                .build()
                 .start();
         var subscription =
-            workers.subscribe(completed::complete, Workers.EventKind.JOB_COMPLETED)) {
+            workers.client().subscribe(completed::complete, Client.EventKind.JOB_COMPLETED)) {
       if (!postgres)
         assertNull(
             writeFailure.get(10, TimeUnit.SECONDS), "Rescue callbacks must not hold the writer");

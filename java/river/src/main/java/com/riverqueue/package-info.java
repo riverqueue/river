@@ -1,8 +1,8 @@
 /**
  * Transactional River jobs on Postgres and SQLite. Define a {@link com.riverqueue.JobType}, insert
  * through a {@link com.riverqueue.Client}, and register worker lambdas through {@link
- * com.riverqueue.Workers.Builder}. Only a running {@code Workers} instance owns resources; close it
- * or call {@code stop()} when the application stops.
+ * com.riverqueue.Workers}. Start the configured {@code Client} to obtain a {@code RunHandle}; close
+ * the handle or call {@code stop()} when the application stops.
  *
  * <p>Connection-first overloads require an existing JDBC transaction with auto-commit disabled.
  * They use savepoints and leave commit, rollback, and close to the caller. Other overloads open and

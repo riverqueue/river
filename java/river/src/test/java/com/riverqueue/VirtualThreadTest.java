@@ -100,13 +100,13 @@ class VirtualThreadTest {
                     }
                   });
       try (var workers =
-          client
-              .workers()
+          client.toBuilder()
               .queue("default", 1)
               .pollOnly(true)
               .leadership(args[0].equals("leadership"))
               .stopTimeout(Duration.ofSeconds(5))
-              .add(JobType.of("noop", String.class), context -> {})
+              .worker(JobType.of("noop", String.class), context -> {})
+              .build()
               .start()) {
         try {
           if (!entered.await(10, TimeUnit.SECONDS))

@@ -70,11 +70,10 @@ class NotificationTest {
     var worked = new CompletableFuture<Job<String>>();
     var retry = new CompletableFuture<Void>();
     var ready = new CompletableFuture<Void>();
-    var paused = new CompletableFuture<Workers.Event>();
+    var paused = new CompletableFuture<Client.Event>();
     var errors = new LinkedBlockingQueue<Throwable>();
     try (var workers =
-            client
-                .workers()
+            client.toBuilder()
                 .queue("default", 1)
                 .leadership(false)
                 .pollInterval(Duration.ofHours(1))
@@ -89,9 +88,11 @@ class NotificationTest {
                     event -> {
                       if (event.equals("listen_ready")) ready.complete(null);
                     })
-                .add(type, context -> worked.complete(context.job()))
+                .worker(type, context -> worked.complete(context.job()))
+                .build()
                 .start();
-        var subscription = workers.subscribe(paused::complete, Workers.EventKind.QUEUE_PAUSED)) {
+        var subscription =
+            workers.client().subscribe(paused::complete, Client.EventKind.QUEUE_PAUSED)) {
       try {
         var error = errors.poll(5, TimeUnit.SECONDS);
         assertNotNull(error);

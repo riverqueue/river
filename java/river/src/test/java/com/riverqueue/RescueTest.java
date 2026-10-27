@@ -44,14 +44,13 @@ class RescueTest {
                 });
     var job = client.insert(TYPE, mode).job();
     try (var workers =
-        client
-            .workers()
+        client.toBuilder()
             .queue("other", 1)
             .pollOnly(true)
             .jobTimeout(Duration.ofMinutes(5))
             .stopTimeout(Duration.ofSeconds(5))
             .errorHandler(errors::add)
-            .add(
+            .worker(
                 TYPE,
                 new Workers.Handler<>() {
                   @Override
@@ -72,6 +71,7 @@ class RescueTest {
                     fail("Wrong queue");
                   }
                 })
+            .build()
             .start()) {
       var rescue = request.get(5, TimeUnit.SECONDS);
       var expected =
@@ -131,8 +131,7 @@ class RescueTest {
           return null;
         });
     var workers =
-        client
-            .workers()
+        client.toBuilder()
             .queue("other", 1)
             .pollOnly(true)
             .serviceInterval(Duration.ofHours(1))
@@ -146,7 +145,7 @@ class RescueTest {
                   }
                   return Duration.ofDays(1);
                 })
-            .add(
+            .worker(
                 TYPE,
                 new Workers.Handler<>() {
                   @Override
@@ -163,6 +162,7 @@ class RescueTest {
                     fail("Wrong queue");
                   }
                 })
+            .build()
             .start();
     try {
       entered.get(5, TimeUnit.SECONDS);
@@ -246,15 +246,14 @@ class RescueTest {
           });
     }
     try (var workers =
-        client
-            .workers()
+        client.toBuilder()
             .queue("other", 1)
             .pollOnly(true)
             .jobTimeout(Duration.ofNanos(defaultDisabled ? -1 : 1))
             .rescueAfter(Duration.ofHours(1))
             .stopTimeout(Duration.ofSeconds(5))
             .errorHandler(errors::add)
-            .add(
+            .worker(
                 TYPE,
                 new Workers.Handler<>() {
                   @Override
@@ -275,6 +274,7 @@ class RescueTest {
                     fail("Wrong queue");
                   }
                 })
+            .build()
             .start()) {
       maintained.get(5, TimeUnit.SECONDS);
       for (var entry : jobs.entrySet()) {
@@ -352,8 +352,7 @@ class RescueTest {
                 });
     try (var follower =
         peer
-            ? peerClient
-                .workers()
+            ? peerClient.toBuilder()
                 .queue("default", 1)
                 .leadership(false)
                 .pollInterval(Duration.ofHours(1))
@@ -364,13 +363,13 @@ class RescueTest {
                     event -> {
                       if (event.equals("listen_ready")) listening.complete(null);
                     })
-                .add(TYPE, context -> worked.complete(context.job()))
+                .worker(TYPE, context -> worked.complete(context.job()))
+                .build()
                 .start()
             : null) {
       if (peer) fetched.get(5, TimeUnit.SECONDS);
       try (var workers =
-          client
-              .workers()
+          client.toBuilder()
               .queue(peer ? "other" : "default", 1)
               .pollOnly(true)
               .pollInterval(Duration.ofHours(1))
@@ -378,7 +377,8 @@ class RescueTest {
               .stopTimeout(Duration.ofSeconds(5))
               .retryPolicy(job -> Duration.ofSeconds(1))
               .errorHandler(errors::add)
-              .add(TYPE, context -> worked.complete(context.job()))
+              .worker(TYPE, context -> worked.complete(context.job()))
+              .build()
               .start()) {
         maintained.get(5, TimeUnit.SECONDS);
         var rescued = client.get(inserted.id());

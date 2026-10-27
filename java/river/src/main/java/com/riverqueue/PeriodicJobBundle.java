@@ -9,10 +9,10 @@ import java.util.Objects;
 import java.util.function.BooleanSupplier;
 
 /**
- * Thread-safe periodic registrations owned by a {@link Workers} instance. Only the leader enqueues
- * occurrences, so update every eligible runtime to change schedules cluster-wide. Removal leaves
- * previously inserted jobs alone, and an insertion already in progress may finish. Registrations
- * can still be added and removed after stop, but no further jobs are enqueued.
+ * Thread-safe periodic registrations owned by a {@link RunHandle} instance. Only the leader
+ * enqueues occurrences, so update every eligible runtime to change schedules cluster-wide. Removal
+ * leaves previously inserted jobs alone, and an insertion already in progress may finish.
+ * Registrations can still be added and removed after stop, but no further jobs are enqueued.
  */
 public final class PeriodicJobBundle {
   private final boolean enabled;

@@ -79,7 +79,7 @@ final class CronSchedule implements Schedule {
   @Override
   public Optional<ZonedDateTime> next(ZonedDateTime after) {
     if (interval != null) return Optional.of(after.truncatedTo(ChronoUnit.SECONDS).plus(interval));
-    // Go uses the reference's zone for unqualified cron; Workers supplies the process zone.
+    // Go uses the reference's zone for unqualified cron; RunHandle supplies the process zone.
     var current =
         after
             .withZoneSameInstant(zone == null ? after.getZone() : zone)

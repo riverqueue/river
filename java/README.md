@@ -36,6 +36,10 @@ For SQLite, replace the Postgres JDBC dependency with `org.xerial:sqlite-jdbc:3.
 
 ## Quick start
 
+The lifecycle API below is unreleased. For the published `0.1.0` API, see
+[its README](https://github.com/riverqueue/river/blob/java/v0.1.0/java/README.md).
+Build from source to use these examples.
+
 Define job arguments as a record, give the job a stable kind, and register a
 worker lambda. This complete `Example.java` starts a client, inserts a job,
 waits for its completion, and stops the workers. Set `DATABASE_URL` to a
@@ -51,18 +55,17 @@ public class Example {
 
   public static void main(String[] args) throws Exception {
     var database = Database.connect(System.getenv("DATABASE_URL"));
-    var client = new Client(database);
     new Migrator(database).migrate();
 
-    var completed = new CompletableFuture<Workers.Event>();
-    try (var workers = client.workers()
-        .queue("default", 10)
+    var workers = new Workers()
         .add(JobType.of("send_email", SendEmail.class), context -> {
           System.out.println("Sending " + context.args().subject() + " to " + context.args().address());
           context.output("sent");
-        })
-        .start();
-        var subscription = workers.subscribe(completed::complete, Workers.EventKind.JOB_COMPLETED)) {
+        });
+    var client = Client.builder(database).queue("default", 10).workers(workers).build();
+    var completed = new CompletableFuture<Client.Event>();
+    try (var subscription = client.subscribe(completed::complete, Client.EventKind.JOB_COMPLETED);
+        var run = client.start()) {
       client.insert(JobType.of("send_email", SendEmail.class),
           new SendEmail("hello@example.com", "Welcome"));
       System.out.println("Completed job " + completed.get(30, TimeUnit.SECONDS).job().id());
@@ -73,7 +76,7 @@ public class Example {
 
 Run this demonstration against a development database with no other workers.
 The worker prints a message; replace its body with your mail service. In a
-service, keep `Workers` open until the application stops. Each active job runs
+service, keep the `RunHandle` open until the application stops. Each active job runs
 on a virtual thread; queue limits bound concurrent jobs. In production, run
 migrations as a deployment step using the CLI below.
 
@@ -263,7 +266,7 @@ selected state, or `SCHEDULED_AT` or `FINALIZED_AT` for an explicit timestamp.
 A thrown exception triggers [retries](https://riverqueue.com/docs/job-retries)
 until `maxAttempts` is exhausted, when the job becomes discarded. The default
 policy uses River's quartic backoff with jitter. Configure a different policy
-on the worker builder, or explicitly retry an existing job with `client.retry(id)`.
+on the client builder, or explicitly retry an existing job with `client.retry(id)`.
 An explicit retry that updates a job notifies its queue after commit. Use
 `client.retry(connection, id)` to make the retry part of an existing transaction.
 A retry policy receives the full job snapshot before the current failure is
@@ -274,15 +277,16 @@ time, River reports the problem and uses its default backoff.
 
 ```java
 var retryingEmail = email.withDefaults(InsertOptions.builder().maxAttempts(10).build());
-var workerConfig = client.workers()
+var clientBuilder = Client.builder(database)
     .queue("default", 10)
     .retryPolicy(job -> Duration.ofSeconds(Math.min(300, 5L * (job.errors().size() + 1))))
-    .add(retryingEmail, context ->
+    .worker(retryingEmail, context ->
         mailer.send(context.args().address(), context.args().subject()));
 client.insert(retryingEmail, new SendEmail("hello@example.com", "Welcome"));
 ```
 
-Call `workerConfig.start()` and keep the runtime open as in the first example.
+Call `clientBuilder.build()` to create the configured client, then call its
+`start()` method and keep the returned handle open as in the first example.
 Job-type defaults apply when inserting through that `JobType`; another producer
 must set its own compatible options.
 
@@ -292,14 +296,15 @@ These sections follow the non-Pro entries in the River documentation's
 [Features sidebar](https://riverqueue.com/docs). Snippets are independent and
 reuse `client` and `database` from the quick start, with imports from
 `com.riverqueue`, `java.time`, and `java.util`. Handler examples configure a builder;
-start it after registering your handlers. `mailer`, `accounts`, and `deliveries`
+call `build()` after registering your handlers, then start that client. In runtime
+examples, `run` is the `RunHandle` returned by `client.start()`. `mailer`, `accounts`, and `deliveries`
 are application services, `applicationDataSource` is your JDBC connection pool,
 `application.awaitStop()` waits for your service to stop, and `jobId` is an
 existing job's ID.
 
 ```java
 var email = JobType.of("send_email", SendEmail.class);
-var workerConfig = client.workers().queue("default", 10);
+var clientBuilder = Client.builder(database).queue("default", 10);
 ```
 
 ### Cancelling jobs
@@ -312,7 +317,7 @@ this ends the attempt without further retries.
 ```java
 client.cancel(jobId);
 
-workerConfig.add(email, context -> {
+clientBuilder.worker(email, context -> {
   context.checkCancelled();
   if (context.args().address().isBlank()) context.cancel("Missing address");
   mailer.send(context.args().address(), context.args().subject());
@@ -326,12 +331,12 @@ requested. Call `context.checkCancelled()` when abandoning unfinished work.
 
 ### Worker timeouts
 
-`Workers.Builder.jobTimeout` sets the default attempt timeout. Override
+`Client.Builder.jobTimeout` sets the default attempt timeout. Override
 `Handler.timeout(job)` for a particular worker; the callback receives typed
 arguments and can choose a duration per job:
 
 ```java
-workerConfig.add(email, new Workers.Handler<SendEmail>() {
+clientBuilder.worker(email, new Workers.Handler<SendEmail>() {
   @Override
   public Duration timeout(Job<SendEmail> job) {
     return Duration.ofMinutes(5);
@@ -358,7 +363,7 @@ enqueueing follow-up work that must commit with other writes or job completion.
 ```java
 record Welcome(String address) {}
 var welcome = JobType.of("welcome", Welcome.class);
-workerConfig.add(welcome, context ->
+clientBuilder.worker(welcome, context ->
     context.client().insert(email, new SendEmail(context.args().address(), "Welcome")));
 ```
 
@@ -367,7 +372,7 @@ workerConfig.add(welcome, context ->
 Java exceptions and uncaught `Error`s are handled as failed attempts; River
 persists failures and retries according to policy. For
 [application error reporting](https://riverqueue.com/docs/error-handling), attach
-a `HookWorkEnd` hook. `Workers.Builder.errorHandler` separately receives
+a `HookWorkEnd` hook. `Client.Builder.errorHandler` separately receives
 runtime failures, such as database or subscriber errors.
 Failures in observers or event subscribers are reported without changing the
 job's outcome or preventing other callbacks from running. If the runtime error
@@ -381,12 +386,11 @@ HookWorkEnd reportFailure = (context, failure) -> {
   }
   return failure;
 };
-var monitoredClient = client.withPlugins(reportFailure);
-var workerConfig = monitoredClient.workers()
+var clientBuilder = Client.builder(database).plugins(reportFailure)
     .queue("default", 10)
     .errorHandler(failure ->
         System.getLogger("river").log(System.Logger.Level.ERROR, "Runtime failure", failure))
-    .add(email, context -> mailer.send(context.args().address(), context.args().subject()));
+    .worker(email, context -> mailer.send(context.args().address(), context.args().subject()));
 ```
 
 Hooks also see the control exceptions used for snoozing and cancellation. Keep
@@ -482,7 +486,7 @@ middleware yet. You can explicitly write that shared format; this
 example appends a fixed message and retains the last ten attempt entries.
 
 ```java
-workerConfig.add(email, context -> {
+clientBuilder.worker(email, context -> {
   var logs = new ArrayList<Object>();
   context.job().metadata().path("river:log").forEach(logs::add);
   try {
@@ -505,16 +509,16 @@ different workloads. Set a queue at insertion and configure its worker count.
 The count is local to each runtime; it is not a cluster-wide concurrency limit.
 
 ```java
-var workerConfig = client.workers()
+var clientBuilder = Client.builder(database)
     .queue("default", 10)
     .queue("mail", 4)
-    .add(email, context -> mailer.send(context.args().address(), context.args().subject()));
+    .worker(email, context -> mailer.send(context.args().address(), context.args().subject()));
 client.insert(email, new SendEmail("hello@example.com", "Welcome"),
     InsertOptions.builder().queue("mail").build());
 ```
 
-A running runtime also supports `workers.addQueue(name, count)` and
-`workers.removeQueue(name)`, which drains that queue's active attempts.
+A running handle also supports `run.addQueue(name, count)` and
+`run.removeQueue(name)`, which drains that queue's active attempts.
 Use `fetchOnlyKnownKinds(true)` when sharing queues with other language workers
 that handle different kinds.
 
@@ -550,9 +554,9 @@ Time-zone rules come from the JVM; schedules computed by River clients in other
 languages match only when they use the same time-zone data.
 
 ```java
-var workerConfig = client.workers()
+var clientBuilder = Client.builder(database)
     .queue("default", 10)
-    .add(email, context -> mailer.send(context.args().address(), context.args().subject()))
+    .worker(email, context -> mailer.send(context.args().address(), context.args().subject()))
     .periodic("hourly-status", Schedule.every(Duration.ofHours(1)), email,
         new SendEmail("ops@example.com", "Hourly status"), InsertOptions.defaults(), true)
     .periodic("daily-report", Schedule.cron("CRON_TZ=America/Chicago 0 9 * * *"), email,
@@ -560,16 +564,16 @@ var workerConfig = client.workers()
 ```
 
 Periodic IDs use the same syntax as job kinds and must fit within 127 UTF-8 bytes.
-Use `null` for an anonymous registration. `workers.periodicJobs().add(...)`
+Use `null` for an anonymous registration. `run.periodicJobs().add(...)`
 returns a handle for removing that registration. Builder registration returns no
 handle, so an anonymous definition added through the builder can only be removed
-with `workers.periodicJobs().clear()`.
+with `run.periodicJobs().clear()`.
 
 OSS schedules are kept in memory and can miss occurrences during downtime or
 leader changes. Add or remove definitions on a running runtime:
 
 ```java
-var periodicJobs = workers.periodicJobs(); // PeriodicJobBundle
+var periodicJobs = run.periodicJobs(); // PeriodicJobBundle
 var handle = periodicJobs.add(new PeriodicJob<>(
     "hourly-status", Schedule.every(Duration.ofHours(1)), email,
     new SendEmail("ops@example.com", "Hourly status"), InsertOptions.defaults(), true));
@@ -592,7 +596,7 @@ The bundle also provides `addMany`, `removeMany`, `removeManyById`, and `clear`.
 `addMany` validates the entire batch before registering any jobs and returns
 handles in input order. Handles identify one registration, so removing an old
 handle cannot remove a replacement that reused the same ID. The same
-`PeriodicJob` definition can be passed to `Workers.Builder.periodic` before start.
+`PeriodicJob` definition can be passed to `Client.Builder.periodic` before start.
 
 Interval schedules retain their planned cadence when maintenance runs late.
 Each job's `scheduled_at` defaults to its planned occurrence; an explicit
@@ -605,7 +609,7 @@ Each job's `scheduled_at` defaults to its planned occurrence; an explicit
 River UI can read the result once the attempt finishes.
 
 ```java
-workerConfig.add(email, context -> {
+clientBuilder.worker(email, context -> {
   mailer.send(context.args().address(), context.args().subject());
   context.output(Map.of("delivered", true, "address", context.args().address()));
 });
@@ -620,7 +624,7 @@ completed before an earlier failure. Keep step names and ordering stable across
 deployments and languages; anything outside a step runs on every attempt.
 
 ```java
-workerConfig.add(email, context -> {
+clientBuilder.worker(email, context -> {
   context.step("send", () ->
       mailer.send(context.args().address(), context.args().subject()));
   context.step("record-delivery", () -> deliveries.record(context.job().id()));
@@ -636,7 +640,7 @@ Use `context.checkpoint(connection)` inside a step to persist its progress in th
 same transaction as application writes:
 
 ```java
-workerConfig.add(email, context -> {
+clientBuilder.worker(email, context -> {
   context.step("record-delivery", () -> context.transaction(connection -> {
     deliveries.record(connection, context.job().id());
     context.checkpoint(connection);
@@ -676,7 +680,7 @@ consuming a retry. `context.snooze` ends the current attempt and schedules the
 same job to run again; code after the call does not execute on that attempt.
 
 ```java
-workerConfig.add(email, context -> {
+clientBuilder.worker(email, context -> {
   if (!mailer.isReady()) context.snooze(Duration.ofMinutes(5));
   mailer.send(context.args().address(), context.args().subject());
 });
@@ -684,20 +688,22 @@ workerConfig.add(email, context -> {
 
 ### Subscriptions
 
-[Subscribe](https://riverqueue.com/docs/subscriptions) to events from a running
-`Workers` instance. Callbacks are process-local, run synchronously, and should
-finish quickly. They are not a durable stream of all events in the cluster.
+[Subscribe](https://riverqueue.com/docs/subscriptions) to events on a `Client`.
+Subscribe before `start()` to include events from immediately processed jobs.
+Subscriptions survive restarts of that client until closed. Callbacks are
+process-local, run synchronously, and should finish quickly. They are not a durable stream of all events in the cluster.
 Close the subscription to unregister it.
 
 ```java
-try (var subscription = workers.subscribe(
+try (var subscription = client.subscribe(
     event -> System.out.println("Completed job " + event.job().id()),
-    Workers.EventKind.JOB_COMPLETED)) {
+    Client.EventKind.JOB_COMPLETED);
+    var run = client.start()) {
   application.awaitStop();
 }
 ```
 
-Event kinds are `Workers.EventKind` values. Omit the filter to receive every kind.
+Event kinds are `Client.EventKind` values. Omit the filter to receive every kind.
 Job events carry `event.job()`; queue events carry `event.queue()` and a null job.
 The enum's `value()` retains River's lower-case protocol spelling.
 
@@ -705,7 +711,7 @@ The enum's `value()` retains River's lower-case protocol spelling.
 
 Use [isolated database tests](https://riverqueue.com/docs/testing) with JUnit and
 signals instead of sleeps. This complete test method uses a fresh SQLite file,
-subscribes before inserting, and waits for committed completion. Add the SQLite
+subscribes before starting, and waits for committed completion. Add the SQLite
 JDBC driver and JUnit Jupiter to the test classpath.
 
 ```java
@@ -715,16 +721,14 @@ void completes(@org.junit.jupiter.api.io.TempDir java.nio.file.Path directory) t
   var echo = JobType.of("echo", Echo.class);
   var database = Database.connect("jdbc:sqlite:" + directory.resolve("river.db"));
   new Migrator(database).migrate();
-  var client = new Client(database);
-  var completed = new java.util.concurrent.CompletableFuture<Workers.Event>();
-
-  try (var workers = client.workers()
+  var client = Client.builder(database)
       .queue("default", 1)
-      .add(echo, context -> context.output(context.args().message()))
-      .start();
-      var subscription = workers.subscribe(event -> {
-        if (event.kind() == Workers.EventKind.JOB_COMPLETED) completed.complete(event);
-      })) {
+      .worker(echo, context -> context.output(context.args().message()))
+      .build();
+  var completed = new java.util.concurrent.CompletableFuture<Client.Event>();
+
+  try (var subscription = client.subscribe(completed::complete, Client.EventKind.JOB_COMPLETED);
+      var run = client.start()) {
     var inserted = client.insert(echo, new Echo("hello"));
     var event = completed.get(5, java.util.concurrent.TimeUnit.SECONDS);
     org.junit.jupiter.api.Assertions.assertEquals(inserted.job().id(), event.job().id());
@@ -734,8 +738,8 @@ void completes(@org.junit.jupiter.api.io.TempDir java.nio.file.Path directory) t
 }
 ```
 
-`new Client(database, clock)` accepts an injected `Clock` for deterministic insert
-timestamps. The worker runtime uses wall time. Java does not currently provide
+`Client.builder(database).clock(clock)` and `new Client(database, clock)` accept
+an injected `Clock` for deterministic insert timestamps. The worker runtime uses wall time. Java does not currently provide
 a dedicated worker-test harness.
 
 ### Transactional job completion
@@ -746,7 +750,7 @@ rolls back, neither change survives. Return from the handler after committing;
 external effects such as sending email cannot participate in a JDBC transaction.
 
 ```java
-workerConfig.add(email, context -> {
+clientBuilder.worker(email, context -> {
   context.transaction(connection -> {
     deliveries.record(connection, context.job().id());
     context.output(Map.of("recorded", true));
@@ -786,7 +790,7 @@ registration, and behavior together without a worker subclass for every kind.
 ```java
 Workers.Handler<SendEmail> sendEmail = context ->
     mailer.send(context.args().address(), context.args().subject());
-workerConfig.add(email, sendEmail);
+clientBuilder.worker(email, sendEmail);
 ```
 
 ## SQLite
@@ -820,9 +824,22 @@ var jobsClient = new Client(jobsDatabase);
 
 ## Stopping workers
 
+`Workers` is a handler registry; it has no lifecycle methods. `Client.start()`
+returns the `RunHandle` that owns one execution. Only one run can be active on a
+client, including while a timed-out stop is draining. After `stop()` succeeds,
+that client can be started again with the same client ID and original settings.
+An old handle never stops a later run. Dynamic queue and periodic registrations
+belong to their run and are reset from client configuration on restart.
+
+Registries and builders are mutable configuration objects. `workers(registry)`
+copies registrations, and `build()` snapshots settings. `client.toBuilder()`
+creates configuration for an independent client; `withHooks`, `withMiddleware`,
+and `withPlugins` likewise return new clients. Configure them before starting,
+and use the configured client for same-process insert wakeups.
+
 For [graceful stopping](https://riverqueue.com/docs/graceful-shutdown),
-`workers.stop()` stops fetching and waits for active attempts. `close()` does the
-same, making try-with-resources convenient. `workers.stopAndCancel()` also
+`run.stop()` stops fetching and waits for active attempts. `close()` does the
+same, making try-with-resources convenient. `run.stopAndCancel()` also
 requests cancellation of active attempts. Both wait for handlers to return.
 A graceful-stop timeout leaves attempts running; call `stop()` again to keep
 waiting or `stopAndCancel()` to request cancellation. Attempt timeouts continue
@@ -836,15 +853,16 @@ propagate `InterruptedException`; shutdown interruption requeues the job without
 consuming an attempt. `awaitCancellation()` only waits for the signal.
 
 ```java
-var workers = client.workers()
+var client = Client.builder(database)
     .queue("default", 10)
     .stopTimeout(Duration.ofSeconds(30))
-    .add(email, context -> mailer.send(context.args().address(), context.args().subject()))
-    .start();
+    .worker(email, context -> mailer.send(context.args().address(), context.args().subject()))
+    .build();
+var run = client.start();
 try {
   application.awaitStop();
 } finally {
-  workers.stop();
+  run.stop();
 }
 ```
 
@@ -868,16 +886,16 @@ rescue candidate even when they exceed `rescueAfter`. Worker durations and snooz
 delays must fit in signed 64-bit nanoseconds, up to about 292 years.
 
 ```java
-var workerConfig = client.workers()
+var clientBuilder = Client.builder(database)
     .queue("default", 10)
     .retention(Duration.ofDays(1), Duration.ofDays(1), Duration.ofDays(7))
-    .add(email, context -> mailer.send(context.args().address(), context.args().subject()));
+    .worker(email, context -> mailer.send(context.args().address(), context.args().subject()));
 ```
 
 Retention arguments are cancelled, completed, and discarded durations, in that
 order. Negative durations retain that state indefinitely. If a runtime uses
 `leadership(false)`, another eligible client must run maintenance; periodic
-registrations require leadership. `workers.isLeader()` reports the local status.
+registrations require leadership. `run.isLeader()` reports the local status.
 Leadership leases last `serviceInterval` plus ten seconds, keeping the same
 renewal margin even when the interval is increased.
 `serviceInterval` also controls maintenance and queue heartbeats. It must be
