@@ -2,6 +2,7 @@
 
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
+use std::sync::atomic::Ordering;
 use std::time::Duration;
 
 use chrono::Utc;
@@ -54,8 +55,7 @@ pub(super) async fn run_dynamic_queues(
     mut changes: watch::Receiver<u64>,
     queues_ready: oneshot::Sender<()>,
 ) -> Result<(), Error> {
-    // Recover lost cancellation notices, including after the notifier stops
-    // during graceful shutdown, until every producer has drained.
+    // Cancellation checks remain independent of fetching until every producer drains.
     let _cancellation_poll = AbortOnDrop(tokio::spawn(poll_job_cancellations(
         Arc::clone(&inner),
         fetch_cancel.clone(),
@@ -138,26 +138,21 @@ fn jittered_fetch_poll_interval(interval: Duration) -> Duration {
     crate::maintenance::random_duration(interval, interval.saturating_add(jitter))
 }
 
-/// Cancels this client's running attempts whose jobs have a cancellation
-/// request, checking every [`QUEUE_CONFIG_POLL_INTERVAL`]. Notifications
-/// deliver cancellations promptly; polling also recovers notices lost during
-/// reconnects or while a fetched attempt was still being registered.
-/// It keeps checking after `stopping` fires, so jobs can still be cancelled
-/// while producers drain; the caller aborts it once they have.
-async fn poll_job_cancellations(inner: Arc<ClientInner>, stopping: CancellationToken) {
-    let mut poll = tokio::time::interval(QUEUE_CONFIG_POLL_INTERVAL);
-    poll.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
-    // The first tick completes at once; running jobs start later.
-    poll.tick().await;
+/// Checks cancellations on notification/reconnect hints, retrying failed reads.
+/// Without a notifier, polls at the queue-control interval instead.
+pub(super) async fn poll_job_cancellations(inner: Arc<ClientInner>, stopping: CancellationToken) {
+    let mut retry = false;
     loop {
         tokio::select! {
-            _ = poll.tick() => {},
+            () = tokio::time::sleep(QUEUE_CONFIG_POLL_INTERVAL), if retry || !inner.has_notifier() => {},
             () = inner.cancellation_wakeup.notified() => {},
         }
-        if let Err(poll_error) = check_job_cancellations(&inner).await
+        let result = check_job_cancellations(&inner).await;
+        retry = result.is_err();
+        if let Err(check_error) = result
             && !stopping.is_cancelled()
         {
-            error!(error = %crate::error::Chain(&poll_error), "River failed to check for job cancellation requests");
+            error!(error = %crate::error::Chain(&check_error), "River failed to check for job cancellation requests");
         }
     }
 }
@@ -849,6 +844,7 @@ pub(super) async fn run_queue(
         if available == 0 {
             continue;
         }
+        let cancellation_generation = inner.cancellation_generation.load(Ordering::Acquire);
         let fetched = match (&session, claims_through_session) {
             (Some(session), true) => {
                 match claim_through_session(
@@ -897,7 +893,7 @@ pub(super) async fn run_queue(
         for (row, decode_error) in claimed {
             let hard_cancel = work_cancel.child_token();
             let cancellation = hard_cancel.child_token();
-            register_running_attempt(&inner, row.id, &cancellation);
+            register_running_attempt(&inner, row.id, &cancellation, cancellation_generation);
             let task_inner = Arc::clone(&inner);
             let completion_sender = completion_sender.clone();
             let session_row = attempts.session.is_some().then(|| row.clone());

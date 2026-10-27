@@ -12,6 +12,41 @@ RSpec.describe "River notification dispatch and recovery" do
     ))
   end
 
+  [false, true].each do |fail_first|
+    it "waits for cancellation hints and retries failures=#{fail_first}" do
+      driver.define_singleton_method(:notification_listener) { Object.new }
+      value = River::ClientRuntime.new(Object.new, driver, River::Config.new(
+        fetch_cooldown: 0.001, fetch_poll_interval: 0.01, leader_election_disabled: true, logger: Logger.new(output)
+      ))
+      queries = Queue.new
+      failures = 0
+      driver.define_singleton_method(:job_get_cancelled_ids) do |_ids|
+        queries << true
+        if fail_first && failures.zero?
+          failures += 1
+          raise "temporary read failure"
+        end
+        []
+      end
+      value.instance_variable_set(:@running, 42 => {queue: "one", thread: Thread.current, working: true})
+      checker = Thread.new { value.send(:cancellation_loop) }
+      sleep 0.05
+      expect(queries).to be_empty
+      value.send(:receive_notification, "river_control", JSON.generate(action: "cancel", queue: "one", job_id: 42))
+      Timeout.timeout(2) { queries.pop }
+      Timeout.timeout(2) { queries.pop } if fail_first
+      sleep 0.05
+      expect(queries).to be_empty
+    ensure
+      value&.instance_variable_get(:@mutex)&.synchronize do
+        value.instance_variable_set(:@stop_requested, true)
+        value.instance_variable_get(:@running).clear
+        value.instance_variable_get(:@condition).broadcast
+      end
+      checker&.join
+    end
+  end
+
   it "backs off repeated connection failures without indefinitely delaying shutdown" do
     listener = Object.new
     listener.define_singleton_method(:poll) { |_| raise "connection lost" }
@@ -78,6 +113,35 @@ RSpec.describe "River notification dispatch and recovery" do
 
     expect(raised).to be_empty
     expect(replacement[:cancelled]).to be_nil
+  end
+
+  it "retries a failed cancellation check made before the worker starts" do
+    raised = Queue.new
+    thread = Object.new
+    thread.define_singleton_method(:raise) { |error| raised << error }
+    entry = {check_before_work: true, queue: "one", thread: thread, working: false}
+    runtime.instance_variable_set(:@running, 42 => entry)
+    queries = 0
+    driver.define_singleton_method(:job_get_cancelled_ids) do |ids|
+      queries += 1
+      raise "temporary read failure" if queries == 1
+
+      ids
+    end
+
+    runtime.send(:begin_work, 42)
+    checker = Thread.new { runtime.send(:cancellation_loop) }
+
+    expect(Timeout.timeout(2) { raised.pop }).to eq(River::JobCancelError)
+    expect(entry[:cancelled]).to be true
+    expect(output.string).to include("temporary read failure")
+  ensure
+    runtime.instance_variable_get(:@mutex).synchronize do
+      runtime.instance_variable_set(:@stop_requested, true)
+      runtime.instance_variable_get(:@running).clear
+      runtime.instance_variable_get(:@condition).broadcast
+    end
+    checker&.join
   end
 
   it "ignores invalid payloads without disrupting the receiver" do

@@ -2,6 +2,7 @@
 
 use std::collections::HashMap;
 use std::sync::Mutex;
+use std::sync::atomic::Ordering;
 
 use tokio_util::sync::CancellationToken;
 
@@ -27,12 +28,14 @@ pub(super) fn register_running_attempt(
     inner: &ClientInner,
     job_id: i64,
     cancellation: &CancellationToken,
+    generation: u64,
 ) {
     inner
         .running
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner)
         .insert(job_id, cancellation.clone());
-    // Recheck after registration even if a notice arrived during the claim.
-    inner.cancellation_wakeup.notify_one();
+    if inner.cancellation_generation.load(Ordering::Acquire) != generation {
+        inner.cancellation_wakeup.notify_one();
+    }
 }

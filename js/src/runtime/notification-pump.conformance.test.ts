@@ -111,6 +111,7 @@ describe.each(["postgres", "sqlite"] as const)(
           },
         } as unknown as AttemptRunner;
         const pump = new NotificationPump(context, {
+          signal: context.claimSignal,
           leaderResigned: () => {
             effects.push(["leaderResigned"]);
           },

@@ -282,7 +282,7 @@ func TestNotifier(t *testing.T) {
 		require.Equal(t, TopicAndPayload{testTopic1, "msg1"}, riversharedtest.WaitOrTimeout(t, notifyChan))
 	})
 
-	t.Run("RegisterListenerReadyFunc", func(t *testing.T) {
+	t.Run("RegisterRecoveryFunc", func(t *testing.T) {
 		t.Parallel()
 
 		notifier, _ := setup(t, nil)
@@ -305,7 +305,7 @@ func TestNotifier(t *testing.T) {
 
 		var ready testsignal.TestSignal[struct{}]
 		ready.Init(t)
-		sub := notifier.RegisterListenerReadyFunc(func() { ready.Signal(struct{}{}) })
+		sub := notifier.RegisterRecoveryFunc(func() { ready.Signal(struct{}{}) })
 		t.Cleanup(sub.Unregister)
 
 		start(t, notifier)
@@ -675,6 +675,36 @@ func TestNotifier(t *testing.T) {
 		// Subscription should still work.
 		require.Equal(t, TopicAndPayload{testTopic1, "msg1"}, riversharedtest.WaitOrTimeout(t, notifyChan))
 	})
+}
+
+func TestNotifier_OverflowRequestsRecovery(t *testing.T) {
+	t.Parallel()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	var recovered testsignal.TestSignal[struct{}]
+	recovered.Init(t)
+	delivered := false
+	notif := New(riversharedtest.BaseServiceArchetype(t), &ListenerMock{
+		waitForNotificationFunc: func(ctx context.Context) (*riverdriver.Notification, error) {
+			if !delivered {
+				delivered = true
+				return &riverdriver.Notification{Topic: string(NotificationTopicControl), Payload: `{"action":"cancel","job_id":1}`}, nil
+			}
+			<-ctx.Done()
+			return nil, ctx.Err()
+		},
+	})
+	notif.notificationBuf = make(chan *riverdriver.Notification, 1)
+	notif.notificationBuf <- &riverdriver.Notification{}
+	sub := notif.RegisterRecoveryFunc(func() { recovered.Signal(struct{}{}) })
+	defer sub.Unregister()
+	var done testsignal.TestSignal[error]
+	done.Init(t)
+	go func() { done.Signal(notif.waitOnce(ctx)) }()
+	recovered.WaitOrTimeout()
+	cancel()
+	require.ErrorIs(t, done.WaitOrTimeout(), context.Canceled)
 }
 
 func TestNotifier_Start(t *testing.T) {

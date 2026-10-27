@@ -125,7 +125,7 @@ pub(super) fn dispatch_notification(
             match payload.action.as_str() {
                 "cancel" => {
                     if payload.job_id.is_some() {
-                        inner.cancellation_wakeup.notify_one();
+                        inner.request_cancellation_check();
                     }
                 }
                 // Like Go's producer, a metadata change is handled at once
@@ -221,6 +221,7 @@ async fn idles_without_listen_notify(
     }
     info!("River's database does not support LISTEN/NOTIFY; polling instead");
     report_ready(ready);
+    inner.request_cancellation_check();
     cancel.cancelled().await;
     Ok(true)
 }
@@ -297,6 +298,7 @@ async fn listen_until_error(
             "timed out connecting and subscribing".to_owned(),
         )
     })??;
+    inner.request_cancellation_check();
     debug!("River notification listener healthy");
     *attempt = 0;
     report_ready(ready);
@@ -325,6 +327,7 @@ async fn listen_until_error(
             Ok(Ok(None)) => {
                 warn!("River notification listener reconnected; waking producers");
                 wake_all_producers(queue_notifications);
+                inner.request_cancellation_check();
             }
             Ok(Err(listener_error)) => return Err(listener_error.into()),
             Err(_) => {
@@ -384,6 +387,7 @@ pub(super) async fn run_sqlite_notifications(
                     .connect(&mut connection)
                     .await
                     .map_err(sqlite_backend_error)?;
+                inner.request_cancellation_check();
             }
             for topic in [
                 crate::NOTIFICATION_TOPIC_CONTROL,

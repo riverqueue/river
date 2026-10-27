@@ -22,21 +22,6 @@ import (
 	"github.com/riverqueue/river/rivershared/util/timeoututil"
 )
 
-// ListenerReadyFunc runs after initial connection and each successful reconnect.
-type ListenerReadyFunc func()
-
-// ListenerReadySubscription unregisters a listener-ready callback.
-type ListenerReadySubscription struct {
-	notifier *Notifier
-}
-
-// Unregister stops future callbacks; an invocation already in progress may finish.
-func (s *ListenerReadySubscription) Unregister() {
-	s.notifier.mu.Lock()
-	defer s.notifier.mu.Unlock()
-	delete(s.notifier.listenerReadyFuncs, s)
-}
-
 type NotificationTopic string
 
 const (
@@ -62,6 +47,22 @@ var NotificationTopicLongest = func() NotificationTopic { //nolint:gochecknoglob
 }()
 
 type NotifyFunc func(topic NotificationTopic, payload string)
+
+// RecoveryFunc requests reconciliation after listening starts or notifications are
+// dropped. It must not block; calls may overlap with notification delivery.
+type RecoveryFunc func()
+
+// RecoverySubscription unregisters a recovery callback.
+type RecoverySubscription struct {
+	notifier *Notifier
+}
+
+// Unregister stops future callbacks; an invocation already in progress may finish.
+func (s *RecoverySubscription) Unregister() {
+	s.notifier.mu.Lock()
+	defer s.notifier.mu.Unlock()
+	delete(s.notifier.recoveryFuncs, s)
+}
 
 type Subscription struct {
 	notifyFunc   NotifyFunc
@@ -103,13 +104,13 @@ type Notifier struct {
 	testSignals       notifierTestSignals
 	waitInterruptChan chan func()
 
-	mu                 sync.RWMutex
-	isConnected        bool
-	isStarted          bool
-	isWaiting          bool
-	listenerReadyFuncs map[*ListenerReadySubscription]ListenerReadyFunc
-	subscriptions      map[NotificationTopic][]*Subscription
-	waitCancel         context.CancelFunc
+	mu            sync.RWMutex
+	isConnected   bool
+	isStarted     bool
+	isWaiting     bool
+	recoveryFuncs map[*RecoverySubscription]RecoveryFunc
+	subscriptions map[NotificationTopic][]*Subscription
+	waitCancel    context.CancelFunc
 }
 
 func New(archetype *baseservice.Archetype, listener riverdriver.Listener) *Notifier {
@@ -118,19 +119,19 @@ func New(archetype *baseservice.Archetype, listener riverdriver.Listener) *Notif
 		notificationBuf:   make(chan *riverdriver.Notification, 1000),
 		waitInterruptChan: make(chan func(), 10),
 
-		listenerReadyFuncs: make(map[*ListenerReadySubscription]ListenerReadyFunc),
-		subscriptions:      make(map[NotificationTopic][]*Subscription),
+		recoveryFuncs: make(map[*RecoverySubscription]RecoveryFunc),
+		subscriptions: make(map[NotificationTopic][]*Subscription),
 	})
 	return notifier
 }
 
-// RegisterListenerReadyFunc registers a callback for initial connection and reconnects.
-func (n *Notifier) RegisterListenerReadyFunc(listenerReadyFunc ListenerReadyFunc) *ListenerReadySubscription {
+// RegisterRecoveryFunc registers a callback for connection recovery and buffer overflow.
+func (n *Notifier) RegisterRecoveryFunc(recoveryFunc RecoveryFunc) *RecoverySubscription {
 	n.mu.Lock()
 	defer n.mu.Unlock()
 
-	sub := &ListenerReadySubscription{notifier: n}
-	n.listenerReadyFuncs[sub] = listenerReadyFunc
+	sub := &RecoverySubscription{notifier: n}
+	n.recoveryFuncs[sub] = recoveryFunc
 	return sub
 }
 
@@ -252,15 +253,7 @@ func (n *Notifier) listenAndWait(ctx context.Context) error {
 	n.testSignals.ListeningBegin.Signal(struct{}{})
 	defer n.testSignals.ListeningEnd.Signal(struct{}{})
 
-	listenerReadyFuncs := func() []ListenerReadyFunc {
-		n.mu.RLock()
-		defer n.mu.RUnlock()
-
-		return maputil.Values(n.listenerReadyFuncs)
-	}()
-	for _, listenerReadyFunc := range listenerReadyFuncs {
-		listenerReadyFunc()
-	}
+	n.requestRecovery()
 
 	drainInterrupts := func() {
 		for {
@@ -320,6 +313,18 @@ func (n *Notifier) listenerClose(ctx context.Context, skipLock bool) {
 	}
 
 	n.isConnected = false
+}
+
+func (n *Notifier) requestRecovery() {
+	recoveryFuncs := func() []RecoveryFunc {
+		n.mu.RLock()
+		defer n.mu.RUnlock()
+
+		return maputil.Values(n.recoveryFuncs)
+	}()
+	for _, recoveryFunc := range recoveryFuncs {
+		recoveryFunc()
+	}
 }
 
 // shouldIgnoreListenerError returns true if the error is a certain type of
@@ -445,6 +450,7 @@ func (n *Notifier) waitOnce(ctx context.Context) error {
 			case n.notificationBuf <- notification:
 			default:
 				n.Logger.WarnContext(ctx, n.Name+": Dropping notification due to full buffer", "payload", notification.Payload)
+				n.requestRecovery()
 			}
 		}
 	}()

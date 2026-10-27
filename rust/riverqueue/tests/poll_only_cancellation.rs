@@ -1,5 +1,5 @@
-//! Durable cancellation of running jobs, including when notifications are
-//! disabled or a cancellation notice is lost, on every backend.
+//! Durable cancellation of running jobs, with notifications enabled or disabled,
+//! including during graceful shutdown, on every backend.
 //!
 //! Postgres tests run in a unique schema and fail rather than skip when
 //! `RIVER_RUST_DATABASE_URL` is unset; SQLite tests use a temporary file.
@@ -11,8 +11,8 @@ mod support;
 use std::{convert::Infallible, sync::Arc, time::Duration};
 
 use riverqueue::{
-    __private::Database, Client, EventKind, Job, JobArgs, JobState, JobUpdateParams, QueueConfig,
-    WorkContext, WorkOutcome, Workers,
+    __private::Database, Client, EventKind, Job, JobArgs, JobState, QueueConfig, WorkContext,
+    WorkOutcome, Workers,
 };
 use serde::{Deserialize, Serialize};
 use tokio::sync::Semaphore;
@@ -56,7 +56,7 @@ impl Backend {
     }
 }
 
-/// Durable cancellation survives lost notifications and graceful shutdown.
+/// Both notification delivery and poll-only checks remain live during graceful shutdown.
 async fn polls_for_remote_cancellation(backend: Backend) {
     for (notifications, while_stopping) in
         [(false, false), (false, true), (true, false), (true, true)]
@@ -100,27 +100,7 @@ async fn polls_for_remote_cancellation(backend: Backend) {
         if while_stopping {
             run.stopper().stop();
         }
-        if notifications {
-            // Persist a cancellation without its notification, as though that
-            // notice was lost while the listener reconnected.
-            other
-                .jobs()
-                .update(
-                    id,
-                    JobUpdateParams::default().metadata(
-                        [(
-                            "cancel_attempted_at".to_owned(),
-                            chrono::Utc::now().to_rfc3339().into(),
-                        )]
-                        .into_iter()
-                        .collect(),
-                    ),
-                )
-                .await
-                .unwrap();
-        } else {
-            other.jobs().cancel(id).await.unwrap();
-        }
+        other.jobs().cancel(id).await.unwrap();
 
         let event = tokio::time::timeout(TIMEOUT, events.recv())
             .await

@@ -19,6 +19,7 @@ import java.util.concurrent.PriorityBlockingQueue;
 import java.util.concurrent.Semaphore;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.locks.Condition;
 import java.util.concurrent.locks.ReentrantLock;
 import org.postgresql.PGConnection;
@@ -41,6 +42,8 @@ public final class RunHandle implements AutoCloseable {
           .plusDays(1)
           .atStartOfDay()
           .toInstant(java.time.ZoneOffset.UTC);
+  private final AtomicLong cancellationGeneration = new AtomicLong();
+  private volatile boolean cancellationPollOnly;
   private final Semaphore cancellationWake = new Semaphore(0);
   private final Client.Builder config;
   private final RetryPolicy defaultRetryPolicy = RetryPolicy.defaults();
@@ -79,12 +82,13 @@ public final class RunHandle implements AutoCloseable {
 
   RunHandle(Client river, Client.Builder config) {
     this.config = config;
+    cancellationPollOnly = config.pollOnly;
     this.river = river;
     id = river.id();
     notifications =
         new Protocol.Dispatcher(
             id,
-            ignored -> cancellationWake.release(),
+            ignored -> requestCancellationCheck(),
             this::queueNotification,
             this::leadershipNotification);
     queues.putAll(config.queues);
@@ -315,6 +319,7 @@ public final class RunHandle implements AutoCloseable {
       }
     }
     dispatcherStopped.countDown();
+    cancellationWake.release();
   }
 
   private record FetchWakeup(Instant scheduledAt, String notifyQueue)
@@ -352,6 +357,7 @@ public final class RunHandle implements AutoCloseable {
   }
 
   private void claim(String queue, int count) {
+    long generation = cancellationGeneration.get();
     List<Client.Decoded> jobs =
         river.transaction(
             c ->
@@ -397,6 +403,7 @@ public final class RunHandle implements AutoCloseable {
                           return result;
                         }));
     for (var decoded : jobs) launch(decoded, config.handlers.get(decoded.job().kind()));
+    if (!jobs.isEmpty() && cancellationGeneration.get() != generation) cancellationWake.release();
   }
 
   private <A> void launch(Client.Decoded decoded, Registration<A> registration) {
@@ -494,6 +501,7 @@ public final class RunHandle implements AutoCloseable {
           queueLock.lock();
           try {
             active.remove(row.id(), context);
+            if (!running.get() && active.isEmpty()) cancellationWake.release();
             queueChanged.signalAll();
           } finally {
             queueLock.unlock();
@@ -515,6 +523,7 @@ public final class RunHandle implements AutoCloseable {
   <A> List<WorkContext<A>> claimPeers(
       WorkContext<?> parent, JobType<A> type, Client.Transaction<List<Client.Decoded>> operation) {
     parent.checkRuntimeCancellation();
+    long generation = cancellationGeneration.get();
     var rows =
         river.transaction(
             connection -> {
@@ -533,6 +542,7 @@ public final class RunHandle implements AutoCloseable {
       // Publish before checking the parent so a concurrent cancellation cannot miss both.
       context.attach(this, parent);
     }
+    if (!rows.isEmpty() && cancellationGeneration.get() != generation) cancellationWake.release();
     var contexts = new ArrayList<WorkContext<A>>();
     for (var decoded : rows) {
       if (decoded.failure() != null) throw decoded.failure();
@@ -562,6 +572,7 @@ public final class RunHandle implements AutoCloseable {
     queueLock.lock();
     try {
       active.remove(context.job().id(), context);
+      if (!running.get() && active.isEmpty()) cancellationWake.release();
       queueChanged.signalAll();
     } finally {
       queueLock.unlock();
@@ -729,6 +740,10 @@ public final class RunHandle implements AutoCloseable {
     }
   }
 
+  private boolean hasActiveWork() {
+    return running.get() || dispatcherStopped.getCount() > 0 || !active.isEmpty();
+  }
+
   private void heartbeat(String queue) {
     river.transaction(
         c -> {
@@ -762,9 +777,13 @@ public final class RunHandle implements AutoCloseable {
       listenSqlite();
       return;
     }
-    while (running.get()) {
+    while (hasActiveWork()) {
       try (var connection = river.database().connection()) {
-        if (!river.database().supportsNotifications(connection)) return;
+        if (!river.database().supportsNotifications(connection)) {
+          cancellationPollOnly = true;
+          cancellationWake.release();
+          return;
+        }
         listener = connection;
         String schema = river.database().schema();
         if (schema.isEmpty())
@@ -779,10 +798,11 @@ public final class RunHandle implements AutoCloseable {
             statement.execute("LISTEN \"" + schema.replace("\"", "\"\"") + "." + topic + "\"");
           }
         wake.release();
+        requestCancellationCheck();
         observe("listen_ready");
         var postgres = connection.unwrap(PGConnection.class);
         try {
-          while (running.get()) {
+          while (hasActiveWork()) {
             var notifications = postgres.getNotifications(25);
             if (notifications != null)
               for (var notification : notifications)
@@ -797,7 +817,7 @@ public final class RunHandle implements AutoCloseable {
           }
         }
       } catch (Exception e) {
-        if (running.get()) {
+        if (hasActiveWork()) {
           report(e);
           try {
             TimeUnit.MILLISECONDS.sleep(100);
@@ -824,7 +844,7 @@ public final class RunHandle implements AutoCloseable {
   private void listenSqlite() {
     long after = 0;
     boolean initialized = false;
-    while (running.get()) {
+    while (hasActiveWork()) {
       try {
         if (!initialized) {
           after =
@@ -841,6 +861,7 @@ public final class RunHandle implements AutoCloseable {
           // The initial cursor skips earlier notifications, including inserts since the first
           // fetch. Poll again once listening starts, as the Postgres listener does.
           wake.release();
+          requestCancellationCheck();
           observe("listen_ready");
         }
         final long cursor = after;
@@ -1402,9 +1423,14 @@ public final class RunHandle implements AutoCloseable {
   private void pollCancellations() {
     // Fetches may block, and graceful stop ends dispatch before active work.
     // Keep cancellation checks independent until every claimed attempt drains.
-    while (running.get() || dispatcherStopped.getCount() > 0 || !active.isEmpty()) {
+    boolean retry = false;
+    while (hasActiveWork()) {
       try {
+        if (cancellationPollOnly || retry) cancellationWake.tryAcquire(50, TimeUnit.MILLISECONDS);
+        else cancellationWake.acquire();
         cancellationWake.drainPermits();
+        if (!hasActiveWork()) return;
+        retry = false;
         var attempts = Map.copyOf(active);
         if (!attempts.isEmpty()) {
           river.transaction(
@@ -1422,14 +1448,12 @@ public final class RunHandle implements AutoCloseable {
                 return null;
               });
         }
-      } catch (Exception e) {
-        report(e);
-      }
-      try {
-        cancellationWake.tryAcquire(50, TimeUnit.MILLISECONDS);
       } catch (InterruptedException e) {
         Thread.currentThread().interrupt();
         return;
+      } catch (Exception e) {
+        retry = true;
+        report(e);
       }
     }
   }
@@ -1452,6 +1476,11 @@ public final class RunHandle implements AutoCloseable {
       logger.log(System.Logger.Level.WARNING, "River runtime failure", error);
       logger.log(System.Logger.Level.WARNING, "River error handler failed", handlerFailure);
     }
+  }
+
+  private void requestCancellationCheck() {
+    cancellationGeneration.incrementAndGet();
+    cancellationWake.release();
   }
 
   private Duration retryDelay(Job<?> job, Instant now) {

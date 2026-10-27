@@ -75,6 +75,8 @@ import {
 
 /** Configuration for an {@link AttemptRunner}. */
 export interface AttemptRunnerOptions {
+  readonly cancellationSignal: AbortSignal;
+  readonly cancellationRetryIntervalMs: number;
   readonly completions: CompletionPipeline;
   readonly errorHandler: RiverErrorHandler | undefined;
   /** Client-level hooks, plugin hooks first. */
@@ -114,6 +116,9 @@ export class AttemptRunner {
   >();
   #cancellationCheck: Promise<void> | undefined;
   #cancellationCheckPending = false;
+  #cancellationGeneration = 0;
+  readonly #cancellationRetryIntervalMs: number;
+  readonly #cancellationSignal: AbortSignal;
   /**
    * For each claim in flight, the `attemptKey`s of cancellations that
    * need a durable check once the claim registers its attempts.
@@ -136,6 +141,8 @@ export class AttemptRunner {
   readonly #workers: Workers;
 
   constructor(context: RuntimeContext, options: AttemptRunnerOptions) {
+    this.#cancellationRetryIntervalMs = options.cancellationRetryIntervalMs;
+    this.#cancellationSignal = options.cancellationSignal;
     this.#completions = options.completions;
     this.#context = context;
     this.#errorHandler = options.errorHandler;
@@ -228,7 +235,7 @@ export class AttemptRunner {
         return;
       }
       try {
-        await this.recoverCancellations(signal);
+        await this.#checkCancellations();
       } catch (error: unknown) {
         if (signal.aborted) return;
         this.#context.logger.error(
@@ -237,6 +244,12 @@ export class AttemptRunner {
         );
       }
     }
+  }
+
+  /** Reconcile a reconnect or overflow, including claims not yet registered. */
+  requestCancellationCheck(): void {
+    this.#cancellationGeneration++;
+    void this.#checkCancellations();
   }
 
   /** Cancel this process's attempts of a job just cancelled through this client. */
@@ -514,10 +527,13 @@ export class AttemptRunner {
     cancelled(id: bigint): boolean;
     end(): void;
   } {
+    const generation = this.#cancellationGeneration;
     const pending = new Set<string>();
     this.#claimCancellations.add(pending);
     return {
-      cancelled: (id) => pending.has(attemptKey(id, this.#context.clientId)),
+      cancelled: (id) =>
+        generation !== this.#cancellationGeneration ||
+        pending.has(attemptKey(id, this.#context.clientId)),
       end: () => {
         this.#claimCancellations.delete(pending);
       },
@@ -926,13 +942,22 @@ export class AttemptRunner {
         while (this.#cancellationCheckPending) {
           this.#cancellationCheckPending = false;
           try {
-            await this.recoverCancellations(this.#runSignal);
+            await this.recoverCancellations(this.#cancellationSignal);
           } catch (error: unknown) {
-            if (this.#runSignal.aborted) return;
+            if (this.#cancellationSignal.aborted) return;
             this.#context.logger.warn(
               "River could not confirm a cancellation notification",
               { error: describeError(error) }
             );
+            try {
+              await this.#context.timer.delay(
+                this.#cancellationRetryIntervalMs,
+                this.#cancellationSignal
+              );
+            } catch {
+              return;
+            }
+            this.#cancellationCheckPending = true;
           }
         }
       } finally {

@@ -15,7 +15,7 @@ import { PG_EXACT_TYPES } from "../exact-types.js";
 import { abortablePromise, PgClientLease } from "../lease.js";
 import type { PgNotification, PgOperationOptions } from "../types.js";
 
-/** Notifications buffered per connection; beyond it the oldest is dropped. */
+/** Notifications buffered per connection; overflow forces resubscription and recovery. */
 const NOTIFICATION_QUEUE_CAPACITY = 1_024;
 
 /** Idle time after which a LISTEN connection is pinged, like River's Go notifier. */
@@ -282,7 +282,7 @@ class NotificationQueue {
   }
 
   push(value: PgNotification): void {
-    if (this.#signal.aborted) return;
+    if (this.#signal.aborted || this.#failure !== undefined) return;
     if (this.#waiting !== undefined) {
       this.#waiting.resolve(value);
       this.#waiting = undefined;
@@ -291,10 +291,12 @@ class NotificationQueue {
     const key = `${value.topic}\0${value.payload}`;
     if (this.#keys.has(key)) return;
     if (this.#values.length - this.#head >= NOTIFICATION_QUEUE_CAPACITY) {
-      const dropped = this.#values[this.#head++];
-      if (dropped !== undefined) {
-        this.#keys.delete(`${dropped.topic}\0${dropped.payload}`);
-      }
+      this.fail(
+        new Error(
+          "River notification buffer overflow; resubscribe to recover missed notifications"
+        )
+      );
+      return;
     }
     this.#keys.add(key);
     this.#values.push(value);

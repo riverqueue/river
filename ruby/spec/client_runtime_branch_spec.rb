@@ -445,7 +445,7 @@ RSpec.describe River::ClientRuntime do
     end
     value = runtime(driver: driver)
     value.define_singleton_method(:monotonic_now) { now }
-    value.define_singleton_method(:launch) { |_| @stop_requested = true if fetched_at.length == 2 }
+    value.define_singleton_method(:launch) { |_, _generation| @stop_requested = true if fetched_at.length == 2 }
     value.define_singleton_method(:wait) do |duration|
       waits << duration
       now += (waits.length == 1) ? 0.25 : duration
@@ -469,7 +469,7 @@ RSpec.describe River::ClientRuntime do
     end
     value = runtime(driver: driver)
     value.define_singleton_method(:monotonic_now) { now }
-    value.define_singleton_method(:launch) { |_| }
+    value.define_singleton_method(:launch) { |_, _generation| }
     value.define_singleton_method(:wait) { |_| @stop_requested = true }
 
     value.send(:producer_loop, "branch", River::QueueConfig.new(max_workers: 1, fetch_cooldown: 1, fetch_poll_interval: 1))
@@ -488,7 +488,7 @@ RSpec.describe River::ClientRuntime do
     }
     value = runtime(driver: driver)
     value.define_singleton_method(:monotonic_now) { 100.0 }
-    value.define_singleton_method(:launch) do |job|
+    value.define_singleton_method(:launch) do |job, _generation|
       @running[job.id] = {queue: "branch", thread: Thread.current, working: true}
     end
     value.define_singleton_method(:wait) { |_| @stop_requested = true }
@@ -528,7 +528,7 @@ RSpec.describe River::ClientRuntime do
     end
     value = runtime(driver: driver)
     value.define_singleton_method(:monotonic_now) { now }
-    value.define_singleton_method(:launch) { |_| @stop_requested = true if fetched_at.length == 2 }
+    value.define_singleton_method(:launch) { |_, _generation| @stop_requested = true if fetched_at.length == 2 }
     value.define_singleton_method(:wait) do |duration|
       @stop_requested = true if paused_at
       paused_at = Time.now.utc
@@ -813,7 +813,7 @@ RSpec.describe River::ClientRuntime do
     end
   end
 
-  it "checks cancellation across queues in one batch, excluding inactive work" do
+  it "checks cancellation across queues, including registered work that has not started" do
     raised = []
     fake_thread = Object.new
     fake_thread.define_singleton_method(:raise) { |error| raised << error }
@@ -821,7 +821,7 @@ RSpec.describe River::ClientRuntime do
     driver = Object.new
     driver.define_singleton_method(:job_get_cancelled_ids) { |ids|
       checked << ids
-      [3]
+      [2, 3]
     }
     value = runtime(driver: driver)
     value.instance_variable_set(
@@ -836,7 +836,8 @@ RSpec.describe River::ClientRuntime do
     value.send(:check_remote_cancellations)
 
     expect(raised).to eq([River::JobCancelError])
-    expect(checked).to eq([[1, 3]])
+    expect(checked).to eq([[1, 2, 3]])
+    expect { value.send(:begin_work, 2) }.to raise_error(River::JobCancelError)
   end
 
   it "interrupts work that begins after stop was requested" do

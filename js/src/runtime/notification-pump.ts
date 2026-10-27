@@ -2,14 +2,13 @@
  * The notification pump: supervises the backend's notification streams,
  * waking queues on inserts, applying queue controls and cancellations, and
  * forwarding leadership resignation requests. Notifications are hints;
- * polling remains the durable path.
+ * reconnects request durable cancellation checks.
  */
 import type { RuntimeNotification } from "../driver.js";
 import { LifecycleError } from "../errors.js";
 import type { AttemptRunner } from "./attempt-runner.js";
 import type { RuntimeContext } from "./context.js";
 import { backOffAfterFailure } from "./context.js";
-import { describeError } from "./failures.js";
 import {
   notificationCancellation,
   notificationLeaderResigned,
@@ -20,6 +19,8 @@ import type { QueueProducer } from "./queue-producer.js";
 
 /** Configuration for a {@link NotificationPump}. */
 export interface NotificationPumpOptions {
+  /** Remains live until every producer has drained. */
+  readonly signal: AbortSignal;
   /** Another client resigned leadership. */
   readonly leaderResigned: () => void;
   readonly producer: QueueProducer;
@@ -35,6 +36,7 @@ export class NotificationPump {
   readonly #producer: QueueProducer;
   readonly #resignLeadership: () => PromiseLike<unknown> | undefined;
   readonly #runner: AttemptRunner;
+  readonly #signal: AbortSignal;
 
   constructor(context: RuntimeContext, options: NotificationPumpOptions) {
     this.#context = context;
@@ -42,6 +44,7 @@ export class NotificationPump {
     this.#producer = options.producer;
     this.#resignLeadership = options.resignLeadership;
     this.#runner = options.runner;
+    this.#signal = options.signal;
   }
 
   /**
@@ -147,24 +150,7 @@ export class NotificationPump {
   #recoverMissedNotifications(): void {
     this.#producer.wakeAll();
     this.#producer.wakeControl();
-    this.#recoverMissedCancellations();
-  }
-
-  /**
-   * Cancel attempts whose cancellation notice was lost while a stream
-   * reconnected. A failed check is logged; the attempt then finishes as if
-   * its notice never arrived, as it would before this recovery.
-   */
-  #recoverMissedCancellations(): void {
-    const recovery = this.#runner
-      .recoverCancellations(this.#context.claimSignal)
-      .catch((error: unknown) => {
-        this.#context.logger.warn(
-          "River could not check running jobs for missed cancellations",
-          { error: describeError(error) }
-        );
-      });
-    this.#context.trackTask(recovery);
+    this.#runner.requestCancellationCheck();
   }
 
   async #remoteCancellationLoop(): Promise<void> {
@@ -181,7 +167,7 @@ export class NotificationPump {
       },
       () => {
         if (subscribed) {
-          this.#recoverMissedCancellations();
+          this.#runner.requestCancellationCheck();
         } else {
           subscribed = true;
         }
@@ -202,7 +188,7 @@ export class NotificationPump {
     connected: () => void,
     resubscribes: () => boolean = () => true
   ): Promise<void> {
-    const signal = this.#context.claimSignal;
+    const signal = this.#signal;
     let failures = 0;
     while (!signal.aborted) {
       let failure: unknown;

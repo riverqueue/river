@@ -92,8 +92,8 @@ class RunHandleTest {
     try (var subscription = workers.client().subscribe(outcome::complete)) {
       var inserted = client.insert(TYPE, "cancel while draining").job();
       entered.get(5, TimeUnit.SECONDS);
-      // The timeout leaves active work draining after the dispatcher and
-      // listener have stopped. A peer can still cancel that work.
+      // The timeout leaves active work draining after dispatch stops.
+      // The listener must remain available to deliver peer cancellation.
       assertThrows(RiverException.class, workers::stop);
       client.cancel(inserted.id());
       assertEquals(Job.State.CANCELLED, outcome.get(5, TimeUnit.SECONDS).job().state());

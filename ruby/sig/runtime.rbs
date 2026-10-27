@@ -360,6 +360,8 @@ module River
       def initialize: (Time, Float, Time) -> void
     end
 
+    @cancellation_generation: Integer
+    @cancellation_pending: bool
     @cancellation_thread: Thread?
     @client: Client
     @condition: ConditionVariable
@@ -408,7 +410,7 @@ module River
 
     def begin_work: (Integer) -> untyped
     def cancellation_loop: () -> untyped
-    def check_remote_cancellations: () -> untyped
+    def check_remote_cancellations: (?entries: Hash[Integer, untyped]?) -> untyped
     def error_handler_cancel?: (Exception, Job) -> bool
     def execute: (JobRow) -> untyped
     def finish_failed: (JobRow, Job, Exception, JobTiming, ?cancelled: bool, ?worker: untyped) -> untyped
@@ -418,7 +420,7 @@ module River
     def finish_work: (Integer) -> untyped
     def invoke_plugins: (Symbol, *untyped) -> Array[untyped]
     def invoke_worker: (untyped, Job) -> untyped
-    def launch: (JobRow) -> untyped
+    def launch: (JobRow, ?Integer?) -> untyped
     def maintenance_loop: () -> untyped
     def monotonic_now: () -> Float
     def next_retry: (JobRow, Exception, Time, ?worker: untyped) -> Time
@@ -430,6 +432,7 @@ module River
     def periodic_jobs_changed: () -> untyped
     def producer_loop: (String, QueueConfig) -> untyped
     def publish: (Symbol, JobRow, JobTiming) -> untyped
+    def request_cancellation_check: () -> void
     def queue_stopping?: (String) -> bool
     def receive_notification: (untyped, untyped) -> untyped
     def remove_subscription: (Subscription) -> Subscription?

@@ -9,6 +9,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/stretchr/testify/require"
@@ -216,7 +217,7 @@ func TestProducer_CancellationCheckDoesNotBlock(t *testing.T) {
 			prod := baseservice.Init(archetype, &producer{
 				activeJobs:     map[int64]*jobexecutor.JobExecutor{1: executor},
 				cancelPollCh:   make(chan struct{}, 1),
-				config:         &producerConfig{MaxWorkers: 2, QueuePollInterval: 20 * time.Millisecond},
+				config:         &producerConfig{MaxWorkers: 2, Notifier: &notifier.Notifier{}, QueuePollInterval: 20 * time.Millisecond},
 				exec:           exec,
 				fetchLimiter:   chanutil.NewDebouncedChan(ctx, time.Millisecond, true),
 				jobResultCh:    make(chan *rivertype.JobRow),
@@ -270,6 +271,51 @@ func TestProducer_CancellationCheckDoesNotBlock(t *testing.T) {
 			case <-time.After(time.Second):
 				t.Fatal("blocked cancellation check prevented job completion")
 			}
+		})
+	}
+}
+
+func TestProducer_CancellationChecksWaitForHints(t *testing.T) {
+	t.Parallel()
+
+	for _, failFirst := range []bool{false, true} {
+		t.Run(fmt.Sprintf("Retry=%v", failFirst), func(t *testing.T) {
+			t.Parallel()
+
+			synctest.Test(t, func(t *testing.T) {
+				ctx, cancel := context.WithCancel(context.Background())
+				defer cancel()
+				var queries atomic.Int32
+				prod := baseservice.Init(riversharedtest.BaseServiceArchetype(t), &producer{
+					activeJobs:   map[int64]*jobexecutor.JobExecutor{1: {}},
+					cancelPollCh: make(chan struct{}, 1),
+					config:       &producerConfig{Notifier: &notifier.Notifier{}, QueuePollInterval: time.Second},
+					exec: &producerTestExecutor{jobGetCancelRequestedFunc: func(context.Context, *riverdriver.JobGetCancelRequestedParams) ([]int64, error) {
+						query := queries.Add(1)
+						if failFirst && query == 1 {
+							return nil, errors.New("temporary failure")
+						}
+						return nil, nil
+					}},
+				})
+				var wg sync.WaitGroup
+				wg.Add(1)
+				go prod.pollForJobCancellations(ctx, &wg)
+				time.Sleep(10 * time.Second)
+				require.Zero(t, queries.Load())
+
+				prod.TriggerCancelCheck()
+				synctest.Wait()
+				require.EqualValues(t, 1, queries.Load())
+				time.Sleep(10 * time.Second)
+				want := 1
+				if failFirst {
+					want = 2
+				}
+				require.EqualValues(t, want, queries.Load())
+				cancel()
+				wg.Wait()
+			})
 		})
 	}
 }
@@ -373,7 +419,7 @@ func TestProducer_JobCancelSurvivesNotifierReconnect(t *testing.T) {
 			notif := notifier.New(archetype, mockListener)
 			var initiallyReady testsignal.TestSignal[struct{}]
 			initiallyReady.Init(t)
-			readySub := notif.RegisterListenerReadyFunc(func() { initiallyReady.Signal(struct{}{}) })
+			readySub := notif.RegisterRecoveryFunc(func() { initiallyReady.Signal(struct{}{}) })
 			require.NoError(t, notif.Start(ctx))
 			initiallyReady.WaitOrTimeout()
 			readySub.Unregister()
@@ -1100,7 +1146,7 @@ func testProducer(t *testing.T, makeProducer func(ctx context.Context, t *testin
 		}
 	})
 
-	t.Run("CancellationPolling", func(t *testing.T) {
+	t.Run("CancellationWhilePausedSaturatedOrStopping", func(t *testing.T) {
 		t.Parallel()
 
 		for _, state := range []string{"Paused", "Running", "Stopping"} {
@@ -1151,11 +1197,12 @@ func testProducer(t *testing.T, makeProducer func(ctx context.Context, t *testin
 				}
 
 				// Use the executor directly so no local client shortcut can cancel
-				// the worker. No more jobs can be fetched in any of these states.
+				// the worker. Notifications or poll-only checks must work even though
+				// no more jobs can be fetched in any of these states.
 				_, err := bundle.exec.JobCancel(ctx, &riverdriver.JobCancelParams{
 					ID:                jobID,
 					CancelAttemptedAt: time.Now().UTC(),
-					ControlTopic:      "unsubscribed_control",
+					ControlTopic:      string(notifier.NotificationTopicControl),
 					Schema:            producer.config.Schema,
 				})
 				require.NoError(t, err)

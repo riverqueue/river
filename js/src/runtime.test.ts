@@ -744,8 +744,8 @@ describe("Client runtime", () => {
     const working = live.size;
     await run.stop();
 
-    // Only the queue loop's link, on the claim signal and its generation's.
-    expect(working).toBe(2);
+    // Only the queue loop's link and the runtime's cancellation link remain.
+    expect(working).toBe(4);
     expect(live.size).toBe(0);
     // Nothing per attempt or completion uses `AbortSignal.any`.
     expect(any).not.toHaveBeenCalled();
@@ -4606,6 +4606,63 @@ describe("Client runtime database faults", () => {
     await run.stop();
   });
 
+  for (const failFirst of [false, true]) {
+    it(`only checks cancellations on hints and retries failures=${failFirst}`, async () => {
+      const driver = new FakeRuntimeDriver();
+      const deliver = Promise.withResolvers<undefined>();
+      const started = Promise.withResolvers<undefined>();
+      const finish = Promise.withResolvers<undefined>();
+      let checks = 0;
+      Object.assign(driver, {
+        jobGetCancelRequested: () => {
+          checks++;
+          if (failFirst && checks === 1)
+            throw new Error("temporary read failure");
+          return [];
+        },
+      });
+      driver.claim = [fakeJob()];
+      driver.notificationStream = async function* (_topics, signal, ready) {
+        ready();
+        await deliver.promise;
+        yield {
+          topic: "control",
+          payload: '{"action":"cancel","job_id":101,"queue":"default"}',
+        };
+        await new Promise<void>((resolve) =>
+          signal.addEventListener("abort", () => resolve(), { once: true })
+        );
+      };
+      const client = new Client(driver, {
+        clientId: "runtime-test",
+        completionBatchSize: 1,
+        leaderElectionDisabled: true,
+        logger: recordingLogger([]),
+        queues: { default: { maxWorkers: 1 } },
+        workers: new Workers().add(defineJob({ kind: "test" }), async () => {
+          started.resolve(undefined);
+          await finish.promise;
+        }),
+      });
+      const timer = new FakeTimer();
+      overrideRuntimeTiming(client, { random: () => 0.5, timer });
+      const run = await client.start();
+      try {
+        await started.promise;
+        await new Promise((resolve) => setTimeout(resolve, 30));
+        expect(checks).toBe(0);
+        deliver.resolve(undefined);
+        await waitUntil(() => checks === (failFirst ? 2 : 1));
+        await new Promise((resolve) => setTimeout(resolve, 30));
+        expect(checks).toBe(failFirst ? 2 : 1);
+      } finally {
+        deliver.resolve(undefined);
+        finish.resolve(undefined);
+        await run.stop();
+      }
+    });
+  }
+
   for (const stream of ["runtime", "remote", "local"] as const) {
     for (const duringClaim of [false, true]) {
       it(`revalidates a delayed ${stream} cancellation ${duringClaim ? "during a retry claim" : "against a running retry"}`, async () => {
@@ -4703,6 +4760,21 @@ describe("Client runtime database faults", () => {
     for (const phase of ["running", "claim", "draining"] as const) {
       it(`recovers a lost cancellation while ${phase}, using ${batched ? "batches" : "rows"}`, async () => {
         const driver = new FakeRuntimeDriver();
+        const reconnect = Promise.withResolvers<undefined>();
+        const reconnected = Promise.withResolvers<undefined>();
+        let subscriptions = 0;
+        // eslint-disable-next-line require-yield -- a lost notice is recovered after resubscription
+        driver.notificationStream = async function* (_topics, signal, ready) {
+          ready();
+          if (subscriptions++ === 0) {
+            await reconnect.promise;
+            throw new Error("listener disconnected");
+          }
+          reconnected.resolve(undefined);
+          await new Promise<void>((resolve) =>
+            signal.addEventListener("abort", () => resolve(), { once: true })
+          );
+        };
         const claim = Promise.withResolvers<undefined>();
         const started = Promise.withResolvers<undefined>();
         let marked = false;
@@ -4762,21 +4834,25 @@ describe("Client runtime database faults", () => {
         try {
           if (phase === "claim") {
             await waitUntil(() => driver.claimRequests.length > 0);
-            marked = true;
-            claim.resolve(undefined);
+          } else {
+            await started.promise;
           }
-          await started.promise;
           const stopping = phase === "draining" ? run.stop() : undefined;
           marked = true;
+          reconnect.resolve(undefined);
+          await reconnected.promise;
+          claim.resolve(undefined);
           await waitUntil(() => driver.completions.length === 1);
-          expect(handlerSignal?.reason).toMatchObject({
-            name: "JobCancelledError",
-          });
+          if (phase !== "claim")
+            expect(handlerSignal?.reason).toMatchObject({
+              name: "JobCancelledError",
+            });
           expect(driver.completions[0]?.kind).toBe("cancel");
           expect(failures).toBeGreaterThanOrEqual(2);
           await stopping;
           await run.stop();
         } finally {
+          reconnect.resolve(undefined);
           claim.resolve(undefined);
           await run.stop({ mode: "cancel" });
         }
@@ -4820,6 +4896,7 @@ describe("Client runtime database faults", () => {
       driver.claim = [fakeJob()];
       const client = new Client(driver, {
         clientId: "runtime-test",
+        pollOnly: true,
         completionBatchSize: 1,
         leaderElectionDisabled: true,
         queues: {

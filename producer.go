@@ -112,8 +112,8 @@ type producerConfig struct {
 	QueueEventCallback func(event *Event)
 
 	// QueuePollInterval is the amount of time between periodic checks for
-	// queue setting changes and job cancellation requests. This is only used in
-	// poll-only mode (when no notifier is provided).
+	// queue setting changes and job cancellation requests in poll-only mode.
+	// It also sets the retry interval for failed cancellation checks.
 	QueuePollInterval time.Duration
 	// QueueReportInterval is the amount of time between periodic reports
 	// of the queue status.
@@ -389,7 +389,7 @@ drainControls:
 	var (
 		controlSub   *notifier.Subscription
 		insertSub    *notifier.Subscription
-		reconnectSub *notifier.ListenerReadySubscription
+		reconnectSub *notifier.RecoverySubscription
 	)
 	if p.config.Notifier != nil {
 		var err error
@@ -425,7 +425,7 @@ drainControls:
 		}
 
 		// Recover cancellations whose NOTIFY was lost while disconnected.
-		reconnectSub = p.config.Notifier.RegisterListenerReadyFunc(p.TriggerCancelCheck)
+		reconnectSub = p.config.Notifier.RegisterRecoveryFunc(p.TriggerCancelCheck)
 	}
 
 	subroutineCtx, cancelSubroutines := context.WithCancelCause(context.WithoutCancel(fetchCtx))
@@ -492,7 +492,7 @@ drainControls:
 	return nil
 }
 
-// TriggerCancelCheck wakes the cancellation poller without blocking notification delivery.
+// TriggerCancelCheck requests a cancellation check without blocking notification delivery.
 func (p *producer) TriggerCancelCheck() {
 	p.cancelGeneration.Add(1)
 	select {
@@ -1046,21 +1046,29 @@ func (p *producer) handleWorkerDone(job *rivertype.JobRow) {
 	p.jobResultCh <- job
 }
 
-// Cancellation polling is independent of fetching: saturated and paused producers
-// must still cancel jobs, including while draining during graceful shutdown.
+// Cancellation checks run independently of fetching and remain live while draining.
+// With notifications, the timer only retries failures; otherwise it polls regularly.
 func (p *producer) pollForJobCancellations(ctx context.Context, wg *sync.WaitGroup) {
 	defer wg.Done()
 
-	ticker := time.NewTicker(p.config.QueuePollInterval)
-	defer ticker.Stop()
+	timer := time.NewTimer(p.config.QueuePollInterval)
+	defer timer.Stop()
+	if p.config.Notifier != nil {
+		timer.Stop()
+	}
 	for {
 		select {
 		case <-ctx.Done():
 			return
-		case <-ticker.C:
+		case <-timer.C:
 		case <-p.cancelPollCh:
 		}
-		if err := p.pollForJobCancellationsOnce(ctx); err != nil {
+		timer.Stop()
+		err := p.pollForJobCancellationsOnce(ctx)
+		if p.config.Notifier == nil || err != nil {
+			timer.Reset(p.config.QueuePollInterval)
+		}
+		if err != nil {
 			if !errors.Is(context.Cause(ctx), startstop.ErrStop) {
 				p.Logger.ErrorContext(ctx, p.Name+": Error fetching job cancellation requests", slog.String("err", err.Error()))
 			}

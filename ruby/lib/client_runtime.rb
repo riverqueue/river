@@ -24,6 +24,8 @@ module River
     attr_reader :periodic_jobs
 
     def initialize(client, driver, config)
+      @cancellation_generation = 0
+      @cancellation_pending = false
       @client = client
       @condition = ConditionVariable.new
       @config = config
@@ -33,7 +35,7 @@ module River
       @maintenance_condition = ConditionVariable.new
       @maintenance_generation = 0
       @mutex = Mutex.new
-      @notifications_disabled = false
+      @notifications_disabled = config.poll_only || !driver.respond_to?(:notification_listener)
       @producer_threads = {}
       @queue_configs = config.queues.dup
       @queue_generations = Hash.new(0)
@@ -282,6 +284,7 @@ module River
           check_remote_cancellations(entries: {id => entry})
         rescue => error
           @config.logger.error("River cancellation check failed: #{error.full_message}")
+          request_cancellation_check
         end
       end
 
@@ -301,34 +304,37 @@ module River
     end
 
     private def cancellation_loop
+      retrying = false
       loop do
+        @mutex.synchronize do
+          interval = @queue_configs.values.map { |config| config.resolved_fetch_poll_interval(@config) }.min || @config.fetch_poll_interval
+          deadline = (@config.poll_only || @notifications_disabled || retrying) ? monotonic_now + interval : nil
+          loop do
+            return if @stop_requested && @running.empty?
+            break if @cancellation_pending
+
+            deadline ||= monotonic_now + interval if @notifications_disabled
+            remaining = deadline && deadline - monotonic_now
+            break if remaining && remaining <= 0
+
+            @condition.wait(@mutex, remaining)
+          end
+          @cancellation_pending = false
+        end
+        retrying = false
         begin
           check_remote_cancellations
         rescue => error
+          retrying = true
           @config.logger.error("River cancellation check failed: #{error.full_message}")
         end
-
-        finished = @mutex.synchronize do
-          if @stop_requested && @running.empty?
-            true
-          else
-            interval = @queue_configs.values.map { |config| config.resolved_fetch_poll_interval(@config) }.min || @config.fetch_poll_interval
-            # Continue polling while producers drain, independently of fetches
-            # and their cooldowns. Completions and queue changes wake us early.
-            @condition.wait(@mutex, interval) unless @running.any? { |_id, entry| entry[:check_cancellation] }
-            false
-          end
-        end
-        break if finished
       end
     end
 
     private def check_remote_cancellations(entries: nil)
-      entries ||= @mutex.synchronize do
-        @running.select { |_id, entry| entry[:working] || entry[:check_cancellation] }.tap do |snapshot|
-          snapshot.each_value { |entry| entry[:check_cancellation] = false }
-        end
-      end
+      # Include registered attempts whose worker has not started yet: a reconnect
+      # can recover their cancellation between registration and begin_work.
+      entries ||= @mutex.synchronize { @running.dup }
       return if entries.empty?
 
       @driver.job_get_cancelled_ids(entries.keys).each do |id|
@@ -558,7 +564,7 @@ module River
       operation.call
     end
 
-    private def launch(row)
+    private def launch(row, generation = nil)
       gate = ::Queue.new
       thread = Thread.new do
         gate.pop
@@ -571,7 +577,7 @@ module River
       end
 
       @mutex.synchronize do
-        @running[row.id] = {check_before_work: @fetching_queues.fetch(row.queue).include?(row.id), queue: row.queue, thread: thread, working: false}
+        @running[row.id] = {check_before_work: @fetching_queues.fetch(row.queue).include?(row.id) || (generation && generation != @cancellation_generation), queue: row.queue, thread: thread, working: false}
       end
       gate.push(true)
     end
@@ -681,6 +687,7 @@ module River
             unless listener
               listener = @driver.notification_listener
               @mutex.synchronize { @notifications_disabled = listener.nil? }
+              request_cancellation_check
               ready << true if ready
               ready = nil
               return unless listener
@@ -765,11 +772,14 @@ module River
         queue_state = @driver.queue_get(queue)
         publish_queue(queue_state.paused_at ? EVENT_QUEUE_PAUSED : EVENT_QUEUE_RESUMED, queue_state) if queue_state
         if capacity.positive? && !queue_state&.paused_at
-          @mutex.synchronize { @fetching_queues[queue] = [] }
+          generation = @mutex.synchronize do
+            @fetching_queues[queue] = []
+            @cancellation_generation
+          end
           begin
             jobs = @driver.job_get_available(attempted_by: @config.id, max: capacity, queue: queue, **fetch_options)
             last_fetch = monotonic_now
-            jobs.each { |job| launch(job) }
+            jobs.each { |job| launch(job, generation) }
             next unless jobs.empty?
           ensure
             @mutex.synchronize { @fetching_queues.delete(queue) }
@@ -803,6 +813,14 @@ module River
       @mutex.synchronize { @subscriptions.dup }.each { |subscription| subscription.publish(event) }
     end
 
+    private def request_cancellation_check
+      @mutex.synchronize do
+        @cancellation_generation += 1
+        @cancellation_pending = true
+        @condition.broadcast
+      end
+    end
+
     private def queue_stopping?(queue)
       @mutex.synchronize { @stop_requested || @removed_queues[queue] }
     end
@@ -823,11 +841,12 @@ module River
           return unless message["job_id"].is_a?(Integer)
 
           @mutex.synchronize do
+            @cancellation_generation += 1
+            @cancellation_pending = true
+            @condition.broadcast
             entry = @running[message["job_id"]]
             if entry && entry[:queue] == queue
               entry[:check_before_work] = true unless entry[:working]
-              entry[:check_cancellation] = true
-              @condition.broadcast
             elsif (pending = @fetching_queues[queue])
               # A claim may have committed before its workers are registered.
               pending << message["job_id"]

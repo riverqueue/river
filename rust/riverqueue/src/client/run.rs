@@ -175,8 +175,8 @@ impl Service {
 /// When each part of a started client stops, matching River Go's order.
 ///
 /// A stop request cancels the client's fetch token. Claims, leadership with
-/// its maintenance services, the notifier, and extension runtime services
-/// all stop then, like Go's services started on the fetch context. Running
+/// its maintenance services, and extension runtime services stop then.
+/// The notifier remains available until every queue has drained. Running
 /// jobs keep going until they finish or `work_cancel` fires, and each
 /// producer keeps reporting to its extension session until its last attempt
 /// has left, from a token of its own that the stop request doesn't cancel.
@@ -185,7 +185,9 @@ struct StopTokens {
     claims: CancellationToken,
     /// Leader election and leader-owned maintenance.
     leadership: CancellationToken,
-    /// The notifier and extension runtime services.
+    /// Notification delivery remains live until queues finish draining.
+    notifier: CancellationToken,
+    /// Extension runtime services.
     services: CancellationToken,
 }
 
@@ -194,6 +196,7 @@ impl StopTokens {
         Self {
             claims: fetch_cancel.child_token(),
             leadership: fetch_cancel.child_token(),
+            notifier: CancellationToken::new(),
             services: fetch_cancel.child_token(),
         }
     }
@@ -247,7 +250,14 @@ impl Supervisor {
             let Some((service, started_at)) = self.services.remove(&task_id) else {
                 continue;
             };
-            let stopping = self.fetch_cancel.is_cancelled();
+            if service == Service::Queues {
+                self.stop.notifier.cancel();
+            }
+            let stopping = if service == Service::Notifier {
+                self.stop.notifier.is_cancelled()
+            } else {
+                self.fetch_cancel.is_cancelled()
+            };
             match outcome {
                 // The completer ends once every producer has dropped its sender.
                 Ok(()) if stopping || service == Service::Completer => {}
@@ -374,7 +384,7 @@ impl Supervisor {
                     ))
                 }
                 Service::Notifier => {
-                    cancel = self.stop.services.child_token();
+                    cancel = self.stop.notifier.child_token();
                     let ready = self.notifier_ready.clone();
                     #[cfg(test)]
                     if inner
@@ -526,9 +536,9 @@ impl Stopper {
     /// Requests a soft stop.
     ///
     /// The client stops fetching new jobs and lets running jobs finish before
-    /// it stops. Leader election, maintenance, and the notification listener
-    /// stop at once, while each queue's producer keeps reporting its
-    /// running jobs until they finish. When the builder's `soft_stop_timeout`
+    /// it stops. Leader election and maintenance stop at once. The notification
+    /// listener keeps delivering cancellations, and each queue's producer keeps
+    /// reporting its running jobs until they finish. When the builder's `soft_stop_timeout`
     /// is set, jobs still running after that timeout are cancelled as if by
     /// [`Stopper::stop_and_cancel`].
     pub fn stop(&self) {

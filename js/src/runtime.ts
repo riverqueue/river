@@ -3,7 +3,7 @@ import type { QueueRow, RuntimeDriver } from "./driver.js";
 import { LifecycleError, ValidationError } from "./errors.js";
 import type { RiverEvent } from "./events.js";
 import type { RiverHooks } from "./extensions.js";
-import { unrefTimeout } from "./internal/abort.js";
+import { LinkedAbortSignal, unrefTimeout } from "./internal/abort.js";
 import { SYSTEM_TIMER, type RuntimeTimer } from "./internal/backoff.js";
 import { EventLoopDelayMonitor } from "./internal/event-loop-delay-monitor.js";
 import type { JobRow } from "./job.js";
@@ -211,10 +211,11 @@ export class RuntimeController {
   readonly ready: Promise<void>;
 
   /**
-   * Ends polling for cancellations once producers drained, so a job can
+   * Ends notification delivery and cancellation checks once producers drain, so a job can
    * still be cancelled while its queue drains.
    */
-  readonly #cancellationPollAbort = new AbortController();
+  readonly #cancellationAbort = new AbortController();
+  readonly #cancellationLink: LinkedAbortSignal;
   /** How often the runtime checks for durable cancellation requests. */
   readonly #cancellationPollIntervalMs: number;
   readonly #claimAbort = new AbortController();
@@ -328,7 +329,14 @@ export class RuntimeController {
             transformJobArgs: (row) => this.#runner.transformJobArgs(row),
             workerRetryPolicy: (kind) => this.#runner.workerRetryPolicy(kind),
           });
+    this.#cancellationLink = new LinkedAbortSignal([
+      this.#cancellationAbort.signal,
+      this.#runAbort.signal,
+    ]);
+    const cancellationSignal = this.#cancellationLink.signal;
     this.#runner = new AttemptRunner(context, {
+      cancellationSignal,
+      cancellationRetryIntervalMs: settings.queueControlPollIntervalMs,
       completions: this.#completions,
       errorHandler: settings.errorHandler,
       hooks: settings.hooks,
@@ -401,6 +409,7 @@ export class RuntimeController {
         ? []
         : serviceList(binding.pilot.services(), "services()");
     this.#notifications = new NotificationPump(context, {
+      signal: cancellationSignal,
       leaderResigned: () => this.#services?.leaderResigned(),
       producer: this.#producer,
       resignLeadership: () => this.#services?.resignLeadership(),
@@ -618,10 +627,11 @@ export class RuntimeController {
       new LifecycleError("River runtime is stopping")
     );
     await this.#producer.drainAll();
-    this.#cancellationPollAbort.abort(
+    this.#cancellationAbort.abort(
       new LifecycleError("River runtime is stopping")
     );
     await Promise.allSettled(this.#tasks);
+    this.#cancellationLink[Symbol.dispose]();
     this.#servicesAbort.abort(new LifecycleError("River runtime is stopping"));
     const [completionClose] = await Promise.allSettled([
       this.#completions.close(),
@@ -664,15 +674,17 @@ export class RuntimeController {
   }
 
   async #initialize(): Promise<void> {
-    // Notifications deliver cancellations promptly. Keep a durable fallback
-    // until every producer drains, including during reconnects and shutdown.
+    // Only clients without notifications poll. Notification hints and reconnects
+    // request checks independently, until every producer has drained.
     const listen = await this.#listens();
-    this.#trackTask(
-      this.#runner.pollCancellations(
-        this.#cancellationPollIntervalMs,
-        this.#cancellationPollAbort.signal
-      )
-    );
+    if (!listen) {
+      this.#trackTask(
+        this.#runner.pollCancellations(
+          this.#cancellationPollIntervalMs,
+          this.#cancellationAbort.signal
+        )
+      );
+    }
     // Like River for Go's notifier, notifications are listening before any
     // queue claims, and a failure to listen fails the start.
     await this.#notifications.start(listen);

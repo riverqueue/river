@@ -101,6 +101,7 @@ const PRODUCER_STALE_RETENTION: Duration = Duration::from_mins(5);
 pub(crate) struct ClientInner {
     allow_legacy_job_kinds: bool,
     allow_unregistered_job_kinds: bool,
+    cancellation_generation: AtomicU64,
     cancellation_wakeup: Notify,
     completion_sender: Mutex<Option<mpsc::WeakSender<CompletionUpdate>>>,
     pub(crate) database: Database,
@@ -199,6 +200,11 @@ impl ClientInner {
     /// Postgres server without `LISTEN`/`NOTIFY` once that's detected.
     pub(crate) fn has_notifier(&self) -> bool {
         !self.poll_only && self.database.delivers_notifications()
+    }
+
+    fn request_cancellation_check(&self) {
+        self.cancellation_generation.fetch_add(1, Ordering::AcqRel);
+        self.cancellation_wakeup.notify_one();
     }
 
     /// Whether this client receives notifications from other clients, which

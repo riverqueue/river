@@ -834,6 +834,52 @@ describe("PgDriver", () => {
     });
   });
 
+  it("fails an overflowing notification stream so its subscriber can recover", async () => {
+    const leased = mockLeasedPgClient();
+    leased.query.mockResolvedValue({
+      command: "LISTEN",
+      fields: [],
+      oid: 0,
+      rowCount: 0,
+      rows: [],
+    });
+    const pool = {
+      ...mockPgClient(),
+      connect: vi.fn().mockResolvedValue(leased),
+      idleCount: 1,
+      options: { max: 4 },
+      totalCount: 1,
+    } as unknown as Pool;
+    const driver = testPgDriver(pool, { schema: "river" });
+    const abort = new AbortController();
+    const ready = Promise.withResolvers<undefined>();
+    const iterator = driver.listen(["river_control"], abort.signal, () =>
+      ready.resolve(undefined)
+    );
+    try {
+      const first = iterator.next();
+      await ready.promise;
+      leased.emit("notification", {
+        channel: "river.river_control",
+        payload: "first",
+      });
+      await first;
+      for (let id = 0; id < 1_025; id++) {
+        leased.emit("notification", {
+          channel: "river.river_control",
+          payload: JSON.stringify({ action: "cancel", job_id: id }),
+        });
+      }
+      await expect(iterator.next()).rejects.toThrow(
+        "notification buffer overflow"
+      );
+      expect(leased.release).toHaveBeenCalledWith(true);
+    } finally {
+      abort.abort();
+      await iterator.return(undefined);
+    }
+  });
+
   it("pings an idle listener and fails when a ping never answers", async () => {
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
     try {

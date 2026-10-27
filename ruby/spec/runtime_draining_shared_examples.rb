@@ -108,10 +108,9 @@ RSpec.shared_examples "cancellation while draining" do
         nil
       end
       Timeout.timeout(5) { draining.pop }
-      Timeout.timeout(5) { poll_failed.pop } if poll_failure
-
-      # Persist through another client so only database polling can deliver it.
+      # A peer notification must still be delivered while this client drains.
       River::Client.new(@driver).job_cancel(job.id)
+      Timeout.timeout(5) { poll_failed.pop } if poll_failure
       event = Timeout.timeout(3) { subscription.pop }
 
       expect(event).to have_attributes(kind: :job_cancelled, job: have_attributes(id: job.id, state: "cancelled"))

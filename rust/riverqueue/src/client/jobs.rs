@@ -259,7 +259,7 @@ impl JobCancelRequest<'_> {
         // wake the durable check. The post-commit signal can be delayed until
         // a retry is running, so it must not cancel by job ID alone.
         if own_transaction && !inner.listens_for_notifications() {
-            inner.cancellation_wakeup.notify_one();
+            inner.request_cancellation_check();
         }
         Ok(row)
     }

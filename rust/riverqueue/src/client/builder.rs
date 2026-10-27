@@ -2,7 +2,6 @@
 
 use std::collections::HashMap;
 use std::sync::atomic::AtomicBool;
-#[cfg(test)]
 use std::sync::atomic::AtomicU64;
 use std::sync::{Arc, Mutex, RwLock};
 use std::time::Duration;
@@ -804,6 +803,7 @@ impl ClientBuilder {
             inner: Arc::new(ClientInner {
                 allow_legacy_job_kinds: self.allow_legacy_job_kinds,
                 allow_unregistered_job_kinds: self.allow_unregistered_job_kinds,
+                cancellation_generation: AtomicU64::new(0),
                 cancellation_wakeup: Notify::new(),
                 completion_sender: Mutex::new(None),
                 database: self.database,

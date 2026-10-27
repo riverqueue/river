@@ -236,14 +236,23 @@ async fn go_notification_fixtures_dispatch_correctly() {
 }
 
 #[tokio::test]
-async fn registration_wakes_cancellation_check() {
+async fn registration_without_a_hint_does_not_query_cancellations() {
     #[cfg(feature = "postgres")]
     let pool = sqlx::PgPool::connect_lazy("postgres://localhost/unused").unwrap();
     #[cfg(not(feature = "postgres"))]
     let pool = sqlx::SqlitePool::connect_lazy("sqlite::memory:").unwrap();
     let client = Client::builder(pool).build().unwrap();
     let cancellation = CancellationToken::new();
-    register_running_attempt(&client.inner, 42, &cancellation);
+    register_running_attempt(&client.inner, 42, &cancellation, 0);
+    assert!(
+        tokio::time::timeout(Duration::ZERO, client.inner.cancellation_wakeup.notified(),)
+            .await
+            .is_err()
+    );
+    // A hint consumed before registration still requires a fresh snapshot afterward.
+    client.inner.request_cancellation_check();
+    client.inner.cancellation_wakeup.notified().await;
+    register_running_attempt(&client.inner, 43, &cancellation, 0);
     tokio::time::timeout(
         Duration::from_secs(1),
         client.inner.cancellation_wakeup.notified(),
@@ -251,6 +260,61 @@ async fn registration_wakes_cancellation_check() {
     .await
     .unwrap();
     assert!(!cancellation.is_cancelled());
+}
+
+#[cfg(feature = "sqlite")]
+#[tokio::test]
+async fn cancellation_checks_wait_for_hints_and_retry_failed_reads() {
+    let queries = Arc::new(AtomicU64::new(0));
+    let observed = Arc::clone(&queries);
+    let pool = sqlx::sqlite::SqlitePoolOptions::new()
+        .max_connections(1)
+        .before_acquire(move |_, _| {
+            let observed = Arc::clone(&observed);
+            Box::pin(async move {
+                observed.fetch_add(1, Ordering::AcqRel);
+                Ok(true)
+            })
+        })
+        .connect("sqlite::memory:")
+        .await
+        .unwrap();
+    let client = Client::builder(pool.clone()).build().unwrap();
+    let cancellation = CancellationToken::new();
+    register_running_attempt(&client.inner, 42, &cancellation, 0);
+    let task = tokio::spawn(super::producer::poll_job_cancellations(
+        Arc::clone(&client.inner),
+        CancellationToken::new(),
+    ));
+    let before = queries.load(Ordering::Acquire);
+    tokio::time::sleep(Duration::from_millis(2100)).await;
+    assert_eq!(before, queries.load(Ordering::Acquire));
+    client.inner.request_cancellation_check();
+    tokio::time::timeout(Duration::from_secs(5), async {
+        while queries.load(Ordering::Acquire) == before {
+            tokio::time::sleep(Duration::from_millis(1)).await;
+        }
+    })
+    .await
+    .unwrap();
+    // The first check fails because the table is absent. Acquiring its sole connection
+    // waits for that check to finish; repairing the database must be enough to recover.
+    let mut connection = pool.acquire().await.unwrap();
+    sqlx::query("CREATE TABLE river_job (id INTEGER, state TEXT, metadata TEXT)")
+        .execute(&mut *connection)
+        .await
+        .unwrap();
+    sqlx::query(r#"INSERT INTO river_job VALUES (42, 'running', '{"cancel_attempted_at":"2026-01-01T00:00:00Z"}')"#).execute(&mut *connection).await.unwrap();
+    drop(connection);
+    tokio::time::timeout(Duration::from_secs(5), cancellation.cancelled())
+        .await
+        .unwrap();
+    let after = queries.load(Ordering::Acquire);
+    tokio::time::sleep(Duration::from_millis(2100)).await;
+    assert_eq!(after, queries.load(Ordering::Acquire));
+    task.abort();
+    let _ = task.await;
+    pool.close().await;
 }
 
 #[cfg(feature = "sqlite")]
@@ -272,7 +336,12 @@ async fn delayed_cancellation_signals_recheck_retry_marker() {
     let id: i64 = sqlx::query_scalar("INSERT INTO river_job (kind, args, state, attempt, max_attempts, metadata) VALUES ('test', jsonb('{}'), 'running', 1, 2, jsonb('{}')) RETURNING id")
         .fetch_one(&pool).await.unwrap();
     let original = CancellationToken::new();
-    register_running_attempt(&client.inner, id, &original);
+    register_running_attempt(
+        &client.inner,
+        id,
+        &original,
+        client.inner.cancellation_generation.load(Ordering::Acquire),
+    );
     client.jobs().cancel(id).await.unwrap();
     sqlx::query("UPDATE river_job SET state = 'cancelled', finalized_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now') WHERE id = ?").bind(id).execute(&pool).await.unwrap();
     client.jobs().retry(id).await.unwrap();
@@ -282,7 +351,12 @@ async fn delayed_cancellation_signals_recheck_retry_marker() {
         .await
         .unwrap();
     let replacement = CancellationToken::new();
-    register_running_attempt(&client.inner, id, &replacement);
+    register_running_attempt(
+        &client.inner,
+        id,
+        &replacement,
+        client.inner.cancellation_generation.load(Ordering::Acquire),
+    );
     dispatch_notification(
         &client.inner,
         &client.inner.queue_notifications,
