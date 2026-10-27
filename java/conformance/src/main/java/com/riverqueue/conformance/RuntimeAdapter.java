@@ -185,7 +185,9 @@ final class RuntimeAdapter {
     var builder =
         river.toBuilder()
             .id(params.path("client_id").asString())
-            .queue(params.path("queue").asString("default"), params.path("max_workers").asInt(1))
+            .queue(
+                params.path("queue").asString(Client.QUEUE_DEFAULT),
+                params.path("max_workers").asInt(1))
             .worker(ECHO, this::work)
             .pollOnly(params.path("poll_only").asBoolean(false))
             .pollInterval(Duration.ofMillis(params.path("fetch_poll_interval_ms").asLong(10)))
