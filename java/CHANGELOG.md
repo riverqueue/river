@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Expose `Client.QUEUE_DEFAULT` (`"default"`) for queue configuration and operations, matching the default queue constant in other River clients.
+
 ## [0.2.0] - 2026-10-26
 
 ### Changed

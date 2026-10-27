@@ -58,7 +58,7 @@ public class Example {
           System.out.println("Sending " + context.args().subject() + " to " + context.args().address());
           context.output("sent");
         });
-    var client = Client.builder(database).queue("default", 10).workers(workers).build();
+    var client = Client.builder(database).queue(Client.QUEUE_DEFAULT, 10).workers(workers).build();
     var completed = new CompletableFuture<Client.Event>();
     try (var subscription = client.subscribe(completed::complete, Client.EventKind.JOB_COMPLETED);
         var run = client.start()) {
@@ -274,7 +274,7 @@ time, River reports the problem and uses its default backoff.
 ```java
 var retryingEmail = email.withDefaults(InsertOptions.builder().maxAttempts(10).build());
 var clientBuilder = Client.builder(database)
-    .queue("default", 10)
+    .queue(Client.QUEUE_DEFAULT, 10)
     .retryPolicy(job -> Duration.ofSeconds(Math.min(300, 5L * (job.errors().size() + 1))))
     .worker(retryingEmail, context ->
         mailer.send(context.args().address(), context.args().subject()));
@@ -300,7 +300,7 @@ existing job's ID.
 
 ```java
 var email = JobType.of("send_email", SendEmail.class);
-var clientBuilder = Client.builder(database).queue("default", 10);
+var clientBuilder = Client.builder(database).queue(Client.QUEUE_DEFAULT, 10);
 ```
 
 ### Cancelling jobs
@@ -383,7 +383,7 @@ HookWorkEnd reportFailure = (context, failure) -> {
   return failure;
 };
 var clientBuilder = Client.builder(database).plugins(reportFailure)
-    .queue("default", 10)
+    .queue(Client.QUEUE_DEFAULT, 10)
     .errorHandler(failure ->
         System.getLogger("river").log(System.Logger.Level.ERROR, "Runtime failure", failure))
     .worker(email, context -> mailer.send(context.args().address(), context.args().subject()));
@@ -504,9 +504,12 @@ not capture SLF4J or `System.Logger` output automatically.
 different workloads. Set a queue at insertion and configure its worker count.
 The count is local to each runtime; it is not a cluster-wide concurrency limit.
 
+`Client.QUEUE_DEFAULT` is the default queue name, `"default"`. Jobs use it when
+neither insertion options nor job-type defaults specify a queue.
+
 ```java
 var clientBuilder = Client.builder(database)
-    .queue("default", 10)
+    .queue(Client.QUEUE_DEFAULT, 10)
     .queue("mail", 4)
     .worker(email, context -> mailer.send(context.args().address(), context.args().subject()));
 client.insert(email, new SendEmail("hello@example.com", "Welcome"),
@@ -551,7 +554,7 @@ languages match only when they use the same time-zone data.
 
 ```java
 var clientBuilder = Client.builder(database)
-    .queue("default", 10)
+    .queue(Client.QUEUE_DEFAULT, 10)
     .worker(email, context -> mailer.send(context.args().address(), context.args().subject()))
     .periodic("hourly-status", Schedule.every(Duration.ofHours(1)), email,
         new SendEmail("ops@example.com", "Hourly status"), InsertOptions.defaults(), true)
@@ -718,7 +721,7 @@ void completes(@org.junit.jupiter.api.io.TempDir java.nio.file.Path directory) t
   var database = Database.connect("jdbc:sqlite:" + directory.resolve("river.db"));
   new Migrator(database).migrate();
   var client = Client.builder(database)
-      .queue("default", 1)
+      .queue(Client.QUEUE_DEFAULT, 1)
       .worker(echo, context -> context.output(context.args().message()))
       .build();
   var completed = new java.util.concurrent.CompletableFuture<Client.Event>();
@@ -850,7 +853,7 @@ consuming an attempt. `awaitCancellation()` only waits for the signal.
 
 ```java
 var client = Client.builder(database)
-    .queue("default", 10)
+    .queue(Client.QUEUE_DEFAULT, 10)
     .stopTimeout(Duration.ofSeconds(30))
     .worker(email, context -> mailer.send(context.args().address(), context.args().subject()))
     .build();
@@ -883,7 +886,7 @@ delays must fit in signed 64-bit nanoseconds, up to about 292 years.
 
 ```java
 var clientBuilder = Client.builder(database)
-    .queue("default", 10)
+    .queue(Client.QUEUE_DEFAULT, 10)
     .retention(Duration.ofDays(1), Duration.ofDays(1), Duration.ofDays(7))
     .worker(email, context -> mailer.send(context.args().address(), context.args().subject()));
 ```
