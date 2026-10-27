@@ -53,7 +53,7 @@ def main():
     manifest_path = reference / "conformance/manifest.json"
     manifest = json.loads(manifest_path.read_text())
     manifest["implementations"]["java"] = {
-        "package": "com.riverqueue:river", "registry": "maven", "version": "0.1.0"
+        "package": "com.riverqueue:river", "registry": "maven", "version": "0.2.0"
     }
     manifest_path.write_text(json.dumps(manifest, indent=2) + "\n")
     environment = os.environ | {
