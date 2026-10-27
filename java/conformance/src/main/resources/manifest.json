@@ -50,7 +50,7 @@
     "java": {
       "package": "com.riverqueue:river",
       "registry": "maven",
-      "version": "0.1.0-alpha.1"
+      "version": "0.1.0"
     }
   },
   "migration": {

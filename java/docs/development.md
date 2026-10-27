@@ -57,7 +57,7 @@ needed. Stop if a command fails. Versions omit `v`; tags use `java/vVERSION`.
     ```sh
     git checkout master && git pull --rebase
     git fetch --tags
-    export VERSION=0.1.0-alpha.2
+    export VERSION=0.1.1
     git checkout -b "$USER-java-$VERSION"
     ```
 

@@ -211,7 +211,7 @@ public final class Adapter implements AutoCloseable {
                       database.dialect() == Database.Dialect.POSTGRES ? "postgres" : "sqlite"),
                   Map.entry("capabilities", capabilities),
                   Map.entry("implementation", "java"),
-                  Map.entry("implementation_version", "0.1.0-alpha.1"),
+                  Map.entry("implementation_version", "0.1.0"),
                   Map.entry("methods", methods),
                   Map.entry("migration_lines", Map.of("main", 8)),
                   Map.entry("profile", profile),
