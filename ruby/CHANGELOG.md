@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.14.0] - 2026-10-26
+
 ### Added
 
 - Receive Postgres and SQLite notifications for insertions, queue controls, cancellation, and leadership handoffs, with reconnect recovery and a `poll_only` option. [PR #1496](https://github.com/riverqueue/river/pull/1496).
