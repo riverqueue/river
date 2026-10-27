@@ -18,12 +18,11 @@ in `java/cli/target/dependency/`. Run it with:
 
 ```sh
 java --enable-native-access=ALL-UNNAMED \
-  -cp 'java/cli/target/river-cli.jar:java/cli/target/dependency/*' \
-  com.riverqueue.cli.MigrationCli --help
+  -jar java/cli/target/river-cli.jar --help
 ```
 
-On Windows, use `;` instead of `:` between classpath entries. For a build without
-running tests, use `make build/java`.
+Keep the `dependency/` directory beside the CLI JAR when moving it. For a build
+without running tests, use `make build/java`.
 
 ## Release artifacts
 
@@ -142,7 +141,10 @@ needed. Stop if a command fails. Versions omit `v`; tags use `java/vVERSION`.
       --directory java/target/github-release
     ```
 
-    To test a dev deployment, wait for its scheduled import, then add `--repository https://mod-workers-dev.riverqueue.workers.dev/maven`. For local initialization, follow the [proxy refresh instructions](https://github.com/riverqueue/gomodproxy-workers/blob/master/docs/maven.md#configuration-and-development). To verify an existing release without a local build, omit `--directory`.
+    To verify an existing release without a local build, omit `--directory`. This
+    requires a thin CLI JAR with `Implementation-Version` manifest metadata. The
+    originally published alpha.1 thin JAR reports `development` instead of its
+    release version and fails the CLI version check.
 
 ## Optional Maven Central publication
 

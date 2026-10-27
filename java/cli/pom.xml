@@ -16,7 +16,11 @@
       <plugin>
         <groupId>org.apache.maven.plugins</groupId><artifactId>maven-jar-plugin</artifactId>
         <configuration><archive>
-          <manifest><mainClass>com.riverqueue.cli.MigrationCli</mainClass></manifest>
+          <manifest>
+            <addClasspath>true</addClasspath>
+            <classpathPrefix>dependency/</classpathPrefix>
+            <mainClass>com.riverqueue.cli.MigrationCli</mainClass>
+          </manifest>
           <manifestEntries><Implementation-Version>${project.version}</Implementation-Version></manifestEntries>
         </archive></configuration>
       </plugin>

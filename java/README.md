@@ -95,7 +95,7 @@ resolves the thin CLI JAR and its dependencies and installs a reusable command:
 ```sh
 jbang app install --name river-java --java 21 \
   --java-options=--enable-native-access=ALL-UNNAMED \
-  --repos https://riverqueue.com/maven \
+  --repos https://riverqueue.com/maven --repos central \
   --main com.riverqueue.cli.MigrationCli \
   com.riverqueue:river-cli:0.1.0-alpha.1
 export PATH="$HOME/.jbang/bin:$PATH"
