@@ -32,7 +32,7 @@ class ClientLifecycleTest {
         .leadership(false)
         .pollInterval(Duration.ofMillis(10))
         .pollOnly(true)
-        .queue("default", 1)
+        .queue(Client.QUEUE_DEFAULT, 1)
         .stopTimeout(Duration.ofSeconds(5));
   }
 
@@ -118,7 +118,7 @@ class ClientLifecycleTest {
         Client.builder(new Database(source, database.dialect()).withSchema(database.schema()))
             .leadership(false)
             .pollOnly(true)
-            .queue("default", 1)
+            .queue(Client.QUEUE_DEFAULT, 1)
             .workers(new Workers().add(TYPE, context -> {}))
             .build();
     assertEquals(

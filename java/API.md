@@ -19,6 +19,7 @@ Java exposes every Go helper. Stored values and protocol behavior still follow G
 | `ResumableSetStepTx`, `ResumableSetStepCursorTx` | `WorkContext.checkpoint(connection[, cursor])` | Checkpoints commit with application writes; failed transactions leave the last committed progress intact. |
 | Worker timeout | `Workers.Handler.timeout(job)` | A default method preserves lambda handlers; per-job overrides also govern rescue decisions. |
 | Retry policy | `RetryPolicy` | A lambda receives the full job and returns `Duration`; the default uses the same error-count backoff and jitter. |
+| `QueueDefault` | `Client.QUEUE_DEFAULT` | The default queue name, `"default"`, used when neither insert options nor job-type defaults specify a queue. |
 | `Queues`, queue CRUD/control APIs | `RunHandle.addQueue/removeQueue`, `Client.queues()` | Runtime concurrency and persisted queue state have separate owners. Reads and mutations support caller transactions. |
 | `Subscribe`, `EventKind`, `Event` | `Client.subscribe`, `EventKind`, `Event`, `Subscription` | Enum filters and an `AutoCloseable` subscription replace channels. Callbacks are synchronous; queue events include their queue. |
 | Periodic jobs and schedules | `Client.Builder.periodic`, `RunHandle.periodicJobs()`, `PeriodicJobBundle`, `PeriodicJob`, `Schedule` | Java time types and a functional scheduling interface; cron implementation details are package-private. |

@@ -38,7 +38,7 @@ public record InsertOptions(
         first(metadata, fallback.metadata, Json.object()),
         first(pending, fallback.pending, false),
         first(priority, fallback.priority, 1),
-        first(queue, fallback.queue, "default"),
+        first(queue, fallback.queue, Client.QUEUE_DEFAULT),
         first(scheduledAt, fallback.scheduledAt, null),
         first(tags, fallback.tags, List.of()),
         first(unique, fallback.unique, Unique.none()));
@@ -84,6 +84,7 @@ public record InsertOptions(
       return this;
     }
 
+    /** Sets the queue; defaults to the job type's queue or {@link Client#QUEUE_DEFAULT}. */
     public Builder queue(String value) {
       queue = value;
       return this;
