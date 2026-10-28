@@ -2963,7 +2963,11 @@ func (c *Client[TTx]) QueueUpdate(ctx context.Context, name string, params *Queu
 		return nil, err
 	}
 
-	c.notifyProducerWithoutListenerQueueControlEvent(name, controlEvent)
+	// No control event is returned when metadata isn't being changed, in which
+	// case there's nothing for the producer to act on.
+	if controlEvent != nil {
+		c.notifyProducerWithoutListenerQueueControlEvent(name, controlEvent)
+	}
 
 	return queue, nil
 }

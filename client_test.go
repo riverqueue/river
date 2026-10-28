@@ -7372,6 +7372,43 @@ func Test_Client_QueueUpdate(t *testing.T) {
 
 		client.producersByQueueName[QueueDefault].testSignals.QueueControlEventTriggered.RequireEmpty()
 	})
+
+	t.Run("ProducerControlEventNotSentWithoutMetadata", func(t *testing.T) {
+		t.Parallel()
+
+		var (
+			dbPool = riversharedtest.DBPoolClone(ctx, t)
+			driver = NewDriverWithoutListenNotify(dbPool)
+			schema = riverdbtest.TestSchema(ctx, t, driver, nil)
+			config = newTestConfig(t, schema)
+		)
+
+		client, err := NewClient(driver, config)
+		require.NoError(t, err)
+		client.producersByQueueName[QueueDefault].testSignals.Init(t)
+
+		startClient(ctx, t, client)
+
+		// Metadata isn't changed, so there's no control event to send.
+		_, err = client.QueueUpdate(ctx, QueueDefault, &QueueUpdateParams{
+			Metadata: nil,
+		})
+		require.NoError(t, err)
+
+		client.producersByQueueName[QueueDefault].testSignals.QueueControlEventTriggered.RequireEmpty()
+
+		// The producer is still running and handles a later metadata change.
+		_, err = client.QueueUpdate(ctx, QueueDefault, &QueueUpdateParams{
+			Metadata: []byte(`{"foo":"baz"}`),
+		})
+		require.NoError(t, err)
+
+		controlEvent := client.producersByQueueName[QueueDefault].testSignals.QueueControlEventTriggered.WaitOrTimeout()
+		require.NotNil(t, controlEvent)
+		require.Equal(t, controlActionMetadataChanged, controlEvent.Action)
+
+		client.producersByQueueName[QueueDefault].testSignals.MetadataChanged.WaitOrTimeout()
+	})
 }
 
 func Test_Client_QueueUpdateTx(t *testing.T) {
