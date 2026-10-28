@@ -47,6 +47,34 @@ RSpec.describe "River notification dispatch and recovery" do
     end
   end
 
+  it "delivers an identified cancellation while a read is blocked and ignores older attempts" do
+    value = runtime
+    queried = Queue.new
+    release = Queue.new
+    raised = Queue.new
+    driver.define_singleton_method(:job_get_cancelled_ids) do |_ids|
+      queried << true
+      release.pop
+      []
+    end
+    thread = Object.new
+    thread.define_singleton_method(:raise) { |error| raised << error }
+    attempted_at = Time.iso8601("2026-01-02T03:04:05.6789Z")
+    entry = {attempt: 2, attempted_at: attempted_at, queue: "one", thread: thread, working: true}
+    value.instance_variable_set(:@running, 42 => entry)
+    checker = Thread.new { value.send(:check_remote_cancellations) }
+    Timeout.timeout(2) { queried.pop }
+    [{attempt: 1, attempted_at: attempted_at}, {attempt: 2, attempted_at: attempted_at - 1}].each do |identity|
+      value.send(:receive_notification, "river_control", JSON.generate(action: "cancel", job_id: 42, queue: "one", attempt: identity[:attempt], attempted_at: identity[:attempted_at].iso8601(6)))
+      expect(raised).to be_empty
+    end
+    value.send(:receive_notification, "river_control", JSON.generate(action: "cancel", job_id: 42, queue: "one", attempt: 2, attempted_at: attempted_at.iso8601(6)))
+    expect(Timeout.timeout(2) { raised.pop }).to eq(River::JobCancelError)
+  ensure
+    release&.push(true)
+    checker&.join
+  end
+
   it "backs off repeated connection failures without indefinitely delaying shutdown" do
     listener = Object.new
     listener.define_singleton_method(:poll) { |_| raise "connection lost" }
@@ -146,6 +174,9 @@ RSpec.describe "River notification dispatch and recovery" do
 
   it "ignores invalid payloads without disrupting the receiver" do
     [nil, "{", "null", "[]", "{}"].each { |payload| runtime.send(:receive_notification, "river_insert", payload) }
+    runtime.instance_variable_set(:@running, 42 => {attempt: 1, queue: "one"})
+    runtime.send(:receive_notification, "river_control", JSON.generate(action: "cancel", attempt: 1, attempted_at: "invalid", job_id: 42, queue: "one"))
+    runtime.instance_variable_set(:@running, {})
     runtime.send(:receive_notification, "unknown", "{}")
     runtime.send(:receive_notification, "river_control", JSON.generate(action: "cancel", queue: "one", job_id: "42"))
     runtime.send(:receive_notification, "river_control", JSON.generate(action: "cancel", queue: "one", job_id: 42))

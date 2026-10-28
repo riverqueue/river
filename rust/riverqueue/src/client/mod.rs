@@ -58,7 +58,6 @@ use std::{
 
 use chrono::{DateTime, Utc};
 use tokio::sync::{Notify, broadcast, mpsc, watch};
-use tokio_util::sync::CancellationToken;
 
 use self::completer::CompletionUpdate;
 pub(crate) use self::notify_limiter::InsertNotifyLimiter;
@@ -146,7 +145,7 @@ pub(crate) struct ClientInner {
     queue_notifications: broadcast::Sender<RuntimeNotification>,
     queues: RwLock<HashMap<String, QueueConfig>>,
     pub(crate) retry_policy: Arc<dyn RetryPolicy>,
-    running: Mutex<HashMap<i64, CancellationToken>>,
+    running: Mutex<HashMap<i64, attempts::RunningAttempt>>,
     #[cfg(feature = "postgres")]
     pub(crate) schema: SchemaName,
     soft_stop_timeout: Option<Duration>,

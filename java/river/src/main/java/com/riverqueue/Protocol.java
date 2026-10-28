@@ -1,8 +1,8 @@
 package com.riverqueue;
 
+import java.time.Instant;
 import java.util.Map;
 import java.util.function.Consumer;
-import java.util.function.LongConsumer;
 import java.util.regex.Pattern;
 
 /** Stored and transmitted values shared with the other River implementations. */
@@ -22,6 +22,28 @@ final class Protocol {
       Pattern.compile("[a-zA-Z0-9_][a-zA-Z0-9_\\-\\[\\]<>/.·:+]+");
 
   private Protocol() {}
+
+  static Notification cancel(Job<?> job) {
+    if (job.attemptedAt() == null) return cancel(job.id(), job.queue());
+    return cancel(job.id(), job.queue(), job.attempt(), job.attemptedAt());
+  }
+
+  static Notification cancel(long id, String queue, int attempt, Instant attemptedAt) {
+    return new Notification(
+        TOPIC_CONTROL,
+        Json.encode(
+            Map.of(
+                "action",
+                "cancel",
+                "attempt",
+                attempt,
+                "attempted_at",
+                attemptedAt,
+                "job_id",
+                id,
+                "queue",
+                queue)));
+  }
 
   static Notification cancel(long id, String queue) {
     return new Notification(
@@ -53,12 +75,14 @@ final class Protocol {
         TOPIC_LEADERSHIP, Json.encode(Map.of("action", "resigned", "leader_id", id)));
   }
 
+  record CancellationNotice(long id, int attempt, Instant attemptedAt) {}
+
   record Notification(String topic, String payload) {}
 
   /** Shared by both database listeners; dispatching itself requires no database I/O. */
   record Dispatcher(
       String clientId,
-      LongConsumer cancellation,
+      Consumer<CancellationNotice> cancellation,
       Consumer<QueueNotice> queues,
       Consumer<LeadershipNotice> leadership) {
     void dispatch(String topic, String payload) {
@@ -70,9 +94,12 @@ final class Protocol {
       switch (topic) {
         case TOPIC_CONTROL -> {
           if (action.equals("cancel") && value.path("job_id").isIntegralNumber()) {
-            // Notices identify a job, not an attempt. Confirm its durable marker
-            // before cancelling so a delayed notice cannot undo a retry.
-            cancellation.accept(value.path("job_id").asLong());
+            var attemptedAt = value.path("attempted_at");
+            cancellation.accept(
+                new CancellationNotice(
+                    value.path("job_id").asLong(),
+                    value.path("attempt").asInt(0),
+                    attemptedAt.isString() ? Instant.parse(attemptedAt.asString()) : null));
           } else if ((action.equals("metadata_changed")
                   || action.equals("pause")
                   || action.equals("resume"))

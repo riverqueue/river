@@ -106,8 +106,18 @@ describe.each(["postgres", "sqlite"] as const)(
           },
         } as unknown as QueueProducer;
         const runner = {
-          cancelAttempt: (id: bigint, owner: string) => {
-            effects.push(["cancel", id, owner]);
+          cancelAttempt: (
+            id: bigint,
+            owner: string,
+            identity: { attempt: number; attemptedAt: Temporal.Instant }
+          ) => {
+            effects.push([
+              "cancel",
+              id,
+              owner,
+              identity.attempt,
+              identity.attemptedAt.toString(),
+            ]);
           },
         } as unknown as AttemptRunner;
         const pump = new NotificationPump(context, {
@@ -129,10 +139,7 @@ describe.each(["postgres", "sqlite"] as const)(
         // Semantic expectations are independent of the fixture's payload.
         // Checking all effects also rules out unrelated cancellations/wakeups.
         const expected: Record<string, unknown[][]> = {
-          cancel: [
-            ["cancel", 42n, clientId],
-            ["refresh", "priority"],
-          ],
+          cancel: [["cancel", 42n, clientId, 1, "2026-01-02T03:04:05.678Z"]],
           insert: [["wake", "priority"]],
           metadata_changed: [["refresh", "priority"]],
           pause: [["refresh", "priority"]],

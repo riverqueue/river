@@ -181,7 +181,7 @@ SELECT {columns} FROM {schema}river_job WHERE state='running' AND attempted_at<?
 SELECT version(), coalesce(current_setting('yb_enable_listen_notify', true), 'off')::boolean
 
 -- name: cancel_requested
-SELECT id FROM {schema}river_job WHERE state='running' AND metadata->>'cancel_attempted_at' IS NOT NULL
+SELECT id FROM {schema}river_job WHERE id IN (SELECT value::bigint FROM jsonb_array_elements_text(?::jsonb)) AND state='running' AND jsonb_exists(metadata, 'cancel_attempted_at')
 
 -- name: notification_cursor
 SELECT coalesce(max(id),0) FROM {schema}river_notification

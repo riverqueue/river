@@ -86,6 +86,12 @@ RSpec.shared_examples "cancellation while draining" do
         end
         super(ids)
       end
+      if poll_failure
+        # Legacy senders require a durable check, including its retry after a failed read.
+        @driver.define_singleton_method(:runtime_notify) do |topic, payload|
+          super(topic, payload.except(:attempt, :attempted_at))
+        end
+      end
       runtime.define_singleton_method(:queue_stopping?) do |queue|
         stopping = super(queue)
         if stopping && !signalled

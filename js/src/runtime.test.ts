@@ -4606,6 +4606,91 @@ describe("Client runtime database faults", () => {
     await run.stop();
   });
 
+  it("delivers identified cancellations during blocked reads and ignores older attempts", async () => {
+    const driver = new FakeRuntimeDriver();
+    const started = Promise.withResolvers<AbortSignal>();
+    const readStarted = Promise.withResolvers<undefined>();
+    const releaseRead = Promise.withResolvers<readonly bigint[]>();
+    const releaseWorker = Promise.withResolvers<undefined>();
+    const deliver = Promise.withResolvers<undefined>();
+    const attemptedAt = Temporal.Instant.from("2026-01-02T03:04:05.6789Z");
+    driver.claim = [{ ...fakeJob(), attempt: 2, attemptedAt }];
+    Object.assign(driver, {
+      jobGetCancelRequested: () => {
+        readStarted.resolve(undefined);
+        return releaseRead.promise;
+      },
+    });
+    driver.notificationStream = async function* (_topics, signal, ready) {
+      ready();
+      await deliver.promise;
+      // Legacy hint starts a read, simulating a saturated pool.
+      yield {
+        topic: "control",
+        payload: '{"action":"cancel","job_id":101,"queue":"default"}',
+      };
+      await readStarted.promise;
+      const workerSignal = await started.promise;
+      for (const identity of [
+        { attempt: 1, attempted_at: attemptedAt.toString() },
+        {
+          attempt: 2,
+          attempted_at: attemptedAt.subtract({ seconds: 1 }).toString(),
+        },
+      ]) {
+        yield {
+          topic: "control",
+          payload: JSON.stringify({
+            action: "cancel",
+            job_id: 101,
+            queue: "default",
+            ...identity,
+          }),
+        };
+        expect(workerSignal.aborted).toBe(false);
+      }
+      yield {
+        topic: "control",
+        payload: JSON.stringify({
+          action: "cancel",
+          job_id: 101,
+          queue: "default",
+          attempt: 2,
+          attempted_at: attemptedAt.toString(),
+        }),
+      };
+      await new Promise<void>((resolve) =>
+        signal.addEventListener("abort", () => resolve(), { once: true })
+      );
+    };
+    const client = new Client(driver, {
+      clientId: "runtime-test",
+      completionBatchSize: 1,
+      leaderElectionDisabled: true,
+      queues: { default: { maxWorkers: 1 } },
+      workers: new Workers().add(
+        defineJob({ kind: "test" }),
+        async ({ signal }) => {
+          started.resolve(signal);
+          await releaseWorker.promise;
+          signal.throwIfAborted();
+        }
+      ),
+    });
+    const run = await client.start();
+    try {
+      const signal = await started.promise;
+      deliver.resolve(undefined);
+      await waitUntil(() => signal.aborted);
+      expect(signal.reason).toMatchObject({ name: "JobCancelledError" });
+    } finally {
+      deliver.resolve(undefined);
+      releaseRead.resolve([]);
+      releaseWorker.resolve(undefined);
+      await run.stop({ mode: "cancel" });
+    }
+  });
+
   for (const failFirst of [false, true]) {
     it(`only checks cancellations on hints and retries failures=${failFirst}`, async () => {
       const driver = new FakeRuntimeDriver();

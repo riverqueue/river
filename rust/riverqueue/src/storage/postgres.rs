@@ -45,9 +45,9 @@ impl Backend for PostgresBackend<'_> {
         let table = self.schema.qualify("river_job");
         let sql = format!(
             "WITH locked AS (\
-                SELECT id, queue, state, finalized_at FROM {table} WHERE id = $1 FOR UPDATE\
+                SELECT id, attempt, attempted_at, queue, state, finalized_at FROM {table} WHERE id = $1 FOR UPDATE\
              ), notified AS (\
-                SELECT id, CASE WHEN $5::boolean THEN pg_notify(concat(coalesce($2::text, current_schema()), '.', $3::text), json_build_object('action', 'cancel', 'job_id', id, 'queue', queue)::text) END \
+                SELECT id, CASE WHEN $5::boolean THEN pg_notify(concat(coalesce($2::text, current_schema()), '.', $3::text), json_build_object('action', 'cancel', 'attempt', attempt, 'attempted_at', attempted_at, 'job_id', id, 'queue', queue)::text) END \
                 FROM locked WHERE state NOT IN ('cancelled', 'completed', 'discarded') AND finalized_at IS NULL\
              ), updated AS (\
                 UPDATE {table} AS job SET \

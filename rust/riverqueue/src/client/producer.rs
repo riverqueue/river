@@ -175,8 +175,8 @@ pub(super) async fn check_job_cancellations(inner: &ClientInner) -> Result<(), E
         for id in requested {
             // A query can outlive an attempt and its retry. Only signal the
             // execution that was present in its snapshot.
-            if let Some(cancellation) = attempts.get(&id) {
-                cancellation.cancel();
+            if let Some(attempt) = attempts.get(&id) {
+                attempt.cancellation.cancel();
             }
         }
     }
@@ -893,7 +893,14 @@ pub(super) async fn run_queue(
         for (row, decode_error) in claimed {
             let hard_cancel = work_cancel.child_token();
             let cancellation = hard_cancel.child_token();
-            register_running_attempt(&inner, row.id, &cancellation, cancellation_generation);
+            register_running_attempt(
+                &inner,
+                row.id,
+                &cancellation,
+                cancellation_generation,
+                row.attempt,
+                row.attempted_at,
+            );
             let task_inner = Arc::clone(&inner);
             let completion_sender = completion_sender.clone();
             let session_row = attempts.session.is_some().then(|| row.clone());

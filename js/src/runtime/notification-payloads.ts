@@ -19,6 +19,33 @@ export function notificationQueue(payload: string): string | null {
   return null;
 }
 
+/** Optional execution identity lets cancellation bypass a blocked database read. */
+export function notificationCancellationAttempt(
+  payload: string
+): { attempt: number; attemptedAt: Temporal.Instant } | undefined {
+  try {
+    const value: unknown = JSON.parse(payload);
+    if (
+      value !== null &&
+      typeof value === "object" &&
+      "attempt" in value &&
+      typeof value.attempt === "number" &&
+      Number.isSafeInteger(value.attempt) &&
+      value.attempt > 0 &&
+      "attempted_at" in value &&
+      typeof value.attempted_at === "string"
+    ) {
+      return {
+        attempt: value.attempt,
+        attemptedAt: Temporal.Instant.from(value.attempted_at),
+      };
+    }
+  } catch {
+    // Old or malformed identities require durable reconciliation.
+  }
+  return undefined;
+}
+
 /** The job ID a control notification asks to cancel, if any. */
 export function notificationCancellation(payload: string): bigint | null {
   if (!/"action"\s*:\s*"cancel"/.test(payload)) return null;

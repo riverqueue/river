@@ -72,7 +72,7 @@ export async function jobCancelWithOptions(
   const sql = {
     with: `
     WITH locked_job AS (
-      SELECT id, queue, state, finalized_at
+      SELECT id, attempt, attempted_at, queue, state, finalized_at
       FROM ${jobTable}
       WHERE id = $1::bigint
       FOR UPDATE
@@ -84,6 +84,8 @@ export async function jobCancelWithOptions(
           concat(coalesce($4::text, current_schema()), '.', $2::text),
           json_build_object(
             'action', 'cancel',
+            'attempt', attempt,
+            'attempted_at', attempted_at,
             'job_id', id,
             'queue', queue
           )::text

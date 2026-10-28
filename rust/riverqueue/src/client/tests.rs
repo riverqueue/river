@@ -1,7 +1,8 @@
 use serde::Deserialize;
 use serde_json::Map;
+use tokio_util::sync::CancellationToken;
 
-use super::attempts::{register_running_attempt, remove_running_attempt};
+use super::attempts::{RunningAttempt, register_running_attempt, remove_running_attempt};
 #[cfg(feature = "postgres")]
 use super::completer::CompletionBatcher;
 #[cfg(feature = "sqlite")]
@@ -94,12 +95,26 @@ fn completion_cleanup_preserves_newer_attempt() {
     let job_id = 42;
     let first = CancellationToken::new();
     let second = CancellationToken::new();
-    let running = Mutex::new(HashMap::from([(job_id, first.clone())]));
+    let running = Mutex::new(HashMap::from([(
+        job_id,
+        RunningAttempt {
+            attempt: 1,
+            attempted_at: None,
+            cancellation: first.clone(),
+        },
+    )]));
 
     running
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner)
-        .insert(job_id, second.clone());
+        .insert(
+            job_id,
+            RunningAttempt {
+                attempt: 2,
+                attempted_at: None,
+                cancellation: second.clone(),
+            },
+        );
 
     remove_running_attempt(&running, job_id, &first);
     assert_eq!(
@@ -107,7 +122,11 @@ fn completion_cleanup_preserves_newer_attempt() {
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .get(&job_id),
-        Some(&second)
+        Some(&RunningAttempt {
+            attempt: 2,
+            attempted_at: None,
+            cancellation: second.clone()
+        })
     );
 
     remove_running_attempt(&running, job_id, &second);
@@ -171,7 +190,14 @@ async fn go_notification_fixtures_dispatch_correctly() {
             let cancellation = CancellationToken::new();
             let unrelated = CancellationToken::new();
             for (job_id, token) in [(42, &cancellation), (43, &unrelated)] {
-                inner.running.lock().unwrap().insert(job_id, token.clone());
+                inner.running.lock().unwrap().insert(
+                    job_id,
+                    RunningAttempt {
+                        attempt: 1,
+                        attempted_at: Some("2026-01-02T03:04:05.678Z".parse().unwrap()),
+                        cancellation: token.clone(),
+                    },
+                );
             }
 
             dispatch_notification(
@@ -204,35 +230,59 @@ async fn go_notification_fixtures_dispatch_correctly() {
                 ),
                 _ => unreachable!(),
             }
+            assert_eq!(cancellation.is_cancelled(), name == "cancel", "{name}");
             assert!(
-                !cancellation.is_cancelled(),
-                "{name}: notice cancelled without a durable check"
-            );
-            assert_eq!(
                 tokio::time::timeout(Duration::ZERO, inner.cancellation_wakeup.notified())
                     .await
-                    .is_ok(),
-                name == "cancel",
+                    .is_err(),
                 "{name}"
             );
             assert!(!unrelated.is_cancelled(), "{name}");
             assert!(
-                matches!(
-                    producer.try_recv(),
-                    Err(broadcast::error::TryRecvError::Empty)
-                ),
+                producer.try_recv().is_err(),
                 "{name}: unexpected producer notification"
             );
             assert!(
-                matches!(
-                    leadership.try_recv(),
-                    Err(broadcast::error::TryRecvError::Empty)
-                ),
+                leadership.try_recv().is_err(),
                 "{name}: unexpected leadership notification"
             );
         }
     }
     pool.close().await;
+}
+
+#[tokio::test]
+async fn identified_cancellation_needs_no_database_and_ignores_older_attempts() {
+    #[cfg(feature = "postgres")]
+    let pool = sqlx::PgPool::connect_lazy("postgres://localhost/unused").unwrap();
+    #[cfg(not(feature = "postgres"))]
+    let pool = sqlx::SqlitePool::connect_lazy("sqlite::memory:").unwrap();
+    let client = Client::builder(pool).build().unwrap();
+    let cancellation = CancellationToken::new();
+    let attempted_at: chrono::DateTime<Utc> = "2026-01-02T03:04:05.6789Z".parse().unwrap();
+    register_running_attempt(&client.inner, 42, &cancellation, 0, 2, Some(attempted_at));
+    for (attempt, at) in [
+        (1, attempted_at),
+        (2, attempted_at - chrono::Duration::seconds(1)),
+        (2, attempted_at),
+    ] {
+        let payload = serde_json::json!({"action":"cancel", "attempt":attempt, "attempted_at":at, "job_id":42,"queue":"default"});
+        dispatch_notification(
+            &client.inner,
+            &client.inner.queue_notifications,
+            crate::NOTIFICATION_TOPIC_CONTROL,
+            &payload.to_string(),
+        );
+        assert_eq!(
+            cancellation.is_cancelled(),
+            attempt == 2 && at == attempted_at
+        );
+    }
+    assert!(
+        tokio::time::timeout(Duration::ZERO, client.inner.cancellation_wakeup.notified())
+            .await
+            .is_err()
+    );
 }
 
 #[tokio::test]
@@ -243,7 +293,7 @@ async fn registration_without_a_hint_does_not_query_cancellations() {
     let pool = sqlx::SqlitePool::connect_lazy("sqlite::memory:").unwrap();
     let client = Client::builder(pool).build().unwrap();
     let cancellation = CancellationToken::new();
-    register_running_attempt(&client.inner, 42, &cancellation, 0);
+    register_running_attempt(&client.inner, 42, &cancellation, 0, 1, None);
     assert!(
         tokio::time::timeout(Duration::ZERO, client.inner.cancellation_wakeup.notified(),)
             .await
@@ -252,7 +302,7 @@ async fn registration_without_a_hint_does_not_query_cancellations() {
     // A hint consumed before registration still requires a fresh snapshot afterward.
     client.inner.request_cancellation_check();
     client.inner.cancellation_wakeup.notified().await;
-    register_running_attempt(&client.inner, 43, &cancellation, 0);
+    register_running_attempt(&client.inner, 43, &cancellation, 0, 1, None);
     tokio::time::timeout(
         Duration::from_secs(1),
         client.inner.cancellation_wakeup.notified(),
@@ -281,7 +331,7 @@ async fn cancellation_checks_wait_for_hints_and_retry_failed_reads() {
         .unwrap();
     let client = Client::builder(pool.clone()).build().unwrap();
     let cancellation = CancellationToken::new();
-    register_running_attempt(&client.inner, 42, &cancellation, 0);
+    register_running_attempt(&client.inner, 42, &cancellation, 0, 1, None);
     let task = tokio::spawn(super::producer::poll_job_cancellations(
         Arc::clone(&client.inner),
         CancellationToken::new(),
@@ -341,6 +391,8 @@ async fn delayed_cancellation_signals_recheck_retry_marker() {
         id,
         &original,
         client.inner.cancellation_generation.load(Ordering::Acquire),
+        1,
+        None,
     );
     client.jobs().cancel(id).await.unwrap();
     sqlx::query("UPDATE river_job SET state = 'cancelled', finalized_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now') WHERE id = ?").bind(id).execute(&pool).await.unwrap();
@@ -356,6 +408,8 @@ async fn delayed_cancellation_signals_recheck_retry_marker() {
         id,
         &replacement,
         client.inner.cancellation_generation.load(Ordering::Acquire),
+        1,
+        None,
     );
     dispatch_notification(
         &client.inner,
@@ -737,11 +791,14 @@ async fn completer_abandons_its_backlog_when_a_batch_fails_during_shutdown() {
     let now = std::time::Instant::now();
     for job_id in 0..i64::try_from(updates).unwrap() {
         let cancellation = CancellationToken::new();
-        inner
-            .running
-            .lock()
-            .unwrap()
-            .insert(job_id, cancellation.clone());
+        inner.running.lock().unwrap().insert(
+            job_id,
+            RunningAttempt {
+                attempt: 0,
+                attempted_at: None,
+                cancellation: cancellation.clone(),
+            },
+        );
         sender
             .try_send(CompletionUpdate {
                 attempt: None,

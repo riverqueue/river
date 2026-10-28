@@ -577,7 +577,7 @@ module River
       end
 
       @mutex.synchronize do
-        @running[row.id] = {check_before_work: @fetching_queues.fetch(row.queue).include?(row.id) || (generation && generation != @cancellation_generation), queue: row.queue, thread: thread, working: false}
+        @running[row.id] = {attempt: row.attempt, attempted_at: row.attempted_at, check_before_work: @fetching_queues.fetch(row.queue).include?(row.id) || (generation && generation != @cancellation_generation), queue: row.queue, thread: thread, working: false}
       end
       gate.push(true)
     end
@@ -841,10 +841,17 @@ module River
           return unless message["job_id"].is_a?(Integer)
 
           @mutex.synchronize do
+            entry = @running[message["job_id"]]
+            if entry && message["attempt"].is_a?(Integer) && message["attempt"].positive? && message["attempted_at"].is_a?(String)
+              if entry[:queue] == queue && entry[:attempt] == message["attempt"] && entry[:attempted_at] == Time.iso8601(message["attempted_at"])
+                entry[:cancelled] = true
+                entry[:thread].raise(JobCancelError) if entry[:working]
+              end
+              return
+            end
             @cancellation_generation += 1
             @cancellation_pending = true
             @condition.broadcast
-            entry = @running[message["job_id"]]
             if entry && entry[:queue] == queue
               entry[:check_before_work] = true unless entry[:working]
             elsif (pending = @fetching_queues[queue])
@@ -869,7 +876,7 @@ module River
           wake_maintenance if message["leader_id"].is_a?(String) && message["leader_id"] != @config.id
         end
       end
-    rescue JSON::ParserError, TypeError => error
+    rescue ArgumentError, JSON::ParserError, TypeError => error
       @config.logger.warn("River ignored invalid notification: #{error.message}")
     end
 

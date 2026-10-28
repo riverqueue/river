@@ -157,11 +157,13 @@ func TestProducer_CancellationCheckDoesNotBlock(t *testing.T) {
 		blockedFetch     bool
 		cancelFromLookup bool
 		queryError       bool
+		remote           bool
 	}{
 		{name: "BlockedFetchCancelDelivery", blockedFetch: true},
 		{name: "BlockedFetchQueryResult", blockedFetch: true, cancelFromLookup: true},
 		{name: "CancelDelivery"},
 		{name: "QueryResult", cancelFromLookup: true},
+		{name: "RemoteCancelDelivery", remote: true},
 		{name: "RetryAfterError", cancelFromLookup: true, queryError: true},
 	} {
 		t.Run(testCase.name, func(t *testing.T) {
@@ -185,7 +187,7 @@ func TestProducer_CancellationCheckDoesNotBlock(t *testing.T) {
 			archetype := riversharedtest.BaseServiceArchetype(t)
 			jobCtx, cancelJob := context.WithCancelCause(ctx)
 			defer cancelJob(nil)
-			executor := baseservice.Init(archetype, &jobexecutor.JobExecutor{CancelFunc: cancelJob, JobRow: &rivertype.JobRow{ID: 1, Attempt: 1}})
+			executor := baseservice.Init(archetype, &jobexecutor.JobExecutor{CancelFunc: cancelJob, JobRow: &rivertype.JobRow{ID: 1, Attempt: 1, AttemptedAt: new(time.Now().UTC())}})
 			var queryAttempts int
 			exec := &producerTestExecutor{
 				jobGetAvailableFunc: func(context.Context, *riverdriver.JobGetAvailableParams) (*riverdriver.JobGetAvailableResult, error) {
@@ -217,7 +219,7 @@ func TestProducer_CancellationCheckDoesNotBlock(t *testing.T) {
 			prod := baseservice.Init(archetype, &producer{
 				activeJobs:     map[int64]*jobexecutor.JobExecutor{1: executor},
 				cancelPollCh:   make(chan struct{}, 1),
-				config:         &producerConfig{MaxWorkers: 2, Notifier: &notifier.Notifier{}, QueuePollInterval: 20 * time.Millisecond},
+				config:         &producerConfig{MaxWorkers: 2, Notifier: &notifier.Notifier{}, Queue: QueueDefault, QueuePollInterval: 20 * time.Millisecond},
 				exec:           exec,
 				fetchLimiter:   chanutil.NewDebouncedChan(ctx, time.Millisecond, true),
 				jobResultCh:    make(chan *rivertype.JobRow),
@@ -253,7 +255,9 @@ func TestProducer_CancellationCheckDoesNotBlock(t *testing.T) {
 				require.Positive(t, signals.QueryStarted.WaitOrTimeout())
 			}
 
-			if !testCase.cancelFromLookup {
+			if testCase.remote {
+				prod.handleControlNotification(ctx, ctx)(notifier.NotificationTopicControl, fmt.Sprintf(`{"action":"cancel","attempt":1,"attempted_at":%q,"job_id":1,"queue":"default"}`, executor.JobRow.AttemptedAt.Format(time.RFC3339Nano)))
+			} else if !testCase.cancelFromLookup {
 				client := &Client[struct{}]{producersByQueueName: map[string]*producer{QueueDefault: prod}}
 				job := *executor.JobRow
 				job.Queue = QueueDefault
@@ -318,6 +322,33 @@ func TestProducer_CancellationChecksWaitForHints(t *testing.T) {
 			})
 		})
 	}
+}
+
+func TestProducer_CancellationNotificationAttemptIdentity(t *testing.T) {
+	t.Parallel()
+
+	attemptedAt := time.Date(2026, 1, 2, 3, 4, 5, 678900000, time.UTC)
+	ctx, cancel := context.WithCancelCause(context.Background())
+	defer cancel(nil)
+	archetype := riversharedtest.BaseServiceArchetype(t)
+	executor := baseservice.Init(archetype, &jobexecutor.JobExecutor{CancelFunc: cancel, JobRow: &rivertype.JobRow{Attempt: 2, AttemptedAt: &attemptedAt}})
+	prod := baseservice.Init(archetype, &producer{
+		activeJobs:   map[int64]*jobexecutor.JobExecutor{1: executor},
+		cancelPollCh: make(chan struct{}, 1),
+		config:       &producerConfig{Queue: QueueDefault},
+	})
+	deliver := prod.handleControlNotification(context.Background(), context.Background())
+	for _, payload := range []string{
+		`{"action":"cancel","attempt":1,"attempted_at":"2026-01-02T03:04:05.6789Z","job_id":1,"queue":"default"}`,
+		`{"action":"cancel","attempt":2,"attempted_at":"2026-01-02T03:04:04.6789Z","job_id":1,"queue":"default"}`,
+	} {
+		deliver(notifier.NotificationTopicControl, payload)
+		require.NoError(t, ctx.Err())
+		require.Empty(t, prod.cancelPollCh)
+	}
+	deliver(notifier.NotificationTopicControl, `{"action":"cancel","attempt":2,"attempted_at":"2026-01-02T03:04:05.6789Z","job_id":1,"queue":"default"}`)
+	require.ErrorIs(t, context.Cause(ctx), rivertype.ErrJobCancelledRemotely)
+	require.Empty(t, prod.cancelPollCh)
 }
 
 func TestProducer_HandleControlNotification(t *testing.T) {

@@ -70,6 +70,8 @@ impl Backend for SqliteBackend<'_> {
         };
         let payload = serde_json::json!({
             "action": "cancel",
+            "attempt": row.attempt,
+            "attempted_at": row.attempted_at,
             "job_id": id,
             "queue": row.queue,
         })

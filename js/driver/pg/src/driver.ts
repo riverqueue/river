@@ -5,6 +5,7 @@ import type {
   DriverInsertResult,
   DriverRecord,
   InsertDriverOptions,
+  JobCancellationNotice,
   JobClaimOptions,
   JobClaimParams,
   JobClaimResult,
@@ -861,7 +862,7 @@ export class PgRuntime<Transaction = never> implements RuntimeDriver<
     attemptedBy: string,
     signal: AbortSignal,
     ready?: () => void
-  ): AsyncGenerator<{ attemptedBy: string; id: bigint }> {
+  ): AsyncGenerator<JobCancellationNotice> {
     return notifySql.jobCancellationSubscribe(
       this.#db,
       attemptedBy,

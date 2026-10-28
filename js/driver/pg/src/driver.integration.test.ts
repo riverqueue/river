@@ -2495,32 +2495,43 @@ describe("PgDriver integration", () => {
     await iterator.return(undefined);
   });
 
-  it("decodes exact bigint IDs from cancellation notifications", async () => {
-    const exactID = 9_007_199_254_741_001n;
-    await pool.query(
-      `INSERT INTO river_job (id, args, kind, max_attempts)
-       VALUES ($1::bigint, '{}'::jsonb, $2::text, 25)`,
-      [exactID.toString(10), `${filePrefix}_large_cancel_id`]
-    );
-    const abort = new AbortController();
-    const iterator = driver.jobCancellationSubscribe(
-      `${filePrefix}_cancel_owner`,
-      abort.signal
-    );
-    const next = iterator.next();
-    await waitForListenerPID(pool, "river_control");
+  it.each([false, true])(
+    "decodes exact bigint IDs from cancellation notifications with identity=%s",
+    async (identified) => {
+      const exactID = 9_007_199_254_741_001n;
+      const attemptedAt = Temporal.Instant.from("2026-01-02T03:04:05.6789Z");
+      await pool.query(
+        `INSERT INTO river_job (id, args, kind, max_attempts, attempt, attempted_at, state)
+       VALUES ($1::bigint, '{}'::jsonb, $2::text, 25, $3::smallint, $4::timestamptz, $5::river_job_state)`,
+        [
+          exactID.toString(10),
+          `${filePrefix}_large_cancel_id`,
+          identified ? 2 : 0,
+          identified ? attemptedAt.toString() : null,
+          identified ? "running" : "available",
+        ]
+      );
+      const abort = new AbortController();
+      const iterator = driver.jobCancellationSubscribe(
+        `${filePrefix}_cancel_owner`,
+        abort.signal
+      );
+      const next = iterator.next();
+      await waitForListenerPID(pool, "river_control");
 
-    await driver.jobCancel(exactID);
-    await expect(next).resolves.toEqual({
-      done: false,
-      value: {
-        attemptedBy: `${filePrefix}_cancel_owner`,
-        id: exactID,
-      },
-    });
-    abort.abort();
-    await iterator.return(undefined);
-  });
+      await driver.jobCancel(exactID);
+      await expect(next).resolves.toEqual({
+        done: false,
+        value: {
+          ...(identified ? { attempt: 2, attemptedAt } : {}),
+          attemptedBy: `${filePrefix}_cancel_owner`,
+          id: exactID,
+        },
+      });
+      abort.abort();
+      await iterator.return(undefined);
+    }
+  );
 
   it("notifies listeners of a committed insert notification", async () => {
     const abort = new AbortController();

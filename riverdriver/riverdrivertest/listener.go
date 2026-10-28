@@ -2,6 +2,7 @@ package riverdrivertest
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"testing"
 	"time"
@@ -111,8 +112,20 @@ func exerciseListener[TTx any](ctx context.Context, t *testing.T, driverWithPool
 
 		notification := waitForNotification(ctx, t, listener)
 		require.Equal(t, string(notifier.NotificationTopicControl), notification.Topic)
-		require.JSONEq(t, fmt.Sprintf(`{"action":"cancel","job_id":%d,"queue":%q}`,
-			committedJob.ID, committedJob.Queue), notification.Payload)
+		var payload struct {
+			Action      string     `json:"action"`
+			Attempt     int        `json:"attempt"`
+			AttemptedAt *time.Time `json:"attempted_at"`
+			JobID       int64      `json:"job_id"`
+			Queue       string     `json:"queue"`
+		}
+		require.NoError(t, json.Unmarshal([]byte(notification.Payload), &payload))
+		require.Equal(t, "cancel", payload.Action)
+		require.Equal(t, committedJob.Attempt, payload.Attempt)
+		require.NotNil(t, payload.AttemptedAt)
+		require.True(t, committedJob.AttemptedAt.Equal(*payload.AttemptedAt))
+		require.Equal(t, committedJob.ID, payload.JobID)
+		require.Equal(t, committedJob.Queue, payload.Queue)
 		requireNoNotification(ctx, t, listener)
 	})
 

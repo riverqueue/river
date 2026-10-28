@@ -73,12 +73,12 @@ shared_examples "Postgres cancellation notifications" do
   it "publishes Go-compatible cancellation only when the transaction commits" do
     client = River::Client.new(@driver)
     row = client.insert(River::JobArgsHash.new(:notify, {})).job
-    @driver.job_claim(id: row.id, attempted_by: "test")
+    claimed = @driver.job_claim(id: row.id, attempted_by: "test")
     @driver.transaction do
       client.job_cancel(row.id)
       expect(insert_notifications).to be_empty
     end
-    expect(insert_notifications).to eq([{"action" => "cancel", "job_id" => row.id, "queue" => "default"}])
+    expect(insert_notifications).to eq([{"action" => "cancel", "attempt" => claimed.attempt, "attempted_at" => claimed.attempted_at.iso8601(6), "job_id" => row.id, "queue" => "default"}])
   end
 
   it "does not notify rolled-back, missing, or already-finalized cancellations" do
@@ -107,14 +107,14 @@ shared_examples "SQLite cancellation notifications" do
   it "makes cancellation and its outbox notification visible together on commit" do
     client = River::Client.new(@driver)
     row = client.insert(River::JobArgsHash.new(:notify, {})).job
-    @driver.job_claim(id: row.id, attempted_by: "test")
+    claimed = @driver.job_claim(id: row.id, attempted_by: "test")
     @driver.transaction do
       client.job_cancel(row.id)
       expect(cancellation_notifications.length).to eq(1)
       observer = Thread.new { cancellation_notifications }
       expect(Timeout.timeout(5) { observer.value }).to be_empty
     end
-    expect(cancellation_notifications).to eq([{"action" => "cancel", "job_id" => row.id, "queue" => "default"}])
+    expect(cancellation_notifications).to eq([{"action" => "cancel", "attempt" => claimed.attempt, "attempted_at" => claimed.attempted_at.iso8601(6), "job_id" => row.id, "queue" => "default"}])
   end
 
   it "rolls back both cancellation and the outbox row" do

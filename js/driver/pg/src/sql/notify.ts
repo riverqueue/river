@@ -3,7 +3,10 @@ import { LinkedAbortSignal, quoteIdentifier } from "riverqueue/unstable-driver";
 import { Buffer } from "node:buffer";
 import type { Notification as NodePgNotification } from "pg";
 import { ConfigurationError } from "riverqueue";
-import type { RuntimeNotification } from "riverqueue/unstable-driver";
+import type {
+  JobCancellationNotice,
+  RuntimeNotification,
+} from "riverqueue/unstable-driver";
 import type { PgDatabase, PgQueryable } from "../database.js";
 import { POSTGRES_IDENTIFIER_MAX_BYTES } from "../database.js";
 import {
@@ -212,7 +215,7 @@ export async function* jobCancellationSubscribe(
   attemptedBy: string,
   signal: AbortSignal,
   ready?: () => void
-): AsyncGenerator<{ attemptedBy: string; id: bigint }> {
+): AsyncGenerator<JobCancellationNotice> {
   for await (const notification of listen(
     db,
     ["river_control"],
@@ -236,7 +239,23 @@ export async function* jobCancellationSubscribe(
     }
     try {
       const id = exactCancellationID(notification.payload, value.job_id);
-      if (id !== null) yield { attemptedBy, id };
+      if (id !== null) {
+        if (
+          "attempt" in value &&
+          typeof value.attempt === "number" &&
+          Number.isSafeInteger(value.attempt) &&
+          value.attempt > 0 &&
+          "attempted_at" in value &&
+          typeof value.attempted_at === "string"
+        ) {
+          yield {
+            attempt: value.attempt,
+            attemptedAt: Temporal.Instant.from(value.attempted_at),
+            attemptedBy,
+            id,
+          };
+        } else yield { attemptedBy, id };
+      }
     } catch {
       // Ignore malformed notifications; polling remains the durable path.
     }

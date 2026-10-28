@@ -336,7 +336,7 @@ describe("SqliteDriver", () => {
 
     database
       .prepare(
-        "UPDATE river_job SET state = 'running', attempt = 1 WHERE id = ?"
+        "UPDATE river_job SET state = 'running', attempt = 1, attempted_at = '2026-01-02T03:04:05.678Z' WHERE id = ?"
       )
       .run(inserted.id);
     expect(await driver.jobDelete(inserted.id)).toMatchObject({
@@ -348,7 +348,7 @@ describe("SqliteDriver", () => {
     // Like River for Go, a retry publishes no insert notification.
     expect(control.map(({ topic }) => topic)).toEqual(["river_control"]);
     expect(control[0]?.payload).toBe(
-      `{"action":"cancel","job_id":${inserted.id},"queue":"default"}`
+      `{"action":"cancel","attempt":0,"attempted_at":null,"job_id":${inserted.id},"queue":"default"}`
     );
   });
 
@@ -431,7 +431,7 @@ describe("SqliteDriver", () => {
       .job;
     database
       .prepare(
-        "UPDATE river_job SET state = 'running', attempt = 1 WHERE id = ?"
+        "UPDATE river_job SET state = 'running', attempt = 1, attempted_at = '2026-01-02T03:04:05.678Z' WHERE id = ?"
       )
       .run(inserted.id);
     const cancels = () =>
@@ -460,7 +460,7 @@ describe("SqliteDriver", () => {
     });
     expect(cancels()).toEqual([
       {
-        payload: `{"action":"cancel","job_id":${inserted.id},"queue":"default"}`,
+        payload: `{"action":"cancel","attempt":1,"attempted_at":"2026-01-02T03:04:05.678Z","job_id":${inserted.id},"queue":"default"}`,
         topic: "river_control",
       },
     ]);

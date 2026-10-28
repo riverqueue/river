@@ -198,7 +198,7 @@ AND queue NOT IN (SELECT value FROM json_each(?)) AND (? OR queue IN (SELECT val
 SELECT {columns} FROM {schema}river_job WHERE state='running' AND attempted_at<? AND id>? ORDER BY id LIMIT 1000
 
 -- name: cancel_requested
-SELECT id FROM river_job WHERE state='running' AND (CASE WHEN typeof(metadata)<>'text' OR json_valid(metadata) THEN json_extract(metadata,'$.cancel_attempted_at') END) IS NOT NULL
+SELECT id FROM {schema}river_job WHERE id IN (SELECT CAST(value AS integer) FROM json_each(?)) AND state='running' AND (CASE WHEN typeof(metadata)<>'text' OR json_valid(metadata) THEN json_type(metadata,'$.cancel_attempted_at') END) IS NOT NULL
 
 -- name: notification_cursor
 SELECT coalesce(max(id),0) FROM {schema}river_notification

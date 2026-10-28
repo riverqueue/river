@@ -39,6 +39,8 @@ const LISTENER_PING_INTERVAL: Duration = Duration::from_secs(5);
 #[derive(Deserialize)]
 pub(super) struct ControlNotification {
     pub(super) action: String,
+    pub(super) attempt: Option<i32>,
+    pub(super) attempted_at: Option<chrono::DateTime<chrono::Utc>>,
     pub(super) job_id: Option<i64>,
     pub(super) queue: Option<String>,
 }
@@ -124,7 +126,24 @@ pub(super) fn dispatch_notification(
             };
             match payload.action.as_str() {
                 "cancel" => {
-                    if payload.job_id.is_some() {
+                    if let Some(id) = payload.job_id {
+                        if let (Some(attempt), Some(attempted_at)) = (
+                            payload.attempt.filter(|attempt| *attempt > 0),
+                            payload.attempted_at,
+                        ) {
+                            let running = inner
+                                .running
+                                .lock()
+                                .unwrap_or_else(std::sync::PoisonError::into_inner);
+                            if let Some(active) = running.get(&id) {
+                                if active.attempt == attempt
+                                    && active.attempted_at == Some(attempted_at)
+                                {
+                                    active.cancellation.cancel();
+                                }
+                                return;
+                            }
+                        }
                         inner.request_cancellation_check();
                     }
                 }

@@ -166,6 +166,8 @@ func makeProtocolNotifications(root string) ([]protocolNotification, error) {
 		switch action {
 		case "cancel":
 			values["job_id"] = exampleJobID
+			values["attempt"] = 1
+			values["attempted_at"] = "2026-01-02T03:04:05.678Z"
 		case "metadata_changed":
 			values["metadata"] = map[string]any{"owner": "candidate"}
 		}

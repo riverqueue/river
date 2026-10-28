@@ -16,7 +16,7 @@ import (
 const jobCancel = `-- name: JobCancel :one
 WITH locked_job AS (
     SELECT
-        id, queue, state, finalized_at
+        id, attempt, attempted_at, queue, state, finalized_at
     FROM /* TEMPLATE: schema */river_job
     WHERE river_job.id = $1
     FOR UPDATE
@@ -26,7 +26,7 @@ notification AS (
         id,
         CASE WHEN $2::boolean THEN pg_notify(
             concat(coalesce($3::text, current_schema()), '.', $4::text),
-            json_build_object('action', 'cancel', 'job_id', id, 'queue', queue)::text
+            json_build_object('action', 'cancel', 'attempt', attempt, 'attempted_at', attempted_at, 'job_id', id, 'queue', queue)::text
         ) END
     FROM
         locked_job

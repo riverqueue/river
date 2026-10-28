@@ -656,7 +656,7 @@ public final class Client {
             if (!rows.next()) return get(c, id);
             var job = read(rows);
             pilot.afterStateChange(c, driver(), job);
-            notify(c, Protocol.cancel(id, job.queue()));
+            notify(c, Protocol.cancel(job));
             return job;
           }
         });

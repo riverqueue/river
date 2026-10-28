@@ -87,10 +87,7 @@ public final class RunHandle implements AutoCloseable {
     id = river.id();
     notifications =
         new Protocol.Dispatcher(
-            id,
-            ignored -> requestCancellationCheck(),
-            this::queueNotification,
-            this::leadershipNotification);
+            id, this::cancelNotification, this::queueNotification, this::leadershipNotification);
     queues.putAll(config.queues);
     periodic =
         new PeriodicJobBundle(
@@ -354,6 +351,15 @@ public final class RunHandle implements AutoCloseable {
       }
     }
     return !ready.isEmpty();
+  }
+
+  private void cancelNotification(Protocol.CancellationNotice notice) {
+    var context = active.get(notice.id());
+    if (context != null && notice.attempt() > 0 && notice.attemptedAt() != null) {
+      if (context.job().attempt() == notice.attempt()
+          && notice.attemptedAt().equals(context.job().attemptedAt()))
+        context.requestCancellation(WorkContext.Cancellation.REMOTE);
+    } else requestCancellationCheck();
   }
 
   private void claim(String queue, int count) {
@@ -1426,27 +1432,35 @@ public final class RunHandle implements AutoCloseable {
     boolean retry = false;
     while (hasActiveWork()) {
       try {
-        if (cancellationPollOnly || retry) cancellationWake.tryAcquire(50, TimeUnit.MILLISECONDS);
+        if (cancellationPollOnly || retry)
+          cancellationWake.tryAcquire(config.pollInterval.toNanos(), TimeUnit.NANOSECONDS);
         else cancellationWake.acquire();
         cancellationWake.drainPermits();
         if (!hasActiveWork()) return;
         retry = false;
         var attempts = Map.copyOf(active);
         if (!attempts.isEmpty()) {
-          river.transaction(
-              c -> {
-                try (var statement =
-                        Sql.prepare(c, Sql.query(river.database(), "cancel_requested"));
-                    var rows = statement.executeQuery()) {
-                  while (rows.next()) {
-                    // A late query result must not cancel a subsequent attempt.
-                    var context = attempts.get(rows.getLong(1));
-                    if (context != null)
-                      context.requestCancellation(WorkContext.Cancellation.REMOTE);
+          var ids = new ArrayList<>(attempts.keySet());
+          for (int start = 0; start < ids.size(); start += 1000) {
+            var batch = ids.subList(start, Math.min(start + 1000, ids.size()));
+            river.transaction(
+                c -> {
+                  try (var statement =
+                          Sql.prepare(
+                              c,
+                              Sql.query(river.database(), "cancel_requested"),
+                              Json.encode(batch));
+                      var rows = statement.executeQuery()) {
+                    while (rows.next()) {
+                      // A late query result must not cancel a subsequent attempt.
+                      var context = attempts.get(rows.getLong(1));
+                      if (context != null)
+                        context.requestCancellation(WorkContext.Cancellation.REMOTE);
+                    }
                   }
-                }
-                return null;
-              });
+                  return null;
+                });
+          }
         }
       } catch (InterruptedException e) {
         Thread.currentThread().interrupt();

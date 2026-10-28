@@ -303,6 +303,8 @@ export function jobCompletionKey(
 
 /** Remote cancellation of an attempt currently owned by this process. */
 export interface JobCancellationNotice {
+  readonly attempt?: number;
+  readonly attemptedAt?: Temporal.Instant;
   readonly attemptedBy: string;
   readonly id: bigint;
 }

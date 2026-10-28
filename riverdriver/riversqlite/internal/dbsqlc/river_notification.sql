@@ -30,10 +30,11 @@ FROM /* TEMPLATE: schema */river_notification;
 
 -- name: NotificationInsertJobCancel :exec
 INSERT INTO /* TEMPLATE: schema */river_notification (payload, topic)
-VALUES (
-    json_object('action', 'cancel', 'job_id', cast(@job_id AS integer), 'queue', cast(@queue AS text)),
+SELECT
+    json_object('action', 'cancel', 'attempt', job.attempt, 'attempted_at', strftime('%Y-%m-%dT%H:%M:%fZ', job.attempted_at), 'job_id', job.id, 'queue', cast(@queue AS text)),
     @topic
-);
+FROM /* TEMPLATE: schema */river_job AS job
+WHERE job.id = @job_id;
 
 -- name: NotificationInsertMany :exec
 INSERT INTO /* TEMPLATE: schema */river_notification (

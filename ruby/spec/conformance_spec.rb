@@ -163,7 +163,7 @@ RSpec.describe "Go-generated conformance fixtures" do
             row = @client.insert(River::JobArgsHash.new(:notify, {}), queue: "priority").job
             if name == "cancel"
               @driver.send(:runtime_execute, "UPDATE river_job SET id = 42 WHERE id = #{row.id}")
-              @driver.job_claim(id: 42, attempted_by: "conformance")
+              @driver.job_claim(id: 42, attempted_by: "conformance", allow_scheduled: true, now: Time.iso8601("2026-01-02T03:04:05.678Z"))
               @client.job_cancel(42)
             end
           when "metadata_changed", "pause", "resume"
@@ -189,7 +189,13 @@ RSpec.describe "Go-generated conformance fixtures" do
             ((name == "insert") ? "insert" : "control")
           end
           expect(@driver.send(:runtime_value, notification, :topic)).to eq(protocol.fetch("topics").fetch(topic))
-          expect(JSON.parse(@driver.send(:runtime_value, notification, :payload))).to eq(fixture.fetch("payload"))
+          payload = JSON.parse(@driver.send(:runtime_value, notification, :payload))
+          expected = fixture.fetch("payload").dup
+          if name == "cancel"
+            payload["attempted_at"] = Time.iso8601(payload.fetch("attempted_at"))
+            expected["attempted_at"] = Time.iso8601(expected.fetch("attempted_at"))
+          end
+          expect(payload).to eq(expected)
         end
       end
 

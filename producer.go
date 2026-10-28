@@ -549,10 +549,12 @@ const (
 )
 
 type controlEventPayload struct {
-	Action   controlAction   `json:"action"`
-	JobID    int64           `json:"job_id,omitempty"`
-	Metadata json.RawMessage `json:"metadata,omitempty"`
-	Queue    string          `json:"queue"`
+	Action      controlAction   `json:"action"`
+	Attempt     int             `json:"attempt,omitempty"`
+	AttemptedAt *time.Time      `json:"attempted_at,omitempty"`
+	JobID       int64           `json:"job_id,omitempty"`
+	Metadata    json.RawMessage `json:"metadata,omitempty"`
+	Queue       string          `json:"queue"`
 }
 
 type insertPayload struct {
@@ -591,7 +593,18 @@ func (p *producer) handleControlNotification(fetchCtx, workCtx context.Context) 
 				)
 				return
 			}
-			p.TriggerCancelCheck()
+			// New senders identify the execution, so delivery never needs a pool
+			// connection. Legacy notices and claims still being registered reconcile.
+			p.activeJobsMu.Lock()
+			executor := p.activeJobs[decoded.JobID]
+			p.activeJobsMu.Unlock()
+			if executor != nil && decoded.Attempt > 0 && decoded.AttemptedAt != nil {
+				if executor.JobRow.Attempt == decoded.Attempt && executor.JobRow.AttemptedAt != nil && executor.JobRow.AttemptedAt.Equal(*decoded.AttemptedAt) {
+					executor.Cancel(workCtx)
+				}
+			} else {
+				p.TriggerCancelCheck()
+			}
 		default:
 			p.Logger.DebugContext(workCtx, p.Name+": Received job control notification with unknown action",
 				slog.String("action", string(decoded.Action)),

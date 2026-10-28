@@ -40,7 +40,7 @@ CREATE TABLE river_job (
 -- name: JobCancel :one
 WITH locked_job AS (
     SELECT
-        id, queue, state, finalized_at
+        id, attempt, attempted_at, queue, state, finalized_at
     FROM /* TEMPLATE: schema */river_job
     WHERE river_job.id = @id
     FOR UPDATE
@@ -50,7 +50,7 @@ notification AS (
         id,
         CASE WHEN @notify::boolean THEN pg_notify(
             concat(coalesce(sqlc.narg('schema')::text, current_schema()), '.', @control_topic::text),
-            json_build_object('action', 'cancel', 'job_id', id, 'queue', queue)::text
+            json_build_object('action', 'cancel', 'attempt', attempt, 'attempted_at', attempted_at, 'job_id', id, 'queue', queue)::text
         ) END
     FROM
         locked_job

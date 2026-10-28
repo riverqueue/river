@@ -11,6 +11,7 @@ import type { RuntimeContext } from "./context.js";
 import { backOffAfterFailure } from "./context.js";
 import {
   notificationCancellation,
+  notificationCancellationAttempt,
   notificationLeaderResigned,
   notificationQueue,
   notificationRequestsLeadershipResignation,
@@ -94,7 +95,12 @@ export class NotificationPump {
       case "control": {
         const cancellation = notificationCancellation(notification.payload);
         if (cancellation !== null) {
-          this.#runner.cancelAttempt(cancellation, this.#context.clientId);
+          this.#runner.cancelAttempt(
+            cancellation,
+            this.#context.clientId,
+            notificationCancellationAttempt(notification.payload)
+          );
+          return;
         }
         const queueName = notificationQueue(notification.payload);
         if (queueName === "*") {
@@ -163,7 +169,13 @@ export class NotificationPump {
       "remote cancellation stream",
       (signal, ready) => subscribe(this.#context.clientId, signal, ready),
       (notice) => {
-        this.#runner.cancelAttempt(notice.id, notice.attemptedBy);
+        this.#runner.cancelAttempt(
+          notice.id,
+          notice.attemptedBy,
+          notice.attempt !== undefined && notice.attemptedAt !== undefined
+            ? { attempt: notice.attempt, attemptedAt: notice.attemptedAt }
+            : undefined
+        );
       },
       () => {
         if (subscribed) {

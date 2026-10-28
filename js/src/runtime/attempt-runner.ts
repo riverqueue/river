@@ -169,9 +169,24 @@ export class AttemptRunner {
       controller.abort(reason);
   }
 
-  /** Check a cancellation hint against durable state before aborting work. */
-  cancelAttempt(id: bigint, attemptedBy: string): void {
+  /** Cancel a matching execution, or reconcile a legacy hint against durable state. */
+  cancelAttempt(
+    id: bigint,
+    attemptedBy: string,
+    identity?: { attempt: number; attemptedAt: Temporal.Instant }
+  ): void {
     const key = attemptKey(id, attemptedBy);
+    const active = this.#attempts.get(key);
+    if (active !== undefined && identity !== undefined) {
+      if (
+        active.row.attempt === identity.attempt &&
+        active.row.attemptedAt?.epochNanoseconds ===
+          identity.attemptedAt.epochNanoseconds
+      ) {
+        active.controller.abort(new JobCancelledError(id));
+      }
+      return;
+    }
     for (const pending of this.#claimCancellations) pending.add(key);
     if (this.#attempts.has(key)) void this.#checkCancellations();
   }

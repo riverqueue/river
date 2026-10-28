@@ -60,7 +60,7 @@ module River::Driver
         row = job_get_by_id(updated_id || original_id)
         # Other engines interrupt running workers through this notification;
         # the durable marker remains Ruby's polling fallback.
-        runtime_notify("river_control", action: "cancel", job_id: row.id, queue: row.queue) if updated_id
+        runtime_notify("river_control", action: "cancel", attempt: row.attempt, attempted_at: row.attempted_at&.iso8601(6), job_id: row.id, queue: row.queue) if updated_id
         row
       end
     end

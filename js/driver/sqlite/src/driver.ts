@@ -623,7 +623,7 @@ export class SqliteRuntime implements RuntimeDriver<
         insertNotification(
           database,
           NOTIFICATION_TOPIC_CONTROL,
-          `{"action":"cancel","job_id":${updated.id},"queue":${JSON.stringify(updated.queue)}}`
+          `{"action":"cancel","attempt":${updated.attempt},"attempted_at":${JSON.stringify(updated.attemptedAt?.toString() ?? null)},"job_id":${updated.id},"queue":${JSON.stringify(updated.queue)}}`
         );
       }
       return {

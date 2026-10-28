@@ -91,20 +91,21 @@ func (q *Queries) NotificationGetLastID(ctx context.Context, db DBTX) (int64, er
 
 const notificationInsertJobCancel = `-- name: NotificationInsertJobCancel :exec
 INSERT INTO /* TEMPLATE: schema */river_notification (payload, topic)
-VALUES (
-    json_object('action', 'cancel', 'job_id', cast(?1 AS integer), 'queue', cast(?2 AS text)),
-    ?3
-)
+SELECT
+    json_object('action', 'cancel', 'attempt', job.attempt, 'attempted_at', strftime('%Y-%m-%dT%H:%M:%fZ', job.attempted_at), 'job_id', job.id, 'queue', cast(?1 AS text)),
+    ?2
+FROM /* TEMPLATE: schema */river_job AS job
+WHERE job.id = ?3
 `
 
 type NotificationInsertJobCancelParams struct {
-	JobID int64
 	Queue string
 	Topic string
+	JobID int64
 }
 
 func (q *Queries) NotificationInsertJobCancel(ctx context.Context, db DBTX, arg *NotificationInsertJobCancelParams) error {
-	_, err := db.ExecContext(ctx, notificationInsertJobCancel, arg.JobID, arg.Queue, arg.Topic)
+	_, err := db.ExecContext(ctx, notificationInsertJobCancel, arg.Queue, arg.Topic, arg.JobID)
 	return err
 }
 

@@ -83,7 +83,10 @@ class ProtocolTest {
                   var leadership = new ArrayList<Protocol.LeadershipNotice>();
                   var dispatcher =
                       new Protocol.Dispatcher(
-                          clientId, cancellations::add, queues::add, leadership::add);
+                          clientId,
+                          notice -> cancellations.add(notice.id()),
+                          queues::add,
+                          leadership::add);
                   dispatcher.dispatch(
                       fixture.required("topic").asString(),
                       Json.encode(fixture.required("payload")));
@@ -130,7 +133,8 @@ class ProtocolTest {
     var queues = new ArrayList<Protocol.QueueNotice>();
     var leadership = new ArrayList<Protocol.LeadershipNotice>();
     var dispatcher =
-        new Protocol.Dispatcher("observer", cancellations::add, queues::add, leadership::add);
+        new Protocol.Dispatcher(
+            "observer", notice -> cancellations.add(notice.id()), queues::add, leadership::add);
     String payload = Json.encode(cancel.required("payload"));
     dispatcher.dispatch("unrelated", payload);
     dispatcher.dispatch(Protocol.TOPIC_LEADERSHIP, payload);
@@ -183,7 +187,7 @@ class ProtocolTest {
   Stream<DynamicTest> notificationEncoding() throws Exception {
     var notifications =
         Map.of(
-            "cancel", Protocol.cancel(42, "priority"),
+            "cancel", Protocol.cancel(42, "priority", 1, Instant.parse("2026-01-02T03:04:05.678Z")),
             "insert", Protocol.insert("priority"),
             "metadata_changed",
                 Protocol.queueMetadataChanged("priority", Map.of("owner", "candidate")),
