@@ -2153,6 +2153,17 @@ func (c *Client[TTx]) insertManyParams(params []InsertManyParams) ([]*rivertype.
 // transaction, the producer wouldn't yet be able to access the new jobs that
 // triggered the notification because they're not committed yet.
 func (c *Client[TTx]) notifyProducerWithoutListenerJobFetch(_ context.Context, res []*rivertype.JobInsertResult) {
+	if !c.config.willExecuteJobs() || c.driver.SupportsListener() {
+		return
+	}
+
+	c.notifyProducerWithoutListenerJobFetchForQueues(sliceutil.Map(res, func(insertRes *rivertype.JobInsertResult) string { return insertRes.Job.Queue }))
+}
+
+// Same as notifyProducerWithoutListenerJobFetch, but takes the queues that jobs
+// were inserted into instead of insert results. Used by InsertManyFast, whose
+// insert doesn't return job rows.
+func (c *Client[TTx]) notifyProducerWithoutListenerJobFetchForQueues(queues []string) {
 	if c.driver.SupportsListener() {
 		return
 	}
@@ -2166,8 +2177,8 @@ func (c *Client[TTx]) notifyProducerWithoutListenerJobFetch(_ context.Context, r
 
 	// Special case for when we were handling exactly one job, which is a very
 	// common case. Acts as a minor optimization by avoiding the map allocation.
-	if len(res) == 1 {
-		if producer, ok := c.producersByQueueName[res[0].Job.Queue]; ok {
+	if len(queues) == 1 {
+		if producer, ok := c.producersByQueueName[queues[0]]; ok {
 			producer.TriggerJobFetch()
 		}
 
@@ -2176,13 +2187,13 @@ func (c *Client[TTx]) notifyProducerWithoutListenerJobFetch(_ context.Context, r
 
 	queuesTriggered := make(map[string]struct{})
 
-	for _, insertRes := range res {
-		if _, ok := queuesTriggered[insertRes.Job.Queue]; ok {
+	for _, queue := range queues {
+		if _, ok := queuesTriggered[queue]; ok {
 			continue
 		}
-		queuesTriggered[insertRes.Job.Queue] = struct{}{}
+		queuesTriggered[queue] = struct{}{}
 
-		if producer, ok := c.producersByQueueName[insertRes.Job.Queue]; ok {
+		if producer, ok := c.producersByQueueName[queue]; ok {
 			producer.TriggerJobFetch()
 		}
 	}
@@ -2211,15 +2222,24 @@ func (c *Client[TTx]) InsertManyFast(ctx context.Context, params []InsertManyPar
 		return 0, errNoDriverDBPool
 	}
 
+	insertParams, err := c.insertManyParams(params)
+	if err != nil {
+		return 0, err
+	}
+
 	// Wrap in a transaction in case we need to notify about inserts.
 	res, err := dbutil.WithTxV(ctx, c.driver.GetExecutor(), func(ctx context.Context, execTx riverdriver.ExecutorTx) ([]*rivertype.JobInsertResult, error) {
-		return c.insertManyFast(ctx, execTx, params)
+		return c.insertManyFast(ctx, execTx, insertParams)
 	})
 	if err != nil {
 		return 0, err
 	}
 
-	c.notifyProducerWithoutListenerJobFetch(ctx, res)
+	// Fast inserts don't return job rows, so notify for the queues in insert
+	// params instead.
+	if c.config.willExecuteJobs() && !c.driver.SupportsListener() {
+		c.notifyProducerWithoutListenerJobFetchForQueues(sliceutil.Map(insertParams, func(insertParam *rivertype.JobInsertParams) string { return insertParam.Queue }))
+	}
 
 	return len(res), nil
 }
@@ -2248,19 +2268,19 @@ func (c *Client[TTx]) InsertManyFast(ctx context.Context, params []InsertManyPar
 // a unique constraint is violated, the operation will fail and no jobs will be
 // inserted.
 func (c *Client[TTx]) InsertManyFastTx(ctx context.Context, tx TTx, params []InsertManyParams) (int, error) {
-	res, err := c.insertManyFast(ctx, c.driver.UnwrapExecutor(tx), params)
+	insertParams, err := c.insertManyParams(params)
+	if err != nil {
+		return 0, err
+	}
+
+	res, err := c.insertManyFast(ctx, c.driver.UnwrapExecutor(tx), insertParams)
 	if err != nil {
 		return 0, err
 	}
 	return len(res), nil
 }
 
-func (c *Client[TTx]) insertManyFast(ctx context.Context, execTx riverdriver.ExecutorTx, params []InsertManyParams) ([]*rivertype.JobInsertResult, error) {
-	insertParams, err := c.insertManyParams(params)
-	if err != nil {
-		return nil, err
-	}
-
+func (c *Client[TTx]) insertManyFast(ctx context.Context, execTx riverdriver.ExecutorTx, insertParams []*rivertype.JobInsertParams) ([]*rivertype.JobInsertResult, error) {
 	return c.insertManyShared(ctx, execTx, insertParams, func(ctx context.Context, insertParams []*riverdriver.JobInsertFastParams) ([]*rivertype.JobInsertResult, error) {
 		count, err := execTx.JobInsertFastManyNoReturning(ctx, &riverdriver.JobInsertFastManyParams{
 			Jobs:   insertParams,
@@ -2943,7 +2963,11 @@ func (c *Client[TTx]) QueueUpdate(ctx context.Context, name string, params *Queu
 		return nil, err
 	}
 
-	c.notifyProducerWithoutListenerQueueControlEvent(name, controlEvent)
+	// No control event is returned when metadata isn't being changed, in which
+	// case there's nothing for the producer to act on.
+	if controlEvent != nil {
+		c.notifyProducerWithoutListenerQueueControlEvent(name, controlEvent)
+	}
 
 	return queue, nil
 }

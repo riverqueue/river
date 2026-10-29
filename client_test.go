@@ -4340,6 +4340,58 @@ func Test_Client_InsertManyFast(t *testing.T) {
 		require.NoError(t, client.Stop(ctx))
 	})
 
+	t.Run("ProducerFetchLimiterCalled", func(t *testing.T) {
+		t.Parallel()
+
+		var (
+			dbPool = riversharedtest.DBPoolClone(ctx, t)
+			driver = NewDriverWithoutListenNotify(dbPool)
+			schema = riverdbtest.TestSchema(ctx, t, driver, nil)
+			config = newTestConfig(t, schema)
+		)
+
+		config.Queues["another_queue"] = QueueConfig{MaxWorkers: 1}
+
+		client, err := NewClient(driver, config)
+		require.NoError(t, err)
+		client.producersByQueueName[QueueDefault].testSignals.Init(t)
+		client.producersByQueueName["another_queue"].testSignals.Init(t)
+
+		startClient(ctx, t, client)
+
+		count, err := client.InsertManyFast(ctx, []InsertManyParams{
+			{Args: noOpArgs{}},
+			{Args: noOpArgs{}},
+			{Args: noOpArgs{}, InsertOpts: &InsertOpts{Queue: "another_queue"}},
+		})
+		require.NoError(t, err)
+		require.Equal(t, 3, count)
+
+		// Each queue that received jobs is triggered once.
+		client.producersByQueueName[QueueDefault].testSignals.JobFetchTriggered.WaitOrTimeout()
+		client.producersByQueueName[QueueDefault].testSignals.JobFetchTriggered.RequireEmpty()
+		client.producersByQueueName["another_queue"].testSignals.JobFetchTriggered.WaitOrTimeout()
+		client.producersByQueueName["another_queue"].testSignals.JobFetchTriggered.RequireEmpty()
+	})
+
+	// Not called for drivers that support a listener.
+	t.Run("ProducerFetchLimiterNotCalled", func(t *testing.T) {
+		t.Parallel()
+
+		client, _ := setup(t)
+		client.producersByQueueName[QueueDefault].testSignals.Init(t)
+
+		startClient(ctx, t, client)
+
+		_, err := client.InsertManyFast(ctx, []InsertManyParams{
+			{Args: noOpArgs{}},
+			{Args: noOpArgs{}},
+		})
+		require.NoError(t, err)
+
+		client.producersByQueueName[QueueDefault].testSignals.JobFetchTriggered.RequireEmpty()
+	})
+
 	t.Run("DoesNotTriggerInsertNotificationForNonAvailableJob", func(t *testing.T) {
 		t.Parallel()
 
@@ -7319,6 +7371,43 @@ func Test_Client_QueueUpdate(t *testing.T) {
 		require.NoError(t, err)
 
 		client.producersByQueueName[QueueDefault].testSignals.QueueControlEventTriggered.RequireEmpty()
+	})
+
+	t.Run("ProducerControlEventNotSentWithoutMetadata", func(t *testing.T) {
+		t.Parallel()
+
+		var (
+			dbPool = riversharedtest.DBPoolClone(ctx, t)
+			driver = NewDriverWithoutListenNotify(dbPool)
+			schema = riverdbtest.TestSchema(ctx, t, driver, nil)
+			config = newTestConfig(t, schema)
+		)
+
+		client, err := NewClient(driver, config)
+		require.NoError(t, err)
+		client.producersByQueueName[QueueDefault].testSignals.Init(t)
+
+		startClient(ctx, t, client)
+
+		// Metadata isn't changed, so there's no control event to send.
+		_, err = client.QueueUpdate(ctx, QueueDefault, &QueueUpdateParams{
+			Metadata: nil,
+		})
+		require.NoError(t, err)
+
+		client.producersByQueueName[QueueDefault].testSignals.QueueControlEventTriggered.RequireEmpty()
+
+		// The producer is still running and handles a later metadata change.
+		_, err = client.QueueUpdate(ctx, QueueDefault, &QueueUpdateParams{
+			Metadata: []byte(`{"foo":"baz"}`),
+		})
+		require.NoError(t, err)
+
+		controlEvent := client.producersByQueueName[QueueDefault].testSignals.QueueControlEventTriggered.WaitOrTimeout()
+		require.NotNil(t, controlEvent)
+		require.Equal(t, controlActionMetadataChanged, controlEvent.Action)
+
+		client.producersByQueueName[QueueDefault].testSignals.MetadataChanged.WaitOrTimeout()
 	})
 }
 

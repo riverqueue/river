@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed `Client.InsertManyFast` panicking after its transaction committed on a client configured with queues when the driver doesn't support a listener, such as a `riverdatabasesql` driver created with `New` instead of `NewWithPgxListener`. It now wakes producers for the inserted jobs' queues right away, like `Client.InsertMany`. [PR #1558](https://github.com/riverqueue/river/pull/1558).
+- Fixed `Client.QueueUpdate` without metadata crashing the program when the client works that queue and the driver doesn't support a listener. [PR #1558](https://github.com/riverqueue/river/pull/1558).
+
 ## [0.50.0] - 2026-10-26
 
 ### Changed
