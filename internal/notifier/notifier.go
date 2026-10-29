@@ -463,7 +463,9 @@ func (n *Notifier) waitOnce(ctx context.Context) error {
 //
 // MUST be called with the `n.mu` mutex already locked.
 func (n *Notifier) sendInterruptAndReceiveResult(operation func() error) error {
-	errChan := make(chan error)
+	// Buffered so the main loop can always hand off a result and move on, even
+	// if the timeout below has fired and nothing is waiting for it anymore.
+	errChan := make(chan error, 1)
 	n.waitInterruptChan <- func() {
 		errChan <- operation()
 	}
