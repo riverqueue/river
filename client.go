@@ -2153,7 +2153,7 @@ func (c *Client[TTx]) insertManyParams(params []InsertManyParams) ([]*rivertype.
 // transaction, the producer wouldn't yet be able to access the new jobs that
 // triggered the notification because they're not committed yet.
 func (c *Client[TTx]) notifyProducerWithoutListenerJobFetch(_ context.Context, res []*rivertype.JobInsertResult) {
-	if c.driver.SupportsListener() {
+	if !c.config.willExecuteJobs() || c.driver.SupportsListener() {
 		return
 	}
 
@@ -2237,7 +2237,7 @@ func (c *Client[TTx]) InsertManyFast(ctx context.Context, params []InsertManyPar
 
 	// Fast inserts don't return job rows, so notify for the queues in insert
 	// params instead.
-	if !c.driver.SupportsListener() {
+	if c.config.willExecuteJobs() && !c.driver.SupportsListener() {
 		c.notifyProducerWithoutListenerJobFetchForQueues(sliceutil.Map(insertParams, func(insertParam *rivertype.JobInsertParams) string { return insertParam.Queue }))
 	}
 
