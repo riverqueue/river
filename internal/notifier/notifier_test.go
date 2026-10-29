@@ -718,6 +718,64 @@ func TestNotifier_Start(t *testing.T) {
 		})
 	})
 
+	t.Run("InterruptTimeout", func(t *testing.T) {
+		t.Parallel()
+
+		synctest.Test(t, func(t *testing.T) {
+			bundle := setup(t)
+
+			const (
+				fastTopic = "fast_topic"
+				slowTopic = "slow_topic"
+			)
+
+			bundle.listener.listenFunc = func(ctx context.Context, topic string) error {
+				if topic != slowTopic {
+					return nil
+				}
+
+				// Longer than the 5 second interrupt timeout so that the listen
+				// finishes only after Listen has given up on it, but shorter than
+				// listenerTimeout.
+				select {
+				case <-ctx.Done():
+					return ctx.Err()
+				case <-time.After(6 * time.Second):
+					return nil
+				}
+			}
+
+			var numWaits int
+			waitFunc := bundle.listener.waitForNotificationFunc
+			bundle.listener.waitForNotificationFunc = func(ctx context.Context) (*riverdriver.Notification, error) {
+				numWaits++
+				return waitFunc(ctx)
+			}
+
+			require.NoError(t, bundle.notifier.Start(context.Background()))
+			bundle.notifier.testSignals.ListeningBegin.WaitOrTimeout()
+			synctest.Wait()
+
+			_, err := bundle.notifier.Listen(context.Background(), slowTopic, nil)
+			require.EqualError(t, err, "timed out waiting for interrupt operation")
+
+			// The listen finishes a second after Listen gave up on it. With
+			// nothing left to receive its result, the main loop should still go
+			// back to waiting for notifications and handling interrupts.
+			time.Sleep(time.Second)
+			synctest.Wait()
+			require.Equal(t, 2, numWaits)
+
+			_, err = bundle.notifier.Listen(context.Background(), fastTopic, nil)
+			require.NoError(t, err)
+			synctest.Wait()
+			require.Equal(t, 3, numWaits)
+
+			bundle.notifier.Stop()
+			bundle.notifier.testSignals.BackoffError.RequireEmpty()
+		})
+	})
+
 	t.Run("ListenerDeadlineExceeded", func(t *testing.T) {
 		t.Parallel()
 
