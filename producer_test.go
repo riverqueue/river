@@ -13,6 +13,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/riverqueue/river/internal/jobcompleter"
+	"github.com/riverqueue/river/internal/jobexecutor"
 	"github.com/riverqueue/river/internal/notifier"
 	"github.com/riverqueue/river/internal/pluginlookup"
 	"github.com/riverqueue/river/internal/rivercommon"
@@ -74,6 +75,18 @@ func (p *beforeJobGetAvailablePilot) JobGetAvailable(
 	}
 
 	return p.Pilot.JobGetAvailable(ctx, exec, state, params)
+}
+
+// jobGetCancelRequestedFuncExecutor replaces JobGetCancelRequested on the
+// wrapped executor.
+type jobGetCancelRequestedFuncExecutor struct {
+	riverdriver.Executor
+
+	jobGetCancelRequestedFunc func(params *riverdriver.JobGetCancelRequestedParams) ([]int64, error)
+}
+
+func (e *jobGetCancelRequestedFuncExecutor) JobGetCancelRequested(ctx context.Context, params *riverdriver.JobGetCancelRequestedParams) ([]int64, error) {
+	return e.jobGetCancelRequestedFunc(params)
 }
 
 // undecodableKindPilot reports locked jobs of one kind as undecodable. Postgres'
@@ -620,6 +633,48 @@ func testProducer(t *testing.T, makeProducer func(ctx context.Context, t *testin
 				require.Equal(t, rivertype.JobStateCancelled, update.Job.State)
 			})
 		}
+	})
+
+	// A cancellation request found by polling cancels the attempt that was
+	// checked, not a newer one running under the same ID by the time the
+	// check returns, like one started after the job was retried.
+	t.Run("CancellationPollingCancelsCheckedAttempt", func(t *testing.T) {
+		t.Parallel()
+
+		producer, bundle := setup(t)
+
+		var (
+			job          = &rivertype.JobRow{ID: 123}
+			checkedCause error
+			retriedCause error
+		)
+		checkedExecutor := baseservice.Init(bundle.archetype, &jobexecutor.JobExecutor{
+			CancelFunc: func(cause error) { checkedCause = cause },
+			JobRow:     job,
+		})
+		retriedExecutor := baseservice.Init(bundle.archetype, &jobexecutor.JobExecutor{
+			CancelFunc: func(cause error) { retriedCause = cause },
+			JobRow:     job,
+		})
+		producer.addActiveJob(job.ID, checkedExecutor)
+
+		producer.exec = &jobGetCancelRequestedFuncExecutor{
+			Executor: producer.exec,
+			jobGetCancelRequestedFunc: func(params *riverdriver.JobGetCancelRequestedParams) ([]int64, error) {
+				require.Equal(t, []int64{job.ID}, params.ID)
+
+				// The checked attempt finishes and a retried one starts.
+				producer.activeJobsMu.Lock()
+				producer.activeJobs[job.ID] = retriedExecutor
+				producer.activeJobsMu.Unlock()
+
+				return []int64{job.ID}, nil
+			},
+		}
+
+		require.NoError(t, producer.pollForJobCancellationsOnce(ctx))
+		require.ErrorIs(t, checkedCause, rivertype.ErrJobCancelledRemotely)
+		require.NoError(t, retriedCause)
 	})
 
 	// A locked job whose row can't be decoded isn't worked. Its attempt fails

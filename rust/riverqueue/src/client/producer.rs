@@ -16,9 +16,7 @@ use tokio_util::sync::CancellationToken;
 use tracing::{debug, error, warn};
 
 use crate::__private::DatabaseConnection as PilotDatabaseConnection;
-use crate::client::attempts::{
-    FetchRegistrationGuard, register_running_attempt, signal_running_attempt,
-};
+use crate::client::attempts::{FetchRegistrationGuard, register_running_attempt};
 use crate::client::backoff::{RestartBackoff, exponential_backoff};
 use crate::client::completer::CompletionUpdate;
 use crate::client::executor::{AbortOnDrop, execute_job};
@@ -164,31 +162,32 @@ async fn poll_job_cancellations(inner: Arc<ClientInner>, stopping: CancellationT
             continue;
         }
         last_checked = tokio::time::Instant::now();
-        let mut ids = inner
+        // Snapshot attempts rather than IDs. By the time a query returns, a
+        // job could have finished and been retried, with a new attempt
+        // running under the same ID that must not be cancelled.
+        let mut attempts = inner
             .running
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .keys()
-            .copied()
+            .iter()
+            .map(|(id, cancellation)| (*id, cancellation.clone()))
             .collect::<Vec<_>>();
-        ids.sort_unstable();
-        for batch in ids.chunks(JOB_CANCEL_POLL_BATCH_SIZE) {
+        attempts.sort_unstable_by_key(|(id, _)| *id);
+        for batch in attempts.chunks(JOB_CANCEL_POLL_BATCH_SIZE) {
+            let ids = batch.iter().map(|(id, _)| *id).collect::<Vec<_>>();
             let requested = tokio::time::timeout(
                 JOB_CANCEL_POLL_TIMEOUT,
-                crate::storage::job_cancel_requested(&inner, batch),
+                crate::storage::job_cancel_requested(&inner, &ids),
             )
             .await
             .map_err(|_| Error::runtime_context("job cancellation poll", "timed out"))
             .and_then(|requested| requested);
             match requested {
                 Ok(requested) => {
-                    for id in requested {
-                        signal_running_attempt(
-                            &inner.running,
-                            &inner.pending_cancellations,
-                            &inner.fetch_registration_windows,
-                            id,
-                        );
+                    for (id, cancellation) in batch {
+                        if requested.contains(id) {
+                            cancellation.cancel();
+                        }
                     }
                 }
                 Err(poll_error) => {

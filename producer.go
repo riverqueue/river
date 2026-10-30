@@ -213,7 +213,8 @@ type producer struct {
 	startstop.BaseStartStop
 
 	// Jobs which are currently being worked. The polling goroutine snapshots
-	// their IDs; only the main goroutine accesses the executors themselves.
+	// them and cancels the snapshotted executors it finds cancellation
+	// requests for; otherwise only the main goroutine accesses executors.
 	activeJobsMu sync.Mutex
 	activeJobs   map[int64]*jobexecutor.JobExecutor
 
@@ -229,8 +230,8 @@ type producer struct {
 	pilot           riverpilot.Pilot
 	workers         *Workers
 
-	// Receives job IDs to cancel. Written by notifier and polling goroutines,
-	// only read from the main goroutine.
+	// Receives job IDs to cancel. Written by the notifier goroutine, only read
+	// from the main goroutine.
 	cancelCh chan int64
 
 	// Set to true when the producer thinks it should trigger another fetch as
@@ -1075,9 +1076,14 @@ func (p *producer) pollForJobCancellations(ctx context.Context, wg *sync.WaitGro
 }
 
 func (p *producer) pollForJobCancellationsOnce(ctx context.Context) error {
+	// Snapshot executors rather than IDs. By the time a query returns, a job
+	// could have finished and been retried, with a new attempt running under
+	// the same ID that must not be cancelled. Cancelling an executor that's
+	// already finished only logs a warning.
 	p.activeJobsMu.Lock()
-	jobIDs := slices.Collect(maps.Keys(p.activeJobs))
+	executors := maps.Clone(p.activeJobs)
 	p.activeJobsMu.Unlock()
+	jobIDs := slices.Collect(maps.Keys(executors))
 
 	// Bound query size (including SQLite's parameter count) and skip database
 	// access entirely when there are no active jobs.
@@ -1093,10 +1099,8 @@ func (p *producer) pollForJobCancellationsOnce(ctx context.Context) error {
 		}
 
 		for _, id := range cancelIDs {
-			select {
-			case <-ctx.Done():
-				return ctx.Err()
-			case p.cancelCh <- id:
+			if executor := executors[id]; executor != nil {
+				executor.Cancel(ctx)
 			}
 		}
 	}
