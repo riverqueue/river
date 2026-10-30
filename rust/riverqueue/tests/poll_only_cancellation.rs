@@ -109,6 +109,53 @@ fn waiting_workers(started: &Arc<Semaphore>) -> Workers {
     workers
 }
 
+/// A client with notifications checks for cancellation requests only once
+/// its interval (a minute by default) has passed, not on every two-second
+/// tick like a client without them. A notified cancellation still arrives
+/// right away.
+async fn checks_for_lost_cancellations_only_after_interval(backend: Backend) {
+    let started = Arc::new(Semaphore::new(0));
+    let client = Client::builder(backend.database())
+        .queue(riverqueue::QUEUE_DEFAULT, QueueConfig::new(1))
+        .without_leader_election()
+        .workers(waiting_workers(&started))
+        .build()
+        .unwrap();
+    let mut events = client.subscribe(&[EventKind::JobCancelled]).unwrap();
+    let mut run = client.start().unwrap();
+    run.wait_ready().await.unwrap();
+
+    let id = client.insert(WaitArgs {}).await.unwrap().job.row.id;
+    tokio::time::timeout(TIMEOUT, started.acquire())
+        .await
+        .expect("the job should start")
+        .unwrap()
+        .forget();
+    backend.request_cancellation_without_notification(id).await;
+    // This spans at least one tick, on which a client without notifications
+    // would have found the request.
+    assert!(
+        tokio::time::timeout(Duration::from_secs(3), events.recv())
+            .await
+            .is_err(),
+        "the job shouldn't be cancelled before the interval passes"
+    );
+
+    client.jobs().cancel(id).await.unwrap();
+    let event = tokio::time::timeout(TIMEOUT, events.recv())
+        .await
+        .expect("the job should be cancelled")
+        .unwrap();
+    let job = &event.as_job().expect("a job event").job;
+    assert_eq!(job.id, id);
+    assert_eq!(job.state, JobState::Cancelled, "{job:?}");
+    tokio::time::timeout(TIMEOUT, run.stop())
+        .await
+        .expect("the client should stop")
+        .unwrap();
+    backend.cleanup().await;
+}
+
 /// A client with notifications still cancels its running job when the
 /// cancellation's notification was lost, like if it was sent while the
 /// client's notifier was reconnecting, because it also checks for
@@ -197,6 +244,14 @@ mod postgres {
     use super::*;
 
     #[tokio::test]
+    async fn checks_for_lost_cancellations_only_after_interval() {
+        super::checks_for_lost_cancellations_only_after_interval(Backend::Postgres(
+            support::PostgresSchema::new("river_poll_cancel_interval").await,
+        ))
+        .await;
+    }
+
+    #[tokio::test]
     async fn polls_for_lost_cancellation_notification() {
         super::polls_for_lost_cancellation_notification(Backend::Postgres(
             support::PostgresSchema::new("river_poll_cancel_lost").await,
@@ -216,6 +271,12 @@ mod postgres {
 #[cfg(feature = "sqlite")]
 mod sqlite {
     use super::*;
+
+    #[tokio::test]
+    async fn checks_for_lost_cancellations_only_after_interval() {
+        let (pool, path) = support::sqlite_file_pool(4).await;
+        super::checks_for_lost_cancellations_only_after_interval(Backend::Sqlite(pool, path)).await;
+    }
 
     #[tokio::test]
     async fn polls_for_lost_cancellation_notification() {

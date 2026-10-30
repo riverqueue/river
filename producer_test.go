@@ -551,9 +551,17 @@ func testProducer(t *testing.T, makeProducer func(ctx context.Context, t *testin
 
 				producer, bundle := setup(t)
 				producer.config.FetchPollInterval = time.Hour
-				producer.config.JobCancelPollInterval = 20 * time.Millisecond
 				producer.config.MaxWorkers = 1
-				producer.config.QueuePollInterval = 20 * time.Millisecond
+
+				// Each mode polls on its own interval. The other one is too long
+				// for the test to pass if it's used instead.
+				if producer.config.Notifier == nil {
+					producer.config.JobCancelPollInterval = time.Hour
+					producer.config.QueuePollInterval = 20 * time.Millisecond
+				} else {
+					producer.config.JobCancelPollInterval = 20 * time.Millisecond
+					producer.config.QueuePollInterval = time.Hour
+				}
 
 				var jobStarted testsignal.TestSignal[int64]
 				var workerErr testsignal.TestSignal[error]
