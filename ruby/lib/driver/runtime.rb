@@ -604,6 +604,11 @@ module River::Driver
       "(#{column} IS NULL OR #{column} #{comparison} #{value} OR (#{column} = #{value} AND #{id_clause}))"
     end
 
+    private def runtime_delete_running_job(id, uncancelled: false)
+      lock, source, condition = runtime_running_job(id, uncancelled)
+      "#{lock}DELETE FROM river_job#{" USING #{source}" if source} WHERE #{condition}"
+    end
+
     private def runtime_job_attempt_predicate(job)
       "attempt = #{Integer(job.attempt)} AND attempted_at IS NOT DISTINCT FROM #{runtime_nullable_time(job.attempted_at)}"
     end
@@ -783,16 +788,6 @@ module River::Driver
       [lock, "running_job", condition]
     end
 
-    private def runtime_delete_running_job(id, uncancelled: false)
-      lock, source, condition = runtime_running_job(id, uncancelled)
-      "#{lock}DELETE FROM river_job#{" USING #{source}" if source} WHERE #{condition}"
-    end
-
-    private def runtime_update_running_job(id, assignments, expected_job: nil, uncancelled: false)
-      lock, source, condition = runtime_running_job(id, uncancelled, expected_job: expected_job)
-      "#{lock}UPDATE river_job SET #{assignments.join(", ")}#{" FROM #{source}" if source} WHERE #{condition}"
-    end
-
     # Finds conflicts and changes the whole pass in one statement.
     private def runtime_schedule_postgres(now, max)
       now = runtime_time(now)
@@ -923,6 +918,11 @@ module River::Driver
         normalize_time(value).strftime("%Y-%m-%d %H:%M:%S.%3N")
       end
       "#{runtime_quote(encoded)}#{cast}"
+    end
+
+    private def runtime_update_running_job(id, assignments, expected_job: nil, uncancelled: false)
+      lock, source, condition = runtime_running_job(id, uncancelled, expected_job: expected_job)
+      "#{lock}UPDATE river_job SET #{assignments.join(", ")}#{" FROM #{source}" if source} WHERE #{condition}"
     end
 
     private def runtime_update_value(field, value)
