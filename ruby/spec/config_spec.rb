@@ -1,6 +1,7 @@
 # frozen_string_literal: true
 
 require "spec_helper"
+require "open3"
 
 RSpec.describe River::QueueConfig do
   %i[fetch_cooldown fetch_poll_interval].product([Float::NAN, Float::INFINITY, -Float::INFINITY]).each do |name, value|
@@ -152,25 +153,38 @@ RSpec.describe River::Config do
   end
 
   describe "#id" do
-    # Runs the block in a forked child and returns its result, marshaled back
-    # through a pipe. The child exits with exit! to skip RSpec and coverage
-    # at_exit hooks.
-    def in_fork
-      reader, writer = IO.pipe
-      pid = Process.fork do
-        reader.close
-        writer.binmode.write(Marshal.dump(yield))
-        writer.close
-        exit!(0)
-      end
-      writer.close
-      result = Marshal.load(reader.binmode.read) # rubocop:disable Security/MarshalLoad
-      _, status = Process.wait2(pid)
-      raise "forked child failed: #{status.inspect}" unless status.success?
+    # Fork in a fresh Ruby process so unrelated specs' open SQLite connections
+    # aren't inherited by children that only exercise configuration IDs.
+    def ids_across_fork(count: 1, id: nil, read_parent_id: true)
+      output, error, status = Open3.capture3(RbConfig.ruby, "-Ilib", "-rriverqueue", "-e", <<~RUBY)
+        config = River::Config.new(id: #{id.inspect})
+        parent_id = config.id if #{read_parent_id}
+        children = Array.new(#{count}) do
+          reader, writer = IO.pipe
+          pid = Process.fork do
+            reader.close
+            client = River::Client.new(Object.new, config: config)
+            writer.binmode.write(Marshal.dump({
+              client_id: client.id, config_id: config.id,
+              copy_id: config.with(job_timeout: 5).id, pid: Process.pid
+            }))
+            writer.close
+            exit!(0)
+          end
+          writer.close
+          result = reader.binmode.read
+          reader.close
+          _, status = Process.wait2(pid)
+          raise "forked child failed: \#{status.inspect}" unless status.success?
 
-      result
-    ensure
-      reader&.close
+          Marshal.load(result)
+        end
+        $stdout.binmode.write(Marshal.dump({parent_id: parent_id, parent_id_after: config.id, children: children}))
+      RUBY
+
+      expect(status.success?).to be(true), error
+      expect(error).to eq("")
+      Marshal.load(output) # rubocop:disable Security/MarshalLoad
     end
 
     def skip_unless_fork_supported
@@ -200,14 +214,9 @@ RSpec.describe River::Config do
     it "generates a new default ID in each forked process" do
       skip_unless_fork_supported
 
-      config = described_class.new
-      parent_id = config.id
-      children = Array.new(2) do
-        in_fork do
-          client = River::Client.new(Object.new, config: config)
-          {client_id: client.id, config_id: config.id, copy_id: config.with(job_timeout: 5).id, pid: Process.pid}
-        end
-      end
+      result = ids_across_fork(count: 2)
+      parent_id = result.fetch(:parent_id)
+      children = result.fetch(:children)
 
       children.each do |child|
         expect(child.fetch(:client_id)).to eq(child.fetch(:config_id))
@@ -215,16 +224,16 @@ RSpec.describe River::Config do
         expect(child.fetch(:config_id)).to include("-#{child.fetch(:pid)}-")
       end
       expect(children.map { |child| child.fetch(:config_id) }.push(parent_id).uniq.length).to eq(3)
-      expect(config.id).to eq(parent_id)
+      expect(result.fetch(:parent_id_after)).to eq(parent_id)
     end
 
     it "generates a forked process's ID even when the parent never read one" do
       skip_unless_fork_supported
 
-      config = described_class.new
-      child_id = in_fork { config.id }
+      result = ids_across_fork(read_parent_id: false)
 
-      expect(config.id).not_to eq(child_id)
+      expect(result.fetch(:parent_id)).to be_nil
+      expect(result.fetch(:parent_id_after)).not_to eq(result.fetch(:children).first.fetch(:config_id))
     end
 
     it "keeps a default ID stable within a process" do
@@ -247,11 +256,13 @@ RSpec.describe River::Config do
     it "preserves an explicit ID across forks" do
       skip_unless_fork_supported
 
-      config = described_class.new(id: "explicit-client")
-      child = in_fork { [config.id, River::Client.new(Object.new, config: config).id] }
+      result = ids_across_fork(id: "explicit-client")
 
-      expect(child).to eq(%w[explicit-client explicit-client])
-      expect(config.id).to eq("explicit-client")
+      expect(result.fetch(:children).first).to include(
+        client_id: "explicit-client", config_id: "explicit-client", copy_id: "explicit-client"
+      )
+      expect(result.fetch(:parent_id)).to eq("explicit-client")
+      expect(result.fetch(:parent_id_after)).to eq("explicit-client")
     end
 
     it "shares a default ID with copies unless overridden" do
