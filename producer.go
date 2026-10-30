@@ -38,6 +38,7 @@ import (
 
 const (
 	jobCancelPollBatchSize        = 1000
+	jobCancelPollIntervalDefault  = time.Minute
 	producerReportIntervalDefault = 30 * time.Second
 	queuePollIntervalDefault      = 2 * time.Second
 	queueReportIntervalDefault    = 10 * time.Minute
@@ -91,6 +92,13 @@ type producerConfig struct {
 	// LISTEN/NOTIFY, but this provides a fallback.
 	FetchPollInterval time.Duration
 
+	// JobCancelPollInterval is the amount of time between checks for
+	// cancellation of running jobs when a notifier is configured. Notifications
+	// normally deliver cancellations right away, so this is only a fallback for
+	// ones that were lost, like while the notifier was reconnecting. In
+	// poll-only mode, QueuePollInterval is used instead.
+	JobCancelPollInterval time.Duration
+
 	PluginLookupByJob  *pluginlookup.JobPluginLookup
 	PluginLookupGlobal *pluginlookup.PluginLookup
 	JobStuckHandler    JobStuckHandler
@@ -112,8 +120,8 @@ type producerConfig struct {
 	QueueEventCallback func(event *Event)
 
 	// QueuePollInterval is the amount of time between periodic checks for
-	// queue setting changes and job cancellation requests. This is only used in
-	// poll-only mode (when no notifier is provided).
+	// queue setting changes and job cancellation requests in poll-only mode
+	// (when no notifier is provided).
 	QueuePollInterval time.Duration
 	// QueueReportInterval is the amount of time between periodic reports
 	// of the queue status.
@@ -137,6 +145,12 @@ func (c *producerConfig) mustValidate() *producerConfig {
 	}
 	if c.FetchPollInterval <= 0 {
 		panic("producerConfig.FetchPollInterval must be greater than zero")
+	}
+	if c.JobCancelPollInterval == 0 {
+		c.JobCancelPollInterval = jobCancelPollIntervalDefault
+	}
+	if c.JobCancelPollInterval <= 0 {
+		panic("producerConfig.JobCancelPollInterval must be greater than zero")
 	}
 	if c.JobStuckCount == nil {
 		c.JobStuckCount = &atomic.Int32{}
@@ -199,7 +213,8 @@ type producer struct {
 	startstop.BaseStartStop
 
 	// Jobs which are currently being worked. The polling goroutine snapshots
-	// their IDs; only the main goroutine accesses the executors themselves.
+	// them and cancels the snapshotted executors it finds cancellation
+	// requests for; otherwise only the main goroutine accesses executors.
 	activeJobsMu sync.Mutex
 	activeJobs   map[int64]*jobexecutor.JobExecutor
 
@@ -215,8 +230,8 @@ type producer struct {
 	pilot           riverpilot.Pilot
 	workers         *Workers
 
-	// Receives job IDs to cancel. Written by notifier and polling goroutines,
-	// only read from the main goroutine.
+	// Receives job IDs to cancel. Written by the notifier goroutine, only read
+	// from the main goroutine.
 	cancelCh chan int64
 
 	// Set to true when the producer thinks it should trigger another fetch as
@@ -442,14 +457,15 @@ func (p *producer) StartWorkContext(fetchCtx, workCtx context.Context) error {
 		subroutineWG.Add(1)
 		go p.reportProducerStatusLoop(subroutineCtx, &subroutineWG)
 
+		// Runs with a notifier too, in case a cancel notification is lost.
+		subroutineWG.Add(1)
+		go p.pollForJobCancellations(subroutineCtx, &subroutineWG)
+
 		if p.config.Notifier == nil {
 			p.Logger.DebugContext(subroutineCtx, p.Name+": No notifier configured; starting in poll mode", "client_id", p.config.ClientID)
 
 			subroutineWG.Add(1)
 			go p.pollForSettingChanges(subroutineCtx, &subroutineWG, initiallyPaused, initialMetadata)
-
-			subroutineWG.Add(1)
-			go p.pollForJobCancellations(subroutineCtx, &subroutineWG)
 		}
 
 		p.fetchAndRunLoop(fetchCtx, workCtx)
@@ -1030,10 +1046,19 @@ func (p *producer) handleWorkerDone(job *rivertype.JobRow) {
 
 // Cancellation polling is independent of fetching: saturated and paused producers
 // must still cancel jobs, including while draining during graceful shutdown.
+//
+// Without a notifier, polling is the only way to learn about cancellations.
+// With one, it's a slower fallback because a notification is lost if it's sent
+// while the notifier isn't listening, like while it's reconnecting.
 func (p *producer) pollForJobCancellations(ctx context.Context, wg *sync.WaitGroup) {
 	defer wg.Done()
 
-	ticker := time.NewTicker(p.config.QueuePollInterval)
+	interval := p.config.QueuePollInterval
+	if p.config.Notifier != nil {
+		interval = p.config.JobCancelPollInterval
+	}
+
+	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 	for {
 		select {
@@ -1051,9 +1076,14 @@ func (p *producer) pollForJobCancellations(ctx context.Context, wg *sync.WaitGro
 }
 
 func (p *producer) pollForJobCancellationsOnce(ctx context.Context) error {
+	// Snapshot executors rather than IDs. By the time a query returns, a job
+	// could have finished and been retried, with a new attempt running under
+	// the same ID that must not be cancelled. Cancelling an executor that's
+	// already finished only logs a warning.
 	p.activeJobsMu.Lock()
-	jobIDs := slices.Collect(maps.Keys(p.activeJobs))
+	executors := maps.Clone(p.activeJobs)
 	p.activeJobsMu.Unlock()
+	jobIDs := slices.Collect(maps.Keys(executors))
 
 	// Bound query size (including SQLite's parameter count) and skip database
 	// access entirely when there are no active jobs.
@@ -1069,10 +1099,8 @@ func (p *producer) pollForJobCancellationsOnce(ctx context.Context) error {
 		}
 
 		for _, id := range cancelIDs {
-			select {
-			case <-ctx.Done():
-				return ctx.Err()
-			case p.cancelCh <- id:
+			if executor := executors[id]; executor != nil {
+				executor.Cancel(ctx)
 			}
 		}
 	}

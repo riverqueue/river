@@ -56,7 +56,7 @@ DELETE FROM {schema}river_job WHERE id=? AND state != 'running' RETURNING {colum
 -- name: delete_filtered
 DELETE FROM {schema}river_job WHERE {where} AND id=? AND state != 'running' RETURNING {columns}
 -- name: retry
-UPDATE {schema}river_job SET state='available', finalized_at=NULL,
+UPDATE {schema}river_job SET state='available', finalized_at=NULL, metadata=metadata - 'cancel_attempted_at',
 max_attempts=CASE WHEN attempt=max_attempts THEN max_attempts+1 ELSE max_attempts END, scheduled_at=?
 WHERE id=? AND state != 'running' AND NOT (state='available' AND scheduled_at < ?) RETURNING {columns}
 -- name: reset_jobs

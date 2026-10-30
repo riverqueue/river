@@ -629,11 +629,12 @@ describe("SqliteDriver compatibility with Go's riversqlite", () => {
     const retried = await insert("golden_retry", "available");
     await driver.jobCancelDetailed(retried, { now });
     await driver.jobRetryDetailed(retried, { now: now.add({ hours: 1 }) });
+    // Like Go, a retry clears the earlier cancellation request.
     expect(stored("golden_retry")).toEqual({
       errors: null,
       errors_null: 1n,
       finalized_at: null,
-      metadata: cancelled,
+      metadata: { m: "x" },
       scheduled_at: "2026-01-02 06:06:07.123",
       state: "available",
     });

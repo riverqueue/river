@@ -16,9 +16,7 @@ use tokio_util::sync::CancellationToken;
 use tracing::{debug, error, warn};
 
 use crate::__private::DatabaseConnection as PilotDatabaseConnection;
-use crate::client::attempts::{
-    FetchRegistrationGuard, register_running_attempt, signal_running_attempt,
-};
+use crate::client::attempts::{FetchRegistrationGuard, register_running_attempt};
 use crate::client::backoff::{RestartBackoff, exponential_backoff};
 use crate::client::completer::CompletionUpdate;
 use crate::client::executor::{AbortOnDrop, execute_job};
@@ -56,8 +54,9 @@ pub(super) async fn run_dynamic_queues(
     mut changes: watch::Receiver<u64>,
     queues_ready: oneshot::Sender<()>,
 ) -> Result<(), Error> {
-    // Without a notifier, running jobs learn of cancellation requests by
-    // polling until every producer has drained. Whether the client has one is
+    // Running jobs learn of cancellation requests by polling until every
+    // producer has drained: regularly without a notifier, and occasionally
+    // with one in case a notification was lost. Whether the client has one is
     // known only once a Postgres server's capabilities are detected, so the
     // poll checks each time.
     let _cancellation_poll = AbortOnDrop(tokio::spawn(poll_job_cancellations(
@@ -144,9 +143,11 @@ fn jittered_fetch_poll_interval(interval: Duration) -> Duration {
 
 /// Cancels this client's running attempts whose jobs have a cancellation
 /// request, checking every [`QUEUE_CONFIG_POLL_INTERVAL`] while the client
-/// has no notifier, like River Go's producers without one. That's checked
-/// each time, since a Postgres server's lack of `LISTEN`/`NOTIFY` is
-/// detected only once the client runs.
+/// has no notifier, like River Go's producers without one. With a notifier,
+/// it's a fallback for a notification that was lost, like while the notifier
+/// was reconnecting, so it checks only every `job_cancel_poll_interval`.
+/// Whether the client has a notifier is checked each time, since a Postgres
+/// server's lack of `LISTEN`/`NOTIFY` is detected only once the client runs.
 /// It keeps checking after `stopping` fires, so jobs can still be cancelled
 /// while producers drain; the caller aborts it once they have.
 async fn poll_job_cancellations(inner: Arc<ClientInner>, stopping: CancellationToken) {
@@ -154,36 +155,39 @@ async fn poll_job_cancellations(inner: Arc<ClientInner>, stopping: CancellationT
     poll.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     // The first tick completes at once; running jobs start later.
     poll.tick().await;
+    let mut last_checked = tokio::time::Instant::now();
     loop {
         poll.tick().await;
-        if inner.has_notifier() {
+        if inner.has_notifier() && last_checked.elapsed() < inner.job_cancel_poll_interval {
             continue;
         }
-        let mut ids = inner
+        last_checked = tokio::time::Instant::now();
+        // Snapshot attempts rather than IDs. By the time a query returns, a
+        // job could have finished and been retried, with a new attempt
+        // running under the same ID that must not be cancelled.
+        let mut attempts = inner
             .running
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .keys()
-            .copied()
+            .iter()
+            .map(|(id, cancellation)| (*id, cancellation.clone()))
             .collect::<Vec<_>>();
-        ids.sort_unstable();
-        for batch in ids.chunks(JOB_CANCEL_POLL_BATCH_SIZE) {
+        attempts.sort_unstable_by_key(|(id, _)| *id);
+        for batch in attempts.chunks(JOB_CANCEL_POLL_BATCH_SIZE) {
+            let ids = batch.iter().map(|(id, _)| *id).collect::<Vec<_>>();
             let requested = tokio::time::timeout(
                 JOB_CANCEL_POLL_TIMEOUT,
-                crate::storage::job_cancel_requested(&inner, batch),
+                crate::storage::job_cancel_requested(&inner, &ids),
             )
             .await
             .map_err(|_| Error::runtime_context("job cancellation poll", "timed out"))
             .and_then(|requested| requested);
             match requested {
                 Ok(requested) => {
-                    for id in requested {
-                        signal_running_attempt(
-                            &inner.running,
-                            &inner.pending_cancellations,
-                            &inner.fetch_registration_windows,
-                            id,
-                        );
+                    for (id, cancellation) in batch {
+                        if requested.contains(id) {
+                            cancellation.cancel();
+                        }
                     }
                 }
                 Err(poll_error) => {

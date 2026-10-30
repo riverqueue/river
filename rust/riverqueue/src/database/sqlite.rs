@@ -957,6 +957,7 @@ pub(crate) async fn retry(
                 ELSE max_attempts
             END,
             finalized_at = NULL,
+            metadata = jsonb_remove(metadata, '$.cancel_attempted_at'),
             scheduled_at = ?
         WHERE id = ?
           AND state != 'running'

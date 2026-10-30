@@ -79,6 +79,10 @@ use crate::{
 
 pub(crate) const ATTEMPTED_BY_MAX: i32 = 100;
 const EVENT_BUFFER_CAPACITY: usize = 10_000;
+/// How often a client with a notifier checks its running jobs for
+/// cancellation requests whose notification was lost, like River Go's
+/// producers.
+const JOB_CANCEL_POLL_INTERVAL_DEFAULT: Duration = Duration::from_mins(1);
 const PENDING_CANCELLATION_LIMIT: usize = 10_000;
 const PENDING_CANCELLATION_RETENTION: Duration = Duration::from_mins(1);
 // Large queues otherwise become limited by a single Postgres claim round trip.
@@ -122,6 +126,9 @@ pub(crate) struct ClientInner {
     /// Skips a queue's insert notification sent within the fetch cooldown
     /// of the previous one.
     pub(crate) insert_notify_limiter: InsertNotifyLimiter,
+    /// How often a client with a notifier checks its running jobs for
+    /// cancellation requests in case a notification was lost.
+    job_cancel_poll_interval: Duration,
     job_stuck_threshold: Duration,
     pub(crate) job_timeout: Option<Duration>,
     leader_election_disabled: bool,
@@ -310,6 +317,7 @@ impl Client {
             hooks: Vec::new(),
             id: default_client_id(),
             insert_middleware: Vec::new(),
+            job_cancel_poll_interval: JOB_CANCEL_POLL_INTERVAL_DEFAULT,
             job_stuck_threshold: JOB_STUCK_THRESHOLD_DEFAULT,
             job_timeout: Some(JOB_TIMEOUT_DEFAULT),
             leader_election_disabled: false,

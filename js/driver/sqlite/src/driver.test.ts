@@ -326,8 +326,11 @@ describe("SqliteDriver", () => {
 
     const retried = await driver.jobRetryDetailed(inserted.id, { now });
     expect(retried.status).toBe("retried");
-    if (retried.status === "retried")
+    if (retried.status === "retried") {
       expect(retried.job.state).toBe("available");
+      // An earlier attempt's cancellation must not cancel the retried one.
+      expect(retried.job.metadata.cancel_attempted_at).toBeUndefined();
+    }
     expect((await driver.jobRetryDetailed(inserted.id, { now })).status).toBe(
       "unchanged"
     );

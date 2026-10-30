@@ -607,6 +607,30 @@ func exerciseJobUpdate[TTx any](ctx context.Context, t *testing.T, executorWithT
 			require.WithinDuration(t, now, jobAfter.ScheduledAt, 5*time.Second)
 		})
 
+		// A cancellation requested during an earlier attempt must not apply to
+		// the retried one. Other metadata is preserved.
+		t.Run("ClearsCancelAttemptedAt", func(t *testing.T) {
+			t.Parallel()
+
+			exec, _ := setup(ctx, t)
+
+			now := time.Now().UTC()
+
+			job := testfactory.Job(ctx, t, exec, &testfactory.JobOpts{
+				FinalizedAt: &now,
+				Metadata:    []byte(`{"cancel_attempted_at":"2026-01-01T00:00:00Z","foo":"bar"}`),
+				State:       new(rivertype.JobStateCancelled),
+			})
+
+			jobAfter, err := exec.JobRetry(ctx, &riverdriver.JobRetryParams{
+				ID:  job.ID,
+				Now: &now,
+			})
+			require.NoError(t, err)
+			require.Equal(t, rivertype.JobStateAvailable, jobAfter.State)
+			require.JSONEq(t, `{"foo":"bar"}`, string(jobAfter.Metadata))
+		})
+
 		t.Run("DoesNotAlterScheduledAtIfInThePastAndJobAlreadyAvailable", func(t *testing.T) {
 			// We don't want to update ScheduledAt if the job was already available
 			// because doing so can make it lose its place in line.

@@ -13,6 +13,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/riverqueue/river/internal/jobcompleter"
+	"github.com/riverqueue/river/internal/jobexecutor"
 	"github.com/riverqueue/river/internal/notifier"
 	"github.com/riverqueue/river/internal/pluginlookup"
 	"github.com/riverqueue/river/internal/rivercommon"
@@ -74,6 +75,18 @@ func (p *beforeJobGetAvailablePilot) JobGetAvailable(
 	}
 
 	return p.Pilot.JobGetAvailable(ctx, exec, state, params)
+}
+
+// jobGetCancelRequestedFuncExecutor replaces JobGetCancelRequested on the
+// wrapped executor.
+type jobGetCancelRequestedFuncExecutor struct {
+	riverdriver.Executor
+
+	jobGetCancelRequestedFunc func(params *riverdriver.JobGetCancelRequestedParams) ([]int64, error)
+}
+
+func (e *jobGetCancelRequestedFuncExecutor) JobGetCancelRequested(ctx context.Context, params *riverdriver.JobGetCancelRequestedParams) ([]int64, error) {
+	return e.jobGetCancelRequestedFunc(params)
 }
 
 // undecodableKindPilot reports locked jobs of one kind as undecodable. Postgres'
@@ -550,12 +563,18 @@ func testProducer(t *testing.T, makeProducer func(ctx context.Context, t *testin
 				t.Parallel()
 
 				producer, bundle := setup(t)
-				if producer.config.Notifier != nil {
-					t.Skip("requires polling without a notifier")
-				}
 				producer.config.FetchPollInterval = time.Hour
 				producer.config.MaxWorkers = 1
-				producer.config.QueuePollInterval = 20 * time.Millisecond
+
+				// Each mode polls on its own interval. The other one is too long
+				// for the test to pass if it's used instead.
+				if producer.config.Notifier == nil {
+					producer.config.JobCancelPollInterval = time.Hour
+					producer.config.QueuePollInterval = 20 * time.Millisecond
+				} else {
+					producer.config.JobCancelPollInterval = 20 * time.Millisecond
+					producer.config.QueuePollInterval = time.Hour
+				}
 
 				var jobStarted testsignal.TestSignal[int64]
 				var workerErr testsignal.TestSignal[error]
@@ -588,19 +607,25 @@ func testProducer(t *testing.T, makeProducer func(ctx context.Context, t *testin
 						Name:   producer.config.Queue,
 						Schema: producer.config.Schema,
 					}))
+					if producer.config.Notifier != nil {
+						// Only Client.QueuePause sends a notification.
+						producer.TriggerQueueControlEvent(&controlEventPayload{Action: controlActionPause, Queue: producer.config.Queue})
+					}
 					producer.testSignals.Paused.WaitOrTimeout()
 				case "Stopping":
 					fetchCancel()
 					producer.testSignals.ExecutorShutdownStarted.WaitOrTimeout()
 				}
 
-				// Use the executor directly so no local client shortcut can cancel
-				// the worker. No more jobs can be fetched in any of these states.
-				_, err := bundle.exec.JobCancel(ctx, &riverdriver.JobCancelParams{
-					ID:                jobID,
-					CancelAttemptedAt: time.Now().UTC(),
-					ControlTopic:      string(notifier.NotificationTopicControl),
-					Schema:            producer.config.Schema,
+				// Request cancellation the way JobCancel does, but without a
+				// notification, as if it was lost while the notifier was
+				// reconnecting. Only polling can find it. No more jobs can be
+				// fetched in any of these states.
+				_, err := bundle.exec.JobUpdate(ctx, &riverdriver.JobUpdateParams{
+					ID:              jobID,
+					Metadata:        fmt.Appendf(nil, `{"cancel_attempted_at":%q}`, time.Now().UTC().Format(time.RFC3339Nano)),
+					MetadataDoMerge: true,
+					Schema:          producer.config.Schema,
 				})
 				require.NoError(t, err)
 				require.ErrorIs(t, workerErr.WaitOrTimeout(), rivertype.ErrJobCancelledRemotely)
@@ -608,6 +633,48 @@ func testProducer(t *testing.T, makeProducer func(ctx context.Context, t *testin
 				require.Equal(t, rivertype.JobStateCancelled, update.Job.State)
 			})
 		}
+	})
+
+	// A cancellation request found by polling cancels the attempt that was
+	// checked, not a newer one running under the same ID by the time the
+	// check returns, like one started after the job was retried.
+	t.Run("CancellationPollingCancelsCheckedAttempt", func(t *testing.T) {
+		t.Parallel()
+
+		producer, bundle := setup(t)
+
+		var (
+			job          = &rivertype.JobRow{ID: 123}
+			checkedCause error
+			retriedCause error
+		)
+		checkedExecutor := baseservice.Init(bundle.archetype, &jobexecutor.JobExecutor{
+			CancelFunc: func(cause error) { checkedCause = cause },
+			JobRow:     job,
+		})
+		retriedExecutor := baseservice.Init(bundle.archetype, &jobexecutor.JobExecutor{
+			CancelFunc: func(cause error) { retriedCause = cause },
+			JobRow:     job,
+		})
+		producer.addActiveJob(job.ID, checkedExecutor)
+
+		producer.exec = &jobGetCancelRequestedFuncExecutor{
+			Executor: producer.exec,
+			jobGetCancelRequestedFunc: func(params *riverdriver.JobGetCancelRequestedParams) ([]int64, error) {
+				require.Equal(t, []int64{job.ID}, params.ID)
+
+				// The checked attempt finishes and a retried one starts.
+				producer.activeJobsMu.Lock()
+				producer.activeJobs[job.ID] = retriedExecutor
+				producer.activeJobsMu.Unlock()
+
+				return []int64{job.ID}, nil
+			},
+		}
+
+		require.NoError(t, producer.pollForJobCancellationsOnce(ctx))
+		require.ErrorIs(t, checkedCause, rivertype.ErrJobCancelledRemotely)
+		require.NoError(t, retriedCause)
 	})
 
 	// A locked job whose row can't be decoded isn't worked. Its attempt fails

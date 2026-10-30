@@ -1504,7 +1504,9 @@ func (c *Client[TTx]) Driver() riverdriver.Driver[TTx] {
 // If the job is currently running, it is not immediately cancelled, but is
 // instead marked for cancellation. The client running the job will also be
 // notified to cancel the running job's context. When running without a notifier,
-// clients poll for cancellation requests every two seconds. Although the job's
+// clients poll for cancellation requests every two seconds. Clients with a
+// notifier also poll once a minute in case a notification was missed, like
+// while the notifier was reconnecting. Although the job's
 // context will be cancelled, since Go does not provide a mechanism to
 // interrupt a running goroutine the job will continue running until it returns.
 // As always, it is important for workers to respect context cancellation and
@@ -1561,7 +1563,9 @@ func (c *Client[TTx]) JobCancel(ctx context.Context, jobID int64) (*rivertype.Jo
 // If the job is currently running, it is not immediately cancelled, but is
 // instead marked for cancellation. The client running the job will also be
 // notified to cancel the running job's context. When running without a notifier,
-// clients poll for cancellation requests every two seconds. Although the job's
+// clients poll for cancellation requests every two seconds. Clients with a
+// notifier also poll once a minute in case a notification was missed, like
+// while the notifier was reconnecting. Although the job's
 // context will be cancelled, since Go does not provide a mechanism to
 // interrupt a running goroutine the job will continue running until it returns.
 // As always, it is important for workers to respect context cancellation and
