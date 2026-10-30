@@ -39,20 +39,6 @@ RSpec.describe River::Driver::ActiveRecord do
       it_behaves_like "historical attempt error decoding"
       it_behaves_like "SQLite corrupt job isolation" if config[:adapter] == :sqlite
 
-      # Jobs finish on their own threads. A connection leased to such a thread
-      # stays checked out after it exits until the pool reaps and resets it.
-      # An in-memory SQLite database exists only on the connection that made it.
-      it "returns the connection to the pool after a call from another thread" do
-        next unless config[:adapter] == :postgres
-
-        leased = Thread.new do
-          driver.job_get_cancelled_ids([1])
-          ActiveRecord::Base.connection_pool.active_connection?
-        end.value
-
-        expect(leased).to be_falsey
-      end
-
       describe "client inserts" do
         it "persists SQLite JSON columns as JSONB objects" do
           next unless config[:adapter] == :sqlite

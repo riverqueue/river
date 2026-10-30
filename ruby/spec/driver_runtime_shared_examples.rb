@@ -289,6 +289,22 @@ RSpec.shared_examples "driver job state machine" do
     expect(driver.job_complete(id: -1, finalized_at: now)).to be_nil
   end
 
+  it "returns claimed and finished rows without reading jobs again" do
+    first = insert_job(1, scheduled_at: now - 1)
+    second = insert_job(2, scheduled_at: now - 1)
+    driver.define_singleton_method(:job_get_by_id) { |_id| raise "claim and completion must return their own rows" }
+
+    claimed = driver.job_get_available(queue: first.queue, max: 2, attempted_by: "test", now: now)
+    expect(claimed.map(&:id)).to contain_exactly(first.id, second.id)
+    expect(claimed).to all(have_attributes(attempt: 1, attempted_by: ["test"], state: "running"))
+    expect(driver.job_complete(id: first.id, finalized_at: now, metadata: {"output" => "done"})).to have_attributes(
+      id: first.id, metadata: include("output" => "done"), state: "completed"
+    )
+    expect(driver.job_set_state_if_running(id: second.id, state: "retryable", scheduled_at: now + 60)).to have_attributes(
+      id: second.id, scheduled_at: driver.normalize_time(now + 60), state: "retryable"
+    )
+  end
+
   it "leaves cancellation-marked jobs for normal cancellation handling" do
     row = insert_job(1, scheduled_at: now - 1)
     driver.job_claim(id: row.id, attempted_by: "test", now: now)

@@ -31,7 +31,7 @@ module River::Driver
 
       @connection_class = connection_class
       @postgres_capabilities_cache = PostgresCapabilities::Cache.new
-      @is_sqlite = connection_class.connection.adapter_name.downcase.include?("sqlite")
+      @is_sqlite = with_connection { |connection| connection.adapter_name.downcase.include?("sqlite") }
       # Do not inherit application scopes, callbacks, or schema caches. Each
       # driver owns its model, but all operations use the selected class's pool.
       @job_model = Class.new(::ActiveRecord::Base) do
@@ -115,12 +115,16 @@ module River::Driver
     # savepoint.
     def transaction(&)
       legacy = runtime_legacy_subtransactions?
-      # A joined Active Record block swallows ActiveRecord::Rollback without
-      # rolling anything back. Yield directly so that the transaction's owner
-      # receives it and rolls back, as Sequel does with Sequel::Rollback.
-      return yield if !legacy && @connection_class.connection.current_transaction.joinable?
-
-      @connection_class.transaction(requires_new: legacy, &)
+      with_connection do |connection|
+        # A joined Active Record block swallows ActiveRecord::Rollback without
+        # rolling anything back. Yield directly so that the transaction's owner
+        # receives it and rolls back, as Sequel does with Sequel::Rollback.
+        if !legacy && connection.current_transaction.joinable?
+          yield
+        else
+          connection.transaction(requires_new: legacy, &)
+        end
+      end
     end
 
     SQLITE_CONFLICT_WHERE = <<~SQL.chomp.freeze

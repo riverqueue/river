@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- Borrow Active Record connections for driver calls and transactions instead of leasing them to short-lived job threads, avoiding connection resets after each job.
+- Return claimed and finished jobs directly from their updates, avoiding per-job reads. On Postgres, lock completion targets by primary key before checking their state so the fetching index is not scanned.
+- Keep job completions and insertions from interrupting the maintenance loop's error backoff.
+
 ## [0.15.0] - 2026-10-30
 
 ### Added
@@ -38,12 +44,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Wake workers when scheduled jobs become available or jobs are manually retried, including workers in other clients. [PR #1496](https://github.com/riverqueue/river/pull/1496).
 - Honor cancellations that arrive between claiming a job and starting its worker. [PR #1496](https://github.com/riverqueue/river/pull/1496).
 - Preserve worker wakeups that arrive between a fetch and the producer going to sleep. [PR #1496](https://github.com/riverqueue/river/pull/1496).
-
-### Fixed
-
-- The Active Record driver borrows a connection for each call instead of leasing one to the calling thread. Each job left a leased connection on its finished thread, and Active Record reset every one when it reclaimed it.
-- The maintenance loop waits on its own condition. Every job completion and insert used to wake it, and each wake ran a leader election or renewal.
-- Claims and job finishes return rows from their own UPDATE instead of reading each job again by id. Finishing a job locks it by primary key first, so Postgres no longer plans the update on the fetching index, which slowed down as a drain went on.
 
 ## [0.13.0] - 2026-10-08
 
