@@ -10,6 +10,10 @@ Changes to River for Go are recorded in the [repository changelog](../CHANGELOG.
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed a running job not being cancelled when its cancellation notification was lost, as happens if it's sent while the client's listener is reconnecting. Clients with notifications now also check their running jobs for cancellation requests once a minute, like River for Go. Retrying a job now clears its earlier attempt's cancellation request so that the retried job isn't cancelled again. [Issue #1358](https://github.com/riverqueue/river/issues/1358).
+
 ## [0.4.0] - 2026-10-26
 
 ### Added

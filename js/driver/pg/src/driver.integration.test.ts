@@ -564,6 +564,19 @@ describe("PgDriver integration", () => {
     expect(unchanged!.state).toBe("running");
   });
 
+  it("clears an earlier attempt's cancellation request on retry", async () => {
+    const inserted = await driver.jobInsert(
+      insertParams(`${filePrefix}_retry_cancelled`)
+    );
+    const cancelled = await driver.jobCancel(inserted.job.id);
+    expect(cancelled!.metadata.cancel_attempted_at).toBeDefined();
+
+    const retried = await driver.jobRetry(inserted.job.id);
+
+    expect(retried!.state).toBe("available");
+    expect(retried!.metadata.cancel_attempted_at).toBeUndefined();
+  });
+
   it("returns the committed row to the loser of a cancel or retry race", async () => {
     const inserted = await driver.jobInsert(
       insertParams(`${filePrefix}_race`, {

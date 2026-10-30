@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"slices"
-	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -14,13 +13,11 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/riverqueue/river/internal/jobcompleter"
-	"github.com/riverqueue/river/internal/jobexecutor"
 	"github.com/riverqueue/river/internal/notifier"
 	"github.com/riverqueue/river/internal/pluginlookup"
 	"github.com/riverqueue/river/internal/rivercommon"
 	"github.com/riverqueue/river/internal/riverinternaltest"
 	"github.com/riverqueue/river/internal/riverinternaltest/sharedtx"
-	"github.com/riverqueue/river/internal/util/chanutil"
 	"github.com/riverqueue/river/riverdbtest"
 	"github.com/riverqueue/river/riverdriver"
 	"github.com/riverqueue/river/riverdriver/riverpgxv5"
@@ -79,21 +76,6 @@ func (p *beforeJobGetAvailablePilot) JobGetAvailable(
 	return p.Pilot.JobGetAvailable(ctx, exec, state, params)
 }
 
-type producerTestExecutor struct {
-	riverdriver.Executor
-
-	jobGetAvailableFunc func(context.Context, *riverdriver.JobGetAvailableParams) (*riverdriver.JobGetAvailableResult, error)
-	jobGetByIDManyFunc  func(context.Context, *riverdriver.JobGetByIDManyParams) ([]*rivertype.JobRow, error)
-}
-
-func (e *producerTestExecutor) JobGetAvailable(ctx context.Context, params *riverdriver.JobGetAvailableParams) (*riverdriver.JobGetAvailableResult, error) {
-	return e.jobGetAvailableFunc(ctx, params)
-}
-
-func (e *producerTestExecutor) JobGetByIDMany(ctx context.Context, params *riverdriver.JobGetByIDManyParams) ([]*rivertype.JobRow, error) {
-	return e.jobGetByIDManyFunc(ctx, params)
-}
-
 // undecodableKindPilot reports locked jobs of one kind as undecodable. Postgres'
 // column types don't allow a job row that can't be decoded, so this simulates
 // one.
@@ -124,208 +106,6 @@ func (p *undecodableKindPilot) JobGetAvailable(
 	}
 
 	return res, nil
-}
-
-// producerTestListenerMock overrides operations on a real listener.
-type producerTestListenerMock struct {
-	riverdriver.Listener
-
-	connectFunc             func(ctx context.Context) error
-	waitForNotificationFunc func(ctx context.Context) (*riverdriver.Notification, error)
-}
-
-func newProducerTestListenerMock(listener riverdriver.Listener) *producerTestListenerMock {
-	return &producerTestListenerMock{
-		Listener:                listener,
-		connectFunc:             listener.Connect,
-		waitForNotificationFunc: listener.WaitForNotification,
-	}
-}
-
-func (l *producerTestListenerMock) Connect(ctx context.Context) error { return l.connectFunc(ctx) }
-
-func (l *producerTestListenerMock) WaitForNotification(ctx context.Context) (*riverdriver.Notification, error) {
-	return l.waitForNotificationFunc(ctx)
-}
-
-func TestProducer_ApplyReconcileResult(t *testing.T) {
-	t.Parallel()
-
-	for _, testCase := range []struct {
-		name       string
-		attempt    int
-		metadata   string
-		replaced   bool
-		wantCancel bool
-	}{
-		{name: "Cancelled", attempt: 1, metadata: `{"cancel_attempted_at":"2026-10-20T00:00:00Z"}`, wantCancel: true},
-		{name: "DifferentAttempt", attempt: 2, metadata: `{"cancel_attempted_at":"2026-10-20T00:00:00Z"}`},
-		{name: "MalformedMetadata", attempt: 1, metadata: `{"cancel_attempted_at":true}`},
-		{name: "NoCancellation", attempt: 1, metadata: `{}`},
-		{name: "ReplacedExecutor", attempt: 1, metadata: `{"cancel_attempted_at":"2026-10-20T00:00:00Z"}`, replaced: true},
-	} {
-		t.Run(testCase.name, func(t *testing.T) {
-			t.Parallel()
-
-			archetype := riversharedtest.BaseServiceArchetype(t)
-			ctx, cancel := context.WithCancelCause(context.Background())
-			t.Cleanup(func() { cancel(nil) })
-			executor := baseservice.Init(archetype, &jobexecutor.JobExecutor{CancelFunc: cancel, JobRow: &rivertype.JobRow{ID: 1, Attempt: 1}})
-			snapshotExecutor := executor
-			if testCase.replaced {
-				snapshotExecutor = &jobexecutor.JobExecutor{}
-			}
-			prod := baseservice.Init(archetype, &producer{activeJobs: map[int64]*jobexecutor.JobExecutor{1: executor}})
-
-			prod.applyReconcileResult(context.Background(), producerReconcileResult{
-				executors: map[int64]*jobexecutor.JobExecutor{1: snapshotExecutor},
-				jobs:      []*rivertype.JobRow{{ID: 1, Attempt: testCase.attempt, Metadata: []byte(testCase.metadata)}},
-			})
-			if testCase.wantCancel {
-				require.ErrorIs(t, context.Cause(ctx), rivertype.ErrJobCancelledRemotely)
-			} else {
-				require.NoError(t, ctx.Err())
-			}
-		})
-	}
-}
-
-// A cancel NOTIFY lost during a disconnect must be recovered on reconnect.
-func TestProducer_JobCancelSurvivesNotifierReconnect(t *testing.T) {
-	t.Parallel()
-
-	ctx := context.Background()
-
-	var (
-		archetype  = riversharedtest.BaseServiceArchetype(t)
-		dbPool     = riversharedtest.DBPool(ctx, t)
-		driver     = riverpgxv5.New(dbPool)
-		exec       = driver.GetExecutor()
-		jobUpdates = make(chan []jobcompleter.CompleterJobUpdated, 10)
-		schema     = riverdbtest.TestSchema(ctx, t, driver, nil)
-		queueName  = fmt.Sprintf("test-reconnect-cancel-%05d", randutil.IntBetween(1, 100_000))
-		pilot      = &riverpilot.StandardPilot{}
-	)
-
-	completer := jobcompleter.NewInlineCompleter(archetype, schema, exec, pilot, jobUpdates)
-	require.NoError(t, completer.Start(ctx))
-	t.Cleanup(completer.Stop)
-
-	realListener := driver.GetListener(&riverdriver.GetListenenerParams{Schema: schema})
-	mockListener := newProducerTestListenerMock(realListener)
-
-	var (
-		forceDisconnect      atomic.Bool // set by the test to inject one simulated connection loss
-		reconnecting         atomic.Bool
-		reconnectStarted     testsignal.TestSignal[struct{}]
-		releaseReconnect     = make(chan struct{})
-		releaseReconnectOnce sync.Once
-	)
-	reconnectStarted.Init(t)
-	closeReleaseReconnect := func() { releaseReconnectOnce.Do(func() { close(releaseReconnect) }) }
-	mockListener.waitForNotificationFunc = func(ctx context.Context) (*riverdriver.Notification, error) {
-		if forceDisconnect.CompareAndSwap(true, false) {
-			reconnecting.Store(true)
-			return nil, errors.New("simulated connection loss")
-		}
-		return realListener.WaitForNotification(ctx)
-	}
-	mockListener.connectFunc = func(ctx context.Context) error {
-		if reconnecting.Load() {
-			reconnectStarted.Signal(struct{}{})
-			select {
-			case <-ctx.Done():
-				return ctx.Err()
-			case <-releaseReconnect:
-			}
-			reconnecting.Store(false)
-		}
-		return realListener.Connect(ctx)
-	}
-
-	notif := notifier.New(archetype, mockListener)
-	require.NoError(t, notif.Start(ctx))
-	t.Cleanup(notif.Stop)
-	// Release a blocked Connect before stopping the notifier.
-	t.Cleanup(closeReleaseReconnect)
-
-	var jobStarted testsignal.TestSignal[int64]
-	jobStarted.Init(t)
-	workers := NewWorkers()
-
-	type JobArgs struct {
-		testutil.JobArgsReflectKind[JobArgs]
-	}
-
-	AddWorker(workers, WorkFunc(func(ctx context.Context, job *Job[JobArgs]) error {
-		jobStarted.Signal(job.ID)
-		<-ctx.Done()
-		return ctx.Err()
-	}))
-
-	prod := newProducer(archetype, exec, pilot, &producerConfig{
-		ClientID:                     testClientID,
-		Completer:                    completer,
-		ErrorHandler:                 newTestErrorHandler(),
-		FetchCooldown:                FetchCooldownDefault,
-		FetchPollInterval:            50 * time.Millisecond,
-		PluginLookupByJob:            pluginlookup.NewJobPluginLookup(nil),
-		PluginLookupGlobal:           pluginlookup.NewPluginLookup(nil),
-		JobTimeout:                   JobTimeoutDefault,
-		MaxWorkers:                   10,
-		Notifier:                     notif,
-		Queue:                        queueName,
-		QueuePollInterval:            queuePollIntervalDefault,
-		QueueReportInterval:          queueReportIntervalDefault,
-		RetryPolicy:                  &DefaultClientRetryPolicy{},
-		SchedulerInterval:            riverinternaltest.SchedulerShortInterval,
-		Schema:                       schema,
-		StaleProducerRetentionPeriod: time.Minute,
-		Workers:                      workers,
-	})
-
-	config := newTestConfig(t, schema)
-	insertParams, err := insertParamsFromConfigArgsAndOptions(&prod.Archetype, config, &JobArgs{}, &InsertOpts{Queue: queueName})
-	require.NoError(t, err)
-	_, err = exec.JobInsertFastMany(ctx, &riverdriver.JobInsertFastManyParams{
-		Jobs:   []*riverdriver.JobInsertFastParams{(*riverdriver.JobInsertFastParams)(insertParams)},
-		Schema: schema,
-	})
-	require.NoError(t, err)
-
-	workCtx, workCancel := context.WithCancel(ctx)
-
-	require.NoError(t, prod.StartWorkContext(ctx, workCtx))
-	// Cancel workers before waiting for producer shutdown.
-	t.Cleanup(prod.Stop)
-	t.Cleanup(workCancel)
-
-	jobID := jobStarted.WaitOrTimeout()
-
-	// Wake the listener so it observes the injected disconnect.
-	forceDisconnect.Store(true)
-	require.NoError(t, exec.NotifyMany(ctx, &riverdriver.NotifyManyParams{
-		Topic:   string(notifier.NotificationTopicInsert),
-		Payload: []string{`{"queue":"` + queueName + `-unrelated-wakeup"}`},
-		Schema:  schema,
-	}))
-
-	reconnectStarted.WaitOrTimeout()
-
-	// Cancel while no listener is connected.
-	_, err = exec.JobCancel(ctx, &riverdriver.JobCancelParams{
-		ID:                jobID,
-		CancelAttemptedAt: time.Now().UTC(),
-		ControlTopic:      string(notifier.NotificationTopicControl),
-		Schema:            schema,
-	})
-	require.NoError(t, err)
-
-	closeReleaseReconnect()
-
-	update := riversharedtest.WaitOrTimeout(t, jobUpdates)
-	require.Equal(t, rivertype.JobStateCancelled, update[0].Job.State,
-		"job should have observed cancellation after the notifier reconnected and reconciled active jobs against cancel_attempted_at")
 }
 
 func TestProducer_MetricEmitHook(t *testing.T) {
@@ -540,124 +320,6 @@ func TestProducer_PollOnly(t *testing.T) {
 			Workers:                      NewWorkers(),
 		}), jobUpdates
 	})
-}
-
-func TestProducer_ReconcileDoesNotBlock(t *testing.T) {
-	t.Parallel()
-
-	for _, testCase := range []struct {
-		name             string
-		blockedFetch     bool
-		cancelFromLookup bool
-		queryError       bool
-	}{
-		{name: "BlockedFetchCancelDelivery", blockedFetch: true},
-		{name: "BlockedFetchReconcileResult", blockedFetch: true, cancelFromLookup: true},
-		{name: "CancelDelivery"},
-		{name: "ReconcileResult", cancelFromLookup: true},
-		{name: "RetryAfterError", cancelFromLookup: true, queryError: true},
-	} {
-		t.Run(testCase.name, func(t *testing.T) {
-			t.Parallel()
-
-			var signals struct {
-				FetchStarted testsignal.TestSignal[struct{}]
-				LoopStopped  testsignal.TestSignal[struct{}]
-				QueryStarted testsignal.TestSignal[time.Duration]
-			}
-			signals.FetchStarted.Init(t)
-			signals.LoopStopped.Init(t)
-			signals.QueryStarted.Init(t)
-
-			ctx, cancel := context.WithCancel(context.Background())
-			defer cancel()
-			releaseFetch := make(chan struct{})
-			var releaseOnce sync.Once
-			release := func() { releaseOnce.Do(func() { close(releaseFetch) }) }
-			defer release()
-			archetype := riversharedtest.BaseServiceArchetype(t)
-			jobCtx, cancelJob := context.WithCancelCause(ctx)
-			defer cancelJob(nil)
-			executor := baseservice.Init(archetype, &jobexecutor.JobExecutor{CancelFunc: cancelJob, JobRow: &rivertype.JobRow{ID: 1, Attempt: 1}})
-			var queryAttempts int
-			exec := &producerTestExecutor{
-				jobGetAvailableFunc: func(context.Context, *riverdriver.JobGetAvailableParams) (*riverdriver.JobGetAvailableResult, error) {
-					signals.FetchStarted.Signal(struct{}{})
-					<-releaseFetch
-					return &riverdriver.JobGetAvailableResult{}, nil
-				},
-				jobGetByIDManyFunc: func(ctx context.Context, _ *riverdriver.JobGetByIDManyParams) ([]*rivertype.JobRow, error) {
-					deadline, ok := ctx.Deadline()
-					if ok {
-						signals.QueryStarted.Signal(time.Until(deadline))
-					} else {
-						signals.QueryStarted.Signal(0)
-					}
-					queryAttempts++
-					if testCase.queryError && queryAttempts == 1 {
-						return nil, errors.New("temporary reconciliation failure")
-					}
-					if testCase.cancelFromLookup {
-						return []*rivertype.JobRow{{ID: 1, Attempt: 1, Metadata: []byte(`{"cancel_attempted_at":"2026-10-20T00:00:00Z"}`)}}, nil
-					}
-					<-ctx.Done()
-					return nil, ctx.Err()
-				},
-			}
-			pilot := &riverpilot.StandardPilot{}
-			_, state, err := pilot.ProducerInit(ctx, exec, nil)
-			require.NoError(t, err)
-			prod := baseservice.Init(archetype, &producer{
-				activeJobs:     map[int64]*jobexecutor.JobExecutor{1: executor},
-				cancelCh:       make(chan int64, 1),
-				config:         &producerConfig{MaxWorkers: 2},
-				exec:           exec,
-				fetchLimiter:   chanutil.NewDebouncedChan(ctx, time.Millisecond, true),
-				jobResultCh:    make(chan *rivertype.JobRow),
-				paused:         !testCase.blockedFetch,
-				pilot:          pilot,
-				state:          state,
-				queueControlCh: make(chan *controlEventPayload),
-				reconnectCh:    make(chan struct{}, 1),
-			})
-			go func() {
-				prod.fetchAndRunLoop(ctx, ctx)
-				signals.LoopStopped.Signal(struct{}{})
-			}()
-			defer func() {
-				release()
-				cancel()
-				signals.LoopStopped.WaitOrTimeout()
-			}()
-
-			if testCase.blockedFetch {
-				signals.FetchStarted.WaitOrTimeout()
-			}
-			prod.reconnectCh <- struct{}{}
-			queryTimeout := signals.QueryStarted.WaitOrTimeout()
-			require.Positive(t, queryTimeout)
-			require.LessOrEqual(t, queryTimeout, 10*time.Second)
-			if testCase.queryError {
-				require.Positive(t, signals.QueryStarted.WaitOrTimeout())
-			}
-
-			if !testCase.cancelFromLookup {
-				prod.cancelCh <- 1
-			}
-			select {
-			case <-jobCtx.Done():
-				require.ErrorIs(t, context.Cause(jobCtx), rivertype.ErrJobCancelledRemotely)
-			case <-time.After(time.Second):
-				t.Fatal("blocked reconciliation prevented cancellation delivery")
-			}
-
-			select {
-			case prod.jobResultCh <- &rivertype.JobRow{ID: 1}:
-			case <-time.After(time.Second):
-				t.Fatal("blocked reconciliation prevented job completion")
-			}
-		})
-	}
 }
 
 func TestProducer_WithNotifier(t *testing.T) {
@@ -888,10 +550,8 @@ func testProducer(t *testing.T, makeProducer func(ctx context.Context, t *testin
 				t.Parallel()
 
 				producer, bundle := setup(t)
-				if producer.config.Notifier != nil {
-					t.Skip("requires polling without a notifier")
-				}
 				producer.config.FetchPollInterval = time.Hour
+				producer.config.JobCancelPollInterval = 20 * time.Millisecond
 				producer.config.MaxWorkers = 1
 				producer.config.QueuePollInterval = 20 * time.Millisecond
 
@@ -926,19 +586,25 @@ func testProducer(t *testing.T, makeProducer func(ctx context.Context, t *testin
 						Name:   producer.config.Queue,
 						Schema: producer.config.Schema,
 					}))
+					if producer.config.Notifier != nil {
+						// Only Client.QueuePause sends a notification.
+						producer.TriggerQueueControlEvent(&controlEventPayload{Action: controlActionPause, Queue: producer.config.Queue})
+					}
 					producer.testSignals.Paused.WaitOrTimeout()
 				case "Stopping":
 					fetchCancel()
 					producer.testSignals.ExecutorShutdownStarted.WaitOrTimeout()
 				}
 
-				// Use the executor directly so no local client shortcut can cancel
-				// the worker. No more jobs can be fetched in any of these states.
-				_, err := bundle.exec.JobCancel(ctx, &riverdriver.JobCancelParams{
-					ID:                jobID,
-					CancelAttemptedAt: time.Now().UTC(),
-					ControlTopic:      string(notifier.NotificationTopicControl),
-					Schema:            producer.config.Schema,
+				// Request cancellation the way JobCancel does, but without a
+				// notification, as if it was lost while the notifier was
+				// reconnecting. Only polling can find it. No more jobs can be
+				// fetched in any of these states.
+				_, err := bundle.exec.JobUpdate(ctx, &riverdriver.JobUpdateParams{
+					ID:              jobID,
+					Metadata:        fmt.Appendf(nil, `{"cancel_attempted_at":%q}`, time.Now().UTC().Format(time.RFC3339Nano)),
+					MetadataDoMerge: true,
+					Schema:          producer.config.Schema,
 				})
 				require.NoError(t, err)
 				require.ErrorIs(t, workerErr.WaitOrTimeout(), rivertype.ErrJobCancelledRemotely)

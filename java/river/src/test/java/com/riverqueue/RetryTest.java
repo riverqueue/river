@@ -9,6 +9,7 @@ import java.time.Duration;
 import java.time.Instant;
 import java.time.ZoneOffset;
 import java.util.List;
+import java.util.Map;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.TimeUnit;
@@ -150,6 +151,24 @@ class RetryTest {
       assertEquals(inserted.id(), worked.get(5, TimeUnit.SECONDS).id());
     }
     assertTrue(errors.isEmpty(), () -> "Unexpected worker errors: " + errors);
+  }
+
+  // Like Go, a retry clears a cancellation requested during an earlier attempt
+  // so that it can't cancel the retried one. Other metadata is preserved.
+  @Test
+  void retryClearsAnEarlierCancellationRequest() {
+    var client = new Client(databases.open(directory.resolve("river.db")));
+    var inserted =
+        client
+            .insert(
+                TYPE, "retry", InsertOptions.builder().metadata(Map.of("preserved", true)).build())
+            .job();
+    assertTrue(client.cancel(inserted.id()).metadata().has("cancel_attempted_at"));
+
+    var retried = client.retry(inserted.id());
+    assertEquals(Job.State.AVAILABLE, retried.state());
+    assertFalse(retried.metadata().has("cancel_attempted_at"));
+    assertTrue(retried.metadata().path("preserved").asBoolean());
   }
 
   @ParameterizedTest

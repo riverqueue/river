@@ -775,6 +775,30 @@ macro_rules! scenarios {
             fixture.cleanup().await;
         }
 
+        // Like Go's `JobRetry`, a retry clears the cancellation requested
+        // during an earlier attempt so that it can't cancel the retried one.
+        #[tokio::test(flavor = "multi_thread")]
+        async fn retry_clears_a_cancellation_request() {
+            let fixture = Fixture::new().await;
+            let jobs = fixture.client.jobs();
+            let metadata: riverqueue::JobMetadata = r#"{"preserved":true}"#.parse().unwrap();
+            let id = fixture
+                .client
+                .insert(args("cancel then retry"))
+                .opts(InsertOpts::default().with_metadata(metadata))
+                .await
+                .unwrap()
+                .id();
+            let cancelled = jobs.cancel(id).await.unwrap();
+            assert!(cancelled.metadata.contains_key("cancel_attempted_at"));
+
+            let retried = jobs.retry(id).await.unwrap();
+            assert_eq!(retried.state, JobState::Available);
+            assert!(!retried.metadata.contains_key("cancel_attempted_at"));
+            assert_eq!(retried.metadata.get::<bool>("preserved").unwrap(), Some(true));
+            fixture.cleanup().await;
+        }
+
         #[tokio::test(flavor = "multi_thread")]
         async fn local_queues_change_configuration_without_lock_errors() {
             let fixture = Fixture::new().await;

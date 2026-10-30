@@ -56,8 +56,9 @@ pub(super) async fn run_dynamic_queues(
     mut changes: watch::Receiver<u64>,
     queues_ready: oneshot::Sender<()>,
 ) -> Result<(), Error> {
-    // Without a notifier, running jobs learn of cancellation requests by
-    // polling until every producer has drained. Whether the client has one is
+    // Running jobs learn of cancellation requests by polling until every
+    // producer has drained: regularly without a notifier, and occasionally
+    // with one in case a notification was lost. Whether the client has one is
     // known only once a Postgres server's capabilities are detected, so the
     // poll checks each time.
     let _cancellation_poll = AbortOnDrop(tokio::spawn(poll_job_cancellations(
@@ -144,9 +145,11 @@ fn jittered_fetch_poll_interval(interval: Duration) -> Duration {
 
 /// Cancels this client's running attempts whose jobs have a cancellation
 /// request, checking every [`QUEUE_CONFIG_POLL_INTERVAL`] while the client
-/// has no notifier, like River Go's producers without one. That's checked
-/// each time, since a Postgres server's lack of `LISTEN`/`NOTIFY` is
-/// detected only once the client runs.
+/// has no notifier, like River Go's producers without one. With a notifier,
+/// it's a fallback for a notification that was lost, like while the notifier
+/// was reconnecting, so it checks only every `job_cancel_poll_interval`.
+/// Whether the client has a notifier is checked each time, since a Postgres
+/// server's lack of `LISTEN`/`NOTIFY` is detected only once the client runs.
 /// It keeps checking after `stopping` fires, so jobs can still be cancelled
 /// while producers drain; the caller aborts it once they have.
 async fn poll_job_cancellations(inner: Arc<ClientInner>, stopping: CancellationToken) {
@@ -154,11 +157,13 @@ async fn poll_job_cancellations(inner: Arc<ClientInner>, stopping: CancellationT
     poll.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     // The first tick completes at once; running jobs start later.
     poll.tick().await;
+    let mut last_checked = tokio::time::Instant::now();
     loop {
         poll.tick().await;
-        if inner.has_notifier() {
+        if inner.has_notifier() && last_checked.elapsed() < inner.job_cancel_poll_interval {
             continue;
         }
+        last_checked = tokio::time::Instant::now();
         let mut ids = inner
             .running
             .lock()

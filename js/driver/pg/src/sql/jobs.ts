@@ -827,6 +827,9 @@ export async function jobRetryWithOptions(
           ELSE river_job.max_attempts
         END,
         finalized_at = NULL,
+        -- A cancellation requested during an earlier attempt must not cancel
+        -- the next one.
+        metadata = river_job.metadata - 'cancel_attempted_at',
         scheduled_at = coalesce($2::timestamptz, now())
       FROM job_to_update
       WHERE river_job.id = job_to_update.id

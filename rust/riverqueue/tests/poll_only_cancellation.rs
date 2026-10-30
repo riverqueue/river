@@ -1,4 +1,5 @@
-//! Cancellation of running jobs in clients without notifications, on every
+//! Cancellation of running jobs found by polling, in clients without
+//! notifications and in clients whose notification was lost, on every
 //! backend.
 //!
 //! Postgres tests run in a unique schema and fail rather than skip when
@@ -11,8 +12,8 @@ mod support;
 use std::{convert::Infallible, sync::Arc, time::Duration};
 
 use riverqueue::{
-    __private::Database, Client, EventKind, Job, JobArgs, JobState, QueueConfig, WorkContext,
-    WorkOutcome, Workers,
+    __private::{ClientBuilderExt, Database},
+    Client, EventKind, Job, JobArgs, JobState, QueueConfig, WorkContext, WorkOutcome, Workers,
 };
 use serde::{Deserialize, Serialize};
 use tokio::sync::Semaphore;
@@ -54,6 +55,97 @@ impl Backend {
             Self::Sqlite(pool, path) => support::sqlite_cleanup(pool, path).await,
         }
     }
+
+    /// Requests a job's cancellation the way `JobCancel` does, but without a
+    /// notification, as if it was lost.
+    async fn request_cancellation_without_notification(&self, id: i64) {
+        let cancel_attempted_at = chrono::Utc::now().to_rfc3339();
+        match self {
+            #[cfg(all(feature = "postgres", river_postgres_tests))]
+            Self::Postgres(schema) => {
+                sqlx::query(sqlx::AssertSqlSafe(format!(
+                    "UPDATE {} SET metadata = jsonb_set(metadata, '{{cancel_attempted_at}}', to_jsonb($2::text)) \
+                     WHERE id = $1",
+                    schema.table("river_job")
+                )))
+                .bind(id)
+                .bind(cancel_attempted_at)
+                .execute(&schema.pool)
+                .await
+                .unwrap();
+            }
+            #[cfg(feature = "sqlite")]
+            Self::Sqlite(pool, _) => {
+                sqlx::query(
+                    "UPDATE river_job SET metadata = jsonb_set(metadata, '$.cancel_attempted_at', ?) \
+                     WHERE id = ?",
+                )
+                .bind(cancel_attempted_at)
+                .bind(id)
+                .execute(pool)
+                .await
+                .unwrap();
+            }
+        }
+    }
+}
+
+/// Workers that block until their attempt is cancelled, adding a permit to
+/// `started` when one starts.
+fn waiting_workers(started: &Arc<Semaphore>) -> Workers {
+    let mut workers = Workers::new();
+    let started = Arc::clone(started);
+    workers
+        .add_fn(move |context: WorkContext, _job: Job<WaitArgs>| {
+            let started = Arc::clone(&started);
+            async move {
+                started.add_permits(1);
+                context.cancellation_token().cancelled().await;
+                // Any outcome but completion becomes the cancellation.
+                Ok::<_, Infallible>(WorkOutcome::Snooze(Duration::from_hours(1)))
+            }
+        })
+        .unwrap();
+    workers
+}
+
+/// A client with notifications still cancels its running job when the
+/// cancellation's notification was lost, like if it was sent while the
+/// client's notifier was reconnecting, because it also checks for
+/// cancellation requests occasionally.
+async fn polls_for_lost_cancellation_notification(backend: Backend) {
+    let started = Arc::new(Semaphore::new(0));
+    let client = Client::builder(backend.database())
+        .job_cancel_poll_interval(Duration::ZERO)
+        .queue(riverqueue::QUEUE_DEFAULT, QueueConfig::new(1))
+        .without_leader_election()
+        .workers(waiting_workers(&started))
+        .build()
+        .unwrap();
+    let mut events = client.subscribe(&[EventKind::JobCancelled]).unwrap();
+    let mut run = client.start().unwrap();
+    run.wait_ready().await.unwrap();
+
+    let id = client.insert(WaitArgs {}).await.unwrap().job.row.id;
+    tokio::time::timeout(TIMEOUT, started.acquire())
+        .await
+        .expect("the job should start")
+        .unwrap()
+        .forget();
+    backend.request_cancellation_without_notification(id).await;
+
+    let event = tokio::time::timeout(TIMEOUT, events.recv())
+        .await
+        .expect("the job should be cancelled")
+        .unwrap();
+    let job = &event.as_job().expect("a job event").job;
+    assert_eq!(job.id, id);
+    assert_eq!(job.state, JobState::Cancelled, "{job:?}");
+    tokio::time::timeout(TIMEOUT, run.stop())
+        .await
+        .expect("the client should stop")
+        .unwrap();
+    backend.cleanup().await;
 }
 
 /// A client without notifications cancels its running job once it polls the
@@ -62,24 +154,11 @@ impl Backend {
 async fn polls_for_remote_cancellation(backend: Backend) {
     for while_stopping in [false, true] {
         let started = Arc::new(Semaphore::new(0));
-        let mut workers = Workers::new();
-        let worker_started = Arc::clone(&started);
-        workers
-            .add_fn(move |context: WorkContext, _job: Job<WaitArgs>| {
-                let started = Arc::clone(&worker_started);
-                async move {
-                    started.add_permits(1);
-                    context.cancellation_token().cancelled().await;
-                    // Any outcome but completion becomes the cancellation.
-                    Ok::<_, Infallible>(WorkOutcome::Snooze(Duration::from_hours(1)))
-                }
-            })
-            .unwrap();
         let client = Client::builder(backend.database())
             .queue(riverqueue::QUEUE_DEFAULT, QueueConfig::new(1))
             .without_leader_election()
             .without_notifications()
-            .workers(workers)
+            .workers(waiting_workers(&started))
             .build()
             .unwrap();
         let other = Client::builder(backend.database()).build().unwrap();
@@ -118,6 +197,14 @@ mod postgres {
     use super::*;
 
     #[tokio::test]
+    async fn polls_for_lost_cancellation_notification() {
+        super::polls_for_lost_cancellation_notification(Backend::Postgres(
+            support::PostgresSchema::new("river_poll_cancel_lost").await,
+        ))
+        .await;
+    }
+
+    #[tokio::test]
     async fn polls_for_remote_cancellation() {
         super::polls_for_remote_cancellation(Backend::Postgres(
             support::PostgresSchema::new("river_poll_cancel").await,
@@ -129,6 +216,12 @@ mod postgres {
 #[cfg(feature = "sqlite")]
 mod sqlite {
     use super::*;
+
+    #[tokio::test]
+    async fn polls_for_lost_cancellation_notification() {
+        let (pool, path) = support::sqlite_file_pool(4).await;
+        super::polls_for_lost_cancellation_notification(Backend::Sqlite(pool, path)).await;
+    }
 
     #[tokio::test]
     async fn polls_for_remote_cancellation() {

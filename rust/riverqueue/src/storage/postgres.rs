@@ -239,7 +239,8 @@ impl Backend for PostgresBackend<'_> {
             "WITH locked AS (SELECT id FROM {table} WHERE id = $1 FOR UPDATE), \
              updated AS (UPDATE {table} AS job SET state = 'available', \
                  max_attempts = CASE WHEN attempt = max_attempts THEN max_attempts + 1 ELSE max_attempts END, \
-                 finalized_at = NULL, scheduled_at = now() \
+                 finalized_at = NULL, metadata = metadata - 'cancel_attempted_at', \
+                 scheduled_at = now() \
                  FROM locked WHERE job.id = locked.id AND job.state != 'running' \
                    AND NOT (job.state = 'available' AND job.scheduled_at < now()) RETURNING job.*) \
              SELECT {}, false AS unique_skipped_as_duplicate FROM updated AS job \

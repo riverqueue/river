@@ -516,10 +516,8 @@ func exerciseJobUpdate[TTx any](ctx context.Context, t *testing.T, executorWithT
 
 			exec, _ := setup(ctx, t)
 
-			metadata := []byte(`{"cancel_attempted_at":"2026-01-01T00:00:00Z","custom":"preserved"}`)
 			job := testfactory.Job(ctx, t, exec, &testfactory.JobOpts{
-				Metadata: metadata,
-				State:    new(rivertype.JobStateRunning),
+				State: new(rivertype.JobStateRunning),
 			})
 
 			jobAfter, err := exec.JobRetry(ctx, &riverdriver.JobRetryParams{
@@ -527,13 +525,11 @@ func exerciseJobUpdate[TTx any](ctx context.Context, t *testing.T, executorWithT
 			})
 			require.NoError(t, err)
 			require.Equal(t, rivertype.JobStateRunning, jobAfter.State)
-			require.JSONEq(t, string(metadata), string(jobAfter.Metadata))
 			require.WithinDuration(t, job.ScheduledAt, jobAfter.ScheduledAt, time.Microsecond)
 
 			jobUpdated, err := exec.JobGetByID(ctx, &riverdriver.JobGetByIDParams{ID: job.ID})
 			require.NoError(t, err)
 			require.Equal(t, rivertype.JobStateRunning, jobUpdated.State)
-			require.JSONEq(t, string(metadata), string(jobUpdated.Metadata))
 		})
 
 		for _, state := range []rivertype.JobState{
@@ -565,7 +561,6 @@ func exerciseJobUpdate[TTx any](ctx context.Context, t *testing.T, executorWithT
 
 				job := testfactory.Job(ctx, t, exec, &testfactory.JobOpts{
 					FinalizedAt: finalizedAt,
-					Metadata:    []byte(`{"cancel_attempted_at":"2026-01-01T00:00:00Z","custom":"preserved"}`),
 					ScheduledAt: new(now.Add(1 * time.Hour)),
 					State:       &state,
 				})
@@ -576,14 +571,12 @@ func exerciseJobUpdate[TTx any](ctx context.Context, t *testing.T, executorWithT
 				})
 				require.NoError(t, err)
 				require.Equal(t, rivertype.JobStateAvailable, jobAfter.State)
-				require.JSONEq(t, `{"custom":"preserved"}`, string(jobAfter.Metadata))
 				require.WithinDuration(t, now, jobAfter.ScheduledAt, bundle.driver.TimePrecision())
 
 				jobUpdated, err := exec.JobGetByID(ctx, &riverdriver.JobGetByIDParams{ID: job.ID})
 				require.NoError(t, err)
 				require.Equal(t, rivertype.JobStateAvailable, jobUpdated.State)
 				require.Nil(t, jobUpdated.FinalizedAt)
-				require.JSONEq(t, `{"custom":"preserved"}`, string(jobUpdated.Metadata))
 			})
 		}
 
@@ -612,6 +605,30 @@ func exerciseJobUpdate[TTx any](ctx context.Context, t *testing.T, executorWithT
 			require.NoError(t, err)
 			require.Equal(t, rivertype.JobStateAvailable, jobAfter.State)
 			require.WithinDuration(t, now, jobAfter.ScheduledAt, 5*time.Second)
+		})
+
+		// A cancellation requested during an earlier attempt must not apply to
+		// the retried one. Other metadata is preserved.
+		t.Run("ClearsCancelAttemptedAt", func(t *testing.T) {
+			t.Parallel()
+
+			exec, _ := setup(ctx, t)
+
+			now := time.Now().UTC()
+
+			job := testfactory.Job(ctx, t, exec, &testfactory.JobOpts{
+				FinalizedAt: &now,
+				Metadata:    []byte(`{"cancel_attempted_at":"2026-01-01T00:00:00Z","foo":"bar"}`),
+				State:       new(rivertype.JobStateCancelled),
+			})
+
+			jobAfter, err := exec.JobRetry(ctx, &riverdriver.JobRetryParams{
+				ID:  job.ID,
+				Now: &now,
+			})
+			require.NoError(t, err)
+			require.Equal(t, rivertype.JobStateAvailable, jobAfter.State)
+			require.JSONEq(t, `{"foo":"bar"}`, string(jobAfter.Metadata))
 		})
 
 		t.Run("DoesNotAlterScheduledAtIfInThePastAndJobAlreadyAvailable", func(t *testing.T) {

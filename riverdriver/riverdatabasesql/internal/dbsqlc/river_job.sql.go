@@ -1320,6 +1320,8 @@ updated_job AS (
         state = 'available',
         max_attempts = CASE WHEN attempt = max_attempts THEN max_attempts + 1 ELSE max_attempts END,
         finalized_at = NULL,
+        -- A cancellation requested during an earlier attempt must not cancel
+        -- the next one.
         metadata = metadata - 'cancel_attempted_at',
         scheduled_at = coalesce($2::timestamptz, now())
     FROM job_to_update

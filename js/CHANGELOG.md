@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed a cancelled job that was retried being cancelled again when the client checked for cancellation requests, which it does while polling and after its notification stream reconnects. Retrying a job now clears its earlier attempt's cancellation request, like River for Go. [Issue #1358](https://github.com/riverqueue/river/issues/1358).
+
 ## [0.3.0] - 2026-10-26
 
 ### Added
