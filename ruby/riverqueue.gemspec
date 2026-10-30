@@ -2,7 +2,7 @@
 
 Gem::Specification.new do |s|
   s.name = "riverqueue"
-  s.version = "0.14.0"
+  s.version = "0.15.0"
   s.summary = "A fast, reliable job queue for Ruby backed by Postgres or SQLite."
   s.description = "Insert and work River jobs in Ruby using the same schema and state machine as other River clients. Use with riverqueue-activerecord or riverqueue-sequel."
   s.authors = ["Blake Gentry", "Brandur Leach"]
