@@ -5,6 +5,8 @@ end
 module River
   module MigrationCLI
     def self.detect_driver: () -> String
+    def self.export: (Hash[Symbol, untyped], untyped, out: untyped) -> Integer
+    def self.parse_versions: (String, String) -> Array[Integer]
     def self.run: (Array[String], ?err: untyped, ?out: untyped) -> Integer
   end
   class Migrator
@@ -31,6 +33,7 @@ module River
     @schema: untyped
     attr_reader migrations: Array[Migration]
     def initialize: (untyped, ?line: String, ?migrations_path: String, ?schema: untyped) -> void
+    def self.migrations: (?backend: Symbol, ?line: String, ?migrations_path: String) -> Array[Migration]
     def migrate: (?direction: Symbol, ?dry_run: bool, ?steps: untyped, ?target: untyped) -> Array[Migration]
     def status: () -> Array[Status]
     private
