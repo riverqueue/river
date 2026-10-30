@@ -1775,9 +1775,18 @@ async fn resumable_cursor_and_transactional_checkpoints() {
             .unwrap();
         job_ids.insert(mode, inserted.job.row.id);
     }
+    let mut failed_events = client.subscribe(&[EventKind::JobFailed]).unwrap();
     let mut handle = client.start().unwrap();
 
-    let first_failure = wait_for_state(&client, job_ids["cursor_retry"], JobState::Retryable).await;
+    // The failed attempt's retry is due after 500 ms, too briefly to reliably
+    // see the job retryable by polling it, so check the row from its event.
+    let failed_event = tokio::time::timeout(Duration::from_secs(5), failed_events.recv())
+        .await
+        .expect("cursor_retry should fail its first attempt")
+        .unwrap();
+    let first_failure = &failed_event.as_job().unwrap().job;
+    assert_eq!(first_failure.id, job_ids["cursor_retry"]);
+    assert_eq!(first_failure.state, JobState::Retryable);
     assert_eq!(
         first_failure
             .metadata
