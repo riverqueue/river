@@ -1,6 +1,7 @@
 # frozen_string_literal: true
 
 require "spec_helper"
+require "open3"
 require "stringio"
 require "tmpdir"
 require_relative "../lib/cli"
@@ -19,8 +20,72 @@ RSpec.describe River::CLI do
     expect(run("--help")).to eq(0)
     expect(run("-h")).to eq(0)
     expect(run("worker", "--help")).to eq(0)
-    expect(out.string).to include("migrate-up", "--stop-timeout", "--rails")
+    expect(out.string).to include("migrate-up", "validate", "version", "--stop-timeout", "--rails")
     expect(err.string).to eq("")
+  end
+
+  describe "version" do
+    it "includes the activated Pro version without loading Pro" do
+      original = Gem.loaded_specs["riverqueue-pro"]
+      Gem.loaded_specs["riverqueue-pro"] = Gem::Specification.new do |spec|
+        spec.name = "riverqueue-pro"
+        spec.version = "1.2.3"
+      end
+
+      expect(run("version")).to eq(0)
+      expect(out.string).to eq("River version #{Gem.loaded_specs.fetch("riverqueue").version}\nRiver Pro version 1.2.3\nRuby #{RUBY_VERSION}\n")
+      expect(err.string).to eq("")
+    ensure
+      Gem.loaded_specs.delete("riverqueue-pro")
+      Gem.loaded_specs["riverqueue-pro"] = original if original
+    end
+
+    it "prints help without printing versions" do
+      expect(run("version", "--help")).to eq(0)
+      expect(run("version", "-h")).to eq(0)
+      expect(out.string).to include("Usage: river version | river --version")
+      expect(out.string).not_to include("River version")
+      expect(err.string).to eq("")
+    end
+
+    it "prints the activated core gem and Ruby versions" do
+      expect(run("version")).to eq(0)
+      expect(out.string).to eq("River version #{Gem.loaded_specs.fetch("riverqueue").version}\nRuby #{RUBY_VERSION}\n")
+      expect(err.string).to eq("")
+    end
+
+    it "reports an unknown gem version when loaded directly from source" do
+      original = Gem.loaded_specs.delete("riverqueue")
+      expect(run("--version")).to eq(0)
+      expect(out.string).to eq("River version (unknown)\nRuby #{RUBY_VERSION}\n")
+      expect(err.string).to eq("")
+    ensure
+      Gem.loaded_specs["riverqueue"] = original
+    end
+
+    %w[version --version].each do |command|
+      it "runs #{command} through the executable without a database or adapters" do
+        script = <<~RUBY
+          at_exit do
+            raise "loaded a database adapter" if defined?(Sequel) || defined?(ActiveRecord) || defined?(PG) || defined?(SQLite3)
+          end
+          load #{File.expand_path("../exe/river", __dir__).inspect}
+        RUBY
+        stdout, stderr, status = Open3.capture3({"DATABASE_URL" => "invalid://"}, Gem.ruby, "-e", script, "--", command)
+
+        expect(status.success?).to be(true), stderr
+        expect(stdout).to eq("River version #{Gem.loaded_specs.fetch("riverqueue").version}\nRuby #{RUBY_VERSION}\n")
+        expect(stderr).to eq("")
+      end
+
+      [["extra"], ["--database-url", "unused"], ["--line", "pro"], ["--unknown"]].each do |args|
+        it "rejects #{command} #{args.join(" ")}" do
+          expect(run(command, *args)).to eq(1)
+          expect(err.string).to include("Version failed:")
+          expect(out.string).to eq("")
+        end
+      end
+    end
   end
 
   it "dispatches migration commands to the migration CLI" do

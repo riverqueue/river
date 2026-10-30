@@ -15,22 +15,29 @@ module River
     def initialize(driver, line: "main", migrations_path: File.expand_path("../migration", __dir__.to_s), schema: nil)
       @backend = driver.migration_backend
       @driver = driver
-      raise ArgumentError, "unsupported migration backend" unless [:postgresql, :sqlite].include?(@backend)
-      raise ArgumentError, "invalid migration line" unless line.match?(/\A[a-z][a-z0-9_]*\z/)
       raise ArgumentError, "SQLite does not support a migration schema option" if @backend == :sqlite && schema
 
       @line = line
+      @migrations = Migrator.migrations(backend: @backend, line: line, migrations_path: migrations_path)
       @mutex = Mutex.new
       @requested_schema = schema
+    end
 
-      directory = File.join(migrations_path, @backend.to_s, line)
-      @migrations = Dir.glob(File.join(directory, "*.up.sql")).sort.map do |path|
+    # Returns bundled SQL without a driver or database connection.
+    def self.migrations(backend: :postgresql, line: "main", migrations_path: File.expand_path("../migration", __dir__.to_s))
+      raise ArgumentError, "unsupported migration backend" unless [:postgresql, :sqlite].include?(backend)
+      raise ArgumentError, "invalid migration line" unless line.match?(/\A[a-z][a-z0-9_]*\z/)
+
+      directory = File.join(migrations_path, backend.to_s, line)
+      migrations = Dir.glob(File.join(directory, "*.up.sql")).sort.map do |path|
         version, name = File.basename(path).delete_suffix(".up.sql").split("_", 2)
         Migration.new(Integer(version.to_s, 10), name, File.read(path).freeze, File.read(path.sub(/\.up\.sql\z/, ".down.sql")).freeze)
       end.freeze
-      unless @migrations.any? && @migrations.map(&:version) == (1..@migrations.length).to_a
+      unless migrations.any? && migrations.map(&:version) == (1..migrations.length).to_a
         raise ArgumentError, "migration files must contain contiguous versions starting at 1"
       end
+
+      migrations
     end
 
     # Applies pending migrations up (all by default) or down (one by default).

@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Add `river migrate-get` for offline Postgres/SQLite SQL export with version selection, exclusions, and schema substitution; `river validate` to check migration state without applying changes; and `river version` / `river --version` to report active core, Pro, and Ruby runtime versions. Export and validation support `--line pro`. [PR #1560](https://github.com/riverqueue/river/pull/1560).
+
 ## [0.14.0] - 2026-10-26
 
 ### Added

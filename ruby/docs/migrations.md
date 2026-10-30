@@ -40,6 +40,68 @@ bundle exec river migrate-down --database-url postgres://localhost/my_app --yes
 Down migrations can delete jobs and other data. Back up the database and stop
 workers first. `--target 0 --yes` removes the complete selected migration line.
 
+## Validating migration state
+
+Use `validate` in a deployment check to require every bundled migration in the
+selected line to be applied:
+
+```sh
+bundle exec river validate --database-url postgres://localhost/my_app
+bundle exec river validate --database-url postgres://localhost/my_app --line pro
+```
+
+Validation exits with status 0 and no output when the selected line is current.
+Pending migrations are listed on stderr with exit status 1. Invalid history or
+connection errors also return 1. Validation reads migration history without
+applying migrations or changing data; it does not inspect individual tables or
+columns for schema drift. It accepts the same `DATABASE_URL`, `--schema`, and
+driver selection as the migration commands. Validate main and Pro separately.
+
+## Version information
+
+`version` and the top-level `--version` flag print the active core gem version
+and Ruby runtime version, plus the Pro gem version when `riverqueue-pro` is
+active in the bundle:
+
+```sh
+bundle exec river version
+bundle exec river --version
+```
+
+Neither command connects to a database or loads a database adapter. The
+`--version` option on `migrate-get` still selects migration versions to export.
+
+## Exporting SQL for other frameworks
+
+`migrate-get` prints SQL without connecting to a database or requiring a River
+driver gem. Select exactly one of `--version` or `--all`, and one of `--up` or
+`--down`:
+
+```sh
+bundle exec river migrate-get --version 3 --up > river3.up.sql
+bundle exec river migrate-get --version 3 --down > river3.down.sql
+bundle exec river migrate-get --all --exclude-version 1 --up > river_all.up.sql
+bundle exec river migrate-get --all --exclude-version 1 --down > river_all.down.sql
+```
+
+`--version` and `--exclude-version` accept comma-separated values and may be
+repeated. Explicit versions retain the supplied order. `--all` exports up SQL
+in ascending order and down SQL in descending order. Version 1 creates River's
+migration-tracking table and can usually be omitted with another framework.
+Preserve version boundaries and apply each migration in its own transaction.
+
+Export defaults to Postgres and ignores `DATABASE_URL`. Use
+`--database-url sqlite://` (or `sqlite3://`) to select SQLite SQL; the URL is only
+a dialect hint. `--schema jobs` qualifies Postgres objects with that schema.
+Without it, objects are unqualified. Schema placeholders are always substituted.
+
+With `riverqueue-pro` installed, export Pro's bundled SQL using the same command:
+
+```sh
+bundle exec river migrate-get --line pro --version 1 --up > river_pro_1.up.sql
+bundle exec river migrate-get --line pro --version 1 --down > river_pro_1.down.sql
+```
+
 ## Ruby API
 
 ```ruby

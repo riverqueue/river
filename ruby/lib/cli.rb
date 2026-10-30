@@ -5,20 +5,45 @@ require_relative "migration_cli"
 require_relative "worker_runner"
 
 module River
-  # Shared command dispatch for migrations and dedicated worker processes.
+  # Shared command dispatch for migrations, version information, and workers.
   module CLI
     # Runs a River command and returns its process exit status.
     def self.run(argv, err: $stderr, out: $stdout)
+      return version(argv.drop(1), err: err, out: out) if %w[version --version].include?(argv.first)
       return worker(argv.drop(1), out: out) if argv.first == "worker"
 
       if argv.empty? || %w[-h --help].include?(argv.first)
-        out.puts("Usage: river worker|migrate-up|migrate-down|migrate-status [options]")
+        out.puts("Usage: river worker|migrate-up|migrate-down|migrate-get|migrate-status|validate|version [options]")
+        out.puts("Use river --version to print gem and Ruby versions.")
         return 0
       end
 
       MigrationCLI.run(argv, err: err, out: out)
     rescue StandardError, LoadError, SyntaxError => error
       err.puts("Worker failed: #{error.class}: #{error.message}")
+      1
+    end
+
+    # Prints active gem versions and the Ruby runtime without loading adapters.
+    def self.version(argv, err:, out:)
+      parser = OptionParser.new do |args|
+        args.banner = "Usage: river version | river --version"
+        args.on("-h", "--help") do
+          out.puts(args)
+          return 0
+        end
+      end
+      args = argv.dup
+      parser.parse!(args)
+      raise ArgumentError, parser.banner unless args.empty?
+
+      out.puts("River version #{Gem.loaded_specs["riverqueue"]&.version || "(unknown)"}")
+      pro = Gem.loaded_specs["riverqueue-pro"]
+      out.puts("River Pro version #{pro.version}") if pro
+      out.puts("Ruby #{RUBY_VERSION}")
+      0
+    rescue ArgumentError, OptionParser::ParseError => error
+      err.puts("Version failed: #{error.message}")
       1
     end
 

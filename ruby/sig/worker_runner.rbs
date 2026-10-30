@@ -1,3 +1,7 @@
+class Gem::BasicSpecification
+  attr_reader version: Gem::Version
+end
+
 module Process
   def self.exit!: (?Integer) -> bot
 end
@@ -5,6 +9,7 @@ end
 module River
   module CLI
     def self.run: (Array[String], ?err: untyped, ?out: untyped) -> Integer
+    def self.version: (Array[String], err: untyped, out: untyped) -> Integer
     def self.worker: (Array[String], out: untyped) -> Integer
   end
 
