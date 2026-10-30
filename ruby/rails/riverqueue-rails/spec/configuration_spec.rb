@@ -61,7 +61,7 @@ end
 RSpec.describe River::Generators::InstallGenerator do
   it "installs a Ruby configuration and executable worker command" do
     Dir.mktmpdir("river-generator-") do |directory|
-      described_class.start([], destination_root: directory, shell: Thor::Shell::Basic.new)
+      described_class.start(["--quiet"], destination_root: directory, shell: Thor::Shell::Basic.new)
 
       expect(File.read(File.join(directory, "config/initializers/river.rb"))).to include("queue_adapter = :river")
       command = File.join(directory, "bin/jobs")

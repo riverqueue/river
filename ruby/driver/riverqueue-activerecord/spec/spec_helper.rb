@@ -40,10 +40,12 @@ end
 unless ENV["RIVERQUEUE_ROOT_TEST_SUITE"]
   require "simplecov"
   SimpleCov.start do
-    add_filter "/spec/"
+    skip "/spec/"
     enable_coverage :branch
     command_name RiverTestDatabase::BACKEND
     minimum_coverage branch: 100, line: 100 if RiverTestDatabase::BACKEND == "all"
+    # A full run covers both backends without results cached by earlier runs.
+    merging false if RiverTestDatabase::BACKEND == "all"
   end
 end
 
