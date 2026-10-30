@@ -9,9 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
-- Borrow Active Record connections for driver calls and transactions instead of leasing them to short-lived job threads, avoiding connection resets after each job.
-- Return claimed and finished jobs directly from their updates, avoiding per-job reads. On Postgres, lock completion targets by primary key before checking their state so the fetching index is not scanned.
-- Keep job completions and insertions from interrupting the maintenance loop's error backoff.
+- Reduce job processing overhead in both drivers by returning claimed and finished jobs directly from updates and locking Postgres completion targets by primary key. Avoid per-job connection resets in Active Record, and keep job completions and insertions from interrupting maintenance error backoff. Thanks to [@jpcamara](https://github.com/jpcamara) for the improvements! [PR #1566](https://github.com/riverqueue/river/pull/1566).
 
 ## [0.15.0] - 2026-10-30
 
