@@ -225,7 +225,7 @@ impl PilotProducer for LifetimePilot {
     }
 
     async fn keep_alive(&self, context: ProducerKeepAliveContext) -> Result<(), PilotError> {
-        assert!(context.stale_before < chrono::Utc::now());
+        assert!(context.stale_before < jiff::Timestamp::now());
         self.calls.push(Call::KeepAlive);
         if self.hang_first_keep_alive && self.keep_alives() == 1 {
             std::future::pending::<()>().await;

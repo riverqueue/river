@@ -3,7 +3,7 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use chrono::{DateTime, Utc};
+use jiff::Timestamp;
 use serde_json::{Map, Value};
 use sha2::{Digest, Sha256};
 use tokio::sync::{mpsc, oneshot};
@@ -47,14 +47,14 @@ pub(super) async fn execute_job(
         let queue_wait_duration = row
             .attempted_at
             .and_then(|attempted_at| {
-                (attempted_at - row.scheduled_at.max(row.created_at))
-                    .to_std()
+                attempted_at.duration_since(row.scheduled_at.max(row.created_at))
+                    .try_into()
                     .ok()
             })
             .unwrap_or_default();
         // Like River Go's executor start time, which it records as the
         // attempt error's `at`.
-        let attempt_started_at = Utc::now();
+        let attempt_started_at = Timestamp::now();
         let peers = Arc::new(PeerLedger::new(row.id, attempt_started_at));
         // The worker gets a child of the attempt's token. It observes
         // timeouts, remote cancellation, and stops, but cancelling it itself
@@ -496,7 +496,7 @@ pub(super) fn public_work_result(result: &WorkerResult) -> WorkResult {
 pub(super) async fn persist_result(
     inner: &ClientInner,
     row: &JobRow,
-    attempt_started_at: DateTime<Utc>,
+    attempt_started_at: Timestamp,
     completion: &CompletionAttempt,
     result: WorkerResult,
     metadata_updates: Map<String, Value>,
@@ -505,7 +505,7 @@ pub(super) async fn persist_result(
     completion_sender: &mpsc::Sender<CompletionUpdate>,
     peer: Option<Arc<peers::PeerCompletion>>,
 ) -> Result<(), Error> {
-    let now = Utc::now();
+    let now = Timestamp::now();
     let (state, finalized_at, scheduled_at, attempt, attempt_error, metadata, event_kind) =
         match result {
             Ok(WorkOutcome::Complete) => (
@@ -668,14 +668,12 @@ const MAX_SCHEDULE_DELAY: Duration = Duration::from_nanos(i64::MAX.cast_unsigned
 
 /// Adds a snooze or retry delay to `now`, clamping out-of-range delays the way
 /// River Go's `time.Duration` arithmetic bounds them instead of failing.
-pub(super) fn scheduled_after(now: DateTime<Utc>, delay: Duration) -> DateTime<Utc> {
-    chrono::Duration::from_std(delay.min(MAX_SCHEDULE_DELAY))
-        .ok()
-        .and_then(|delay| now.checked_add_signed(delay))
-        .unwrap_or(DateTime::<Utc>::MAX_UTC)
+pub(super) fn scheduled_after(now: Timestamp, delay: Duration) -> Timestamp {
+    now.checked_add(delay.min(MAX_SCHEDULE_DELAY))
+        .unwrap_or(Timestamp::MAX)
 }
 
-pub(crate) fn default_retry_delay(row: &JobRow, now: DateTime<Utc>, seed: u64) -> Duration {
+pub(crate) fn default_retry_delay(row: &JobRow, now: Timestamp, seed: u64) -> Duration {
     const MAX_RETRY_NANOS: u64 = i64::MAX as u64;
 
     let error_count = u32::try_from(row.errors.len().saturating_add(1)).unwrap_or(u32::MAX);
@@ -690,7 +688,11 @@ pub(crate) fn default_retry_delay(row: &JobRow, now: DateTime<Utc>, seed: u64) -
     hasher.update(seed.to_be_bytes());
     hasher.update(row.id.to_be_bytes());
     hasher.update(error_count.to_be_bytes());
-    hasher.update(now.timestamp_nanos_opt().unwrap_or_default().to_be_bytes());
+    hasher.update(
+        i64::try_from(now.as_nanosecond())
+            .unwrap_or_default()
+            .to_be_bytes(),
+    );
     let hash = hasher.finalize();
     let sample = u32::from_be_bytes(hash[..4].try_into().unwrap());
     let ratio = f64::from(sample) / f64::from(u32::MAX);

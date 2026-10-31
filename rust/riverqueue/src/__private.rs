@@ -9,7 +9,7 @@
 use std::{fmt, time::Duration};
 
 use async_trait::async_trait;
-use chrono::{DateTime, Utc};
+use jiff::Timestamp;
 use serde_json::{Map, Value, value::RawValue};
 
 #[cfg(feature = "postgres")]
@@ -180,7 +180,7 @@ pub fn attempt_errors_from_json(json: &str) -> Result<Vec<AttemptError>, serde_j
 /// millisecond-rounded, timezone-free SQLite representation.
 #[cfg(feature = "sqlite")]
 #[must_use]
-pub fn sqlite_timestamp(time: DateTime<Utc>) -> String {
+pub fn sqlite_timestamp(time: Timestamp) -> String {
     crate::database::sqlite::sqlite_time(time)
 }
 
@@ -384,11 +384,11 @@ pub async fn notify_many(
 #[non_exhaustive]
 pub struct FinalizedJobDeleteParams {
     /// Delete cancelled jobs finalized before this time.
-    pub cancelled_before: Option<DateTime<Utc>>,
+    pub cancelled_before: Option<Timestamp>,
     /// Delete completed jobs finalized before this time.
-    pub completed_before: Option<DateTime<Utc>>,
+    pub completed_before: Option<Timestamp>,
     /// Delete discarded jobs finalized before this time.
-    pub discarded_before: Option<DateTime<Utc>>,
+    pub discarded_before: Option<Timestamp>,
     /// Maximum jobs to delete, lowest IDs first.
     pub limit: i64,
     /// Queues whose jobs are kept.
@@ -628,7 +628,7 @@ pub struct RescueParams {
     pub rescue_after: Duration,
     /// Jobs attempted at or after this time are not stuck. Computed once per
     /// rescuer pass.
-    pub stuck_horizon: DateTime<Utc>,
+    pub stuck_horizon: Timestamp,
     /// The limit on the rescuer transaction the selection runs in. An
     /// extension that reads through a connection of its own should bound
     /// that read the same way.
@@ -641,11 +641,11 @@ pub struct RescueJob {
     /// Attempt error JSON appended to the job's `errors`.
     pub attempt_error: Value,
     /// Finalization time, set for `cancelled` and `discarded`.
-    pub finalized_at: Option<DateTime<Utc>>,
+    pub finalized_at: Option<Timestamp>,
     /// Job ID.
     pub id: i64,
     /// Next scheduled time.
-    pub scheduled_at: DateTime<Utc>,
+    pub scheduled_at: Timestamp,
     /// Target River state string.
     pub state: JobState,
 }
@@ -663,7 +663,7 @@ pub struct RescueManyParams {
     /// Transitions OSS would write, in ID order.
     pub jobs: Vec<RescueJob>,
     /// Horizon the batch was selected with.
-    pub stuck_horizon: DateTime<Utc>,
+    pub stuck_horizon: Timestamp,
 }
 
 /// Whether the OSS rescuer should perform its normal guarded update.
@@ -765,7 +765,7 @@ impl fmt::Debug for JobInsertParams<'_> {
 pub struct LeaderTerm {
     /// When the database recorded this client's election, which identifies
     /// the term.
-    pub elected_at: DateTime<Utc>,
+    pub elected_at: Timestamp,
     /// Cancelled when the term ends.
     pub token: CancellationToken,
 }
@@ -1314,7 +1314,7 @@ pub struct RawInsertResult {
 #[derive(Clone, Debug)]
 pub struct PreparedInsertParams {
     /// Original creation time.
-    pub created_at: DateTime<Utc>,
+    pub created_at: Timestamp,
     /// Serialized job arguments.
     pub encoded_args: Box<RawValue>,
     /// Stable job kind.
@@ -1328,7 +1328,7 @@ pub struct PreparedInsertParams {
     /// Queue in which the job runs.
     pub queue: String,
     /// Earliest time at which the reinserted job may run.
-    pub scheduled_at: DateTime<Utc>,
+    pub scheduled_at: Timestamp,
     /// Searchable tags.
     pub tags: Vec<String>,
     /// Existing unique hash, if any.
@@ -1561,18 +1561,18 @@ impl RawInsertResult {
 pub struct JobRowParts {
     pub id: i64,
     pub attempt: i32,
-    pub attempted_at: Option<DateTime<Utc>>,
+    pub attempted_at: Option<Timestamp>,
     pub attempted_by: Vec<String>,
-    pub created_at: DateTime<Utc>,
+    pub created_at: Timestamp,
     pub encoded_args: Box<RawValue>,
     pub errors: Vec<AttemptError>,
-    pub finalized_at: Option<DateTime<Utc>>,
+    pub finalized_at: Option<Timestamp>,
     pub kind: String,
     pub max_attempts: i32,
     pub metadata: crate::JobMetadata,
     pub priority: i16,
     pub queue: String,
-    pub scheduled_at: DateTime<Utc>,
+    pub scheduled_at: Timestamp,
     pub state: JobState,
     pub tags: Vec<String>,
     pub unique_key: Option<Vec<u8>>,

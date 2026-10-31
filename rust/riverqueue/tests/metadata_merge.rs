@@ -150,7 +150,7 @@ mod sqlite_resumable {
             &self,
             _job: &Job<ResumableArgs>,
             _error: &WorkError,
-            _now: chrono::DateTime<chrono::Utc>,
+            _now: jiff::Timestamp,
         ) -> Option<Duration> {
             Some(Duration::from_millis(10))
         }

@@ -13,7 +13,7 @@ use std::{
 };
 
 use async_trait::async_trait;
-use chrono::{DateTime, Utc};
+use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
 use sqlx::{AssertSqlSafe, PgPool, postgres::PgPoolOptions};
 use tokio::sync::mpsc;
@@ -111,7 +111,7 @@ impl TestDatabase {
             "{prefix}_{:x}_{:x}_{:x}",
             std::process::id(),
             NONCE.fetch_add(1, Ordering::Relaxed),
-            Utc::now().timestamp_subsec_nanos()
+            Timestamp::now().subsec_nanosecond()
         );
         name.truncate(riverqueue_migrate::SCHEMA_MAX_LEN);
         sqlx::raw_sql(AssertSqlSafe(format!("CREATE SCHEMA \"{name}\"")))
@@ -151,13 +151,13 @@ impl TestDatabase {
             self.schema.qualify("river_job_state"),
         )))
         .bind(job.attempt)
-        .bind(job.attempted_at)
-        .bind(job.finalized_at)
+        .bind(job.attempted_at.map(jiff_sqlx::Timestamp::from))
+        .bind(job.finalized_at.map(jiff_sqlx::Timestamp::from))
         .bind(job.kind)
         .bind(job.max_attempts)
         .bind(sqlx::types::Json(job.metadata))
         .bind(job.queue)
-        .bind(job.scheduled_at)
+        .bind(job.scheduled_at.map(jiff_sqlx::Timestamp::from))
         .bind(job.state)
         .bind(job.unique_key)
         .bind(job.unique_states)
@@ -195,13 +195,13 @@ impl TestDatabase {
 
 struct RawJob<'a> {
     attempt: i16,
-    attempted_at: Option<DateTime<Utc>>,
-    finalized_at: Option<DateTime<Utc>>,
+    attempted_at: Option<Timestamp>,
+    finalized_at: Option<Timestamp>,
     kind: &'a str,
     max_attempts: i16,
     metadata: serde_json::Value,
     queue: &'a str,
-    scheduled_at: Option<DateTime<Utc>>,
+    scheduled_at: Option<Timestamp>,
     state: &'a str,
     unique_key: Option<Vec<u8>>,
     /// Unique-state bitmask; defaults to every state when a key is set.
@@ -226,8 +226,8 @@ impl Default for RawJob<'_> {
     }
 }
 
-fn hours_ago(hours: i64) -> DateTime<Utc> {
-    Utc::now() - chrono::Duration::hours(hours)
+fn hours_ago(hours: i64) -> Timestamp {
+    Timestamp::now() - jiff::SignedDuration::from_hours(hours)
 }
 
 fn stuck(kind: &str) -> RawJob<'_> {
@@ -405,14 +405,14 @@ async fn scheduler_look_ahead_and_unique_conflicts() {
         .await;
     let look_ahead = database
         .insert_job(RawJob {
-            scheduled_at: Some(Utc::now() + chrono::Duration::seconds(2)),
+            scheduled_at: Some(Timestamp::now() + jiff::SignedDuration::from_secs(2)),
             state: "retryable",
             ..RawJob::default()
         })
         .await;
     let later = database
         .insert_job(RawJob {
-            scheduled_at: Some(Utc::now() + chrono::Duration::minutes(5)),
+            scheduled_at: Some(Timestamp::now() + jiff::SignedDuration::from_mins(5)),
             state: "scheduled",
             ..RawJob::default()
         })
@@ -459,10 +459,10 @@ async fn scheduler_look_ahead_and_unique_conflicts() {
         database
             .insert_job(RawJob {
                 attempt: i16::from(holder_state == "running"),
-                attempted_at: (holder_state == "running").then(Utc::now),
-                finalized_at: (holder_state == "completed").then(Utc::now),
+                attempted_at: (holder_state == "running").then(Timestamp::now),
+                finalized_at: (holder_state == "completed").then(Timestamp::now),
                 scheduled_at: (holder_state == "scheduled")
-                    .then(|| Utc::now() + chrono::Duration::hours(1)),
+                    .then(|| Timestamp::now() + jiff::SignedDuration::from_hours(1)),
                 state: holder_state,
                 unique_key: Some(vec![key; 32]),
                 unique_states: without_retryable,
@@ -541,7 +541,7 @@ async fn job_cleaner_retention_exclusions_and_batches() {
         }
         let recent = database
             .insert_job(RawJob {
-                finalized_at: Some(Utc::now()),
+                finalized_at: Some(Timestamp::now()),
                 state: "completed",
                 ..RawJob::default()
             })
@@ -728,7 +728,7 @@ async fn elector_loses_leadership_when_same_id_term_is_replaced() {
     // Another instance with the same ID replaces the term: same leader ID,
     // newer `elected_at`.
     let table = database.table("river_leader");
-    let replaced_elected_at: DateTime<Utc> = sqlx::query_scalar(AssertSqlSafe(format!(
+    let replaced_elected_at: jiff_sqlx::Timestamp = sqlx::query_scalar(AssertSqlSafe(format!(
         "WITH removed AS (DELETE FROM {table} RETURNING leader_id, elected_at) \
          INSERT INTO {table} (leader_id, elected_at, expires_at) \
          SELECT leader_id, elected_at + interval '1 second', now() + interval '1 hour' FROM removed \
@@ -737,7 +737,7 @@ async fn elector_loses_leadership_when_same_id_term_is_replaced() {
     .fetch_one(&database.pool)
     .await
     .unwrap();
-    assert!(replaced_elected_at > term.elected_at);
+    assert!(replaced_elected_at.to_jiff() > term.elected_at);
 
     tokio::time::timeout(Duration::from_secs(10), term.token.cancelled())
         .await
@@ -757,7 +757,7 @@ async fn elector_loses_leadership_when_same_id_term_is_replaced() {
     assert!(!observed.contains(&ElectorEvent::Resigned));
 
     // The replacement term was neither renewed nor deleted by this client.
-    let (elected_at, expires_in_minutes): (DateTime<Utc>, f64) =
+    let (elected_at, expires_in_minutes): (jiff_sqlx::Timestamp, f64) =
         sqlx::query_as(AssertSqlSafe(format!(
             "SELECT elected_at, (extract(epoch FROM expires_at - now()) / 60)::float8 FROM {table}"
         )))
@@ -873,7 +873,7 @@ async fn periodic_jobs_use_expected_run_time_and_uniqueness() {
         ))
         .unwrap();
 
-    let start = Utc::now();
+    let start = Timestamp::now();
     periodic.reset_for_leadership();
     periodic
         .run_due(&client, start, &CancellationToken::new())
@@ -885,11 +885,11 @@ async fn periodic_jobs_use_expected_run_time_and_uniqueness() {
     periodic
         .run_due(
             &client,
-            target - chrono::Duration::milliseconds(50),
+            target - jiff::SignedDuration::from_millis(50),
             &CancellationToken::new(),
         )
         .await;
-    let rows: Vec<DateTime<Utc>> = sqlx::query_scalar(AssertSqlSafe(format!(
+    let rows: Vec<jiff_sqlx::Timestamp> = sqlx::query_scalar(AssertSqlSafe(format!(
         "SELECT scheduled_at FROM {}",
         database.table("river_job")
     )))
@@ -898,8 +898,8 @@ async fn periodic_jobs_use_expected_run_time_and_uniqueness() {
     .unwrap();
     assert_eq!(rows.len(), 1);
     assert_eq!(
-        rows[0].timestamp_micros(),
-        target.timestamp_micros(),
+        rows[0].to_jiff().as_microsecond(),
+        target.as_microsecond(),
         "periodic job scheduled at its expected run time"
     );
 
@@ -1140,7 +1140,7 @@ async fn maintenance_start_retries_then_resigns(poll_only: bool) {
         let pool = database.pool.clone();
         let table = database.table("river_leader");
         async move {
-            sqlx::query_scalar::<_, DateTime<Utc>>(AssertSqlSafe(format!(
+            sqlx::query_scalar::<_, jiff_sqlx::Timestamp>(AssertSqlSafe(format!(
                 "SELECT elected_at FROM {table}"
             )))
             .fetch_optional(&pool)

@@ -39,7 +39,7 @@ fn flattened_job_args_round_trip_through_a_job_row() {
         1,
         FlattenedArgs::KIND,
         encode_args(&args).unwrap(),
-        chrono::Utc::now(),
+        jiff::Timestamp::now(),
     );
 
     assert_eq!(

@@ -5,7 +5,7 @@
 //! the unique key River would assign to a job or listening for River's
 //! notifications.
 
-use chrono::{DateTime, Utc};
+use jiff::Timestamp;
 use serde_json::value::RawValue;
 
 use crate::{Error, JobState, UniqueOpts};
@@ -29,13 +29,13 @@ pub struct UniqueKeyInput<'a> {
     pub kind: &'a str,
     /// Current time, used for period-scoped uniqueness when `scheduled_at` is
     /// absent.
-    pub now: DateTime<Utc>,
+    pub now: Timestamp,
     /// Uniqueness options.
     pub opts: &'a UniqueOpts,
     /// Queue name.
     pub queue: &'a str,
     /// Scheduled time, if the job is scheduled.
-    pub scheduled_at: Option<DateTime<Utc>>,
+    pub scheduled_at: Option<Timestamp>,
     /// Literal argument path components selected for uniqueness, such as
     /// [`JobArgs::unique_fields`](crate::JobArgs::unique_fields). For example,
     /// `&[&["user.id"], &["user", "id"]]` selects two distinct fields.

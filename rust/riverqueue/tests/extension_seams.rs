@@ -40,7 +40,7 @@ const FINALIZED_SEEDS: [(&str, &str); 6] = [
 fn finalized_deletions() -> Vec<(riverqueue::__private::FinalizedJobDeleteParams, Vec<usize>)> {
     use riverqueue::__private::FinalizedJobDeleteParams;
 
-    let before = chrono::Utc::now();
+    let before = jiff::Timestamp::now();
     let mut none = FinalizedJobDeleteParams::new(100);
     none.queues_included = Some(vec!["alpha".to_owned()]);
 
@@ -129,7 +129,7 @@ fn queue_filter_cases() -> Vec<QueueFilterCase> {
                 queues_included: Option<&[&str]>,
                 batches: Vec<u64>,
                 deleted_queues: Vec<&'static str>| {
-        let horizon = chrono::Utc::now();
+        let horizon = jiff::Timestamp::now();
         let mut params = riverqueue::__private::FinalizedJobDeleteParams::new(2);
         params.cancelled_before = Some(horizon);
         params.completed_before = Some(horizon);

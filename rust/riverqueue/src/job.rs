@@ -2,7 +2,7 @@
 
 use std::time::Duration;
 
-use chrono::{DateTime, Utc};
+use jiff::Timestamp;
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use serde_json::{Map, Value, value::RawValue};
 
@@ -116,7 +116,7 @@ pub struct AttemptError {
     /// Time at which the error occurred. It serializes as RFC 3339 with the
     /// shortest fractional seconds.
     #[serde(serialize_with = "crate::encoding::go_time::serialize")]
-    pub at: DateTime<Utc>,
+    pub at: Timestamp,
     /// Attempt number on which the error occurred.
     pub attempt: i32,
     /// Stringified worker error or panic value.
@@ -128,7 +128,7 @@ pub struct AttemptError {
 impl AttemptError {
     /// Creates a persisted attempt error without a panic trace.
     #[must_use]
-    pub fn new(at: DateTime<Utc>, attempt: i32, error: impl Into<String>) -> Self {
+    pub fn new(at: Timestamp, attempt: i32, error: impl Into<String>) -> Self {
         Self {
             at,
             attempt,
@@ -170,7 +170,7 @@ pub struct InsertOpts {
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub enum ScheduleOverride {
     /// Schedule the job no earlier than this time.
-    At(DateTime<Utc>),
+    At(Timestamp),
     /// Make the job immediately eligible, replacing any schedule from a lower
     /// layer.
     Immediate,
@@ -274,7 +274,7 @@ impl InsertOpts {
 
     /// Schedules the job no earlier than `scheduled_at`.
     #[must_use]
-    pub const fn with_scheduled_at(mut self, scheduled_at: DateTime<Utc>) -> Self {
+    pub const fn with_scheduled_at(mut self, scheduled_at: Timestamp) -> Self {
         self.scheduled_at = ScheduleOverride::At(scheduled_at);
         self
     }
@@ -379,7 +379,7 @@ pub struct InsertParams {
     /// Queue in which the job runs.
     pub queue: String,
     /// Earliest time the job may run.
-    pub scheduled_at: Option<DateTime<Utc>>,
+    pub scheduled_at: Option<Timestamp>,
     /// Searchable tags.
     pub tags: Vec<String>,
     /// Unique job options.
@@ -499,17 +499,17 @@ pub struct JobRow {
     /// Current attempt number.
     pub attempt: i32,
     /// Last attempt time.
-    pub attempted_at: Option<DateTime<Utc>>,
+    pub attempted_at: Option<Timestamp>,
     /// IDs of clients that attempted the job.
     pub attempted_by: Vec<String>,
     /// Creation time.
-    pub created_at: DateTime<Utc>,
+    pub created_at: Timestamp,
     /// Encoded job arguments as the exact JSON text stored with the job.
     pub encoded_args: Box<RawValue>,
     /// Failed attempts in chronological order.
     pub errors: Vec<AttemptError>,
     /// Terminal-state time.
-    pub finalized_at: Option<DateTime<Utc>>,
+    pub finalized_at: Option<Timestamp>,
     /// Stable job kind.
     pub kind: String,
     /// Maximum attempts.
@@ -521,7 +521,7 @@ pub struct JobRow {
     /// Queue name.
     pub queue: String,
     /// Earliest run time.
-    pub scheduled_at: DateTime<Utc>,
+    pub scheduled_at: Timestamp,
     /// Current state.
     pub state: JobState,
     /// Searchable tags.
@@ -542,7 +542,7 @@ impl JobRow {
         id: i64,
         kind: impl Into<String>,
         encoded_args: Box<RawValue>,
-        now: DateTime<Utc>,
+        now: Timestamp,
     ) -> Self {
         Self {
             attempt: 0,
@@ -947,7 +947,7 @@ mod tests {
             .with_max_attempts(9)
             .with_priority(3)
             .with_queue("job_queue")
-            .with_scheduled_at(Utc::now());
+            .with_scheduled_at(Timestamp::now());
         let resolved = InsertOpts::resolve(
             7,
             job_defaults,
@@ -990,7 +990,7 @@ mod tests {
 
     #[test]
     fn overlay_replaces_only_options_set_in_overrides() {
-        let scheduled_at = Utc::now();
+        let scheduled_at = Timestamp::now();
         let base = InsertOpts::default()
             .with_max_attempts(9)
             .with_priority(3)
@@ -1025,7 +1025,7 @@ mod tests {
             42,
             "id_test",
             crate::encoding::encode_args(&serde_json::json!({})).unwrap(),
-            Utc::now(),
+            Timestamp::now(),
         );
         let job = Job::new((), row.clone());
         assert_eq!(job.id(), 42);

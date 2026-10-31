@@ -1,6 +1,6 @@
 //! SQLite implementation of River's storage operations.
 
-use chrono::Utc;
+use jiff::Timestamp;
 use serde_json::{Map, Value};
 use sqlx::SqliteConnection;
 
@@ -61,7 +61,7 @@ impl Backend for SqliteBackend<'_> {
     }
 
     async fn job_cancel(&mut self, id: i64) -> Result<Option<JobRow>, Error> {
-        let updated = sqlite::cancel(self.connection, id, Utc::now())
+        let updated = sqlite::cancel(self.connection, id, Timestamp::now())
             .await
             .map_err(database_error)?;
         let Some(row) = updated else {
@@ -113,7 +113,7 @@ impl Backend for SqliteBackend<'_> {
         if job.state != JobState::Running {
             return Err(super::job_not_running(job.state));
         }
-        let now = Utc::now();
+        let now = Timestamp::now();
         sqlite::complete(
             self.connection,
             &sqlite::CompleteJob {
@@ -178,7 +178,7 @@ impl Backend for SqliteBackend<'_> {
                 kinds: None,
                 limit: 1,
                 max_attempted_by,
-                now: Utc::now(),
+                now: Timestamp::now(),
                 queue: "",
             },
             &[id],
@@ -202,7 +202,7 @@ impl Backend for SqliteBackend<'_> {
     }
 
     async fn job_retry(&mut self, id: i64) -> Result<Option<JobRow>, Error> {
-        let updated = sqlite::retry(self.connection, id, Utc::now())
+        let updated = sqlite::retry(self.connection, id, Timestamp::now())
             .await
             .map_err(database_error)?;
         let Some(row) = updated else {
@@ -247,7 +247,7 @@ impl Backend for SqliteBackend<'_> {
     }
 
     async fn queue_set_paused(&mut self, name: &str, paused: bool) -> Result<u64, Error> {
-        let now = Utc::now();
+        let now = Timestamp::now();
         let updated = if paused {
             sqlite::queue_pause(self.connection, name, now).await
         } else {
@@ -258,7 +258,7 @@ impl Backend for SqliteBackend<'_> {
     }
 
     async fn queue_touch(&mut self, name: &str) -> Result<Queue, Error> {
-        sqlite::queue_upsert(self.connection, name, &Map::new(), None, Utc::now())
+        sqlite::queue_upsert(self.connection, name, &Map::new(), None, Timestamp::now())
             .await
             .map_err(database_error)
     }
@@ -268,7 +268,7 @@ impl Backend for SqliteBackend<'_> {
         name: &str,
         metadata: Option<&Map<String, Value>>,
     ) -> Result<Option<Queue>, Error> {
-        sqlite::queue_update(self.connection, name, metadata, Utc::now())
+        sqlite::queue_update(self.connection, name, metadata, Timestamp::now())
             .await
             .map_err(database_error)
     }

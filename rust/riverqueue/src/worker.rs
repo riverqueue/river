@@ -9,7 +9,7 @@ use std::{
 };
 
 use async_trait::async_trait;
-use chrono::{DateTime, Utc};
+use jiff::Timestamp;
 use serde::Serialize;
 use serde::de::DeserializeOwned;
 use serde_json::{Map, Value};
@@ -769,12 +769,7 @@ where
 
     /// Overrides the client retry delay for this job. Returning `None` uses the
     /// client policy.
-    fn next_retry(
-        &self,
-        _job: &Job<A>,
-        _error: &WorkError,
-        _now: DateTime<Utc>,
-    ) -> Option<Duration> {
+    fn next_retry(&self, _job: &Job<A>, _error: &WorkError, _now: Timestamp) -> Option<Duration> {
         None
     }
 
@@ -802,7 +797,7 @@ trait ErasedWorker: Send + Sync {
         &self,
         row: &JobRow,
         error: &WorkError,
-        now: DateTime<Utc>,
+        now: Timestamp,
     ) -> Result<Option<Duration>, Box<dyn StdError + Send + Sync>>;
 
     fn timeout(&self, row: &JobRow) -> Result<WorkerTimeout, Box<dyn StdError + Send + Sync>>;
@@ -856,7 +851,7 @@ where
         &self,
         row: &JobRow,
         error: &WorkError,
-        now: DateTime<Utc>,
+        now: Timestamp,
     ) -> Result<Option<Duration>, Box<dyn StdError + Send + Sync>> {
         // `work` consumes its job, so a failed attempt decodes once more to
         // consult the worker's retry override.
@@ -943,7 +938,7 @@ impl Workers {
         &self,
         row: &JobRow,
         error: &WorkError,
-        now: DateTime<Utc>,
+        now: Timestamp,
     ) -> Result<Option<Duration>, Box<dyn StdError + Send + Sync>> {
         self.worker_for(row)?.next_retry(row, error, now)
     }
@@ -1096,7 +1091,7 @@ mod tests {
         },
     };
 
-    use chrono::Utc;
+    use jiff::Timestamp;
     use serde::{Deserialize, Serialize};
     use serde_json::json;
 
@@ -1139,7 +1134,7 @@ mod tests {
     }
 
     fn job_row(kind: &str, fail: bool) -> JobRow {
-        let now = Utc::now();
+        let now = Timestamp::now();
         JobRow {
             attempt: 1,
             attempted_at: Some(now),

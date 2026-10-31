@@ -4,8 +4,8 @@ use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use std::time::Duration;
 
-use chrono::Utc;
 use futures_util::FutureExt as _;
+use jiff::Timestamp;
 #[cfg(feature = "postgres")]
 use sqlx::postgres::PgRow;
 #[cfg(feature = "postgres")]
@@ -589,9 +589,9 @@ async fn run_reports(
         ticks.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
         loop {
             ticks.tick().await;
-            let stale_before = Utc::now()
-                - chrono::Duration::from_std(PRODUCER_STALE_RETENTION)
-                    .unwrap_or(chrono::Duration::MAX);
+            let stale_before = Timestamp::now()
+                - jiff::SignedDuration::try_from(PRODUCER_STALE_RETENTION)
+                    .unwrap_or(jiff::SignedDuration::MAX);
             let report = std::panic::AssertUnwindSafe(
                 session.keep_alive(crate::__private::ProducerKeepAliveContext { stale_before }),
             )
@@ -1141,7 +1141,7 @@ pub(crate) async fn standard_claim(
                 kinds: inner.fetch_kinds.as_deref(),
                 limit,
                 max_attempted_by: ATTEMPTED_BY_MAX,
-                now: Utc::now(),
+                now: Timestamp::now(),
                 queue,
             };
             crate::database::sqlite::claim(connection, &params)

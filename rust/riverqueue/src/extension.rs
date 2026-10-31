@@ -2,7 +2,7 @@
 
 use std::{fmt, future::Future, pin::Pin, sync::Arc, time::Duration};
 
-use chrono::{DateTime, Utc};
+use jiff::Timestamp;
 
 use crate::{BoxError, Error, InsertParams, JobRow, PeriodicJobs, WorkContext, WorkOutcome};
 
@@ -234,7 +234,7 @@ pub struct InsertContext {
     /// State the job is inserted in: available, pending, or scheduled.
     pub state: crate::JobState,
     /// Creation time to persist instead of the database's current time.
-    pub(crate) created_at: Option<DateTime<Utc>>,
+    pub(crate) created_at: Option<Timestamp>,
     /// Unique key hash computed from the original insertion.
     pub(crate) unique_key: Option<Vec<u8>>,
     /// Bitmask of states in which the unique key is enforced.
@@ -706,7 +706,7 @@ impl fmt::Debug for WorkNext<'_> {
 pub trait RetryPolicy: Send + Sync + 'static {
     /// Returns the delay before another attempt of `job`, whose attempt
     /// failed with `error`.
-    fn next_retry(&self, job: &JobRow, error: &WorkError, now: DateTime<Utc>) -> Duration;
+    fn next_retry(&self, job: &JobRow, error: &WorkError, now: Timestamp) -> Duration;
 }
 
 /// River's quartic retry policy with compatibility jitter.
@@ -724,7 +724,7 @@ impl DefaultRetryPolicy {
 }
 
 impl RetryPolicy for DefaultRetryPolicy {
-    fn next_retry(&self, job: &JobRow, _error: &WorkError, now: DateTime<Utc>) -> Duration {
+    fn next_retry(&self, job: &JobRow, _error: &WorkError, now: Timestamp) -> Duration {
         crate::client::default_retry_delay(job, now, self.seed)
     }
 }

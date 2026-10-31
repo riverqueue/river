@@ -23,7 +23,7 @@
 
 use std::{borrow::Cow, time::Duration};
 
-use chrono::{DateTime, SecondsFormat, Utc};
+use jiff::Timestamp;
 use serde_json::value::RawValue;
 use sha2::{Digest, Sha256};
 
@@ -37,10 +37,10 @@ pub(crate) fn build_unique_key_parts(
     kind: &str,
     unique_fields: &[&[&str]],
     encoded_args: &RawValue,
-    now: DateTime<Utc>,
+    now: Timestamp,
     opts: &UniqueOpts,
     queue: &str,
-    scheduled_at: Option<DateTime<Utc>>,
+    scheduled_at: Option<Timestamp>,
 ) -> Result<Option<[u8; 32]>, Error> {
     if opts.is_empty() {
         return Ok(None);
@@ -64,7 +64,9 @@ pub(crate) fn build_unique_key_parts(
         key.push_str("&period=");
         let scheduled_at = scheduled_at.unwrap_or(now);
         key.push_str(
-            &truncate_period(scheduled_at, period)?.to_rfc3339_opts(SecondsFormat::Secs, true),
+            &truncate_period(scheduled_at, period)?
+                .strftime("%Y-%m-%dT%H:%M:%SZ")
+                .to_string(),
         );
     }
     if opts.by_queue {
@@ -437,12 +439,11 @@ impl<'a> Scanner<'a> {
     }
 }
 
-fn truncate_period(timestamp: DateTime<Utc>, period: Duration) -> Result<DateTime<Utc>, Error> {
+fn truncate_period(timestamp: Timestamp, period: Duration) -> Result<Timestamp, Error> {
     let period_nanos = i128::try_from(period.as_nanos()).map_err(|_| {
         Error::invalid_job_context("job uniqueness", "unique period is too large".to_owned())
     })?;
-    let unix_nanos = i128::from(timestamp.timestamp()) * 1_000_000_000
-        + i128::from(timestamp.timestamp_subsec_nanos());
+    let unix_nanos = timestamp.as_nanosecond();
     let absolute_nanos = unix_nanos + SECONDS_FROM_YEAR_ONE_TO_UNIX_EPOCH * 1_000_000_000;
     let truncated_absolute = absolute_nanos - absolute_nanos.rem_euclid(period_nanos);
     let truncated_unix = truncated_absolute - SECONDS_FROM_YEAR_ONE_TO_UNIX_EPOCH * 1_000_000_000;
@@ -452,13 +453,13 @@ fn truncate_period(timestamp: DateTime<Utc>, period: Duration) -> Result<DateTim
             "truncated timestamp is out of range".to_owned(),
         )
     })?;
-    let nanos = u32::try_from(truncated_unix.rem_euclid(1_000_000_000)).map_err(|_| {
+    let nanos = i32::try_from(truncated_unix.rem_euclid(1_000_000_000)).map_err(|_| {
         Error::invalid_job_context(
             "job uniqueness",
             "truncated timestamp is out of range".to_owned(),
         )
     })?;
-    DateTime::from_timestamp(seconds, nanos).ok_or_else(|| {
+    Timestamp::new(seconds, nanos).map_err(|_| {
         Error::invalid_job_context(
             "job uniqueness",
             "truncated timestamp is out of range".to_owned(),
@@ -468,10 +469,8 @@ fn truncate_period(timestamp: DateTime<Utc>, period: Duration) -> Result<DateTim
 
 #[cfg(test)]
 mod tests {
-    use std::collections::BTreeMap;
-
-    use chrono::TimeZone;
     use serde::{Deserialize, Serialize};
+    use std::collections::BTreeMap;
 
     use super::*;
     use crate::{
@@ -493,10 +492,10 @@ mod tests {
         expected_state_mask: u8,
         kind: String,
         name: String,
-        now: DateTime<Utc>,
+        now: Timestamp,
         options: FixtureOptions,
         queue: String,
-        scheduled_at: Option<DateTime<Utc>>,
+        scheduled_at: Option<Timestamp>,
         selected_unique_components: Option<Vec<Vec<String>>>,
     }
 
@@ -588,7 +587,7 @@ mod tests {
             kind,
             unique_fields,
             args,
-            Utc.with_ymd_and_hms(2026, 1, 2, 3, 4, 5).unwrap(),
+            "2026-01-02T03:04:05Z".parse::<jiff::Timestamp>().unwrap(),
             opts,
             "default",
             None,
@@ -939,24 +938,24 @@ mod tests {
     #[river(kind = "conformance_all_args")]
     struct TimeArgs {
         #[serde(with = "crate::encoding::go_time")]
-        fraction: DateTime<Utc>,
+        fraction: Timestamp,
         #[serde(with = "crate::encoding::go_time")]
-        micros: DateTime<Utc>,
+        micros: Timestamp,
         #[serde(with = "crate::encoding::go_time")]
-        millis: DateTime<Utc>,
-        whole: DateTime<Utc>,
+        millis: Timestamp,
+        whole: Timestamp,
     }
 
     #[test]
     fn typed_args_match_go_time_golden() {
-        let whole = Utc.with_ymd_and_hms(2026, 1, 2, 3, 4, 5).unwrap();
+        let whole = "2026-01-02T03:04:05Z".parse::<jiff::Timestamp>().unwrap();
         assert_typed_golden(
             "typed_time_values",
             &TimeArgs {
-                fraction: whole + chrono::Duration::milliseconds(500),
-                micros: whole + chrono::Duration::microseconds(123_456),
-                millis: whole + chrono::Duration::milliseconds(120),
-                // Whole seconds need no helper: chrono and Go agree.
+                fraction: whole + jiff::SignedDuration::from_millis(500),
+                micros: whole + jiff::SignedDuration::from_micros(123_456),
+                millis: whole + jiff::SignedDuration::from_millis(120),
+                // Whole seconds need no helper: Jiff and Go agree.
                 whole,
             },
         );
@@ -1143,11 +1142,11 @@ mod tests {
 
     #[test]
     fn truncates_from_go_time_zero() {
-        let timestamp = Utc.with_ymd_and_hms(2026, 1, 2, 3, 4, 5).unwrap();
+        let timestamp = "2026-01-02T03:04:05Z".parse::<jiff::Timestamp>().unwrap();
         let truncated = truncate_period(timestamp, Duration::from_mins(1)).unwrap();
         assert_eq!(
             truncated,
-            Utc.with_ymd_and_hms(2026, 1, 2, 3, 4, 0).unwrap()
+            "2026-01-02T03:04:00Z".parse::<jiff::Timestamp>().unwrap()
         );
     }
 }

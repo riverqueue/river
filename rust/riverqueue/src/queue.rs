@@ -1,6 +1,6 @@
 //! Persisted queue configuration.
 
-use chrono::{DateTime, Utc};
+use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
@@ -9,7 +9,7 @@ use serde_json::{Map, Value};
 #[non_exhaustive]
 pub struct Queue {
     /// Time at which this active queue record was created.
-    pub created_at: DateTime<Utc>,
+    pub created_at: Timestamp,
     /// Reserved queue metadata.
     pub metadata: Map<String, Value>,
     /// The metadata's text as the database renders it, keeping the key
@@ -19,9 +19,9 @@ pub struct Queue {
     /// Stable queue name.
     pub name: String,
     /// Time at which the queue was paused.
-    pub paused_at: Option<DateTime<Utc>>,
+    pub paused_at: Option<Timestamp>,
     /// Last client heartbeat or configuration update.
-    pub updated_at: DateTime<Utc>,
+    pub updated_at: Timestamp,
 }
 
 /// Parameters for listing queues.

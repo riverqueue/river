@@ -56,7 +56,7 @@ use std::{
     time::Duration,
 };
 
-use chrono::{DateTime, Utc};
+use jiff::Timestamp;
 use tokio::sync::{broadcast, mpsc, watch};
 use tokio_util::sync::CancellationToken;
 
@@ -466,17 +466,8 @@ impl Client {
 /// Formats a time as River Go's `time.Time` JSON (RFC 3339 with nanoseconds
 /// and trailing zeros trimmed, in UTC), which River stores for
 /// `cancel_attempted_at`.
-pub(crate) fn go_time_json(time: DateTime<Utc>) -> String {
-    let formatted = time.to_rfc3339_opts(chrono::SecondsFormat::Nanos, true);
-    let Some((seconds, fraction)) = formatted.trim_end_matches('Z').split_once('.') else {
-        return formatted;
-    };
-    let fraction = fraction.trim_end_matches('0');
-    if fraction.is_empty() {
-        format!("{seconds}Z")
-    } else {
-        format!("{seconds}.{fraction}Z")
-    }
+pub(crate) fn go_time_json(time: Timestamp) -> String {
+    crate::encoding::format_rfc3339_nano(time)
 }
 
 /// Generates a client ID unique to this `Client` instance.
@@ -487,10 +478,14 @@ pub(crate) fn go_time_json(time: DateTime<Utc>) -> String {
 /// microsecond or containers report identical host names, because a shared ID
 /// would let two clients renew one leadership lease.
 fn default_client_id() -> String {
-    default_client_id_with_host(&host_name(), Utc::now(), crate::maintenance::random_u64())
+    default_client_id_with_host(
+        &host_name(),
+        Timestamp::now(),
+        crate::maintenance::random_u64(),
+    )
 }
 
-fn default_client_id_with_host(host: &str, created_at: DateTime<Utc>, random: u64) -> String {
+fn default_client_id_with_host(host: &str, created_at: Timestamp, random: u64) -> String {
     const MAX_HOST_LENGTH: usize = 60;
 
     let mut host = host.replace('.', "_");
@@ -503,7 +498,7 @@ fn default_client_id_with_host(host: &str, created_at: DateTime<Utc>, random: u6
     }
     format!(
         "{host}_{}_{:08x}",
-        created_at.format("%Y_%m_%dT%H_%M_%S_%6f"),
+        created_at.strftime("%Y_%m_%dT%H_%M_%S_%6f"),
         random & 0xffff_ffff
     )
 }
@@ -520,16 +515,13 @@ fn host_name() -> String {
 
 #[cfg(test)]
 mod default_client_id_tests {
-    use chrono::{TimeZone, Timelike};
 
     use super::*;
 
     #[test]
     fn default_client_id_matches_go_shape_and_is_unique() {
-        let created_at = Utc
-            .with_ymd_and_hms(2026, 1, 2, 3, 4, 5)
-            .unwrap()
-            .with_nanosecond(678_901_000)
+        let created_at = "2026-01-02T03:04:05.678901000Z"
+            .parse::<jiff::Timestamp>()
             .unwrap();
         assert_eq!(
             default_client_id_with_host("worker.example.com", created_at, 0xdead_beef),

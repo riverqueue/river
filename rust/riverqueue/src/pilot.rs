@@ -6,7 +6,7 @@
 use std::{fmt, sync::Arc, time::Duration};
 
 use async_trait::async_trait;
-use chrono::{DateTime, Utc};
+use jiff::Timestamp;
 use serde_json::{Map, Value};
 #[cfg(feature = "postgres")]
 use sqlx::Postgres;
@@ -328,7 +328,7 @@ pub struct ProducerStartContext {
 pub struct ProducerKeepAliveContext {
     /// Peers that haven't reported since this time are stale, like River
     /// Go's `StaleUpdatedAtHorizon`.
-    pub stale_before: DateTime<Utc>,
+    pub stale_before: Timestamp,
 }
 
 /// Inputs to one [`PilotProducer::shutdown`] attempt.

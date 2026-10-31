@@ -13,7 +13,7 @@ use std::{
     time::Duration,
 };
 
-use chrono::{DateTime, Utc};
+use jiff::Timestamp;
 use riverqueue::{
     AttemptError, BoxError, Client, ErrorHandler, ErrorHandlerDecision, EventKind, InsertOpts, Job,
     JobArgs, JobEventKind, JobRow, JobState, MaintenanceConfig, QueueConfig, RetryPolicy,
@@ -240,7 +240,7 @@ impl RetryPolicy for RetryAnHourLater {
         &self,
         _job: &JobRow,
         _error: &riverqueue::WorkError,
-        _now: DateTime<Utc>,
+        _now: Timestamp,
     ) -> Duration {
         Duration::from_hours(1)
     }
@@ -391,7 +391,7 @@ async fn claimed_rows_decode_individually_and_accept_go_integer_ranges() {
             i64,
             String,
             String,
-            DateTime<Utc>,
+            jiff_sqlx::DateTime,
         ) = sqlx::query_as(
             "SELECT state, attempt, json(errors), json(tags), scheduled_at FROM river_job WHERE id = ?",
         )
@@ -409,8 +409,13 @@ async fn claimed_rows_decode_individually_and_accept_go_integer_ranges() {
         if state == JobState::Retryable {
             assert_eq!(errors[0], serde_json::json!({"not": "an array"}));
             assert!(
-                scheduled_at > Utc::now() + chrono::Duration::minutes(50),
-                "the client retry policy wasn't used: {scheduled_at}"
+                scheduled_at
+                    .to_jiff()
+                    .to_zoned(jiff::tz::TimeZone::UTC)
+                    .unwrap()
+                    .timestamp()
+                    > Timestamp::now() + jiff::SignedDuration::from_mins(50),
+                "the client retry policy wasn't used: {scheduled_at:?}"
             );
         } else {
             assert_eq!(errors.len(), 1);
@@ -603,7 +608,10 @@ async fn invalid_json_columns_fail_attempts_without_stalling_the_queue() {
     // their invalid values, along with an ordinary scheduled job.
     let scheduled = client
         .insert(ResilienceArgs {})
-        .opts(InsertOpts::default().with_scheduled_at(Utc::now() + chrono::Duration::hours(1)))
+        .opts(
+            InsertOpts::default()
+                .with_scheduled_at(Timestamp::now() + jiff::SignedDuration::from_hours(1)),
+        )
         .await
         .unwrap();
     sqlx::query("UPDATE river_job SET scheduled_at = datetime('now', '-1 second') WHERE state IN ('retryable', 'scheduled')")
@@ -800,7 +808,7 @@ async fn cancel_attempted_at_matches_go_time_json() {
             "trailing zeros are trimmed: {cancel_attempted_at}"
         );
     }
-    chrono::DateTime::parse_from_rfc3339(&cancel_attempted_at).unwrap();
+    cancel_attempted_at.parse::<jiff::Timestamp>().unwrap();
 }
 
 #[tokio::test(flavor = "multi_thread")]

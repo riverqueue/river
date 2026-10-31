@@ -14,7 +14,7 @@
 use std::fmt::Display;
 
 #[cfg(feature = "postgres")]
-use chrono::{DateTime, Utc};
+use jiff::Timestamp;
 #[cfg(feature = "postgres")]
 use serde_json::value::RawValue;
 #[cfg(feature = "postgres")]
@@ -115,19 +115,19 @@ impl FieldErrors {
 #[cfg(feature = "postgres")]
 pub(crate) struct JobRecord {
     attempt: i16,
-    attempted_at: Option<DateTime<Utc>>,
+    attempted_at: Option<Timestamp>,
     attempted_by: Result<Option<Vec<String>>, sqlx::Error>,
-    created_at: DateTime<Utc>,
+    created_at: Timestamp,
     encoded_args: Json<Box<RawValue>>,
     errors: Result<Vec<Option<Json<Box<RawValue>>>>, sqlx::Error>,
-    finalized_at: Option<DateTime<Utc>>,
+    finalized_at: Option<Timestamp>,
     id: i64,
     kind: String,
     max_attempts: i16,
     metadata: Json<Box<RawValue>>,
     priority: i16,
     queue: String,
-    scheduled_at: DateTime<Utc>,
+    scheduled_at: Timestamp,
     state: String,
     tags: Result<Vec<String>, sqlx::Error>,
     unique_key: Option<Vec<u8>>,
@@ -144,19 +144,23 @@ impl<'row> FromRow<'row, PgRow> for JobRecord {
         // and completion paths.
         Ok(Self {
             attempt: row.try_get(1)?,
-            attempted_at: row.try_get(2)?,
+            attempted_at: row
+                .try_get::<Option<jiff_sqlx::Timestamp>, _>(2)?
+                .map(jiff_sqlx::Timestamp::to_jiff),
             attempted_by: row.try_get(3),
-            created_at: row.try_get(4)?,
+            created_at: row.try_get::<jiff_sqlx::Timestamp, _>(4)?.to_jiff(),
             encoded_args: row.try_get(5)?,
             errors: row.try_get(6),
-            finalized_at: row.try_get(7)?,
+            finalized_at: row
+                .try_get::<Option<jiff_sqlx::Timestamp>, _>(7)?
+                .map(jiff_sqlx::Timestamp::to_jiff),
             id: row.try_get(0)?,
             kind: row.try_get(8)?,
             max_attempts: row.try_get(9)?,
             metadata: row.try_get(10)?,
             priority: row.try_get(11)?,
             queue: row.try_get(12)?,
-            scheduled_at: row.try_get(13)?,
+            scheduled_at: row.try_get::<jiff_sqlx::Timestamp, _>(13)?.to_jiff(),
             state: row.try_get(14)?,
             tags: row.try_get(15),
             unique_key: row.try_get(16)?,

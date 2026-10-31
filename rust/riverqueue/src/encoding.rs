@@ -25,15 +25,15 @@
 //! * River clients in other languages may encode byte strings as base64
 //!   strings; a Rust `Vec<u8>` encodes as an array of numbers.
 //! * Canonical timestamps use RFC 3339 with the shortest fractional seconds,
-//!   while `chrono` pads fractional seconds to 3, 6, or 9 digits. Use
-//!   [`go_time`] for `DateTime<Utc>` fields that participate in unique keys.
+//!   as Jiff timestamps do by default. [`go_time`] explicitly applies this
+//!   representation to `Timestamp` fields that participate in unique keys.
 //!
 //! Encoding fails for non-finite floats (`NaN` and infinities) instead of
 //! writing them as `null` the way [`serde_json`] does.
 
 use std::{fmt, fmt::Write as _, io};
 
-use chrono::{DateTime, SecondsFormat, Timelike, Utc};
+use jiff::Timestamp;
 use serde::Serialize;
 use serde_json::{
     ser::{CharEscape, Formatter},
@@ -60,7 +60,7 @@ pub fn encode_args<T: Serialize + ?Sized>(args: &T) -> Result<Box<RawValue>, ser
     RawValue::from_string(to_go_string(args)?)
 }
 
-/// Serde helpers that encode a `DateTime<Utc>` as River's canonical
+/// Serde helpers that encode a `Timestamp` as River's canonical
 /// timestamp: RFC 3339 in UTC with `Z` and the shortest fractional seconds,
 /// with no fractional part when it's zero (`2026-01-02T03:04:05.5Z`).
 ///
@@ -68,7 +68,7 @@ pub fn encode_args<T: Serialize + ?Sized>(args: &T) -> Result<Box<RawValue>, ser
 /// fields that participate in unique keys shared with other River clients.
 /// Deserialization accepts any RFC 3339 timestamp.
 pub mod go_time {
-    use chrono::{DateTime, Utc};
+    use jiff::Timestamp;
     use serde::{Deserialize, Deserializer, Serializer};
 
     /// Serializes a timestamp in RFC 3339 form with the shortest fractional
@@ -78,7 +78,7 @@ pub mod go_time {
     ///
     /// Returns the serializer's error.
     pub fn serialize<S: Serializer>(
-        timestamp: &DateTime<Utc>,
+        timestamp: &Timestamp,
         serializer: S,
     ) -> Result<S::Ok, S::Error> {
         serializer.serialize_str(&super::format_rfc3339_nano(*timestamp))
@@ -89,23 +89,14 @@ pub mod go_time {
     /// # Errors
     ///
     /// Returns an error when the input is not an RFC 3339 timestamp.
-    pub fn deserialize<'de, D: Deserializer<'de>>(
-        deserializer: D,
-    ) -> Result<DateTime<Utc>, D::Error> {
-        DateTime::<Utc>::deserialize(deserializer)
+    pub fn deserialize<'de, D: Deserializer<'de>>(deserializer: D) -> Result<Timestamp, D::Error> {
+        Timestamp::deserialize(deserializer)
     }
 }
 
 /// Formats a UTC timestamp like Go's `time.RFC3339Nano`.
-pub(crate) fn format_rfc3339_nano(timestamp: DateTime<Utc>) -> String {
-    let mut formatted = timestamp.to_rfc3339_opts(SecondsFormat::Secs, true);
-    let nanos = timestamp.nanosecond() % 1_000_000_000;
-    if nanos > 0 {
-        let fraction = format!("{nanos:09}");
-        formatted.insert(formatted.len() - 1, '.');
-        formatted.insert_str(formatted.len() - 1, fraction.trim_end_matches('0'));
-    }
-    formatted
+pub(crate) fn format_rfc3339_nano(timestamp: Timestamp) -> String {
+    timestamp.to_string()
 }
 
 /// A [`serde_json`] formatter that writes compact JSON with Go's
@@ -428,8 +419,6 @@ pub(crate) fn write_go_string(value: &str, output: &mut String) {
 mod tests {
     use std::collections::BTreeMap;
 
-    use chrono::TimeZone;
-
     use super::*;
 
     fn encoded<T: Serialize + ?Sized>(value: &T) -> String {
@@ -567,10 +556,10 @@ mod tests {
         #[derive(Serialize)]
         struct Times {
             #[serde(with = "go_time")]
-            at: DateTime<Utc>,
+            at: Timestamp,
         }
 
-        let whole = Utc.with_ymd_and_hms(2026, 1, 2, 3, 4, 5).unwrap();
+        let whole = "2026-01-02T03:04:05Z".parse::<jiff::Timestamp>().unwrap();
         for (nanos, expected) in [
             (0, r#"{"at":"2026-01-02T03:04:05Z"}"#),
             (500_000_000, r#"{"at":"2026-01-02T03:04:05.5Z"}"#),
@@ -578,7 +567,7 @@ mod tests {
             (123_456_000, r#"{"at":"2026-01-02T03:04:05.123456Z"}"#),
             (1, r#"{"at":"2026-01-02T03:04:05.000000001Z"}"#),
         ] {
-            let at = whole + chrono::Duration::nanoseconds(nanos);
+            let at = whole + jiff::SignedDuration::from_nanos(nanos);
             assert_eq!(encoded(&Times { at }), expected);
         }
     }

@@ -3,7 +3,7 @@
 
 use std::time::Duration;
 
-use chrono::{DateTime, Utc};
+use jiff::Timestamp;
 use sqlx::{AssertSqlSafe, PgConnection, PgPool};
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, error, info, warn};
@@ -25,26 +25,27 @@ const ARTIFACT_CLEANUP_TIMEOUT: Duration = Duration::from_secs(15);
 const CATALOG_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// Returns the first scheduled run strictly after `after`.
-pub(crate) fn next_run(schedule: PostgresReindexSchedule, after: DateTime<Utc>) -> DateTime<Utc> {
+pub(crate) fn next_run(schedule: PostgresReindexSchedule, after: Timestamp) -> Timestamp {
     match schedule {
         PostgresReindexSchedule::DailyUtc(time) => {
-            let today = after.date_naive().and_time(time).and_utc();
+            let date = after.to_zoned(jiff::tz::TimeZone::UTC).date();
+            let today = date
+                .to_datetime(time)
+                .to_zoned(jiff::tz::TimeZone::UTC)
+                .expect("valid UTC date")
+                .timestamp();
             if today > after {
                 today
             } else {
-                after
-                    .date_naive()
-                    .succ_opt()
+                date.tomorrow()
                     .expect("UTC date has a following day")
-                    .and_time(time)
-                    .and_utc()
+                    .to_datetime(time)
+                    .to_zoned(jiff::tz::TimeZone::UTC)
+                    .expect("valid UTC date")
+                    .timestamp()
             }
         }
-        PostgresReindexSchedule::Interval(interval) => {
-            after
-                + chrono::Duration::from_std(interval)
-                    .expect("validated reindexer interval fits chrono duration")
-        }
+        PostgresReindexSchedule::Interval(interval) => after + interval,
     }
 }
 
@@ -61,10 +62,13 @@ pub(super) async fn run(context: std::sync::Arc<ServiceContext>, pool: sqlx::PgP
     if config.index_names().is_empty() {
         return;
     }
-    let mut scheduled = next_run(config.schedule(), Utc::now());
+    let mut scheduled = next_run(config.schedule(), Timestamp::now());
     debug!(next_run_at = %scheduled, "River reindexer scheduled its first run");
     loop {
-        let wait = (scheduled - Utc::now()).to_std().unwrap_or_default();
+        let wait = scheduled
+            .duration_since(Timestamp::now())
+            .try_into()
+            .unwrap_or_default();
         if !sleep_cancellable(&context.cancel, wait).await {
             return;
         }
@@ -306,26 +310,26 @@ async fn cancellable_catalog<T>(
 
 #[cfg(test)]
 mod unit_tests {
-    use chrono::{NaiveTime, TimeZone, Utc};
+    use jiff::civil::Time;
 
     use super::{PostgresReindexSchedule, next_run};
 
     #[test]
     fn schedule_advances_from_the_previous_run() {
-        let before_midnight = Utc.with_ymd_and_hms(2026, 8, 11, 23, 59, 0).unwrap();
-        let midnight = Utc.with_ymd_and_hms(2026, 8, 12, 0, 0, 0).unwrap();
-        let daily = PostgresReindexSchedule::DailyUtc(NaiveTime::MIN);
+        let before_midnight = "2026-08-11T23:59:00Z".parse::<jiff::Timestamp>().unwrap();
+        let midnight = "2026-08-12T00:00:00Z".parse::<jiff::Timestamp>().unwrap();
+        let daily = PostgresReindexSchedule::DailyUtc(Time::MIN);
         assert_eq!(next_run(daily, before_midnight), midnight);
         // A run exactly at midnight schedules the following midnight, like
         // Go's `t.Add(24h).Truncate(24h)`.
         assert_eq!(
             next_run(daily, midnight),
-            Utc.with_ymd_and_hms(2026, 8, 13, 0, 0, 0).unwrap()
+            "2026-08-13T00:00:00Z".parse::<jiff::Timestamp>().unwrap()
         );
         let interval = PostgresReindexSchedule::Interval(std::time::Duration::from_secs(30));
         assert_eq!(
             next_run(interval, before_midnight),
-            before_midnight + chrono::Duration::seconds(30)
+            before_midnight + jiff::SignedDuration::from_secs(30)
         );
     }
 }

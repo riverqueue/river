@@ -3,7 +3,7 @@
 
 use std::{collections::BTreeSet, time::Duration};
 
-use chrono::{DateTime, Utc};
+use jiff::Timestamp;
 #[cfg(feature = "postgres")]
 use sqlx::{AssertSqlSafe, Row};
 
@@ -27,7 +27,7 @@ const NOTIFICATION_HORIZON: Duration = Duration::from_millis(5);
 /// A job the scheduler transitioned.
 struct Scheduled {
     queue: String,
-    scheduled_at: DateTime<Utc>,
+    scheduled_at: Timestamp,
 }
 
 /// Runs scheduling batches until a batch is smaller than the batch size.
@@ -48,9 +48,9 @@ pub(super) async fn run_once(context: &ServiceContext) -> Result<(), Maintenance
 }
 
 async fn schedule_batch(context: &ServiceContext, limit: i64) -> Result<usize, MaintenanceError> {
-    let now = Utc::now();
+    let now = Timestamp::now();
     let look_ahead = now
-        + chrono::Duration::from_std(context.inner.maintenance.scheduler_interval)
+        + jiff::SignedDuration::try_from(context.inner.maintenance.scheduler_interval)
             .unwrap_or_default();
     match context.inner.database.pool() {
         #[cfg(feature = "sqlite")]
@@ -75,7 +75,8 @@ async fn schedule_batch(context: &ServiceContext, limit: i64) -> Result<usize, M
 }
 
 fn notified_queues(scheduled: &[Scheduled]) -> BTreeSet<String> {
-    let horizon = Utc::now() + chrono::Duration::from_std(NOTIFICATION_HORIZON).unwrap_or_default();
+    let horizon =
+        Timestamp::now() + jiff::SignedDuration::try_from(NOTIFICATION_HORIZON).unwrap_or_default();
     scheduled
         .iter()
         .filter(|job| job.scheduled_at <= horizon)
@@ -87,7 +88,7 @@ fn notified_queues(scheduled: &[Scheduled]) -> BTreeSet<String> {
 async fn schedule_batch_postgres(
     context: &ServiceContext,
     pool: &sqlx::PgPool,
-    look_ahead: DateTime<Utc>,
+    look_ahead: Timestamp,
     limit: i64,
 ) -> Result<usize, MaintenanceError> {
     use super::postgres::{MaintenanceTransaction, cancellable};
@@ -141,7 +142,7 @@ async fn schedule_batch_postgres(
         TIMEOUT_DEFAULT,
         sqlx::query(AssertSqlSafe(sql))
             .bind(limit)
-            .bind(look_ahead)
+            .bind(jiff_sqlx::Timestamp::from(look_ahead))
             .fetch_all(&mut *transaction.transaction),
     )
     .await?;
@@ -151,7 +152,7 @@ async fn schedule_batch_postgres(
         .filter(|row| row.get::<String, _>("state") == "available")
         .map(|row| Scheduled {
             queue: row.get("queue"),
-            scheduled_at: row.get("scheduled_at"),
+            scheduled_at: row.get::<jiff_sqlx::Timestamp, _>("scheduled_at").to_jiff(),
         })
         .collect::<Vec<_>>();
     let notified = notified_queues(&scheduled);
@@ -211,7 +212,7 @@ async fn delivers_notifications(
 async fn schedule_batch_sqlite(
     pool: &sqlx::SqlitePool,
     notify_limiter: &InsertNotifyLimiter,
-    look_ahead: DateTime<Utc>,
+    look_ahead: Timestamp,
     limit: i64,
 ) -> Result<usize, MaintenanceError> {
     let mut transaction = crate::database::begin_sqlite_write(pool).await?;
@@ -274,7 +275,7 @@ async fn schedule_batch_sqlite(
 mod sqlite_tests {
     use std::{sync::Arc, time::Duration};
 
-    use chrono::Utc;
+    use jiff::Timestamp;
     use riverqueue_migrate::SqliteMigrator;
     use serde::{Deserialize, Serialize};
     use sqlx::{SqlitePool, sqlite::SqlitePoolOptions};
@@ -293,7 +294,7 @@ mod sqlite_tests {
              VALUES (jsonb('{}'), 'scheduler_notification', 25, jsonb('{}'), ?, ?, 'scheduled')",
         )
         .bind(queue)
-        .bind(sqlite_time(Utc::now() - chrono::Duration::hours(1)))
+        .bind(sqlite_time(Timestamp::now() - jiff::SignedDuration::from_hours(1)))
         .execute(pool)
         .await
         .unwrap();
