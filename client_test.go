@@ -3727,6 +3727,74 @@ func Test_Client_JobDeleteMany(t *testing.T) {
 		require.Equal(t, []int64{job4.ID}, sliceutil.Map(deleteRes.Jobs, func(job *rivertype.JobRow) int64 { return job.ID }))
 	})
 
+	t.Run("FiltersByWhere", func(t *testing.T) {
+		t.Parallel()
+
+		client, bundle := setup(t)
+
+		var (
+			job1 = testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{EncodedArgs: []byte(`{"customer_id": 1}`), Kind: new("send_email"), Schema: bundle.schema})
+			job2 = testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{EncodedArgs: []byte(`{"customer_id": 2}`), Kind: new("send_email"), Schema: bundle.schema})
+			job3 = testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{EncodedArgs: []byte(`{"customer_id": 3}`), Kind: new("send_email"), Schema: bundle.schema})
+			job4 = testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{EncodedArgs: []byte(`{"customer_id": 1}`), Kind: new("other_kind"), Schema: bundle.schema})
+		)
+
+		deleteRes, err := client.JobDeleteMany(ctx, NewJobDeleteManyParams().
+			Kinds("send_email").
+			Where("(args->>'customer_id')::bigint = any(@customer_ids)", NamedArgs{"customer_ids": []int64{1, 2}}))
+		require.NoError(t, err)
+		require.Equal(t, []int64{job1.ID, job2.ID}, sliceutil.Map(deleteRes.Jobs, func(job *rivertype.JobRow) int64 { return job.ID }))
+
+		_, err = client.JobGet(ctx, job3.ID)
+		require.NoError(t, err)
+		_, err = client.JobGet(ctx, job4.ID)
+		require.NoError(t, err)
+	})
+
+	t.Run("FiltersByWhereWithoutUnsafeAll", func(t *testing.T) {
+		t.Parallel()
+
+		client, bundle := setup(t)
+
+		var (
+			job1 = testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{Priority: new(1), Schema: bundle.schema})
+			job2 = testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{Priority: new(2), Schema: bundle.schema})
+		)
+
+		deleteRes, err := client.JobDeleteMany(ctx, NewJobDeleteManyParams().Where("priority = @priority", NamedArgs{"priority": 1}))
+		require.NoError(t, err)
+		require.Equal(t, []int64{job1.ID}, sliceutil.Map(deleteRes.Jobs, func(job *rivertype.JobRow) int64 { return job.ID }))
+
+		_, err = client.JobGet(ctx, job2.ID)
+		require.NoError(t, err)
+	})
+
+	t.Run("WhereWithOrDoesNotWidenDeletion", func(t *testing.T) {
+		t.Parallel()
+
+		client, bundle := setup(t)
+
+		var (
+			job1 = testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{Kind: new("target_kind"), Priority: new(1), Schema: bundle.schema})
+			job2 = testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{Kind: new("target_kind"), Priority: new(1), Schema: bundle.schema, State: new(rivertype.JobStateRunning)})
+			job3 = testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{Kind: new("other_kind"), Priority: new(2), Schema: bundle.schema})
+		)
+
+		// Without parentheses around the predicate, the query's filters would
+		// read `kind = ... AND priority = 1 OR priority = 2 AND state !=
+		// 'running'`, deleting the running job2 and the other kind's job3.
+		deleteRes, err := client.JobDeleteMany(ctx, NewJobDeleteManyParams().
+			Kinds("target_kind").
+			Where("priority = @priority1 OR priority = @priority2", NamedArgs{"priority1": 1, "priority2": 2}))
+		require.NoError(t, err)
+		require.Equal(t, []int64{job1.ID}, sliceutil.Map(deleteRes.Jobs, func(job *rivertype.JobRow) int64 { return job.ID }))
+
+		_, err = client.JobGet(ctx, job2.ID)
+		require.NoError(t, err)
+		_, err = client.JobGet(ctx, job3.ID)
+		require.NoError(t, err)
+	})
+
 	t.Run("DeletesAllWithUnsafeAll", func(t *testing.T) {
 		t.Parallel()
 

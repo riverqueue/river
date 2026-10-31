@@ -538,9 +538,10 @@ func (p *JobListParams) TagsAny(tags ...string) *JobListParams {
 	return paramsCopy
 }
 
-// NamedArgs are named arguments for use with JobListParams.Where. Keys should
-// look like "my_param", and map to parameters like "@my_param" in SQL queries.
-// "@" are present in the SQL, but not in the keys of this map.
+// NamedArgs are named arguments for use with JobListParams.Where and
+// JobDeleteManyParams.Where. Keys should look like "my_param", and map to
+// parameters like "@my_param" in SQL queries. "@" are present in the SQL, but
+// not in the keys of this map.
 type NamedArgs map[string]any
 
 // Where is an all-encompassing query escape hatch that adds an arbitrary
