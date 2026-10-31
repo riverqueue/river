@@ -283,6 +283,10 @@ module River
     # Applies keyword attributes or a JobUpdateParams to a job and returns its
     # updated JobRow. Explicit nil clears nullable fields; omitted fields are
     # unchanged. Metadata must be a Hash; use an empty Hash to clear it.
+    # Output is written immediately under metadata["output"], preserving other
+    # keys. Explicit output: nil stores JSON null. If metadata is also supplied,
+    # it replaces the existing metadata and output overrides its "output" key.
+    # The write participates in an enclosing transaction, if any.
     # attempt must be between 0 and MAX_ATTEMPTS_LIMIT (32,767);
     # max_attempts must be between 1 and MAX_ATTEMPTS_LIMIT.
     # Raises NotFoundError if the job does not exist.

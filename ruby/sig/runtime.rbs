@@ -290,6 +290,7 @@ module River
     @finalized_at: untyped
     @max_attempts: untyped
     @metadata: untyped
+    @output: untyped
     @state: untyped
     attr_reader attempt: untyped
     attr_reader attempted_at: untyped
@@ -298,10 +299,11 @@ module River
     attr_reader finalized_at: untyped
     attr_reader max_attempts: untyped
     attr_reader metadata: untyped
+    attr_reader output: untyped
     attr_reader state: untyped
     def initialize: (?attempt: untyped, ?attempted_at: untyped, ?attempted_by: untyped,
       ?errors: untyped, ?finalized_at: untyped, ?max_attempts: untyped,
-      ?metadata: untyped, ?state: untyped) -> void
+      ?metadata: untyped, ?output: untyped, ?state: untyped) -> void
     def each: () { (Symbol, untyped) -> void } -> untyped
             | () -> Enumerator[[Symbol, untyped], untyped]
   end
