@@ -124,6 +124,7 @@ module River
 
     module Runtime
       def runtime_read_job: (untyped) -> untyped
+      def runtime_decoded_job: () { () -> JobRow } -> JobRow
       def runtime_decode_sqlite_job: (untyped) -> JobRow
       def runtime_decode_postgres_job: (untyped) -> JobRow
       @postgres_capabilities_cache: PostgresCapabilities::Cache
@@ -172,6 +173,7 @@ module River
       def runtime_cursor_clause: (untyped) -> String
       def runtime_execute: (String) -> untyped
       def runtime_in_clause: (untyped, untyped) -> untyped
+      def runtime_delete_running_job: (untyped, ?uncancelled: bool) -> String
       def runtime_job_attempt_predicate: (untyped) -> String
       def runtime_job_list_without_params: () -> untyped
       def runtime_job_list: (JobListParams, ?for_delete: bool) -> Array[JobRow]
@@ -194,11 +196,14 @@ module River
       def runtime_quote: (untyped) -> String
       def runtime_rescue_retry: (untyped, untyped, untyped, untyped, untyped) -> Time
       def runtime_returning_ids: (untyped) -> untyped
+      def runtime_returning_jobs: (String) -> Array[JobRow]
+      def runtime_running_job: (untyped, bool, ?expected_job: JobRow?) -> [String, String?, String]
       def runtime_schedule_postgres: (Time, Integer) -> Array[String]
       def runtime_schedule_sqlite: (Time, Integer) -> Array[String]
       def runtime_state: (untyped) -> untyped
       def runtime_tag_contains: (untyped) -> untyped
       def runtime_time: (untyped) -> untyped
+      def runtime_update_running_job: (untyped, Array[String], ?expected_job: JobRow?, ?uncancelled: bool) -> String
       def runtime_update_value: (untyped, untyped) -> untyped
       def runtime_value: (untyped, untyped) -> untyped
       def transaction: () { () -> untyped } -> untyped

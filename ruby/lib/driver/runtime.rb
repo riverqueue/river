@@ -82,16 +82,10 @@ module River::Driver
       assignments = ["state = 'completed'", "finalized_at = #{runtime_time(finalized_at)}"]
       assignments << "metadata = #{runtime_merge_metadata(metadata)}" unless metadata.nil? || metadata.empty?
 
-      transaction do
-        updated_id = runtime_returning_ids(<<~SQL).first
-          UPDATE river_job SET #{assignments.join(", ")}
-          WHERE #{predicate} AND state = 'running' AND NOT (#{runtime_cancel_attempted})
-          RETURNING id
-        SQL
-        next runtime_read_job(updated_id) if updated_id
+      completed = runtime_returning_jobs(runtime_update_running_job(id, assignments, expected_job: expected_job, uncancelled: true)).first
+      return completed if completed
 
-        :cancelled if runtime_returning_ids("SELECT id FROM river_job WHERE #{predicate} AND (#{runtime_cancel_attempted})").any?
-      end
+      :cancelled if runtime_returning_ids("SELECT id FROM river_job WHERE #{predicate} AND (#{runtime_cancel_attempted})").any?
     end
 
     def job_delete(id)
@@ -128,11 +122,7 @@ module River::Driver
     # completion. Return :cancelled so the runtime can record the cancellation.
     def job_delete_if_running(id)
       id = Integer(id)
-      deleted = runtime_returning_ids(<<~SQL).any?
-        DELETE FROM river_job
-        WHERE id = #{id} AND state = 'running' AND NOT (#{runtime_cancel_attempted})
-        RETURNING id
-      SQL
+      deleted = runtime_returning_ids("#{runtime_delete_running_job(id, uncancelled: true)} RETURNING river_job.id").any?
       return true if deleted
       return :cancelled if job_get_cancelled_ids([id]).include?(id)
 
@@ -307,13 +297,7 @@ module River::Driver
 
       assignments << "state = CASE WHEN #{cancel_path} THEN 'cancelled' ELSE #{runtime_state(state)} END"
 
-      id = runtime_returning_ids(<<~SQL).first
-        UPDATE river_job
-        SET #{assignments.join(",\n    ")}
-        WHERE id = #{Integer(id)} AND state = 'running'
-        RETURNING id
-      SQL
-      id ? runtime_read_job(id) : nil
+      runtime_returning_jobs(runtime_update_running_job(id, assignments)).first
     end
 
     def job_update(id, params)
@@ -487,53 +471,58 @@ module River::Driver
       runtime_postgres? ? "metadata ? 'cancel_attempted_at'" : "(CASE WHEN json_valid(metadata, 10) THEN metadata -> 'cancel_attempted_at' END) IS NOT NULL"
     end
 
+    # One statement claims the jobs and returns their rows, like Go's
+    # JobGetAvailable. The fetch subquery locks rows it then rejects, including
+    # jobs other producers already claimed, until the statement commits.
     private def runtime_claim_jobs(predicate, max, attempted_by, now)
-      transaction do
-        attempted_by_sql = if runtime_postgres?
-          "array_append(CASE WHEN cardinality(attempted_by) >= 100 THEN attempted_by[(cardinality(attempted_by) - 98):] ELSE attempted_by END, #{runtime_quote(attempted_by)})"
-        else
-          # Preserve corrupt history so decoding can fail this attempt instead
-          # of silently repairing it or aborting the entire claim batch. Trim
-          # to the newest 99 entries before appending, preserving JSON types.
-          <<~SQL
-            CASE WHEN NOT json_valid(attempted_by, 10) AND attempted_by IS NOT NULL THEN attempted_by
-                 ELSE jsonb(json_insert(json(
-                   CASE WHEN json_array_length(attempted_by) >= 100 THEN (
-                     SELECT json_group_array(json(value)) FROM (
-                       SELECT attempted_by -> ('$[' || key || ']') AS value FROM json_each(attempted_by)
-                       WHERE key >= json_array_length(attempted_by) - 99 ORDER BY key
-                     )
-                   ) ELSE coalesce(attempted_by, jsonb('[]')) END
-                 ), '$[#]', #{runtime_quote(attempted_by)})) END
-          SQL
-        end
-
-        lock_clause = runtime_postgres? ? "FOR UPDATE SKIP LOCKED" : ""
-        # An administratively requeued job may already be at the counter limit.
-        # Saturate instead of letting that row abort the entire claim batch.
-        ids = runtime_returning_ids(<<~SQL)
-          UPDATE river_job
-          SET attempt = CASE WHEN attempt < #{River::MAX_ATTEMPTS_LIMIT} THEN attempt + 1 ELSE attempt END,
-              attempted_at = #{runtime_time(now)},
-              attempted_by = #{attempted_by_sql},
-              state = 'running'
-          WHERE id IN (
-            SELECT id FROM river_job
-            WHERE #{predicate}
-            ORDER BY priority ASC, scheduled_at ASC, id ASC
-            LIMIT #{Integer(max)}
-            #{lock_clause}
-          )
-          RETURNING id
+      attempted_by_sql = if runtime_postgres?
+        "array_append(CASE WHEN cardinality(attempted_by) >= 100 THEN attempted_by[(cardinality(attempted_by) - 98):] ELSE attempted_by END, #{runtime_quote(attempted_by)})"
+      else
+        # Preserve corrupt history so decoding can fail this attempt instead
+        # of silently repairing it or aborting the entire claim batch. Trim
+        # to the newest 99 entries before appending, preserving JSON types.
+        <<~SQL
+          CASE WHEN NOT json_valid(attempted_by, 10) AND attempted_by IS NOT NULL THEN attempted_by
+               ELSE jsonb(json_insert(json(
+                 CASE WHEN json_array_length(attempted_by) >= 100 THEN (
+                   SELECT json_group_array(json(value)) FROM (
+                     SELECT attempted_by -> ('$[' || key || ']') AS value FROM json_each(attempted_by)
+                     WHERE key >= json_array_length(attempted_by) - 99 ORDER BY key
+                   )
+                 ) ELSE coalesce(attempted_by, jsonb('[]')) END
+               ), '$[#]', #{runtime_quote(attempted_by)})) END
         SQL
-        ids.map { |id| runtime_read_job(id) }
       end
+
+      lock_clause = runtime_postgres? ? "FOR UPDATE SKIP LOCKED" : ""
+      # An administratively requeued job may already be at the counter limit.
+      # Saturate instead of letting that row abort the entire claim batch.
+      runtime_returning_jobs(<<~SQL)
+        UPDATE river_job
+        SET attempt = CASE WHEN attempt < #{River::MAX_ATTEMPTS_LIMIT} THEN attempt + 1 ELSE attempt END,
+            attempted_at = #{runtime_time(now)},
+            attempted_by = #{attempted_by_sql},
+            state = 'running'
+        WHERE id IN (
+          SELECT id FROM river_job
+          WHERE #{predicate}
+          ORDER BY priority ASC, scheduled_at ASC, id ASC
+          LIMIT #{Integer(max)}
+          #{lock_clause}
+        )
+      SQL
+    end
+
+    # A row that can't be decoded comes back with its decode error attached,
+    # so one corrupt job fails only its own attempt.
+    private def runtime_decoded_job
+      yield
+    rescue River::JobRowDecodeError => error
+      error.job
     end
 
     private def runtime_read_job(id)
-      job_get_by_id(id)
-    rescue River::JobRowDecodeError => error
-      error.job
+      runtime_decoded_job { job_get_by_id(id) }
     end
 
     private def runtime_decode_postgres_job(row)
@@ -613,6 +602,11 @@ module River::Driver
 
       value = runtime_time(cursor.value)
       "(#{column} IS NULL OR #{column} #{comparison} #{value} OR (#{column} = #{value} AND #{id_clause}))"
+    end
+
+    private def runtime_delete_running_job(id, uncancelled: false)
+      lock, source, condition = runtime_running_job(id, uncancelled)
+      "#{lock}DELETE FROM river_job#{" USING #{source}" if source} WHERE #{condition}"
     end
 
     private def runtime_job_attempt_predicate(job)
@@ -766,6 +760,34 @@ module River::Driver
       runtime_query_rows(sql).map { |row| runtime_value(row, :id).to_i }
     end
 
+    # Targets one job only while it's running and, when uncancelled, only while
+    # no cancellation was requested. Postgres locks the row by primary key
+    # first and tests the locked row, the way Go's JobRetry and JobUpdate lock
+    # their target. With the state test in the statement's own WHERE, Postgres
+    # can plan it on the fetching index (state, queue, ...) when few jobs are
+    # running, and that scan reads every running entry, including the dead
+    # ones claims and completions leave behind. Returns the CTE, the extra
+    # source to join, and the condition.
+    private def runtime_running_job(id, uncancelled, expected_job: nil)
+      predicate = "id = #{Integer(id)}"
+      predicate += " AND #{runtime_job_attempt_predicate(expected_job)}" if expected_job
+      unless runtime_postgres?
+        condition = "#{predicate} AND state = 'running'"
+        condition += " AND NOT (#{runtime_cancel_attempted})" if uncancelled
+        return ["", nil, condition]
+      end
+
+      lock = <<~SQL
+        WITH running_job AS (
+          SELECT id, state AS locked_state, #{runtime_cancel_attempted} AS cancel_attempted
+          FROM river_job WHERE #{predicate} FOR UPDATE
+        )
+      SQL
+      condition = "river_job.id = running_job.id AND running_job.locked_state = 'running'"
+      condition += " AND NOT running_job.cancel_attempted" if uncancelled
+      [lock, "running_job", condition]
+    end
+
     # Finds conflicts and changes the whole pass in one statement.
     private def runtime_schedule_postgres(now, max)
       now = runtime_time(now)
@@ -896,6 +918,11 @@ module River::Driver
         normalize_time(value).strftime("%Y-%m-%d %H:%M:%S.%3N")
       end
       "#{runtime_quote(encoded)}#{cast}"
+    end
+
+    private def runtime_update_running_job(id, assignments, expected_job: nil, uncancelled: false)
+      lock, source, condition = runtime_running_job(id, uncancelled, expected_job: expected_job)
+      "#{lock}UPDATE river_job SET #{assignments.join(", ")}#{" FROM #{source}" if source} WHERE #{condition}"
     end
 
     private def runtime_update_value(field, value)

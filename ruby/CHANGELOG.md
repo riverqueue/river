@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- Reduce job processing overhead in both drivers by returning claimed and finished jobs directly from updates and locking Postgres completion targets by primary key. Avoid per-job connection resets in Active Record, and keep job completions and insertions from interrupting maintenance error backoff. Thanks to [@jpcamara](https://github.com/jpcamara) for the improvements! [PR #1566](https://github.com/riverqueue/river/pull/1566).
+
 ## [0.15.0] - 2026-10-30
 
 ### Added

@@ -439,7 +439,7 @@ module River
     def start_notifications: () -> untyped
     def start_producer: (String, QueueConfig) -> untyped
     def stopping?: () -> bool
-    def wait: (Float | Integer) -> untyped
+    def wait: (Float | Integer, ?ConditionVariable) -> untyped
     def wait_for_maintenance: (Float | Integer, Integer) -> untyped
     def wait_for_queue: (String, Float | Integer, Integer) -> untyped
     def wait_for_running_jobs: (String, Float | Integer) -> untyped

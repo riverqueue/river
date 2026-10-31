@@ -31,7 +31,7 @@ module River::Driver
 
       @connection_class = connection_class
       @postgres_capabilities_cache = PostgresCapabilities::Cache.new
-      @is_sqlite = connection_class.connection.adapter_name.downcase.include?("sqlite")
+      @is_sqlite = with_connection { |connection| connection.adapter_name.downcase.include?("sqlite") }
       # Do not inherit application scopes, callbacks, or schema caches. Each
       # driver owns its model, but all operations use the selected class's pool.
       @job_model = Class.new(::ActiveRecord::Base) do
@@ -115,12 +115,16 @@ module River::Driver
     # savepoint.
     def transaction(&)
       legacy = runtime_legacy_subtransactions?
-      # A joined Active Record block swallows ActiveRecord::Rollback without
-      # rolling anything back. Yield directly so that the transaction's owner
-      # receives it and rolls back, as Sequel does with Sequel::Rollback.
-      return yield if !legacy && @connection_class.connection.current_transaction.joinable?
-
-      @connection_class.transaction(requires_new: legacy, &)
+      with_connection do |connection|
+        # A joined Active Record block swallows ActiveRecord::Rollback without
+        # rolling anything back. Yield directly so that the transaction's owner
+        # receives it and rolls back, as Sequel does with Sequel::Rollback.
+        if !legacy && connection.current_transaction.joinable?
+          yield
+        else
+          connection.transaction(requires_new: legacy, &)
+        end
+      end
     end
 
     SQLITE_CONFLICT_WHERE = <<~SQL.chomp.freeze
@@ -245,7 +249,7 @@ module River::Driver
     end
 
     private def runtime_execute(sql)
-      @connection_class.connection.execute(sql)
+      with_connection { |connection| connection.execute(sql) }
     end
 
     private def runtime_job_list_without_params
@@ -275,14 +279,27 @@ module River::Driver
 
     private def runtime_query_rows(sql)
       if @is_sqlite
-        @connection_class.connection.raw_connection.execute(sql).to_a
+        with_connection { |connection| connection.raw_connection.execute(sql).to_a }
       else
-        @connection_class.connection.select_all(sql).to_a
+        with_connection { |connection| connection.select_all(sql).to_a }
       end
     end
 
     private def runtime_quote(value)
-      @connection_class.connection.quote(value)
+      with_connection { |connection| connection.quote(value) }
+    end
+
+    # Runs an UPDATE on river_job and decodes the rows it changed.
+    private def runtime_returning_jobs(sql)
+      if @is_sqlite
+        rows = with_connection { |connection| connection.raw_connection.execute("#{sql}\nRETURNING #{SQLITE_JOB_COLUMNS}").to_a }
+        rows.map { |row| runtime_decoded_job { sqlite_to_job_row_from_raw(row) } }
+      else
+        result = with_connection { |connection| connection.select_all("#{sql}\nRETURNING river_job.*") }
+        result.rows.map do |row|
+          runtime_decoded_job { postgres_to_job_row_from_raw(row, result.columns, result.column_types).first }
+        end
+      end
     end
 
     private def runtime_value(row, key)
@@ -355,7 +372,7 @@ module River::Driver
           RETURNING #{SQLITE_JOB_COLUMNS}
         SQL
 
-        rows = @connection_class.connection.raw_connection.execute(sql, [JSON.generate(jobs)])
+        rows = with_connection { |connection| connection.raw_connection.execute(sql, [JSON.generate(jobs)]) }
         sqlite_notify_insert(insert_params_many)
 
         rows.map do |row|
@@ -367,7 +384,7 @@ module River::Driver
 
     private def sqlite_job_rows(suffix, binds = [])
       sql = "SELECT #{SQLITE_JOB_COLUMNS} FROM river_job #{suffix}"
-      @connection_class.connection.raw_connection.execute(sql, binds)
+      with_connection { |connection| connection.raw_connection.execute(sql, binds) }
     end
 
     private def sqlite_notify_insert(insert_params_many)
@@ -381,13 +398,15 @@ module River::Driver
         {payload: JSON.generate({queue: queue}), topic: "river_insert"}
       end
 
-      @connection_class.connection.raw_connection.execute(<<~SQL, [JSON.generate(notifications)])
-        INSERT INTO river_notification (payload, topic)
-        SELECT
-          json_extract(value, '$.payload'),
-          json_extract(value, '$.topic')
-        FROM json_each(cast(? AS blob))
-      SQL
+      with_connection do |connection|
+        connection.raw_connection.execute(<<~SQL, [JSON.generate(notifications)])
+          INSERT INTO river_notification (payload, topic)
+          SELECT
+            json_extract(value, '$.payload'),
+            json_extract(value, '$.topic')
+          FROM json_each(cast(? AS blob))
+        SQL
+      end
     end
 
     private def sqlite_to_job_row_from_model(river_job)
@@ -401,6 +420,13 @@ module River::Driver
 
     private def to_job_row_from_model(river_job)
       @is_sqlite ? sqlite_to_job_row_from_model(river_job) : postgres_to_job_row_from_model(river_job)
+    end
+
+    # Borrows the thread's current connection, or checks one out for the call
+    # only. A permanent lease would outlive the short-lived job threads, and the
+    # pool would reset each one when it reaps it.
+    private def with_connection(&)
+      @connection_class.connection_pool.with_connection(&)
     end
   end
 end
