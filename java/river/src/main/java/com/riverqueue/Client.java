@@ -116,6 +116,11 @@ public final class Client {
     return id;
   }
 
+  /** Returns job operations. Insert jobs with this client's insert methods. */
+  public Jobs jobs() {
+    return new Jobs(this, clock);
+  }
+
   public Queues queues() {
     return new Queues(this);
   }
@@ -635,54 +640,6 @@ public final class Client {
     return workerMiddleware;
   }
 
-  public Job<JsonNode> cancel(long id) {
-    return transaction(c -> cancel(c, id));
-  }
-
-  public Job<JsonNode> cancel(Connection connection, long id) {
-    return atomic(
-        connection,
-        c -> {
-          var before = locked(c, id);
-          if (before.state().isFinalized()) return before;
-          try (var statement =
-                  Sql.prepare(
-                      c,
-                      Sql.query(database, "cancel"),
-                      database.timestamp(clock.instant()),
-                      Json.encode(clock.instant()),
-                      id);
-              var rows = statement.executeQuery()) {
-            if (!rows.next()) return get(c, id);
-            var job = read(rows);
-            pilot.afterStateChange(c, driver(), job);
-            notify(c, Protocol.cancel(id, job.queue()));
-            return job;
-          }
-        });
-  }
-
-  public Job<JsonNode> delete(long id) {
-    return transaction(c -> delete(c, id));
-  }
-
-  public Job<JsonNode> delete(Connection connection, long id) {
-    return atomic(
-        connection,
-        c -> {
-          var job = locked(c, id);
-          if (job.state() == Job.State.RUNNING)
-            throw new RiverException(RiverException.Code.REJECTED, "Cannot delete a running job");
-          try (var statement = Sql.prepare(c, Sql.query(database, "delete"), id);
-              var rows = statement.executeQuery()) {
-            rows.next();
-            var deleted = read(rows);
-            pilot.afterDelete(c, driver(), deleted);
-            return deleted;
-          }
-        });
-  }
-
   private int deleteFinalized(
       Connection connection,
       Instant before,
@@ -703,122 +660,6 @@ public final class Client {
     } catch (SQLException e) {
       throw databaseError("Delete finalized jobs", e);
     }
-  }
-
-  /** Completes a running attempt in the caller's transaction, preserving its argument type. */
-  public <A> Job<A> complete(Connection connection, Job<A> job) {
-    return complete(connection, job, java.util.Map.of());
-  }
-
-  /** Completes a running attempt and merges metadata in the caller's transaction. */
-  public <A> Job<A> complete(Connection connection, Job<A> job, Object metadata) {
-    Objects.requireNonNull(job, "job");
-    if (job.state() != Job.State.RUNNING) throw new IllegalArgumentException("Job must be running");
-    var updates = metadata == null ? Json.object() : Json.tree(metadata);
-    if (!updates.isObject()) throw new IllegalArgumentException("Metadata must be a JSON object");
-    return atomic(
-        connection,
-        c -> {
-          try (var statement =
-                  Sql.prepare(
-                      c,
-                      Sql.query(database, "complete"),
-                      "completed",
-                      database.timestamp(clock.instant()),
-                      null,
-                      "{}",
-                      Json.encode(updates),
-                      "completed",
-                      database.timestamp(clock.instant()),
-                      database.timestamp(job.scheduledAt()),
-                      job.attempt(),
-                      null,
-                      null,
-                      job.id(),
-                      job.attempt(),
-                      database.timestamp(job.attemptedAt()));
-              var rows = statement.executeQuery()) {
-            if (!rows.next()) return get(c, job.id()).mapArgs(ignored -> job.args());
-            var completed = read(rows);
-            pilot.afterStateChange(c, driver(), completed);
-            return completed.mapArgs(ignored -> job.args());
-          }
-        });
-  }
-
-  /**
-   * Deletes a page of matching non-running jobs in query order. Running jobs do not count toward
-   * the limit. Concurrent changes that stop selected jobs matching the filters or cursor can reduce
-   * the returned batch size. Unfiltered deletion requires {@code all=true}.
-   */
-  public List<Job<JsonNode>> deleteMany(JobQuery query, boolean all) {
-    return transaction(connection -> deleteMany(connection, query, all));
-  }
-
-  /** Deletes matching non-running jobs atomically within the caller's transaction. */
-  public List<Job<JsonNode>> deleteMany(Connection connection, JobQuery query, boolean all) {
-    if (!all && !query.hasFilters())
-      throw new IllegalArgumentException("Bulk deletion requires filters or explicit all=true");
-    return atomic(
-        connection,
-        c -> {
-          // Reserve SQLite's writer before listing so another commit cannot invalidate the
-          // snapshot.
-          if (database.dialect() == Database.Dialect.SQLITE)
-            try (var statement = Sql.prepare(c, Sql.query(database, "writer_lock"))) {
-              statement.executeUpdate();
-            }
-          var result = new ArrayList<Job<JsonNode>>();
-          var jobs = list(c, query, true).jobs();
-          var params = new ArrayList<Object>();
-          String sql = query.deleteSql(database, params);
-          try (var statement = Sql.prepare(c, sql, params.toArray())) {
-            for (var job : jobs) {
-              statement.setLong(params.size() + 1, job.id());
-              try (var rows = statement.executeQuery()) {
-                // Recheck every filter atomically: a peer may have updated this job since listing.
-                if (!rows.next()) continue;
-                var deleted = read(rows);
-                pilot.afterDelete(c, driver(), deleted);
-                result.add(deleted);
-              }
-            }
-          }
-          return List.copyOf(result);
-        });
-  }
-
-  public Job<JsonNode> get(long id) {
-    return transaction(c -> get(c, id));
-  }
-
-  /** Loads and decodes a job, rejecting a kind that does not match the supplied type. */
-  public <A> Job<A> get(long id, JobType<A> type) {
-    return transaction(connection -> get(connection, id, type));
-  }
-
-  /** Loads and decodes a job using the caller's connection. */
-  public <A> Job<A> get(Connection connection, long id, JobType<A> type) {
-    var job = get(connection, id);
-    if (!job.kind().equals(type.kind()))
-      throw new IllegalArgumentException(
-          "Expected job kind " + type.kind() + ", got " + job.kind());
-    return typed(job, type);
-  }
-
-  public Job<JsonNode> get(Connection connection, long id) {
-    return atomic(
-        connection,
-        transaction -> {
-          try (var statement = Sql.prepare(transaction, Sql.query(database, "get"), id);
-              var rows = statement.executeQuery()) {
-            if (!rows.next())
-              throw new RiverException(RiverException.Code.NOT_FOUND, "Job " + id + " not found");
-            return read(rows);
-          } catch (SQLException e) {
-            throw databaseError("Get job", e);
-          }
-        });
   }
 
   public <A> Job.InsertResult insert(JobType<A> type, A args) {
@@ -1077,45 +918,6 @@ public final class Client {
     }
   }
 
-  public JobQuery.Page list(JobQuery query) {
-    return transaction(c -> list(c, query));
-  }
-
-  public JobQuery.Page list(Connection connection, JobQuery query) {
-    return list(connection, query, false);
-  }
-
-  private JobQuery.Page list(Connection connection, JobQuery query, boolean forDelete) {
-    return atomic(
-        connection,
-        transaction -> {
-          var params = new ArrayList<Object>();
-          String sql = query.sql(database, params, forDelete);
-          try (var statement = Sql.prepare(transaction, sql, params.toArray());
-              var rows = statement.executeQuery()) {
-            var jobs = new ArrayList<Job<JsonNode>>();
-            while (rows.next()) jobs.add(read(rows));
-            return new JobQuery.Page(
-                jobs.isEmpty() ? null : query.cursor(jobs.getLast()), List.copyOf(jobs));
-          } catch (SQLException e) {
-            throw databaseError("List jobs", e);
-          }
-        });
-  }
-
-  private Job<JsonNode> locked(Connection connection, long id) throws SQLException {
-    if (database.dialect() == Database.Dialect.SQLITE)
-      try (var statement = Sql.prepare(connection, Sql.query(database, "writer_lock"))) {
-        statement.executeUpdate();
-      }
-    try (var statement = Sql.prepare(connection, Sql.query(database, "lock_get"), id);
-        var rows = statement.executeQuery()) {
-      if (!rows.next())
-        throw new RiverException(RiverException.Code.NOT_FOUND, "Job " + id + " not found");
-      return read(rows);
-    }
-  }
-
   /** Requests that the current leader resign after this transaction commits. */
   public void requestResign(Connection connection) {
     atomic(
@@ -1151,50 +953,6 @@ public final class Client {
 
   void notifyInsert(Connection connection, String queue) throws SQLException {
     notify(connection, Protocol.insert(queue));
-  }
-
-  public Job<JsonNode> output(long id, Object output) {
-    return transaction(connection -> output(connection, id, output));
-  }
-
-  public Job<JsonNode> output(Connection connection, long id, Object output) {
-    return atomic(
-        connection,
-        c -> {
-          try (var statement =
-                  Sql.prepare(c, Sql.query(database, "output"), Json.encode(output), id);
-              var rows = statement.executeQuery()) {
-            if (!rows.next())
-              throw new RiverException(RiverException.Code.NOT_FOUND, "Job " + id + " not found");
-            return read(rows);
-          }
-        });
-  }
-
-  public Job<JsonNode> retry(long id) {
-    return transaction(c -> retry(c, id));
-  }
-
-  public Job<JsonNode> retry(Connection connection, long id) {
-    return atomic(
-        connection,
-        c -> {
-          var before = locked(c, id);
-          try (var statement =
-                  Sql.prepare(
-                      c,
-                      Sql.query(database, "retry"),
-                      database.timestamp(clock.instant()),
-                      id,
-                      database.timestamp(clock.instant()));
-              var rows = statement.executeQuery()) {
-            boolean updated = rows.next();
-            var job = updated ? read(rows) : before;
-            pilot.afterStateChange(c, driver(), job);
-            if (updated) notifyInsert(c, job.queue());
-            return job;
-          }
-        });
   }
 
   private void reset() {

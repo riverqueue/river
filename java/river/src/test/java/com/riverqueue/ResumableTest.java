@@ -55,12 +55,12 @@ class ResumableTest {
       var failed = events.poll(5, TimeUnit.SECONDS);
       assertNotNull(failed);
       assertEquals(Client.EventKind.JOB_FAILED, failed.kind());
-      var savedMetadata = client.get(inserted.id()).metadata();
+      var savedMetadata = client.jobs().get(inserted.id()).metadata();
       assertEquals(
           Json.tree(metadata).path(Protocol.METADATA_RESUMABLE_CURSOR),
           savedMetadata.path(Protocol.METADATA_RESUMABLE_CURSOR));
       assertFalse(savedMetadata.has(Protocol.METADATA_RESUMABLE_STEP));
-      client.retry(inserted.id());
+      client.jobs().retry(inserted.id());
       var completed = events.poll(5, TimeUnit.SECONDS);
       assertNotNull(completed);
       assertEquals(Client.EventKind.JOB_COMPLETED, completed.kind());
@@ -160,18 +160,18 @@ class ResumableTest {
       var failed = events.poll(5, TimeUnit.SECONDS);
       assertNotNull(failed);
       assertEquals(Client.EventKind.JOB_FAILED, failed.kind());
-      var saved = client.get(inserted.id());
+      var saved = client.jobs().get(inserted.id());
       assertEquals(
           rollback ? "prepare" : "process",
           saved.metadata().path(Protocol.METADATA_RESUMABLE_STEP).asString());
       assertEquals("deferred", saved.metadata().path(Protocol.METADATA_OUTPUT).asString());
       assertTrue(saved.metadata().path("unrelated").path("keep").asBoolean());
-      assertEquals(rollback ? 1 : 2, client.list(JobQuery.all()).jobs().size());
+      assertEquals(rollback ? 1 : 2, client.jobs().list(JobQuery.all()).jobs().size());
       if (rollback) {
         var cursor = saved.metadata().path(Protocol.METADATA_RESUMABLE_CURSOR);
         assertTrue(cursor.isMissingNode() || cursor.isNull());
       }
-      client.retry(inserted.id());
+      client.jobs().retry(inserted.id());
       var completed = events.poll(5, TimeUnit.SECONDS);
       assertNotNull(completed);
       assertEquals(Client.EventKind.JOB_COMPLETED, completed.kind());
@@ -201,7 +201,7 @@ class ResumableTest {
           }
           return null;
         });
-    var job = client.get(inserted.id(), TYPE);
+    var job = client.jobs().get(inserted.id(), TYPE);
     var context = new WorkContext<>(client, job);
     try (var connection = client.database().connection()) {
       assertThrows(IllegalStateException.class, () -> context.checkpoint(connection));
@@ -210,11 +210,11 @@ class ResumableTest {
           () -> {
             assertThrows(IllegalArgumentException.class, () -> context.checkpoint(connection));
             connection.setAutoCommit(false);
-            client.complete(connection, job);
+            client.jobs().complete(connection, job);
             assertEquals(
                 RiverException.Code.REJECTED,
                 assertThrows(RiverException.class, () -> context.checkpoint(connection)).code());
-            assertEquals(Job.State.COMPLETED, client.get(connection, job.id()).state());
+            assertEquals(Job.State.COMPLETED, client.jobs().get(connection, job.id()).state());
             connection.rollback();
             try (var statement =
                 Sql.prepare(
@@ -227,7 +227,7 @@ class ResumableTest {
             connection.rollback();
           });
     }
-    assertFalse(client.get(job.id()).metadata().has(Protocol.METADATA_RESUMABLE_STEP));
+    assertFalse(client.jobs().get(job.id()).metadata().has(Protocol.METADATA_RESUMABLE_STEP));
   }
 
   @ParameterizedTest
@@ -250,7 +250,7 @@ class ResumableTest {
           }
           return null;
         });
-    var context = new WorkContext<>(client, client.get(inserted.id(), TYPE));
+    var context = new WorkContext<>(client, client.jobs().get(inserted.id(), TYPE));
     var failure = new IllegalStateException("retry");
     WorkContext.Step work =
         () ->
@@ -277,6 +277,7 @@ class ResumableTest {
     assertEquals(
         rollback ? 1 : 2,
         client
+            .jobs()
             .get(inserted.id())
             .metadata()
             .path(Protocol.METADATA_RESUMABLE_CURSOR)
@@ -331,11 +332,11 @@ class ResumableTest {
       var failed = events.poll(5, TimeUnit.SECONDS);
       assertNotNull(failed);
       assertEquals(Client.EventKind.JOB_FAILED, failed.kind());
-      var metadata = client.get(job.id()).metadata();
+      var metadata = client.jobs().get(job.id()).metadata();
       assertEquals(
           first ? "" : "prepare", metadata.path(Protocol.METADATA_RESUMABLE_STEP).asString(""));
       assertTrue(metadata.path(Protocol.METADATA_RESUMABLE_CURSOR).has("process"));
-      client.retry(job.id());
+      client.jobs().retry(job.id());
       var completed = events.poll(5, TimeUnit.SECONDS);
       assertNotNull(completed);
       assertEquals(Client.EventKind.JOB_COMPLETED, completed.kind());
@@ -427,11 +428,12 @@ class ResumableTest {
             attempt == 3 ? Client.EventKind.JOB_COMPLETED : Client.EventKind.JOB_FAILED,
             event.kind());
         if (attempt == 2) {
-          var cursors = client.get(job.id()).metadata().path(Protocol.METADATA_RESUMABLE_CURSOR);
+          var cursors =
+              client.jobs().get(job.id()).metadata().path(Protocol.METADATA_RESUMABLE_CURSOR);
           assertFalse(cursors.has("first"));
           assertTrue(cursors.has("second"));
         }
-        if (attempt < 3) client.retry(job.id());
+        if (attempt < 3) client.jobs().retry(job.id());
       }
       assertEquals(2, firstCalls.get());
     }

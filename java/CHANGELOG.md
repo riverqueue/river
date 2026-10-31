@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Breaking:** Added `client.jobs()` for job reads, cancellation, completion, deletion, retries, and updates, removing the corresponding flat `Client` methods. Insertions remain on `Client`. [PR #1569](https://github.com/riverqueue/river/pull/1569).
+- **Breaking:** Replaced `Client.output` with `client.jobs().update` and immutable `JobUpdateOptions` for immediate output writes and top-level metadata merges, with a connection-first overload for caller-owned transactions. [PR #1569](https://github.com/riverqueue/river/pull/1569).
+
 ### Fixed
 
 - Fixed a cancelled job that was retried being cancelled again as soon as its new attempt started. Retrying a job now clears its earlier attempt's cancellation request, like River for Go. [PR #1564](https://github.com/riverqueue/river/pull/1564).

@@ -41,9 +41,9 @@ class ClientLifecycleTest {
     var database = databases.open(directory.resolve("river.db"));
     var client = Client.builder(database).build();
     var job = client.insert(TYPE, "insert only").job();
-    assertEquals(Job.State.AVAILABLE, client.get(job.id()).state());
+    assertEquals(Job.State.AVAILABLE, client.jobs().get(job.id()).state());
     assertThrows(IllegalArgumentException.class, client::start);
-    assertEquals(Job.State.AVAILABLE, new Client(database).get(job.id()).state());
+    assertEquals(Job.State.AVAILABLE, new Client(database).jobs().get(job.id()).state());
   }
 
   @Test

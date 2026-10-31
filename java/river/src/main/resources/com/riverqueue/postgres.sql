@@ -83,8 +83,8 @@ UPDATE {schema}river_job SET state=CASE WHEN state='running' THEN state ELSE 'ca
 finalized_at=CASE WHEN state='running' THEN finalized_at ELSE ? END,
 metadata=jsonb_set(metadata,'{cancel_attempted_at}',?::jsonb,true)
 WHERE id=? AND state NOT IN ('cancelled','completed','discarded') AND finalized_at IS NULL RETURNING {columns}
--- name: output
-UPDATE {schema}river_job SET metadata=jsonb_set(metadata,'{output}',?::jsonb,true) WHERE id=? RETURNING {columns}
+-- name: update
+UPDATE {schema}river_job SET metadata=metadata||?::jsonb WHERE id=? RETURNING {columns}
 -- name: filter_metadata
 metadata @> ?::jsonb
 -- name: filter_tags_all

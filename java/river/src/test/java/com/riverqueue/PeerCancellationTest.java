@@ -116,7 +116,7 @@ class PeerCancellationTest {
       assertFalse(
           provisional.forceIfStuck(Duration.ZERO), "Finished attempts must stop being supervised");
       workers.stop();
-      var job = client.get(inserted.id());
+      var job = client.jobs().get(inserted.id());
       if (when.equals("forced")) {
         assertEquals(1, job.attempt());
         assertEquals(1, job.errors().size());
@@ -231,7 +231,7 @@ class PeerCancellationTest {
         assertNotNull(event);
         assertEquals(Client.EventKind.JOB_FAILED, event.kind());
       }
-      assertEquals(Job.State.DISCARDED, client.get(peerJob.id()).state());
+      assertEquals(Job.State.DISCARDED, client.jobs().get(peerJob.id()).state());
     } finally {
       release.countDown();
       workers.stopAndCancel();

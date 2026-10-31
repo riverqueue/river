@@ -36,13 +36,13 @@ class ClientTest {
     try (var connection = river.database().connection()) {
       connection.setAutoCommit(false);
       long rolledBack = river.insert(connection, EMAIL, new Email("one@example.com")).job().id();
-      assertEquals(rolledBack, river.get(connection, rolledBack).id());
-      assertThrows(RiverException.class, () -> river.get(rolledBack));
+      assertEquals(rolledBack, river.jobs().get(connection, rolledBack).id());
+      assertThrows(RiverException.class, () -> river.jobs().get(rolledBack));
       connection.rollback();
-      assertThrows(RiverException.class, () -> river.get(rolledBack));
+      assertThrows(RiverException.class, () -> river.jobs().get(rolledBack));
       long committed = river.insert(connection, EMAIL, new Email("two@example.com")).job().id();
       connection.commit();
-      assertEquals(committed, river.get(committed).id());
+      assertEquals(committed, river.jobs().get(committed).id());
       assertFalse(connection.isClosed());
       assertFalse(connection.getAutoCommit());
     }
@@ -87,10 +87,10 @@ class ClientTest {
                 return client.read(rows);
               }
             });
-    client.transaction(connection -> client.complete(connection, claimed, updates));
+    client.transaction(connection -> client.jobs().complete(connection, claimed, updates));
     var expected = ((tools.jackson.databind.node.ObjectNode) inserted.metadata()).deepCopy();
     updates.properties().forEach(entry -> expected.set(entry.getKey(), entry.getValue()));
-    assertEquals(expected, client.get(claimed.id()).metadata());
+    assertEquals(expected, client.jobs().get(claimed.id()).metadata());
   }
 
   @Test
@@ -122,8 +122,8 @@ class ClientTest {
     assertFalse(original.uniqueSkippedAsDuplicate());
     assertTrue(duplicate.uniqueSkippedAsDuplicate());
     assertEquals(original.job(), duplicate.job());
-    assertEquals(original.job(), client.get(original.job().id()));
-    assertEquals(1, client.list(JobQuery.all()).jobs().size());
+    assertEquals(original.job(), client.jobs().get(original.job().id()));
+    assertEquals(1, client.jobs().list(JobQuery.all()).jobs().size());
   }
 
   @ParameterizedTest
@@ -148,7 +148,7 @@ class ClientTest {
     assertEquals(original.id(), duplicate.job().id());
     assertEquals(original.kind(), duplicate.job().kind());
     assertEquals(Json.tree(new Existing("original")), Json.tree(duplicate.job().args()));
-    assertEquals(1, client.list(JobQuery.all()).jobs().size());
+    assertEquals(1, client.jobs().list(JobQuery.all()).jobs().size());
   }
 
   @ParameterizedTest
@@ -215,10 +215,10 @@ class ClientTest {
           }
           return null;
         });
-    var before = client.get(inserted.id());
-    var completed = client.transaction(connection -> client.complete(connection, claimed));
+    var before = client.jobs().get(inserted.id());
+    var completed = client.transaction(connection -> client.jobs().complete(connection, claimed));
     assertEquals(before, completed);
-    assertEquals(before, client.get(inserted.id()));
+    assertEquals(before, client.jobs().get(inserted.id()));
   }
 
   @Test
@@ -239,7 +239,7 @@ class ClientTest {
       connection.commit();
       assertEquals(
           List.of(kept.job().id()),
-          river.list(JobQuery.all()).jobs().stream().map(Job::id).toList());
+          river.jobs().list(JobQuery.all()).jobs().stream().map(Job::id).toList());
     }
   }
 
@@ -306,8 +306,8 @@ class ClientTest {
       river.insert(EMAIL, new Email("java@example.com"));
       assertTrue(worked.await(10, TimeUnit.SECONDS));
     }
-    assertEquals(Job.State.AVAILABLE, river.get(unknown.id()).state());
-    assertEquals(0, river.get(unknown.id()).attempt());
+    assertEquals(Job.State.AVAILABLE, river.jobs().get(unknown.id()).state());
+    assertEquals(0, river.jobs().get(unknown.id()).attempt());
   }
 
   @Test
@@ -347,8 +347,8 @@ class ClientTest {
       }
       removal.get(10, TimeUnit.SECONDS);
       assertEquals(1, calls.get());
-      assertEquals(Job.State.COMPLETED, river.get(first.id()).state());
-      assertEquals(Job.State.AVAILABLE, river.get(second.id()).state());
+      assertEquals(Job.State.COMPLETED, river.jobs().get(first.id()).state());
+      assertEquals(Job.State.AVAILABLE, river.jobs().get(second.id()).state());
     }
   }
 
@@ -402,9 +402,9 @@ class ClientTest {
       release.countDown();
       var completed = done.get(10, TimeUnit.SECONDS);
       assertEquals(inserted.job().id(), completed.job().id());
-      assertEquals(Job.State.COMPLETED, river.get(inserted.job().id()).state());
+      assertEquals(Job.State.COMPLETED, river.jobs().get(inserted.job().id()).state());
       assertEquals(
-          "delivered", river.get(inserted.job().id()).metadata().path("output").asString());
+          "delivered", river.jobs().get(inserted.job().id()).metadata().path("output").asString());
       assertEquals(
           Integer.valueOf(1),
           river.transaction(
@@ -432,11 +432,12 @@ class ClientTest {
                 InsertOptions.builder().scheduledAt(NOW.plusSeconds(3600)).build())
             .job();
     var second = river.insert(EMAIL, new Email("now@example.com")).job();
-    var page = river.list(JobQuery.all().limit(1));
+    var page = river.jobs().list(JobQuery.all().limit(1));
     assertEquals(first.id(), page.jobs().getFirst().id());
     assertEquals(
         second.id(),
         river
+            .jobs()
             .list(JobQuery.builder().after(page.cursor()).limit(1).build())
             .jobs()
             .getFirst()
@@ -444,6 +445,7 @@ class ClientTest {
     assertEquals(
         second.id(),
         river
+            .jobs()
             .list(JobQuery.builder().order(JobQuery.Order.TIME).limit(1).build())
             .jobs()
             .getFirst()
@@ -460,15 +462,15 @@ class ClientTest {
                 EMAIL.submission(new Email("one@example.com")),
                 report.submission(
                     new Report(42), InsertOptions.builder().queue("reports").build())));
-    Job<Email> email = river.get(results.get(0).job().id(), EMAIL);
-    Job<Report> typedReport = river.get(results.get(1).job().id(), report);
+    Job<Email> email = river.jobs().get(results.get(0).job().id(), EMAIL);
+    Job<Report> typedReport = river.jobs().get(results.get(1).job().id(), report);
     assertEquals(new Email("one@example.com"), email.args());
     assertEquals(new Report(42), typedReport.args());
     assertEquals("reports", typedReport.queue());
-    assertThrows(IllegalArgumentException.class, () -> river.get(email.id(), report));
+    assertThrows(IllegalArgumentException.class, () -> river.jobs().get(email.id(), report));
     try (var connection = river.database().connection()) {
       connection.setAutoCommit(false);
-      assertThrows(IllegalArgumentException.class, () -> river.complete(connection, email));
+      assertThrows(IllegalArgumentException.class, () -> river.jobs().complete(connection, email));
       var inserted =
           river.insertMany(
               connection,
@@ -477,7 +479,7 @@ class ClientTest {
               InsertOptions.builder().queue("mail").build());
       assertEquals("mail", inserted.getFirst().job().queue());
       connection.rollback();
-      assertThrows(RiverException.class, () -> river.get(inserted.getFirst().job().id()));
+      assertThrows(RiverException.class, () -> river.jobs().get(inserted.getFirst().job().id()));
     }
   }
 
@@ -521,7 +523,8 @@ class ClientTest {
       var kept = base.insert(connection, EMAIL, new Email("kept@example.com")).job();
       connection.commit();
       assertEquals(
-          List.of(kept.id()), base.list(JobQuery.all()).jobs().stream().map(Job::id).toList());
+          List.of(kept.id()),
+          base.jobs().list(JobQuery.all()).jobs().stream().map(Job::id).toList());
     }
   }
 
@@ -554,7 +557,7 @@ class ClientTest {
       assertFalse(river.queues().get(connection, "default").metadata().has("changed"));
       var kept = river.insert(connection, EMAIL, new Email("kept@example.com")).job();
       connection.commit();
-      assertEquals(kept.id(), river.get(kept.id()).id());
+      assertEquals(kept.id(), river.jobs().get(kept.id()).id());
     }
   }
 
@@ -654,7 +657,7 @@ class ClientTest {
       var args = new Email("long-kind@example.com");
       var inserted = client.insert(type, args).job();
       assertEquals(type.kind(), inserted.kind());
-      assertEquals(args, client.get(inserted.id(), type).args());
+      assertEquals(args, client.jobs().get(inserted.id(), type).args());
       assertEquals(type.kind(), worked.get(10, TimeUnit.SECONDS).kind());
       assertEquals(args, worked.get().args());
       assertEquals(inserted.id(), completed.get(10, TimeUnit.SECONDS).job().id());
@@ -743,7 +746,7 @@ class ClientTest {
         }
       }
     }
-    assertEquals(Job.State.COMPLETED, river.list(JobQuery.all()).jobs().getFirst().state());
+    assertEquals(Job.State.COMPLETED, river.jobs().list(JobQuery.all()).jobs().getFirst().state());
   }
 
   @Test

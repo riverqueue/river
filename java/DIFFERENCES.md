@@ -16,6 +16,12 @@
   stuck threshold. The JVM has no safe way to kill an arbitrary uncooperative
   thread. Such a handler retains its slot until it returns; handlers should use
   interruptible I/O or inspect their `WorkContext` cancellation signal.
+- Job operations live on `client.jobs()` as in Rust and JavaScript, instead of using
+  Go's `Job` method prefix. `insert` and `insertMany` remain on `Client`.
+- `client.jobs().update` takes immutable `JobUpdateOptions` and merges top-level metadata
+  as in TypeScript and Rust, in addition to setting output. Empty options leave
+  the job unchanged; there is no implicit copying of buffered worker output as
+  with Go's `JobUpdate`. Builder `output(null)` explicitly stores JSON null.
 - Transaction variants use connection-first overloads instead of `Tx` suffixes.
   Storage failures are unchecked `RiverException` values with a stable code and
   original cause; JDBC callbacks may throw checked exceptions.

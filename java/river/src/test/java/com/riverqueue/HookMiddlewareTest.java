@@ -165,7 +165,9 @@ class HookMiddlewareTest {
     }
     assertEquals(
         callerTransaction ? List.of("keep") : List.of(),
-        base.list(JobQuery.all()).jobs().stream().map(job -> job.args().asString()).toList());
+        base.jobs().list(JobQuery.all()).jobs().stream()
+            .map(job -> job.args().asString())
+            .toList());
   }
 
   @Test

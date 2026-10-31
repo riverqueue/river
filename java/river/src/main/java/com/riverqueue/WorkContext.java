@@ -169,7 +169,7 @@ public final class WorkContext<A> {
 
   /** Completes this attempt atomically with application writes in the supplied transaction. */
   public Job<A> complete(Connection transaction) {
-    return client.complete(transaction, job, metadataUpdates());
+    return client.jobs().complete(transaction, job, metadataUpdates());
   }
 
   public void discard(String reason) {

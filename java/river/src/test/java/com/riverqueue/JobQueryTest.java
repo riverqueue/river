@@ -51,9 +51,9 @@ class JobQueryTest {
             .job();
     var query = JobQuery.builder().metadata(Json.parse(fragment)).build();
     var expected = matches ? List.of(inserted.id()) : List.<Long>of();
-    assertEquals(expected, client.list(query).jobs().stream().map(Job::id).toList());
-    assertEquals(expected, client.deleteMany(query, false).stream().map(Job::id).toList());
-    assertEquals(matches ? 0 : 1, client.list(JobQuery.all()).jobs().size());
+    assertEquals(expected, client.jobs().list(query).jobs().stream().map(Job::id).toList());
+    assertEquals(expected, client.jobs().deleteMany(query, false).stream().map(Job::id).toList());
+    assertEquals(matches ? 0 : 1, client.jobs().list(JobQuery.all()).jobs().size());
   }
 
   @ParameterizedTest
@@ -90,9 +90,10 @@ class JobQueryTest {
     filter.set(
         "tenant", nested ? Json.object().set("settings", Json.parse(empty)) : Json.parse(empty));
     var query = JobQuery.builder().metadata(filter).build();
-    assertEquals(expected, client.list(query).jobs().stream().map(Job::id).toList());
-    assertEquals(expected, client.deleteMany(query, false).stream().map(Job::id).toList());
-    assertEquals(remaining, client.list(JobQuery.all()).jobs().stream().map(Job::id).toList());
+    assertEquals(expected, client.jobs().list(query).jobs().stream().map(Job::id).toList());
+    assertEquals(expected, client.jobs().deleteMany(query, false).stream().map(Job::id).toList());
+    assertEquals(
+        remaining, client.jobs().list(JobQuery.all()).jobs().stream().map(Job::id).toList());
   }
 
   @Test

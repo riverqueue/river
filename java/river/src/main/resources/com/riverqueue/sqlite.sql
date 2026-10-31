@@ -86,8 +86,17 @@ UPDATE river_job SET state=CASE WHEN state='running' THEN state ELSE 'cancelled'
 finalized_at=CASE WHEN state='running' THEN finalized_at ELSE ? END,
 metadata=jsonb_set(metadata,'$.cancel_attempted_at',jsonb(?))
 WHERE id=? AND state NOT IN ('cancelled','completed','discarded') AND finalized_at IS NULL RETURNING {columns}
--- name: output
-UPDATE river_job SET metadata=jsonb_set(metadata,'$.output',jsonb(?)) WHERE id=? RETURNING {columns}
+-- name: update
+WITH updates(doc) AS (SELECT jsonb(?))
+UPDATE river_job SET metadata=CASE WHEN json_type(metadata)='object' THEN (
+  -- Replace whole top-level values, preserving nulls and exact numeric tokens.
+  SELECT jsonb_group_object(key,jsonb(doc->fullkey)) FROM (
+    SELECT key,fullkey,metadata AS doc FROM json_each(metadata)
+      WHERE key NOT IN (SELECT key FROM updates,json_each(doc))
+    UNION ALL SELECT key,fullkey,doc FROM updates,json_each(doc)
+  )
+) ELSE metadata END
+WHERE id=? RETURNING {columns}
 -- name: filter_metadata_container
 ({type}='{kind}' AND {children})
 -- name: filter_metadata_element

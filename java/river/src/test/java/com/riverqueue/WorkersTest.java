@@ -55,7 +55,7 @@ class WorkersTest {
       assertNotNull(event);
       assertEquals(firstJob.id(), event.job().id());
     }
-    assertEquals(Job.State.AVAILABLE, client.get(secondJob.id()).state());
-    assertEquals(Job.State.AVAILABLE, client.get(thirdJob.id()).state());
+    assertEquals(Job.State.AVAILABLE, client.jobs().get(secondJob.id()).state());
+    assertEquals(Job.State.AVAILABLE, client.jobs().get(thirdJob.id()).state());
   }
 }

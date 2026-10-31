@@ -228,11 +228,17 @@ var mixed = client.insertMany(List.of(
 
 ## Reading typed jobs
 
-`client.get(id)` returns `Job<JsonNode>` because an ID does not identify a Java
+Job operations live on `client.jobs()`, alongside queue operations on
+`client.queues()`. Use `jobs().get`, `list`, `cancel`, `delete`, `deleteMany`,
+`retry`, `complete`, and `update`. Insertions remain `client.insert` and
+`client.insertMany`. Connection-first overloads use an existing transaction;
+`jobs().complete` always requires one.
+
+`client.jobs().get(id)` returns `Job<JsonNode>` because an ID does not identify a Java
 argument class. Supply a job type when it is known:
 
 ```java
-Job<SendEmail> job = client.get(jobId, email);
+Job<SendEmail> job = client.jobs().get(jobId, email);
 System.out.println(job.args().address());
 ```
 
@@ -248,9 +254,9 @@ unchanged when continuing from a page's cursor:
 
 ```java
 var query = JobQuery.builder().kinds("send_email").limit(50).build();
-var first = client.list(query);
+var first = client.jobs().list(query);
 if (!first.jobs().isEmpty()) {
-  var next = client.list(query.after(first.cursor()));
+  var next = client.jobs().list(query.after(first.cursor()));
 }
 ```
 
@@ -262,9 +268,9 @@ selected state, or `SCHEDULED_AT` or `FINALIZED_AT` for an explicit timestamp.
 A thrown exception triggers [retries](https://riverqueue.com/docs/job-retries)
 until `maxAttempts` is exhausted, when the job becomes discarded. The default
 policy uses River's quartic backoff with jitter. Configure a different policy
-on the client builder, or explicitly retry an existing job with `client.retry(id)`.
+on the client builder, or explicitly retry an existing job with `client.jobs().retry(id)`.
 An explicit retry that updates a job notifies its queue after commit. Use
-`client.retry(connection, id)` to make the retry part of an existing transaction.
+`client.jobs().retry(connection, id)` to make the retry part of an existing transaction.
 A retry policy receives the full job snapshot before the current failure is
 appended to `errors`; use `job.errors().size() + 1` to include that failure.
 It runs only when another attempt is possible. Return a nonnegative `Duration`;
@@ -306,12 +312,12 @@ var clientBuilder = Client.builder(database).queue("default", 10);
 ### Cancelling jobs
 
 [Cancel](https://riverqueue.com/docs/cancelling-jobs) an enqueued or running job
-with `client.cancel(id)`. Running attempts receive a cooperative cancellation
+with `client.jobs().cancel(id)`. Running attempts receive a cooperative cancellation
 signal. A handler can cancel itself permanently with `context.cancel(reason)`;
 this ends the attempt without further retries.
 
 ```java
-client.cancel(jobId);
+client.jobs().cancel(jobId);
 
 clientBuilder.worker(email, context -> {
   context.checkCancelled();
@@ -610,8 +616,33 @@ clientBuilder.worker(email, context -> {
   context.output(Map.of("delivered", true, "address", context.args().address()));
 });
 
-var output = client.get(jobId).metadata().path("output");
+var output = client.jobs().get(jobId).metadata().path("output");
 ```
+
+To persist output immediately, use `client.jobs().update` with `JobUpdateOptions`:
+
+```java
+var updates = JobUpdateOptions.builder()
+    .metadata(Map.of("provider_request_id", requestId))
+    .output(Map.of("normalized_text", normalized))
+    .build();
+var updated = client.jobs().update(jobId, updates);
+
+// Or include the update in an existing JDBC transaction:
+client.jobs().update(connection, jobId, updates);
+```
+
+Metadata merges at the top level, preserving unrelated keys. Supplied nested
+objects replace whole values; JSON null is preserved. Explicit `output` overrides
+any `"output"` in the metadata updates. Omit it to leave output unchanged, or call
+`.output(null)` to store JSON null. `JobUpdateOptions.defaults()` changes nothing.
+Missing jobs throw `RiverException` with code `NOT_FOUND`.
+
+The connection overload requires auto-commit disabled and leaves commit/rollback
+to the caller. Save step results before marking a resumable step complete.
+`context.output` remains buffered until the attempt finishes and may overwrite
+an immediate output update. Read fresh output with `client.jobs().get(jobId)`; existing
+job objects are snapshots.
 
 ### Resumable jobs
 

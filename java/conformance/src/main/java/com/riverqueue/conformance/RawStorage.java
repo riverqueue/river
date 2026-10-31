@@ -41,7 +41,7 @@ final class RawStorage {
             id = rows.getLong(1);
           }
         }
-        return Adapter.normalized(new Client(database).get(id));
+        return Adapter.normalized(new Client(database).jobs().get(id));
       }
       if (method.equals("leader")) {
         try (var statement = connection.createStatement();
@@ -148,7 +148,7 @@ final class RawStorage {
             id = rows.getLong(1);
           }
         }
-        return Adapter.normalized(new Client(database).get(id));
+        return Adapter.normalized(new Client(database).jobs().get(id));
       }
       if (method.equals("raw_finalize")) {
         String error =
@@ -185,7 +185,7 @@ final class RawStorage {
           statement.setLong(4, params.path("id").asLong());
           statement.executeUpdate();
         }
-        return Adapter.normalized(new Client(database).get(params.path("id").asLong()));
+        return Adapter.normalized(new Client(database).jobs().get(params.path("id").asLong()));
       }
       if (method.equals("raw_replace_json_text")) {
         String column = params.path("column").asString();
