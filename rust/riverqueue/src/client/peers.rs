@@ -27,8 +27,8 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use chrono::{DateTime, Utc};
 use futures_util::future::BoxFuture;
+use jiff::Timestamp;
 use serde_json::{Map, Value};
 use tokio::sync::{Notify, mpsc, oneshot};
 use tokio_util::sync::CancellationToken;
@@ -78,7 +78,7 @@ pub(crate) struct PeerLedger {
     coordinator: i64,
     /// When the coordinator's attempt started, recorded as its peers'
     /// attempt errors' time.
-    started_at: DateTime<Utc>,
+    started_at: Timestamp,
     id: u64,
     idle: Notify,
     state: Mutex<LedgerState>,
@@ -186,7 +186,7 @@ fn not_running() -> Error {
 }
 
 impl PeerLedger {
-    pub(super) fn new(coordinator: i64, started_at: DateTime<Utc>) -> Self {
+    pub(super) fn new(coordinator: i64, started_at: Timestamp) -> Self {
         Self {
             coordinator,
             started_at,
@@ -562,8 +562,9 @@ impl PeerLedger {
         let queue_wait_duration = row
             .attempted_at
             .and_then(|attempted_at| {
-                (attempted_at - row.scheduled_at.max(row.created_at))
-                    .to_std()
+                attempted_at
+                    .duration_since(row.scheduled_at.max(row.created_at))
+                    .try_into()
                     .ok()
             })
             .unwrap_or_default();

@@ -11,7 +11,7 @@ use std::{
     time::Duration,
 };
 
-use chrono::{DateTime, Utc};
+use jiff::Timestamp;
 use tokio::sync::Notify;
 use tokio_util::sync::CancellationToken;
 
@@ -20,7 +20,7 @@ use crate::{Client, Error, InsertOpts, JobArgs};
 /// A schedule that calculates the next periodic run after a UTC instant.
 pub trait PeriodicSchedule: Send + Sync + 'static {
     /// Returns the next run time, or `None` to disable future runs.
-    fn next(&self, current: DateTime<Utc>) -> Option<DateTime<Utc>>;
+    fn next(&self, current: Timestamp) -> Option<Timestamp>;
 }
 
 /// A fixed-duration periodic schedule.
@@ -52,10 +52,8 @@ impl IntervalSchedule {
 }
 
 impl PeriodicSchedule for IntervalSchedule {
-    fn next(&self, current: DateTime<Utc>) -> Option<DateTime<Utc>> {
-        chrono::Duration::from_std(self.0)
-            .ok()
-            .and_then(|interval| current.checked_add_signed(interval))
+    fn next(&self, current: Timestamp) -> Option<Timestamp> {
+        current.checked_add(self.0).ok()
     }
 }
 
@@ -64,7 +62,7 @@ impl PeriodicSchedule for IntervalSchedule {
 pub struct NeverSchedule;
 
 impl PeriodicSchedule for NeverSchedule {
-    fn next(&self, _current: DateTime<Utc>) -> Option<DateTime<Utc>> {
+    fn next(&self, _current: Timestamp) -> Option<Timestamp> {
         None
     }
 }
@@ -215,7 +213,7 @@ pub struct PeriodicJobHandle(u64);
 
 pub(crate) struct PeriodicEntry {
     pub(crate) job: PeriodicJob,
-    pub(crate) next_run: Option<DateTime<Utc>>,
+    pub(crate) next_run: Option<Timestamp>,
     pub(crate) needs_initialization: bool,
 }
 
@@ -235,7 +233,7 @@ pub struct PeriodicJobs {
 
 /// Jobs due within this margin are inserted in the current pass, like Go's
 /// enqueuer, which also keeps each occurrence's original scheduled time.
-const DUE_MARGIN: chrono::Duration = chrono::Duration::milliseconds(100);
+const DUE_MARGIN: jiff::SignedDuration = jiff::SignedDuration::from_millis(100);
 
 /// Bound on one periodic insert (Go `riversharedmaintenance.TimeoutDefault`).
 const INSERT_TIMEOUT: Duration = Duration::from_secs(30);
@@ -294,12 +292,12 @@ impl PeriodicJobs {
 
     /// Returns the earliest scheduled occurrence, or now when a job still
     /// needs its first schedule computed.
-    pub(crate) fn next_run_at(&self) -> Option<DateTime<Utc>> {
+    pub(crate) fn next_run_at(&self) -> Option<Timestamp> {
         let registry = self.lock();
-        let mut next: Option<DateTime<Utc>> = None;
+        let mut next: Option<Timestamp> = None;
         for entry in registry.entries.values() {
             let candidate = if entry.needs_initialization {
-                Some(Utc::now())
+                Some(Timestamp::now())
             } else {
                 entry.next_run
             };
@@ -405,14 +403,14 @@ impl PeriodicJobs {
     pub(crate) async fn run_due(
         &self,
         client: &Client,
-        now: DateTime<Utc>,
+        now: Timestamp,
         cancel: &CancellationToken,
     ) {
         struct DueJob {
             advance_handle: Option<PeriodicJobHandle>,
             handle: PeriodicJobHandle,
             job: PeriodicJob,
-            target: DateTime<Utc>,
+            target: Timestamp,
         }
 
         let due = {
@@ -557,10 +555,10 @@ mod tests {
     #[test]
     fn interval_schedules_accept_any_positive_interval() {
         let schedule = IntervalSchedule::new(Duration::from_millis(500)).unwrap();
-        let now = Utc::now();
+        let now = Timestamp::now();
         assert_eq!(
             schedule.next(now),
-            Some(now + chrono::Duration::milliseconds(500))
+            Some(now + jiff::SignedDuration::from_millis(500))
         );
         let error = IntervalSchedule::new(Duration::ZERO).unwrap_err();
         assert!(matches!(error, Error::Configuration(_)), "{error}");
@@ -620,8 +618,8 @@ mod tests {
             .connect_lazy("postgres://127.0.0.1:1/river_periodic_test")
             .unwrap();
         let client = Client::builder(pool).build().unwrap();
-        let now = Utc::now();
-        let target = now + chrono::Duration::seconds(1);
+        let now = Timestamp::now();
+        let target = now + jiff::SignedDuration::from_secs(1);
         let cancel = CancellationToken::new();
 
         jobs.run_due(&client, now, &cancel).await;
@@ -633,7 +631,7 @@ mod tests {
         let registry = jobs.lock();
         assert_eq!(
             registry.entries.values().next().unwrap().next_run,
-            Some(target + chrono::Duration::seconds(1))
+            Some(target + jiff::SignedDuration::from_secs(1))
         );
     }
 
@@ -663,8 +661,8 @@ mod tests {
             .connect_lazy(&format!("postgres://{address}/river_periodic_test"))
             .unwrap();
         let client = Client::builder(pool).build().unwrap();
-        let now = Utc::now();
-        let target = now + chrono::Duration::seconds(1);
+        let now = Timestamp::now();
+        let target = now + jiff::SignedDuration::from_secs(1);
         let cancel = CancellationToken::new();
         jobs.run_due(&client, now, &cancel).await;
 

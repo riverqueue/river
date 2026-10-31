@@ -9,7 +9,7 @@
 
 use std::{borrow::Cow, fmt};
 
-use chrono::{DateTime, NaiveDate, Utc};
+use jiff::Timestamp;
 use serde::{
     Deserialize, Deserializer,
     de::{self, MapAccess, Visitor},
@@ -121,11 +121,10 @@ impl AttemptError {
 
 /// Go's zero `time.Time`, which Go leaves in an attempt error without a
 /// usable `at`.
-fn go_zero_time() -> DateTime<Utc> {
-    NaiveDate::from_ymd_opt(1, 1, 1)
-        .and_then(|date| date.and_hms_opt(0, 0, 0))
-        .expect("Go's zero time is a valid date")
-        .and_utc()
+fn go_zero_time() -> Timestamp {
+    "0001-01-01T00:00:00Z"
+        .parse()
+        .expect("Go zero time is valid")
 }
 
 /// An attempt error object's fields as raw JSON, matched the way Go's
@@ -200,7 +199,7 @@ fn is_json_whitespace(character: char) -> bool {
 /// Decodes `at` like Go's `time.Time.UnmarshalJSON`: `null` is Go's zero
 /// time, and a string must hold an RFC 3339 timestamp. Like Go 1.26, the
 /// string isn't unescaped first.
-fn strict_time(raw: &str) -> Result<DateTime<Utc>, String> {
+fn strict_time(raw: &str) -> Result<Timestamp, String> {
     if raw == "null" {
         return Ok(go_zero_time());
     }
@@ -322,7 +321,7 @@ fn compact_json(raw: &str) -> String {
 /// two digit hour, `:MM:SS` with valid ranges and no leap second, an optional
 /// fraction introduced by `.` or `,` (digits past nanoseconds are ignored),
 /// and `Z` or a `±hh:mm` offset of up to 24 hours and 60 minutes.
-fn parse_rfc3339(text: &str) -> Option<DateTime<Utc>> {
+fn parse_rfc3339(text: &str) -> Option<Timestamp> {
     let mut parser = TimeParser(text.as_bytes());
     let year = parser.digits(4)?;
     parser.expect(b"-")?;
@@ -342,10 +341,22 @@ fn parse_rfc3339(text: &str) -> Option<DateTime<Utc>> {
         return None;
     }
 
-    let local = NaiveDate::from_ymd_opt(i32::try_from(year).ok()?, month, day)?
-        .and_hms_nano_opt(hour, minute, second, nanosecond)?
-        .and_utc();
-    local.checked_sub_signed(chrono::Duration::seconds(offset_seconds))
+    let local = jiff::civil::DateTime::new(
+        i16::try_from(year).ok()?,
+        i8::try_from(month).ok()?,
+        i8::try_from(day).ok()?,
+        i8::try_from(hour).ok()?,
+        i8::try_from(minute).ok()?,
+        i8::try_from(second).ok()?,
+        i32::try_from(nanosecond).ok()?,
+    )
+    .ok()?
+    .to_zoned(jiff::tz::TimeZone::UTC)
+    .ok()?
+    .timestamp();
+    local
+        .checked_sub(jiff::SignedDuration::from_secs(offset_seconds))
+        .ok()
 }
 
 /// The unparsed remainder of a timestamp.
@@ -419,18 +430,15 @@ impl TimeParser<'_> {
 
 #[cfg(test)]
 mod tests {
-    use chrono::{DateTime, NaiveDate, Utc};
+    use jiff::Timestamp;
 
     use super::{AttemptError, go_zero_time};
 
-    fn attempt_at() -> DateTime<Utc> {
-        NaiveDate::from_ymd_opt(2024, 1, 2)
-            .and_then(|date| date.and_hms_micro_opt(3, 4, 5, 123_456))
-            .unwrap()
-            .and_utc()
+    fn attempt_at() -> Timestamp {
+        "2024-01-02T03:04:05.123456Z".parse().unwrap()
     }
 
-    fn attempt_error(at: DateTime<Utc>, attempt: i32, error: &str, trace: &str) -> AttemptError {
+    fn attempt_error(at: Timestamp, attempt: i32, error: &str, trace: &str) -> AttemptError {
         AttemptError::new(at, attempt, error).with_trace(trace)
     }
 
@@ -444,11 +452,8 @@ mod tests {
         }
     }
 
-    fn whole_second() -> DateTime<Utc> {
-        NaiveDate::from_ymd_opt(2024, 1, 2)
-            .and_then(|date| date.and_hms_opt(3, 4, 5))
-            .unwrap()
-            .and_utc()
+    fn whole_second() -> Timestamp {
+        "2024-01-02T03:04:05Z".parse::<jiff::Timestamp>().unwrap()
     }
 
     #[test]
@@ -641,10 +646,7 @@ mod tests {
                 "AtYearZero",
                 r#"{"at":"0000-01-01T00:00:00Z"}"#,
                 attempt_error(
-                    NaiveDate::from_ymd_opt(0, 1, 1)
-                        .and_then(|date| date.and_hms_opt(0, 0, 0))
-                        .unwrap()
-                        .and_utc(),
+                    "0000-01-01T00:00:00Z".parse::<jiff::Timestamp>().unwrap(),
                     0,
                     "",
                     "",
@@ -803,12 +805,8 @@ mod tests {
 
     #[test]
     fn serializes_at_like_go() {
-        let at = NaiveDate::from_ymd_opt(2024, 1, 2)
-            .unwrap()
-            .and_hms_opt(3, 4, 5)
-            .unwrap()
-            .and_utc()
-            + chrono::Duration::nanoseconds(678_900_000);
+        let at = "2024-01-02T03:04:05Z".parse::<jiff::Timestamp>().unwrap()
+            + jiff::SignedDuration::from_nanos(678_900_000);
         let encoded = serde_json::to_string(&attempt_error(at, 1, "", "")).unwrap();
         assert_eq!(
             encoded,

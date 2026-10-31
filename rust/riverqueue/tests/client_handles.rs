@@ -366,7 +366,7 @@ macro_rules! scenarios {
         #[tokio::test(flavor = "multi_thread")]
         async fn fetches_by_priority_then_schedule_then_id() {
             let fixture = Fixture::new().await;
-            let base = chrono::Utc::now() - chrono::Duration::minutes(10);
+            let base = jiff::Timestamp::now() - jiff::SignedDuration::from_mins(10);
             let mut ids = Vec::new();
             for (name, priority, minutes) in [
                 ("p2_early", 2, 0),
@@ -381,7 +381,7 @@ macro_rules! scenarios {
                     .opts(
                         InsertOpts::default()
                             .with_priority(priority)
-                            .with_scheduled_at(base + chrono::Duration::minutes(minutes)),
+                            .with_scheduled_at(base + jiff::SignedDuration::from_mins(minutes)),
                     )
                     .await
                     .unwrap()
@@ -463,7 +463,7 @@ macro_rules! scenarios {
             assert_eq!(job.id, id);
             assert_eq!(job.state, JobState::Cancelled);
             let finalized_at = job.finalized_at.unwrap();
-            assert!((chrono::Utc::now() - finalized_at).num_seconds().abs() < 2);
+            assert!(jiff::Timestamp::now().duration_since(finalized_at).as_secs().abs() < 2);
 
             run.stop().await.unwrap();
             fixture.cleanup().await;

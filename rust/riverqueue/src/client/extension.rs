@@ -3,7 +3,7 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use chrono::{DateTime, Utc};
+use jiff::Timestamp;
 use serde_json::Map;
 use serde_json::value::RawValue;
 
@@ -64,7 +64,7 @@ impl<'client> ExtensionClient<'client> {
 impl<'client> ExtensionClient<'client> {
     /// Computes the configured retry delay for an exact-version extension.
     #[must_use]
-    pub fn retry_delay(&self, row: &JobRow, error: &WorkError, now: DateTime<Utc>) -> Duration {
+    pub fn retry_delay(&self, row: &JobRow, error: &WorkError, now: Timestamp) -> Duration {
         self.client.inner.retry_policy.next_retry(row, error, now)
     }
 
@@ -135,7 +135,7 @@ impl<'client> ExtensionClient<'client> {
         unique_fields: &'a [&'a [&'a str]],
         encoded_args: Box<RawValue>,
         params: InsertParams,
-        target: DateTime<Utc>,
+        target: Timestamp,
     ) -> RawInsertRequest<'a>
     where
         'client: 'a,
@@ -289,7 +289,7 @@ enum RawInsertOptions {
     /// A periodic occurrence due at `target`.
     Periodic {
         params: InsertParams,
-        target: DateTime<Utc>,
+        target: Timestamp,
     },
 }
 
@@ -311,7 +311,7 @@ impl RawInsertRequest<'_> {
         let executor = self.target.into_executor()?;
         let client = self.client;
         client.validate_known_kind(self.kind)?;
-        let now = Utc::now();
+        let now = Timestamp::now();
         let job = match self.options {
             RawInsertOptions::Opts(opts) => {
                 let params = InsertOpts::resolve(

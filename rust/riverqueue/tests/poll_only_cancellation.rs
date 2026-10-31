@@ -59,7 +59,7 @@ impl Backend {
     /// Requests a job's cancellation the way `JobCancel` does, but without a
     /// notification, as if it was lost.
     async fn request_cancellation_without_notification(&self, id: i64) {
-        let cancel_attempted_at = chrono::Utc::now().to_rfc3339();
+        let cancel_attempted_at = jiff::Timestamp::now().to_string();
         match self {
             #[cfg(all(feature = "postgres", river_postgres_tests))]
             Self::Postgres(schema) => {

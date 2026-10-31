@@ -10,6 +10,10 @@ Changes to River for Go are recorded in the [repository changelog](../CHANGELOG.
 
 ## [Unreleased]
 
+### Changed
+
+- **Breaking:** Replace Chrono with Jiff 0.2 throughout the Rust API. Job timestamps, insertion options, retry hooks, periodic schedules, and test helpers now use `jiff::Timestamp`; River re-exports Jiff as `riverqueue::jiff`. `CronSchedule::next_after` takes and returns `jiff::Zoned`, `CronTimeZone::Fixed` uses `jiff::tz::Offset`, and `CronTimeZone::Named` uses `jiff::tz::TimeZone`. `CronTimeZone` is now `Clone` rather than `Copy`. `PostgresReindexSchedule::DailyUtc` takes `jiff::civil::Time`. Rename the optional `chrono-tz` feature to `tzdb`. Database formats, canonical timestamp JSON, and Go-compatible cron behavior remain unchanged. Timestamp ranges and checked arithmetic follow Jiff's supported range. [PR #1567](https://github.com/riverqueue/river/pull/1567).
+
 ### Fixed
 
 - Fixed a running job not being cancelled when its cancellation notification was lost, as happens if it's sent while the client's listener is reconnecting. Clients with notifications now also check their running jobs for cancellation requests once a minute, like River for Go. Retrying a job now clears its earlier attempt's cancellation request so that the retried job isn't cancelled again. [PR #1564](https://github.com/riverqueue/river/pull/1564).

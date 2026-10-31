@@ -12,9 +12,10 @@
 
 use std::{fmt, str::FromStr, time::Duration};
 
-use chrono::{
-    DateTime, Datelike, FixedOffset, Local, NaiveDate, NaiveDateTime, Offset as _, TimeZone,
-    Timelike, Utc,
+use jiff::{
+    SignedDuration, Timestamp, Zoned,
+    civil::{Date, DateTime},
+    tz::{Offset, TimeZone},
 };
 use thiserror::Error as ThisError;
 
@@ -77,7 +78,7 @@ const DAYS_OF_WEEK: Bounds = Bounds {
 };
 
 /// Time zone in which a [`CronSchedule`] is evaluated.
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
 #[non_exhaustive]
 pub enum CronTimeZone {
     /// The process's local time zone, the default. Containers usually run in
@@ -88,12 +89,24 @@ pub enum CronTimeZone {
     /// Coordinated Universal Time.
     Utc,
     /// A fixed offset from UTC, without daylight saving time.
-    Fixed(FixedOffset),
+    Fixed(Offset),
     /// A zone from the IANA time zone database, with its daylight saving
     /// rules. `CRON_TZ=` and `TZ=` prefixes naming a zone such as
     /// `America/New_York` parse to this variant.
-    #[cfg(feature = "chrono-tz")]
-    Named(chrono_tz::Tz),
+    #[cfg(feature = "tzdb")]
+    Named(TimeZone),
+}
+
+impl CronTimeZone {
+    fn resolve(&self) -> TimeZone {
+        match self {
+            Self::Local => TimeZone::system(),
+            Self::Utc => TimeZone::UTC,
+            Self::Fixed(offset) => TimeZone::fixed(*offset),
+            #[cfg(feature = "tzdb")]
+            Self::Named(zone) => zone.clone(),
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -113,7 +126,7 @@ enum Spec {
 /// Parsing accepts exactly the expressions every River client accepts, and
 /// [`CronSchedule::next_after`] returns the same occurrences, so a schedule
 /// fires at the same times whichever client leads.
-/// Without the `chrono-tz` feature, which bundles the IANA time zone
+/// Without the `tzdb` feature, which bundles the IANA time zone
 /// database, named `CRON_TZ=`/`TZ=` zones are limited to `UTC`, `Local`, and
 /// `Etc/GMT±N`, and other names are rejected; use
 /// [`CronSchedule::with_time_zone`] for other fixed offsets.
@@ -150,7 +163,7 @@ impl CronSchedule {
     /// Returns the zone in which periodic occurrences are computed.
     #[must_use]
     pub fn time_zone(&self) -> CronTimeZone {
-        self.zone.unwrap_or_default()
+        self.zone.clone().unwrap_or_default()
     }
 
     /// Returns the first occurrence strictly after `after`, or `None` when
@@ -159,21 +172,14 @@ impl CronSchedule {
     /// Without an explicit zone or `CRON_TZ=` prefix, the occurrence is
     /// computed in `after`'s own time zone.
     #[must_use]
-    pub fn next_after<Tz: TimeZone>(&self, after: &DateTime<Tz>) -> Option<DateTime<Tz>> {
-        let zone = after.timezone();
-        match self.zone {
-            None => next_in(self.spec, after.clone()),
-            Some(CronTimeZone::Local) => next_in(self.spec, after.with_timezone(&Local))
-                .map(|next| next.with_timezone(&zone)),
-            Some(CronTimeZone::Utc) => {
-                next_in(self.spec, after.with_timezone(&Utc)).map(|next| next.with_timezone(&zone))
-            }
-            Some(CronTimeZone::Fixed(offset)) => next_in(self.spec, after.with_timezone(&offset))
-                .map(|next| next.with_timezone(&zone)),
-            #[cfg(feature = "chrono-tz")]
-            Some(CronTimeZone::Named(named)) => next_in(self.spec, after.with_timezone(&named))
-                .map(|next| next.with_timezone(&zone)),
-        }
+    pub fn next_after(&self, after: &Zoned) -> Option<Zoned> {
+        let zone = after.time_zone().clone();
+        let evaluation_zone = self
+            .zone
+            .as_ref()
+            .map_or_else(|| zone.clone(), CronTimeZone::resolve);
+        next_in(self.spec, &after.with_time_zone(evaluation_zone))
+            .map(|next| next.with_time_zone(zone))
     }
 }
 
@@ -200,17 +206,9 @@ impl fmt::Display for CronSchedule {
 }
 
 impl PeriodicSchedule for CronSchedule {
-    fn next(&self, current: DateTime<Utc>) -> Option<DateTime<Utc>> {
-        match self.time_zone() {
-            CronTimeZone::Local => next_in(self.spec, current.with_timezone(&Local))
-                .map(|next| next.with_timezone(&Utc)),
-            CronTimeZone::Utc => next_in(self.spec, current),
-            CronTimeZone::Fixed(offset) => next_in(self.spec, current.with_timezone(&offset))
-                .map(|next| next.with_timezone(&Utc)),
-            #[cfg(feature = "chrono-tz")]
-            CronTimeZone::Named(named) => next_in(self.spec, current.with_timezone(&named))
-                .map(|next| next.with_timezone(&Utc)),
-        }
+    fn next(&self, current: Timestamp) -> Option<Timestamp> {
+        next_in(self.spec, &current.to_zoned(self.time_zone().resolve()))
+            .map(|next| next.timestamp())
     }
 }
 
@@ -273,20 +271,20 @@ fn parse_zone(name: &str) -> Result<CronTimeZone, String> {
             .or_else(|| offset.strip_prefix('-').map(|hours| (1, hours)))
         && let Ok(hours) = hours.parse::<i32>()
         && (0..=14).contains(&hours)
-        && let Some(offset) = FixedOffset::east_opt(sign * hours * 3_600)
+        && let Ok(offset) = Offset::from_seconds(sign * hours * 3_600)
     {
         return Ok(CronTimeZone::Fixed(offset));
     }
-    #[cfg(feature = "chrono-tz")]
-    if let Ok(named) = name.parse::<chrono_tz::Tz>() {
+    #[cfg(feature = "tzdb")]
+    if let Ok(named) = TimeZone::get(name) {
         return Ok(CronTimeZone::Named(named));
     }
-    #[cfg(feature = "chrono-tz")]
+    #[cfg(feature = "tzdb")]
     return Err(format!("provided bad location {name}: unknown time zone"));
-    #[cfg(not(feature = "chrono-tz"))]
+    #[cfg(not(feature = "tzdb"))]
     Err(format!(
         "provided bad location {name}: only UTC, Local, and Etc/GMT offsets are supported \
-         without River's chrono-tz feature; use CronSchedule::with_time_zone for other zones"
+         without River's tzdb feature; use CronSchedule::with_time_zone for other zones"
     ))
 }
 
@@ -521,11 +519,11 @@ fn parse_go_duration(text: &str) -> Result<i128, String> {
     clippy::too_many_lines,
     reason = "a line-for-line port keeps robfig's field loops auditable"
 )]
-fn next_in<Z: TimeZone>(spec: Spec, after: DateTime<Z>) -> Option<DateTime<Z>> {
-    let subsecond = chrono::Duration::nanoseconds(i64::from(after.nanosecond()));
+fn next_in(spec: Spec, after: &Zoned) -> Option<Zoned> {
+    let subsecond = SignedDuration::from_nanos(i64::from(after.subsec_nanosecond()));
     let (minute, hour, dom, month, dow) = match spec {
         Spec::Every(delay) => {
-            return Some(after + chrono::Duration::from_std(delay).ok()? - subsecond);
+            return after.checked_add(delay).ok()?.checked_sub(subsecond).ok();
         }
         Spec::Fields {
             dom,
@@ -535,12 +533,16 @@ fn next_in<Z: TimeZone>(spec: Spec, after: DateTime<Z>) -> Option<DateTime<Z>> {
             month,
         } => (minute, hour, dom, month, dow),
     };
-    let zone = after.timezone();
-    let one_hour = chrono::Duration::hours(1);
-    let one_minute = chrono::Duration::minutes(1);
+    let zone = after.time_zone().clone();
+    let one_hour = SignedDuration::from_hours(1);
+    let one_minute = SignedDuration::from_mins(1);
 
     // Start at the earliest possible time (the upcoming second).
-    let mut time = after + chrono::Duration::seconds(1) - subsecond;
+    let mut time = after
+        .checked_add(SignedDuration::from_secs(1))
+        .ok()?
+        .checked_sub(subsecond)
+        .ok()?;
     let mut added = false;
     let year_limit = time.year() + 5;
 
@@ -587,9 +589,10 @@ fn next_in<Z: TimeZone>(spec: Spec, after: DateTime<Z>) -> Option<DateTime<Z>> {
             if time.hour() != 0 {
                 let hour = i64::from(time.hour());
                 time = if hour > 12 {
-                    time + chrono::Duration::hours(24 - hour)
+                    time.checked_add(SignedDuration::from_hours(24 - hour))
+                        .ok()?
                 } else {
-                    time - chrono::Duration::hours(hour)
+                    time.checked_sub(SignedDuration::from_hours(hour)).ok()?
                 };
             }
             if time.day() == 1 {
@@ -610,7 +613,7 @@ fn next_in<Z: TimeZone>(spec: Spec, after: DateTime<Z>) -> Option<DateTime<Z>> {
                     0,
                 )?;
             }
-            time += one_hour;
+            time = time.checked_add(one_hour).ok()?;
             if time.hour() == 0 {
                 continue 'wrap;
             }
@@ -619,9 +622,9 @@ fn next_in<Z: TimeZone>(spec: Spec, after: DateTime<Z>) -> Option<DateTime<Z>> {
         while (1 << time.minute()) & minute == 0 {
             if !added {
                 added = true;
-                time = truncate_to_minute(time);
+                time = truncate_to_minute(&time)?;
             }
-            time += one_minute;
+            time = time.checked_add(one_minute).ok()?;
             if time.minute() == 0 {
                 continue 'wrap;
             }
@@ -633,16 +636,18 @@ fn next_in<Z: TimeZone>(spec: Spec, after: DateTime<Z>) -> Option<DateTime<Z>> {
         let second = i64::from(time.second());
         if second != 0 {
             added = true;
-            time += chrono::Duration::seconds(60 - second);
+            time = time
+                .checked_add(SignedDuration::from_secs(60 - second))
+                .ok()?;
             continue 'wrap;
         }
         return Some(time);
     }
 }
 
-fn day_matches<Z: TimeZone>(dom: u64, dow: u64, time: &DateTime<Z>) -> bool {
+fn day_matches(dom: u64, dow: u64, time: &Zoned) -> bool {
     let day_of_month = (1 << time.day()) & dom != 0;
-    let weekday = (1 << time.weekday().num_days_from_sunday()) & dow != 0;
+    let weekday = (1 << time.weekday().to_sunday_zero_offset()) & dow != 0;
     if dom & STAR_BIT != 0 || dow & STAR_BIT != 0 {
         day_of_month && weekday
     } else {
@@ -651,31 +656,35 @@ fn day_matches<Z: TimeZone>(dom: u64, dow: u64, time: &DateTime<Z>) -> bool {
 }
 
 /// Go's `time.Truncate(time.Minute)`, which rounds absolute time.
-fn truncate_to_minute<Z: TimeZone>(time: DateTime<Z>) -> DateTime<Z> {
-    let seconds = time.timestamp().rem_euclid(60);
-    let nanos = i64::from(time.nanosecond());
-    time - chrono::Duration::seconds(seconds) - chrono::Duration::nanoseconds(nanos)
+fn truncate_to_minute(time: &Zoned) -> Option<Zoned> {
+    let truncated = time.timestamp().as_nanosecond().div_euclid(60_000_000_000) * 60_000_000_000;
+    Some(
+        Timestamp::from_nanosecond(truncated)
+            .ok()?
+            .to_zoned(time.time_zone().clone()),
+    )
 }
 
 /// Go's `time.Date` in `zone`: overflowing months and days roll forward, and
 /// a wall-clock time that a transition skips or repeats resolves as Go
 /// resolves it (see [`resolve_local`]).
-fn go_date<Z: TimeZone>(
-    zone: &Z,
-    year: i32,
-    month: u32,
-    day: u32,
-    hour: u32,
-    minute: u32,
-    second: u32,
-) -> Option<DateTime<Z>> {
-    let months = i64::from(year) * 12 + i64::from(month) - 1;
-    let year = i32::try_from(months.div_euclid(12)).ok()?;
-    let month = u32::try_from(months.rem_euclid(12)).ok()? + 1;
-    let date = NaiveDate::from_ymd_opt(year, month, 1)?
-        .checked_add_days(chrono::Days::new(u64::from(day.checked_sub(1)?)))?;
-    let naive = date.and_hms_opt(hour, minute, second)?;
-    resolve_local(zone, naive)
+fn go_date(
+    zone: &TimeZone,
+    year: i16,
+    month: i8,
+    day: i8,
+    hour: i8,
+    minute: i8,
+    second: i8,
+) -> Option<Zoned> {
+    let months = i32::from(year) * 12 + i32::from(month) - 1;
+    let year = i16::try_from(months.div_euclid(12)).ok()?;
+    let month = i8::try_from(months.rem_euclid(12)).ok()? + 1;
+    let date = Date::new(year, month, 1)
+        .ok()?
+        .checked_add(jiff::Span::new().days(i64::from(day.checked_sub(1)?)))
+        .ok()?;
+    resolve_local(zone, date.at(hour, minute, second, 0))
 }
 
 /// Converts a wall-clock time in `zone` to an instant exactly like Go's
@@ -689,29 +698,30 @@ fn go_date<Z: TimeZone>(
 /// reads as the hour before it: `02:30` on a New York spring-forward day is
 /// `01:30` EST, so a daily `30 2 * * *` schedule skips that day. Like Go, a
 /// zero first offset is used as is.
-fn resolve_local<Z: TimeZone>(zone: &Z, naive: NaiveDateTime) -> Option<DateTime<Z>> {
-    let offset_at = |instant: NaiveDateTime| {
-        i64::from(
-            zone.offset_from_utc_datetime(&instant)
-                .fix()
-                .local_minus_utc(),
-        )
-    };
-    let mut offset = offset_at(naive);
-    if offset != 0 {
-        let utc = naive.checked_sub_signed(chrono::Duration::seconds(offset))?;
-        let corrected = offset_at(utc);
+fn resolve_local(zone: &TimeZone, naive: DateTime) -> Option<Zoned> {
+    let local = naive.to_zoned(TimeZone::UTC).ok()?.timestamp();
+    let mut offset = zone.to_offset(local);
+    if offset != Offset::UTC {
+        let utc = local
+            .checked_sub(SignedDuration::from_secs(i64::from(offset.seconds())))
+            .ok()?;
+        let corrected = zone.to_offset(utc);
         if corrected != offset {
             offset = corrected;
         }
     }
-    let utc = naive.checked_sub_signed(chrono::Duration::seconds(offset))?;
-    Some(zone.from_utc_datetime(&utc))
+    let utc = local
+        .checked_sub(SignedDuration::from_secs(i64::from(offset.seconds())))
+        .ok()?;
+    Some(utc.to_zoned(zone.clone()))
 }
 
 #[cfg(test)]
 mod tests {
-    use chrono::{DateTime, FixedOffset};
+    use jiff::{
+        Zoned,
+        tz::{Offset, TimeZone},
+    };
     use serde::Deserialize;
 
     use super::{CronSchedule, CronTimeZone, PeriodicSchedule};
@@ -731,9 +741,35 @@ mod tests {
     #[derive(Deserialize)]
     struct CronCase {
         expression: String,
-        from: DateTime<FixedOffset>,
+        #[serde(deserialize_with = "deserialize_zoned")]
+        from: Zoned,
         name: String,
-        next: Vec<DateTime<FixedOffset>>,
+        #[serde(deserialize_with = "deserialize_zoned_vec")]
+        next: Vec<Zoned>,
+    }
+
+    fn parse_zoned(text: &str) -> Result<Zoned, jiff::Error> {
+        let offset = jiff::fmt::temporal::Pieces::parse(text)?
+            .to_numeric_offset()
+            .unwrap_or(Offset::UTC);
+        Ok(text
+            .parse::<jiff::Timestamp>()?
+            .to_zoned(TimeZone::fixed(offset)))
+    }
+
+    fn deserialize_zoned<'de, D: serde::Deserializer<'de>>(
+        deserializer: D,
+    ) -> Result<Zoned, D::Error> {
+        parse_zoned(&String::deserialize(deserializer)?).map_err(serde::de::Error::custom)
+    }
+
+    fn deserialize_zoned_vec<'de, D: serde::Deserializer<'de>>(
+        deserializer: D,
+    ) -> Result<Vec<Zoned>, D::Error> {
+        Vec::<String>::deserialize(deserializer)?
+            .iter()
+            .map(|text| parse_zoned(text).map_err(serde::de::Error::custom))
+            .collect()
     }
 
     fn fixture() -> Fixture {
@@ -744,13 +780,13 @@ mod tests {
         let schedule = CronSchedule::parse(&case.expression)
             .unwrap_or_else(|error| panic!("{}: {error}", case.name));
         // The fixture records five occurrences, stopping early at Go's zero time.
-        let mut current = case.from;
+        let mut current = case.from.clone();
         let mut observed = Vec::new();
         while observed.len() < 5 {
             let Some(next) = schedule.next_after(&current) else {
                 break;
             };
-            observed.push(next);
+            observed.push(next.clone());
             current = next;
         }
         assert_eq!(observed, case.next, "{}", case.name);
@@ -775,60 +811,14 @@ mod tests {
     // cases' own offsets.
     #[test]
     fn transitions_resolve_like_go_time_date() {
-        use chrono::{NaiveDate, TimeZone as _};
-
-        // A zone at UTC-5 that springs forward to UTC-4 at 07:00 UTC on
-        // 2026-03-08 and falls back at 06:00 UTC on 2026-11-01, like New
-        // York.
-        #[derive(Clone, Copy, Debug)]
-        struct NewYork2026;
-
-        impl chrono::TimeZone for NewYork2026 {
-            type Offset = FixedOffset;
-
-            fn from_offset(_: &FixedOffset) -> Self {
-                Self
-            }
-
-            fn offset_from_local_date(&self, _: &NaiveDate) -> chrono::LocalResult<FixedOffset> {
-                unimplemented!("River resolves wall-clock times itself")
-            }
-
-            fn offset_from_local_datetime(
-                &self,
-                _: &chrono::NaiveDateTime,
-            ) -> chrono::LocalResult<FixedOffset> {
-                unimplemented!("River resolves wall-clock times itself")
-            }
-
-            fn offset_from_utc_date(&self, _: &NaiveDate) -> FixedOffset {
-                unimplemented!("River only looks up instants")
-            }
-
-            fn offset_from_utc_datetime(&self, utc: &chrono::NaiveDateTime) -> FixedOffset {
-                let spring = NaiveDate::from_ymd_opt(2026, 3, 8)
-                    .unwrap()
-                    .and_hms_opt(7, 0, 0)
-                    .unwrap();
-                let fall = NaiveDate::from_ymd_opt(2026, 11, 1)
-                    .unwrap()
-                    .and_hms_opt(6, 0, 0)
-                    .unwrap();
-                let hours = if (spring..fall).contains(utc) { 4 } else { 5 };
-                FixedOffset::west_opt(hours * 3_600).unwrap()
-            }
-        }
-
-        let wall = |month, day, hour, minute| {
-            NaiveDate::from_ymd_opt(2026, month, day)
-                .unwrap()
-                .and_hms_opt(hour, minute, 0)
-                .unwrap()
-        };
+        let zone = TimeZone::posix("EST5EDT,M3.2.0/2,M11.1.0/2").unwrap();
+        let wall =
+            |month, day, hour, minute| jiff::civil::date(2026, month, day).at(hour, minute, 0, 0);
         let resolved = |naive| {
-            super::resolve_local(&NewYork2026, naive)
+            super::resolve_local(&zone, naive)
                 .unwrap()
-                .naive_utc()
+                .with_time_zone(TimeZone::UTC)
+                .datetime()
         };
         // A skipped time resolves to the hour before the transition.
         assert_eq!(resolved(wall(3, 8, 2, 30)), wall(3, 8, 6, 30));
@@ -839,21 +829,33 @@ mod tests {
 
         // So, like Go, a daily schedule at a skipped time misses that day,
         // and one at a repeated time fires twice.
-        let from = NewYork2026.from_utc_datetime(&wall(3, 7, 12, 0));
+        let from = wall(3, 7, 12, 0)
+            .to_zoned(TimeZone::UTC)
+            .unwrap()
+            .with_time_zone(zone.clone());
         let skipped = CronSchedule::parse("30 2 * * *").unwrap();
         let first = skipped.next_after(&from).unwrap();
-        assert_eq!(first.naive_utc(), wall(3, 9, 6, 30));
-        let from = NewYork2026.from_utc_datetime(&wall(10, 31, 12, 0));
+        assert_eq!(
+            first.with_time_zone(TimeZone::UTC).datetime(),
+            wall(3, 9, 6, 30)
+        );
+        let from = wall(10, 31, 12, 0)
+            .to_zoned(TimeZone::UTC)
+            .unwrap()
+            .with_time_zone(zone);
         let repeated = CronSchedule::parse("30 1 * * *").unwrap();
         let first = repeated.next_after(&from).unwrap();
         let second = repeated.next_after(&first).unwrap();
         assert_eq!(
-            (first.naive_utc(), second.naive_utc()),
+            (
+                first.with_time_zone(TimeZone::UTC).datetime(),
+                second.with_time_zone(TimeZone::UTC).datetime()
+            ),
             (wall(11, 1, 5, 30), wall(11, 1, 6, 30))
         );
     }
 
-    #[cfg(feature = "chrono-tz")]
+    #[cfg(feature = "tzdb")]
     #[test]
     fn named_zone_schedules_match_go_fixture() {
         let fixture = fixture();
@@ -863,12 +865,25 @@ mod tests {
         }
     }
 
-    #[cfg(not(feature = "chrono-tz"))]
+    #[cfg(not(feature = "tzdb"))]
     #[test]
     fn named_zones_need_the_time_zone_database() {
         for case in fixture().cron_named_zone_cases {
             let error = CronSchedule::parse(&case.expression).unwrap_err();
-            assert!(error.to_string().contains("chrono-tz"), "{error}");
+            assert!(error.to_string().contains("tzdb"), "{error}");
+        }
+    }
+
+    #[test]
+    fn schedules_stop_at_the_timestamp_limit() {
+        let after = jiff::Timestamp::MAX.to_zoned(TimeZone::UTC);
+        for expression in ["* * * * *", "@every 1h"] {
+            assert!(
+                CronSchedule::parse(expression)
+                    .unwrap()
+                    .next_after(&after)
+                    .is_none()
+            );
         }
     }
 
@@ -886,24 +901,23 @@ mod tests {
     fn explicit_time_zones_override_the_reference_zone() {
         let schedule = CronSchedule::parse("0 9 * * *").unwrap();
         assert_eq!(schedule.time_zone(), CronTimeZone::Local);
-        let eastern = FixedOffset::west_opt(5 * 3_600).unwrap();
+        let eastern = Offset::from_hours(-5).unwrap();
         let utc = schedule.clone().with_time_zone(CronTimeZone::Utc);
-        let from = DateTime::parse_from_rfc3339("2026-03-07T08:00:00-05:00").unwrap();
+        let from = parse_zoned("2026-03-07T08:00:00-05:00").unwrap();
         assert_eq!(
-            utc.next_after(&from).unwrap().to_rfc3339(),
+            utc.next_after(&from)
+                .unwrap()
+                .strftime("%Y-%m-%dT%H:%M:%S%:z")
+                .to_string(),
             "2026-03-08T04:00:00-05:00"
         );
         let fixed = schedule.with_time_zone(CronTimeZone::Fixed(eastern));
         assert_eq!(
             fixed
-                .next(
-                    DateTime::parse_from_rfc3339("2026-03-07T13:00:00Z")
-                        .unwrap()
-                        .to_utc()
-                )
+                .next(parse_zoned("2026-03-07T13:00:00Z").unwrap().timestamp())
                 .unwrap()
-                .to_rfc3339(),
-            "2026-03-07T14:00:00+00:00"
+                .to_string(),
+            "2026-03-07T14:00:00Z"
         );
         assert_eq!(
             CronSchedule::parse("CRON_TZ=Etc/GMT+5 0 9 * * *")
@@ -911,14 +925,14 @@ mod tests {
                 .time_zone(),
             CronTimeZone::Fixed(eastern)
         );
-        #[cfg(feature = "chrono-tz")]
+        #[cfg(feature = "tzdb")]
         assert_eq!(
             CronSchedule::parse("CRON_TZ=America/New_York 0 9 * * *")
                 .unwrap()
                 .time_zone(),
-            CronTimeZone::Named(chrono_tz::America::New_York)
+            CronTimeZone::Named(TimeZone::get("America/New_York").unwrap())
         );
-        #[cfg(not(feature = "chrono-tz"))]
+        #[cfg(not(feature = "tzdb"))]
         assert!(CronSchedule::parse("CRON_TZ=America/New_York 0 9 * * *").is_err());
     }
 }

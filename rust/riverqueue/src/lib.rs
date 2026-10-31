@@ -41,9 +41,6 @@ mod storage;
 mod unique;
 pub mod worker;
 
-/// The Chrono version of the timestamps in River's API, such as
-/// [`JobRow::scheduled_at`] and [`InsertOpts::with_scheduled_at`].
-pub use chrono;
 pub use client::{
     Client, ClientBuilder, InsertBatchRequest, InsertManyItem, InsertManyRequest, InsertRequest,
     JobCancelRequest, JobCompleteRequest, JobCompleteTxRequest, JobDeleteManyRequest,
@@ -66,6 +63,9 @@ pub use extension::{
     InsertMiddleware, InsertNext, InsertedJob, JobCancelError, Metric, MetricName, PanicError,
     Plugin, RetryPolicy, WorkCancelled, WorkError, WorkMiddleware, WorkNext, WorkResult,
 };
+/// The Jiff version of the timestamps in River's API, such as
+/// [`JobRow::scheduled_at`] and [`InsertOpts::with_scheduled_at`].
+pub use jiff;
 pub use job::{
     AttemptError, InsertBatch, InsertBatchResult, InsertOpts, InsertParams, InsertResult, Job,
     JobArgs, JobMetadata, JobRow, JobState, JobStateParseError, ScheduleOverride, UniqueOpts,

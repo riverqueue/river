@@ -101,7 +101,7 @@ pub(crate) enum LeadershipWakeup {
     /// This client's maintenance asks it to resign the term elected at this
     /// time, and no later one. It never passes through the database, so it
     /// works without notifications.
-    ResignTerm(chrono::DateTime<chrono::Utc>),
+    ResignTerm(jiff::Timestamp),
 }
 
 /// Moves leadership notifications from the client's broadcast channel into

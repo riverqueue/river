@@ -280,9 +280,7 @@ fn unmatched_cancellation_is_not_retained_without_fetch() {
 }
 
 fn retry_row(error_count: usize) -> JobRow {
-    let now = DateTime::parse_from_rfc3339("2026-01-02T03:04:05Z")
-        .unwrap()
-        .with_timezone(&Utc);
+    let now = "2026-01-02T03:04:05Z".parse::<jiff::Timestamp>().unwrap();
     JobRow {
         attempt: i32::try_from(error_count).unwrap_or(i32::MAX),
         attempted_at: Some(now),
@@ -315,7 +313,7 @@ fn retry_row(error_count: usize) -> JobRow {
 
 #[test]
 fn retry_delay_is_seeded_bounded_and_capped() {
-    let now = Utc::now();
+    let now = Timestamp::now();
     let row = retry_row(0);
     let first = default_retry_delay(&row, now, 123);
     assert_eq!(first, default_retry_delay(&row, now, 123));
@@ -476,33 +474,29 @@ async fn completion_retries_stop_immediately_for_a_closed_pool() {
 
 #[test]
 fn go_time_json_matches_go_rfc3339_nano() {
-    use chrono::TimeZone as _;
-
-    let base = Utc.with_ymd_and_hms(2026, 1, 2, 3, 4, 5).unwrap();
+    let base = "2026-01-02T03:04:05Z".parse::<jiff::Timestamp>().unwrap();
     assert_eq!(go_time_json(base), "2026-01-02T03:04:05Z");
     assert_eq!(
-        go_time_json(base + chrono::Duration::nanoseconds(120_000_000)),
+        go_time_json(base + jiff::SignedDuration::from_nanos(120_000_000)),
         "2026-01-02T03:04:05.12Z"
     );
     assert_eq!(
-        go_time_json(base + chrono::Duration::nanoseconds(123_456_789)),
+        go_time_json(base + jiff::SignedDuration::from_nanos(123_456_789)),
         "2026-01-02T03:04:05.123456789Z"
     );
 }
 
 #[test]
 fn schedule_delays_clamp_like_go_durations() {
-    use chrono::TimeZone as _;
-
-    let now = Utc.with_ymd_and_hms(2026, 1, 2, 3, 4, 5).unwrap();
+    let now = "2026-01-02T03:04:05Z".parse::<jiff::Timestamp>().unwrap();
     assert_eq!(
         scheduled_after(now, Duration::from_secs(90)),
-        now + chrono::Duration::seconds(90)
+        now + jiff::SignedDuration::from_secs(90)
     );
     let clamped = scheduled_after(now, Duration::MAX);
     assert_eq!(
         clamped,
-        now + chrono::Duration::nanoseconds(i64::MAX),
+        now + jiff::SignedDuration::from_nanos(i64::MAX),
         "delays saturate at Go's maximum time.Duration"
     );
 }
@@ -580,8 +574,8 @@ async fn intercepting_extensions_can_only_lower_completion_concurrency() {
 async fn periodic_jobs_run_at_their_target_unless_scheduled_explicitly() {
     let pool = sqlx::SqlitePool::connect_lazy("sqlite::memory:").unwrap();
     let client = Client::builder(pool).build().unwrap();
-    let now = Utc::now();
-    let target = now - chrono::Duration::milliseconds(5);
+    let now = Timestamp::now();
+    let target = now - jiff::SignedDuration::from_millis(5);
     let prepare = |opts: InsertParams| {
         client
             .prepare_periodic(
@@ -608,7 +602,7 @@ async fn periodic_jobs_run_at_their_target_unless_scheduled_explicitly() {
     assert_eq!(due.opts.scheduled_at, Some(target));
 
     // An explicit schedule from the constructor is kept and waits.
-    let later = now + chrono::Duration::minutes(5);
+    let later = now + jiff::SignedDuration::from_mins(5);
     let mut explicit = defaults();
     explicit.scheduled_at = Some(later);
     let explicit = prepare(explicit);
@@ -649,7 +643,7 @@ async fn completer_abandons_its_backlog_when_a_batch_fails_during_shutdown() {
                 cancellation,
                 error: None,
                 event_kind: JobEventKind::Completed,
-                finalized_at: Some(Utc::now()),
+                finalized_at: Some(Timestamp::now()),
                 job_id,
                 metadata: Map::new(),
                 peer: None,
@@ -693,7 +687,7 @@ async fn readiness_survives_a_notification_listener_panic() {
     let path = std::env::temp_dir().join(format!(
         "river-readiness-{}-{}.sqlite",
         std::process::id(),
-        Utc::now().timestamp_nanos_opt().unwrap_or_default()
+        Timestamp::now().as_nanosecond()
     ));
     let pool = sqlx::sqlite::SqlitePoolOptions::new()
         .max_connections(4)

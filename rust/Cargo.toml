@@ -20,8 +20,8 @@ version = "0.4.0"
 [workspace.dependencies]
 async-trait = "0.1.92"
 base64 = "0.23.1"
-chrono = { version = "0.4.45", features = ["serde"] }
 futures-util = { version = "0.3.34", default-features = false, features = ["std"] }
+jiff = { version = "0.2.38", features = ["serde"] }
 proc-macro2 = "1.0.107"
 quote = "1.0.47"
 rand = "0.10.2"

@@ -23,7 +23,7 @@ postgres = ["riverqueue/postgres"]
 sqlite = ["riverqueue/sqlite"]
 
 [dependencies]
-chrono.workspace = true
+jiff.workspace = true
 riverqueue = { path = "../riverqueue", version = "=0.4.0", default-features = false }
 serde_json.workspace = true
 tokio-util.workspace = true
