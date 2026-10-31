@@ -797,6 +797,94 @@ RSpec.shared_examples "driver job state machine" do
     end
   end
 
+  describe "job update output" do
+    it "applies output to explicit replacement metadata without mutating the params" do
+      job = insert_job(1, metadata: {"old" => true, "output" => "old"})
+      metadata = {"kept" => true, "output" => "string key", :output => "symbol key"}.freeze
+      params = River::JobUpdateParams.new(metadata: metadata, output: {"new" => true})
+
+      updated = client.job_update(job.id, params)
+
+      expect(updated.metadata).to eq("kept" => true, "output" => {"new" => true})
+      expect(client.job_get(job.id).metadata).to eq(updated.metadata)
+      expect(params.metadata).to eq("kept" => true, "output" => "string key", :output => "symbol key")
+      expect(params.output).to eq("new" => true)
+      expect(client.job_update(job.id, metadata: {}, output: nil).metadata).to eq("output" => nil)
+    end
+
+    it "preserves current metadata and replaces the entire previous output" do
+      metadata = {"large" => 2**80, "river:resumable_step" => "normalize", "output" => {"old" => true}}
+      job = insert_job(1, metadata: metadata)
+      driver.job_metadata_merge(job.id, "later" => {"keep" => true})
+
+      updated = client.job_update(job.id, output: {"new" => true})
+
+      expect(updated.metadata).to eq(job.metadata.merge("later" => {"keep" => true}, "output" => {"new" => true}))
+      expect(client.job_get(job.id).metadata).to eq(updated.metadata)
+      expect(client.job_update(job.id, max_attempts: 10).metadata).to eq(updated.metadata)
+    end
+
+    it "raises NotFoundError when setting output on a missing job" do
+      expect(driver.job_update(-1, River::JobUpdateParams.new(output: "missing"))).to be_nil
+      expect { client.job_update(-1, output: "missing") }.to raise_error(River::NotFoundError)
+    end
+
+    it "rejects invalid JSON without applying other updates" do
+      job = insert_job(1, metadata: {"output" => "original"})
+
+      expect { client.job_update(job.id, max_attempts: 10, output: Float::NAN) }
+        .to raise_error(JSON::GeneratorError)
+      expect(client.job_get(job.id)).to have_attributes(max_attempts: job.max_attempts, metadata: job.metadata)
+    end
+
+    it "rejects invalid replacement metadata without applying output or other updates" do
+      job = insert_job(1, metadata: {"output" => "original"})
+
+      expect { client.job_update(job.id, max_attempts: 10, metadata: nil, output: "new") }
+        .to raise_error(ArgumentError, "metadata must be a Hash")
+      expect(client.job_get(job.id)).to have_attributes(max_attempts: job.max_attempts, metadata: job.metadata)
+    end
+
+    it "rolls back output and other updates with the caller's transaction" do
+      job = insert_job(1, metadata: {"output" => "original", "keep" => true})
+      savepoint(driver) do
+        updated = client.job_update(job.id, max_attempts: 10, output: "new")
+        expect(updated).to have_attributes(max_attempts: 10, metadata: job.metadata.merge("output" => "new"))
+        expect(client.job_get(job.id).metadata).to eq(updated.metadata)
+        raise driver.rollback_exception
+      end
+
+      expect(client.job_get(job.id)).to have_attributes(max_attempts: job.max_attempts, metadata: job.metadata)
+    end
+
+    it "stores JSON values without treating strings as encoded JSON" do
+      job = insert_job(1, metadata: {"keep" => true})
+      [nil, false, true, 42, 2**80, 1.5, "null", "a 'quoted' string", {"nested" => [false, nil]}, []].each do |output|
+        updated = client.job_update(job.id, output: output)
+
+        expect(updated.metadata).to eq(job.metadata.merge("output" => output))
+        expect(client.job_get(job.id).metadata).to eq(updated.metadata)
+      end
+    end
+
+    it "writes output during an attempt and retains it after completion" do
+      persisted = nil
+      workers = River::Workers.new.add("driver_runtime") do |job|
+        job.client.job_update(job.id, output: {"normalized_text" => "saved"})
+        persisted = job.client.job_get(job.id)
+      end
+      working_client = River::Client.new(driver, config: River::Config.new(workers: workers))
+      job = working_client.insert(DriverRuntimeArgs.new(1), metadata: {"keep" => true}).job
+
+      completed, error, outcome = working_client.__perform_job(job.id)
+
+      expect(error).to be_nil
+      expect(outcome).to eq(:completed)
+      expect(persisted).to have_attributes(state: "running", metadata: job.metadata.merge("output" => {"normalized_text" => "saved"}))
+      expect(completed).to have_attributes(state: "completed", metadata: persisted.metadata)
+    end
+  end
+
   describe "snooze counter recovery" do
     # The shared Go fixtures only specify canonical non-negative integers.
     # Keep Ruby's recovery behavior covered independently of those fixtures.

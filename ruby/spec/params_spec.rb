@@ -81,6 +81,12 @@ RSpec.describe River::JobListParams do
 end
 
 RSpec.describe River::JobUpdateParams do
+  it "distinguishes omitted output from explicit nil and false" do
+    expect(described_class.new.each.to_h).not_to have_key(:output)
+    expect(described_class.new(output: nil).each.to_h).to eq(output: nil)
+    expect(described_class.new(output: false).each.to_h).to eq(output: false)
+  end
+
   it "normalizes symbolic states without changing unset or explicitly nil states" do
     expect(described_class.new(state: :available).each.to_h).to eq(state: "available")
     expect(described_class.new(state: nil).each.to_h).to eq(state: nil)

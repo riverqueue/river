@@ -546,7 +546,7 @@ remain idempotent.
 
 ### [Recorded output and metadata](https://riverqueue.com/docs/recorded-output)
 
-Assign `job.output` to store JSON-compatible output under `metadata["output"]`. Use `job.update_metadata` for other metadata that should be committed with the attempt's final transition.
+Assign `job.output` to buffer JSON-compatible output under `metadata["output"]` until the attempt finishes. Use `job.update_metadata` for other metadata that should be committed with the attempt's final transition.
 
 Values are validated and copied when assigned. Invalid JSON fails the attempt
 normally without preventing its error from being recorded. `job.metadata` and
@@ -558,6 +558,22 @@ def work(job)
   job.output = {imported: 42}
 end
 ```
+
+To save output immediately, including between resumable steps, use `job_update`:
+
+```ruby
+job.client.job_update(job.id, output: {normalized_text: normalized})
+```
+
+This writes `metadata["output"]` atomically while preserving other metadata keys,
+including resumable progress. It participates in an enclosing transaction, so
+commit that transaction before relying on the saved result. Read saved output
+through `client.job_get(job.id).metadata["output"]`. `job.output =` remains buffered;
+an output assigned there can overwrite an immediate update when the attempt ends.
+
+Omitting `output:` leaves it unchanged; `output: nil` stores JSON null. When
+`metadata:` and `output:` are both supplied, metadata replaces the existing Hash
+and the explicit output value overrides its `"output"` key.
 
 ### Job-persisted logging
 

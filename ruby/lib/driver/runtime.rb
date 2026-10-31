@@ -317,10 +317,25 @@ module River::Driver
     end
 
     def job_update(id, params)
-      assignments = params.each.map do |field, value|
+      values = params.each.to_h
+      assignments = [] #: Array[String]
+      if values.key?(:output)
+        output = values.delete(:output)
+        if values.key?(:metadata)
+          metadata = values[:metadata]
+          raise ArgumentError, "metadata must be a Hash" unless metadata.is_a?(Hash)
+
+          values[:metadata] = metadata.transform_keys(&:to_s).merge("output" => output)
+        else
+          # Merge against the database row in the UPDATE, preserving metadata
+          # written since the caller last read the job.
+          assignments << "metadata = #{runtime_merge_metadata("output" => output)}"
+        end
+      end
+      values.each do |field, value|
         raise ArgumentError, "unknown update field: #{field}" unless River::JobUpdateParams.method_defined?(field)
 
-        "#{field} = #{runtime_update_value(field, value)}"
+        assignments << "#{field} = #{runtime_update_value(field, value)}"
       end
 
       return job_get_by_id(id) if assignments.empty?
