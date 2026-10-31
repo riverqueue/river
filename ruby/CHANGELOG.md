@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Add `output:` to `Client#job_update` and `River::JobUpdateParams` to persist job output immediately with an atomic metadata update that preserves other keys. Explicit `output: nil` stores JSON null; when `metadata:` is also supplied, output is applied to that replacement metadata. [PR #1568](https://github.com/riverqueue/river/pull/1568).
+
 ### Fixed
 
 - Reduce database overhead in the Active Record and Sequel drivers: use `RETURNING` to avoid redundant row fetches, claim batches and clean up finalized jobs in one statement, and omit unnecessary transactions. Return Active Record connections to the pool after operations and avoid allocating models for job reads. Avoid slow Postgres fetching-index scans for updates and deletes targeting a job by ID when state statistics are stale. [PR #1574](https://github.com/riverqueue/river/pull/1574).

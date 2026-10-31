@@ -39,7 +39,7 @@ module River
     def job_retry: (Integer) -> JobRow
     def job_update: (Integer, ?JobUpdateParams?, ?attempt: untyped, ?attempted_at: untyped,
       ?attempted_by: untyped, ?errors: untyped, ?finalized_at: untyped, ?max_attempts: untyped,
-      ?metadata: untyped, ?state: untyped) -> JobRow
+      ?metadata: untyped, ?output: untyped, ?state: untyped) -> JobRow
     def periodic_jobs: () -> PeriodicJobBundle
     def queue_add: (String | Symbol, QueueConfig | Integer) -> self
     def queue_get: (String | Symbol) -> Queue
