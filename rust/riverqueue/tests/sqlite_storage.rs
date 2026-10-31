@@ -1,4 +1,4 @@
-use chrono::{DateTime, Duration, SubsecRound, Utc};
+use jiff::{SignedDuration as Duration, Timestamp};
 use riverqueue::{
     Client, Error, InsertBatch, InsertOpts, JobArgs, JobDeleteManyParams, JobListCursor,
     JobListOrderBy, JobListParams, JobState, JobUpdateParams, QueueListParams, QueueSelector,
@@ -216,10 +216,8 @@ async fn inserts_leave_unset_times_to_sqlite() {
             .unwrap()
         }
     };
-    let is_sqlite_time = |text: &str| {
-        text.len() == 23
-            && chrono::NaiveDateTime::parse_from_str(text, "%Y-%m-%d %H:%M:%S%.3f").is_ok()
-    };
+    let is_sqlite_time =
+        |text: &str| text.len() == 23 && text.parse::<jiff::civil::DateTime>().is_ok();
 
     let before = sqlite_now().await;
     let unscheduled = client
@@ -238,7 +236,7 @@ async fn inserts_leave_unset_times_to_sqlite() {
         .iter()
         .map(riverqueue::InsertBatchResult::id)
         .collect::<Vec<_>>();
-    let scheduled_for = Utc::now() + Duration::hours(1);
+    let scheduled_for = Timestamp::now() + Duration::from_hours(1);
     let scheduled = client
         .insert(EmptyBatchArgs { value: 4 })
         .opts(riverqueue::InsertOpts::default().with_scheduled_at(scheduled_for))
@@ -268,11 +266,11 @@ async fn inserts_leave_unset_times_to_sqlite() {
 #[tokio::test]
 async fn job_list_time_without_states_uses_schedule_and_finalized_requires_states() {
     let (client, pool) = setup().await;
-    let now = Utc::now();
+    let now = Timestamp::now();
     let first = insert_job(
         &pool,
         JobSeed {
-            scheduled_at: now + Duration::hours(1),
+            scheduled_at: now + Duration::from_hours(1),
             ..JobSeed::default()
         },
     )
@@ -280,7 +278,7 @@ async fn job_list_time_without_states_uses_schedule_and_finalized_requires_state
     let second = insert_job(
         &pool,
         JobSeed {
-            scheduled_at: now - Duration::hours(1),
+            scheduled_at: now - Duration::from_hours(1),
             ..JobSeed::default()
         },
     )
@@ -318,12 +316,12 @@ async fn job_list_time_without_states_uses_schedule_and_finalized_requires_state
 )]
 async fn job_crud_preserves_sqlite_semantics() {
     let (client, pool) = setup().await;
-    let now = Utc::now();
+    let now = Timestamp::now();
     let delete_id = insert_job(
         &pool,
         JobSeed {
             metadata: json!({"original": true}),
-            scheduled_at: now - Duration::minutes(3),
+            scheduled_at: now - Duration::from_mins(3),
             tags: json!(["delete-me", "shared"]),
             ..JobSeed::default()
         },
@@ -334,7 +332,7 @@ async fn job_crud_preserves_sqlite_semantics() {
         JobSeed {
             attempt: 3,
             max_attempts: 3,
-            scheduled_at: now - Duration::minutes(2),
+            scheduled_at: now - Duration::from_mins(2),
             state: JobState::Retryable,
             tags: json!(["retry-me", "shared"]),
             ..JobSeed::default()
@@ -344,7 +342,7 @@ async fn job_crud_preserves_sqlite_semantics() {
     let running_id = insert_job(
         &pool,
         JobSeed {
-            scheduled_at: now - Duration::minutes(1),
+            scheduled_at: now - Duration::from_mins(1),
             state: JobState::Running,
             tags: json!(["running", "shared"]),
             ..JobSeed::default()
@@ -677,7 +675,7 @@ struct JobSeed {
     max_attempts: i16,
     metadata: Value,
     queue: &'static str,
-    scheduled_at: DateTime<Utc>,
+    scheduled_at: Timestamp,
     state: JobState,
     tags: Value,
 }
@@ -690,7 +688,7 @@ impl Default for JobSeed {
             max_attempts: 25,
             metadata: json!({}),
             queue: "default",
-            scheduled_at: Utc::now(),
+            scheduled_at: Timestamp::now(),
             state: JobState::Available,
             tags: json!([]),
         }
@@ -698,7 +696,7 @@ impl Default for JobSeed {
 }
 
 async fn insert_job(pool: &SqlitePool, seed: JobSeed) -> i64 {
-    let now = Utc::now();
+    let now = Timestamp::now();
     let finalized_at = matches!(
         seed.state,
         JobState::Cancelled | JobState::Completed | JobState::Discarded
@@ -733,10 +731,15 @@ async fn insert_job(pool: &SqlitePool, seed: JobSeed) -> i64 {
     .unwrap()
 }
 
-fn sqlite_time(time: DateTime<Utc>) -> String {
-    time.round_subsecs(3)
-        .format("%Y-%m-%d %H:%M:%S%.3f")
-        .to_string()
+fn sqlite_time(time: Timestamp) -> String {
+    time.round(
+        jiff::TimestampRound::new()
+            .smallest(jiff::Unit::Millisecond)
+            .mode(jiff::RoundMode::HalfCeil),
+    )
+    .unwrap()
+    .strftime("%Y-%m-%d %H:%M:%S%.3f")
+    .to_string()
 }
 
 async fn insert_queue(pool: &SqlitePool, name: &str) {

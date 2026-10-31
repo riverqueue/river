@@ -185,7 +185,7 @@ impl Worker<RescueRetryOverrideArgs> for RescueRetryOverrideWorker {
         &self,
         _job: &Job<RescueRetryOverrideArgs>,
         _error: &WorkError,
-        _now: chrono::DateTime<chrono::Utc>,
+        _now: jiff::Timestamp,
     ) -> Option<Duration> {
         Some(Duration::from_hours(2))
     }
@@ -223,7 +223,7 @@ impl Worker<ResumableCheckpointArgs> for ResumableCheckpointWorker {
         &self,
         job: &Job<ResumableCheckpointArgs>,
         _error: &WorkError,
-        _now: chrono::DateTime<chrono::Utc>,
+        _now: jiff::Timestamp,
     ) -> Option<Duration> {
         (job.args.mode == "cursor_retry").then_some(Duration::from_millis(500))
     }
@@ -762,7 +762,7 @@ async fn concurrent_unique_inserts_return_the_conflicting_job() {
         JobState::Running,
         JobState::Scheduled,
     ];
-    let fixed_scheduled_at = chrono::Utc::now() - chrono::Duration::minutes(1);
+    let fixed_scheduled_at = jiff::Timestamp::now() - jiff::SignedDuration::from_mins(1);
     let cases = [
         (
             "by_args",
@@ -868,7 +868,7 @@ async fn insert_many_variants_preserve_order_and_transactionality() {
     assert_eq!(empty_batch_tx.to_string(), "invalid job: no jobs to insert");
     empty_transaction.commit().await.unwrap();
 
-    let past_scheduled_at = chrono::Utc::now() - chrono::Duration::minutes(1);
+    let past_scheduled_at = jiff::Timestamp::now() - jiff::SignedDuration::from_mins(1);
     let ordered = client
         .insert_many([
             (
@@ -1370,7 +1370,7 @@ async fn maintenance_client_runs_pilot_periodic_scheduled_and_transactional_jobs
         })
         .opts(
             InsertOpts::default()
-                .with_scheduled_at(chrono::Utc::now() + chrono::Duration::milliseconds(100)),
+                .with_scheduled_at(jiff::Timestamp::now() + jiff::SignedDuration::from_millis(100)),
         )
         .await
         .unwrap();
@@ -1691,7 +1691,7 @@ async fn rescuer_honors_worker_timeout_and_retry_overrides() {
     );
     assert_eq!(retry_override.errors.len(), 1);
     assert!(
-        retry_override.scheduled_at > chrono::Utc::now() + chrono::Duration::minutes(90),
+        retry_override.scheduled_at > jiff::Timestamp::now() + jiff::SignedDuration::from_mins(90),
         "worker retry override was not applied: {:?}",
         retry_override.scheduled_at
     );

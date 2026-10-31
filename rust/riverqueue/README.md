@@ -26,20 +26,37 @@ Rust version is 1.95.
 |---|---|---|
 | `postgres` | yes | Postgres through SQLx |
 | `sqlite` | no | SQLite 3.45 or newer through SQLx |
-| `chrono-tz` | no | IANA zone names such as `America/New_York` in cron `CRON_TZ=` and `TZ=` prefixes |
+| `tzdb` | no | IANA zone names such as `America/New_York` in cron `CRON_TZ=` and `TZ=` prefixes |
 
 For SQLite alone, use
 `riverqueue = { version = "0.4.0", default-features = false, features = ["sqlite"] }`.
 
-River's API uses types from SQLx (pools and transactions), Chrono
+River's API uses types from SQLx (pools and transactions), Jiff
 (timestamps), `serde_json` (metadata, outputs, and other JSON values), and
 `tokio-util` (the worker's `CancellationToken`). The crate re-exports each one
-as `riverqueue::sqlx`, `riverqueue::chrono`, `riverqueue::serde_json`, and
+as `riverqueue::sqlx`, `riverqueue::jiff`, `riverqueue::serde_json`, and
 `riverqueue::tokio_util`. Use the re-exports, or depend on versions
-compatible with River's (SQLx 0.9, Chrono 0.4, `serde_json` 1, and
+compatible with River's (SQLx 0.9, Jiff 0.2, `serde_json` 1, and
 `tokio-util` 0.7), so the types match. River doesn't choose a TLS
 implementation for SQLx; enable one of SQLx's TLS features in your own SQLx
 dependency if your database connections use TLS.
+
+## Migrating from Chrono
+
+Use `riverqueue::jiff::Timestamp` wherever River previously accepted or returned
+`chrono::DateTime<Utc>`. For example, `Timestamp::now()` replaces `Utc::now()`,
+and `"2026-01-02T03:04:05Z".parse::<Timestamp>()?` parses an absolute timestamp.
+Use `std::time::Duration` for delays and intervals, and `jiff::SignedDuration`
+when a duration can be negative. To measure elapsed time between timestamps,
+use `later.duration_since(earlier)`; subtracting Jiff timestamps produces a
+calendar `Span`.
+
+Cron's `next_after` accepts a `jiff::Zoned` and preserves the reference time
+zone. Use `timestamp.to_zoned(jiff::tz::TimeZone::UTC)` for a UTC reference.
+Fixed cron offsets use `jiff::tz::Offset`, named zones use `jiff::tz::TimeZone`,
+and the `tzdb` feature replaces `chrono-tz`. Daily UTC reindex schedules use
+`jiff::civil::Time`. River's persisted timestamps and unique-key encoding are
+unchanged; existing databases require no migration.
 
 ## Quick start
 
@@ -255,7 +272,7 @@ results are persisted, and independent jobs have no global completion order.
   `CronSchedule` accepts standard five-field cron syntax and descriptors such
   as `@hourly` and `@every 90s`, evaluated in the process's local time zone
   unless another `CronTimeZone` is chosen. `CRON_TZ=` and `TZ=` prefixes
-  naming IANA zones such as `America/New_York` need the `chrono-tz` feature,
+  naming IANA zones such as `America/New_York` need the `tzdb` feature,
   which bundles the time zone database; without it only `UTC`, `Local`, and
   `Etc/GMT±N` names parse.
 - Resumable steps persist the last completed step and an optional cursor. Use

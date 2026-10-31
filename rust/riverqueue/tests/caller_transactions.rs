@@ -283,10 +283,9 @@ macro_rules! scenarios {
             let available = client.insert(args("available")).await.unwrap().id();
             let scheduled = client
                 .insert(args("scheduled"))
-                .opts(
-                    InsertOpts::default()
-                        .with_scheduled_at(chrono::Utc::now() + chrono::Duration::hours(1)),
-                )
+                .opts(InsertOpts::default().with_scheduled_at(
+                    jiff::Timestamp::now() + jiff::SignedDuration::from_hours(1),
+                ))
                 .await
                 .unwrap()
                 .id();
@@ -529,15 +528,15 @@ mod postgres {
         let client = fixture.client(&fail);
         let plain = fixture.builder().build().unwrap();
         let cancellable = plain.insert(args("cancellable")).await.unwrap().id();
-        let retryable = plain
-            .insert(args("retryable"))
-            .opts(
-                InsertOpts::default()
-                    .with_scheduled_at(chrono::Utc::now() + chrono::Duration::hours(1)),
-            )
-            .await
-            .unwrap()
-            .id();
+        let retryable =
+            plain
+                .insert(args("retryable"))
+                .opts(InsertOpts::default().with_scheduled_at(
+                    jiff::Timestamp::now() + jiff::SignedDuration::from_hours(1),
+                ))
+                .await
+                .unwrap()
+                .id();
 
         let mut tx = fixture.begin().await;
         // A write directly in the caller's transaction, so that even one

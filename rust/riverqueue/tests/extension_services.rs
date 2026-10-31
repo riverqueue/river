@@ -23,7 +23,7 @@ use std::{
 };
 
 use async_trait::async_trait;
-use chrono::{DateTime, Utc};
+use jiff::Timestamp;
 use riverqueue::__private::{
     ClientBuilderExt, ExtensionClient, MaintenanceService, MaintenanceServiceContext, Pilot,
     PilotError, PilotProducer, ProducerKeepAliveContext, ProducerShutdownContext,
@@ -52,7 +52,7 @@ struct GatedArgs {}
 enum Call {
     Finished(i64),
     KeepAlive,
-    MaintenanceStarted(DateTime<Utc>),
+    MaintenanceStarted(Timestamp),
     MaintenanceStopped,
     RuntimeStarted,
     RuntimeStopped,

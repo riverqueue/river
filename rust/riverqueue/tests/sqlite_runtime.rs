@@ -853,7 +853,7 @@ async fn sqlite_reinsert_preserves_wire_fields_and_runs_the_canonical_pipeline()
         .workers(workers)
         .build()
         .unwrap();
-    let scheduled_at = chrono::Utc::now() + chrono::Duration::hours(2);
+    let scheduled_at = jiff::Timestamp::now() + jiff::SignedDuration::from_hours(2);
     let raw = riverqueue::__private::ExtensionClient::new(&client)
         .insert_raw(
             CancelArgs::KIND,
@@ -1302,7 +1302,7 @@ async fn sqlite_attempt_errors_record_when_the_attempt_started() {
         .add_fn(move |_context: WorkContext, _job: Job<CancelArgs>| {
             let worker_started = Arc::clone(&worker_started_for_worker);
             async move {
-                *worker_started.lock().unwrap() = Some(chrono::Utc::now());
+                *worker_started.lock().unwrap() = Some(jiff::Timestamp::now());
                 tokio::time::sleep(Duration::from_millis(200)).await;
                 Err::<WorkOutcome, _>(FailedLate)
             }
@@ -1333,7 +1333,7 @@ async fn sqlite_attempt_errors_record_when_the_attempt_started() {
     // when the worker returned. SQLite stores milliseconds.
     let at = row.errors[0].at;
     assert!(
-        at <= worker_started && at > worker_started - chrono::Duration::milliseconds(100),
+        at <= worker_started && at > worker_started - jiff::SignedDuration::from_millis(100),
         "error at {at}, worker started at {worker_started}"
     );
 
@@ -1723,7 +1723,9 @@ impl PilotProducer for ClaimingPilot {
                  attempted_by = jsonb_insert(coalesce(attempted_by, jsonb('[]')), '$[#]', ?) \
                  WHERE id = ?",
             )
-            .bind(riverqueue::__private::sqlite_timestamp(chrono::Utc::now()))
+            .bind(riverqueue::__private::sqlite_timestamp(
+                jiff::Timestamp::now(),
+            ))
             .bind(context.client_id)
             .bind(id)
             .execute(&mut *connection)

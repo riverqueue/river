@@ -268,7 +268,9 @@ async fn scripted_claim(
                      attempted_by = jsonb_insert(coalesce(attempted_by, jsonb('[]')), '$[#]', ?) \
                      WHERE id IN (SELECT value FROM json_each(?)) RETURNING {columns}"
                 )))
-                .bind(riverqueue::__private::sqlite_timestamp(chrono::Utc::now()))
+                .bind(riverqueue::__private::sqlite_timestamp(
+                    jiff::Timestamp::now(),
+                ))
                 .bind(&client_id)
                 .bind(&ids_json)
                 .fetch_all(connection)

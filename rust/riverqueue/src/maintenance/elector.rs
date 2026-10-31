@@ -3,7 +3,7 @@
 use std::{sync::Arc, time::Duration};
 
 use async_trait::async_trait;
-use chrono::{DateTime, Utc};
+use jiff::Timestamp;
 #[cfg(feature = "postgres")]
 use sqlx::AssertSqlSafe;
 use tokio::{sync::mpsc, time::Instant};
@@ -45,7 +45,7 @@ const BACKOFF_RESET: u32 = 7;
 #[derive(Clone, Debug)]
 pub(crate) struct Term {
     /// Database `elected_at` identifying this term.
-    pub(crate) elected_at: DateTime<Utc>,
+    pub(crate) elected_at: Timestamp,
     /// Cancelled the moment this client stops trusting the term.
     pub(crate) token: CancellationToken,
 }
@@ -53,14 +53,14 @@ pub(crate) struct Term {
 /// Local view of a held lease (Go `leadershipTerm`).
 #[derive(Clone, Copy, Debug)]
 struct Lease {
-    elected_at: DateTime<Utc>,
+    elected_at: Timestamp,
     trusted_until: Instant,
 }
 
 impl Lease {
     /// Trusts the lease until `ttl - 1s` after the attempt *started*, so time
     /// spent waiting on a slow database never extends local trust.
-    fn new(elected_at: DateTime<Utc>, attempt_started: Instant, ttl: Duration) -> Self {
+    fn new(elected_at: Timestamp, attempt_started: Instant, ttl: Duration) -> Self {
         Self {
             elected_at,
             trusted_until: attempt_started + ttl.saturating_sub(LOCAL_DEADLINE_SAFETY_MARGIN),
@@ -82,18 +82,18 @@ impl Lease {
 pub(crate) trait LeaderStore: Send + Sync + 'static {
     /// Deletes an expired lease and inserts this client's lease if none
     /// exists (`ON CONFLICT DO NOTHING`). Returns the new term's `elected_at`.
-    async fn elect(&self, ttl: Duration) -> Result<Option<DateTime<Utc>>, Error>;
+    async fn elect(&self, ttl: Duration) -> Result<Option<Timestamp>, Error>;
 
     /// Extends the lease only when it still belongs to this client *and* term.
     /// Returns the renewed term's `elected_at`, or `None` if it was lost.
     async fn reelect(
         &self,
-        elected_at: DateTime<Utc>,
+        elected_at: Timestamp,
         ttl: Duration,
-    ) -> Result<Option<DateTime<Utc>>, Error>;
+    ) -> Result<Option<Timestamp>, Error>;
 
     /// Deletes this client's lease for exactly this term and announces it.
-    async fn resign(&self, elected_at: DateTime<Utc>) -> Result<bool, Error>;
+    async fn resign(&self, elected_at: Timestamp) -> Result<bool, Error>;
 }
 
 /// Events observed by tests.
@@ -375,7 +375,7 @@ impl Elector {
 
     /// Makes a bounded, good-faith attempt to give up the lease even during
     /// shutdown. The TTL is the backstop if every attempt fails.
-    async fn resign(&self, elected_at: DateTime<Utc>) {
+    async fn resign(&self, elected_at: Timestamp) {
         for attempt in 1..=RESIGN_ATTEMPTS {
             let timeout = Duration::from_secs(u64::from(attempt));
             match tokio::time::timeout(timeout, self.store.resign(elected_at)).await {
@@ -443,12 +443,12 @@ impl DatabaseLeaderStore {
 
 #[async_trait]
 impl LeaderStore for DatabaseLeaderStore {
-    async fn elect(&self, ttl: Duration) -> Result<Option<DateTime<Utc>>, Error> {
+    async fn elect(&self, ttl: Duration) -> Result<Option<Timestamp>, Error> {
         match self.inner.database.pool() {
             #[cfg(feature = "sqlite")]
             DatabasePool::Sqlite(pool) => {
                 let mut transaction = crate::database::begin_sqlite_write(pool).await?;
-                let now = Utc::now();
+                let now = Timestamp::now();
                 sqlite::leader_delete_expired(&mut transaction, now)
                     .await
                     .map_err(sqlite_error)?;
@@ -467,26 +467,27 @@ impl LeaderStore for DatabaseLeaderStore {
                 )))
                 .execute(&mut *transaction)
                 .await?;
-                let elected_at = sqlx::query_scalar::<_, DateTime<Utc>>(AssertSqlSafe(format!(
-                    "INSERT INTO {table} (leader_id, elected_at, expires_at) \
+                let elected_at =
+                    sqlx::query_scalar::<_, jiff_sqlx::Timestamp>(AssertSqlSafe(format!(
+                        "INSERT INTO {table} (leader_id, elected_at, expires_at) \
                      VALUES ($1, now(), now() + make_interval(secs => $2)) \
                      ON CONFLICT (name) DO NOTHING RETURNING elected_at"
-                )))
-                .bind(&self.inner.id)
-                .bind(ttl.as_secs_f64())
-                .fetch_optional(&mut *transaction)
-                .await?;
+                    )))
+                    .bind(&self.inner.id)
+                    .bind(ttl.as_secs_f64())
+                    .fetch_optional(&mut *transaction)
+                    .await?;
                 transaction.commit().await?;
-                Ok(elected_at)
+                Ok(elected_at.map(jiff_sqlx::Timestamp::to_jiff))
             }
         }
     }
 
     async fn reelect(
         &self,
-        elected_at: DateTime<Utc>,
+        elected_at: Timestamp,
         ttl: Duration,
-    ) -> Result<Option<DateTime<Utc>>, Error> {
+    ) -> Result<Option<Timestamp>, Error> {
         match self.inner.database.pool() {
             #[cfg(feature = "sqlite")]
             DatabasePool::Sqlite(pool) => {
@@ -495,7 +496,7 @@ impl LeaderStore for DatabaseLeaderStore {
                     &mut transaction,
                     &self.inner.id,
                     elected_at,
-                    Utc::now(),
+                    Timestamp::now(),
                     ttl,
                 )
                 .await
@@ -507,22 +508,23 @@ impl LeaderStore for DatabaseLeaderStore {
             DatabasePool::Postgres(pool) => {
                 let table = self.inner.schema.qualify("river_leader");
                 Ok(
-                    sqlx::query_scalar::<_, DateTime<Utc>>(AssertSqlSafe(format!(
+                    sqlx::query_scalar::<_, jiff_sqlx::Timestamp>(AssertSqlSafe(format!(
                         "UPDATE {table} SET expires_at = now() + make_interval(secs => $1) \
                      WHERE elected_at = $2 AND expires_at >= now() AND leader_id = $3 \
                      RETURNING elected_at"
                     )))
                     .bind(ttl.as_secs_f64())
-                    .bind(elected_at)
+                    .bind(jiff_sqlx::Timestamp::from(elected_at))
                     .bind(&self.inner.id)
                     .fetch_optional(pool)
-                    .await?,
+                    .await?
+                    .map(jiff_sqlx::Timestamp::to_jiff),
                 )
             }
         }
     }
 
-    async fn resign(&self, elected_at: DateTime<Utc>) -> Result<bool, Error> {
+    async fn resign(&self, elected_at: Timestamp) -> Result<bool, Error> {
         match self.inner.database.pool() {
             #[cfg(feature = "sqlite")]
             DatabasePool::Sqlite(pool) => {
@@ -554,7 +556,7 @@ impl LeaderStore for DatabaseLeaderStore {
                      ) \
                      DELETE FROM {table} USING notified_resignations"
                 )))
-                .bind(elected_at)
+                .bind(jiff_sqlx::Timestamp::from(elected_at))
                 .bind(&self.inner.id)
                 .bind(self.inner.schema.as_deref())
                 .bind(crate::NOTIFICATION_TOPIC_LEADERSHIP)
@@ -580,9 +582,9 @@ mod unit_tests {
 
     /// A lease store whose renewals can be slowed or failed.
     struct ScriptedStore {
-        elected_at: DateTime<Utc>,
+        elected_at: Timestamp,
         reelect: Mutex<Vec<Reelect>>,
-        resigned: Mutex<Vec<DateTime<Utc>>>,
+        resigned: Mutex<Vec<Timestamp>>,
     }
 
     enum Reelect {
@@ -594,15 +596,15 @@ mod unit_tests {
 
     #[async_trait]
     impl LeaderStore for ScriptedStore {
-        async fn elect(&self, _ttl: Duration) -> Result<Option<DateTime<Utc>>, Error> {
+        async fn elect(&self, _ttl: Duration) -> Result<Option<Timestamp>, Error> {
             Ok(Some(self.elected_at))
         }
 
         async fn reelect(
             &self,
-            elected_at: DateTime<Utc>,
+            elected_at: Timestamp,
             _ttl: Duration,
-        ) -> Result<Option<DateTime<Utc>>, Error> {
+        ) -> Result<Option<Timestamp>, Error> {
             let step = self.reelect.lock().unwrap().pop();
             match step {
                 Some(Reelect::SlowSuccess(delay)) => {
@@ -618,17 +620,15 @@ mod unit_tests {
             }
         }
 
-        async fn resign(&self, elected_at: DateTime<Utc>) -> Result<bool, Error> {
+        async fn resign(&self, elected_at: Timestamp) -> Result<bool, Error> {
             self.resigned.lock().unwrap().push(elected_at);
             Ok(true)
         }
     }
 
-    async fn run_scripted(
-        reelect: Reelect,
-    ) -> (Vec<ElectorEvent>, Vec<DateTime<Utc>>, DateTime<Utc>) {
+    async fn run_scripted(reelect: Reelect) -> (Vec<ElectorEvent>, Vec<Timestamp>, Timestamp) {
         let elect_interval = Duration::from_millis(100);
-        let elected_at = Utc::now();
+        let elected_at = Timestamp::now();
         let store = Arc::new(ScriptedStore {
             elected_at,
             reelect: Mutex::new(vec![reelect]),
@@ -664,7 +664,7 @@ mod unit_tests {
 
     #[tokio::test(start_paused = true)]
     async fn ignores_resign_requests_queued_before_gaining_leadership() {
-        let elected_at = Utc::now();
+        let elected_at = Timestamp::now();
         let store = Arc::new(ScriptedStore {
             elected_at,
             reelect: Mutex::new(Vec::new()),
@@ -698,7 +698,7 @@ mod unit_tests {
 
     #[tokio::test(start_paused = true)]
     async fn resigns_only_the_named_term() {
-        let elected_at = Utc::now();
+        let elected_at = Timestamp::now();
         let store = Arc::new(ScriptedStore {
             elected_at,
             reelect: Mutex::new(Vec::new()),
@@ -719,7 +719,7 @@ mod unit_tests {
         // after that term ended, is ignored.
         wakeup_sender
             .send(LeadershipWakeup::ResignTerm(
-                elected_at - chrono::Duration::seconds(1),
+                elected_at - jiff::SignedDuration::from_secs(1),
             ))
             .unwrap();
         tokio::time::sleep(Duration::from_millis(50)).await;
@@ -771,7 +771,7 @@ mod unit_tests {
     #[test]
     fn lease_trust_is_measured_from_attempt_start() {
         let started = Instant::now();
-        let lease = Lease::new(Utc::now(), started, Duration::from_secs(15));
+        let lease = Lease::new(Timestamp::now(), started, Duration::from_secs(15));
         assert_eq!(lease.remaining(started), Duration::from_secs(14));
         assert_eq!(lease.reelect_attempt_timeout(started), ATTEMPT_TIMEOUT);
         assert_eq!(

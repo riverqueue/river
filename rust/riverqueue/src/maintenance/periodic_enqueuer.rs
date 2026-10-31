@@ -3,7 +3,7 @@
 
 use std::{sync::Arc, time::Duration};
 
-use chrono::Utc;
+use jiff::Timestamp;
 
 use super::maintainer::ServiceContext;
 
@@ -27,10 +27,12 @@ pub(super) async fn run(context: Arc<ServiceContext>) {
         changed.as_mut().enable();
 
         periodic_jobs
-            .run_due(&client, Utc::now(), &context.cancel)
+            .run_due(&client, Timestamp::now(), &context.cancel)
             .await;
         let wait = periodic_jobs.next_run_at().map_or(IDLE_WAIT, |next| {
-            (next - Utc::now()).to_std().unwrap_or_default()
+            next.duration_since(Timestamp::now())
+                .try_into()
+                .unwrap_or_default()
         });
         tokio::select! {
             biased;

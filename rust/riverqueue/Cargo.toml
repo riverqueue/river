@@ -19,25 +19,25 @@ all-features = true
 
 [features]
 default = ["postgres"]
+postgres = ["riverqueue-migrate/postgres", "sqlx/postgres", "jiff-sqlx/postgres"]
+sqlite = ["riverqueue-migrate/sqlite", "sqlx/sqlite", "jiff-sqlx/sqlite"]
 # Resolves IANA zone names such as `America/New_York` in cron `CRON_TZ=`
 # prefixes from a bundled time zone database.
-chrono-tz = ["dep:chrono-tz"]
-postgres = ["riverqueue-migrate/postgres", "sqlx/postgres"]
-sqlite = ["riverqueue-migrate/sqlite", "sqlx/sqlite"]
+tzdb = ["jiff/tzdb-bundle-always"]
 
 [dependencies]
 async-trait.workspace = true
 base64.workspace = true
-chrono.workspace = true
-chrono-tz = { version = "0.10.4", optional = true }
 futures-util.workspace = true
+jiff.workspace = true
+jiff-sqlx = { version = "0.2.0", default-features = false }
 riverqueue-migrate = { path = "../riverqueue-migrate", version = "=0.4.0", default-features = false }
 riverqueue-macros = { path = "../riverqueue-macros", version = "=0.4.0" }
 rand = { workspace = true }
 serde.workspace = true
 serde_json.workspace = true
 sha2.workspace = true
-sqlx = { workspace = true, features = ["chrono", "derive", "json"] }
+sqlx = { workspace = true, features = ["derive", "json"] }
 thiserror.workspace = true
 tokio.workspace = true
 tokio-util.workspace = true

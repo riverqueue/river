@@ -11,8 +11,8 @@ use std::collections::{HashSet, VecDeque};
 use std::sync::Arc;
 use std::time::Duration;
 
-use chrono::{DateTime, Utc};
 use futures_util::FutureExt as _;
+use jiff::Timestamp;
 use serde_json::{Map, Value};
 #[cfg(feature = "postgres")]
 use sqlx::AssertSqlSafe;
@@ -64,10 +64,10 @@ pub(super) struct CompletionUpdate {
     pub(super) cancellation: CancellationToken,
     pub(super) error: Option<AttemptError>,
     pub(super) event_kind: JobEventKind,
-    pub(super) finalized_at: Option<DateTime<Utc>>,
+    pub(super) finalized_at: Option<Timestamp>,
     pub(super) job_id: i64,
     pub(super) metadata: Map<String, Value>,
-    pub(super) scheduled_at: Option<DateTime<Utc>>,
+    pub(super) scheduled_at: Option<Timestamp>,
     pub(super) state: JobState,
     pub(super) timing: CompletionTiming,
     /// Set for a peer attempt's outcome, whose ownership ends as it persists.
@@ -562,7 +562,7 @@ pub(super) async fn persist_completion_batch(
         DatabasePool::Sqlite(pool) => {
             let mut transaction = crate::database::begin_sqlite_write(pool).await?;
             let mut rows = Vec::with_capacity(batch.len());
-            let now = Utc::now();
+            let now = Timestamp::now();
             for update in batch {
                 let row = crate::database::sqlite::complete_decoded(
                     &mut transaction,
@@ -641,7 +641,7 @@ pub(super) async fn persist_completion_batch(
                 .collect::<Vec<_>>();
             let finalized_at = batch
                 .iter()
-                .map(|update| update.finalized_at)
+                .map(|update| update.finalized_at.map(jiff_sqlx::Timestamp::from))
                 .collect::<Vec<_>>();
             let ids = batch.iter().map(|update| update.job_id).collect::<Vec<_>>();
             let metadata_do_merge = batch
@@ -654,7 +654,7 @@ pub(super) async fn persist_completion_batch(
                 .collect::<Vec<_>>();
             let scheduled_at = batch
                 .iter()
-                .map(|update| update.scheduled_at)
+                .map(|update| update.scheduled_at.map(jiff_sqlx::Timestamp::from))
                 .collect::<Vec<_>>();
             let states = batch
                 .iter()

@@ -87,8 +87,15 @@ in their queues.
 
 Cron schedules use the same standard five-field syntax in both languages.
 A schedule with a `CRON_TZ=` prefix naming an IANA zone parses in Rust only
-with the `chrono-tz` feature enabled; without it, Rust rejects the schedule
+with the `tzdb` feature enabled; without it, Rust rejects the schedule
 rather than evaluating it in another zone.
+
+Rust timestamps use Jiff's supported range and nanosecond precision. In
+particular, Go's year-one zero time is representable, but dates outside
+Jiff's `Timestamp::MIN` and `Timestamp::MAX` cannot be read by the Rust client.
+The JSON representation remains RFC 3339 in UTC with trailing fractional
+zeros removed. Persisted values retain each database's precision: microseconds
+in Postgres and milliseconds in SQLite.
 
 ## SQLite
 

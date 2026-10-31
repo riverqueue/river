@@ -1,6 +1,6 @@
 //! Rescues jobs stuck in `running`, a port of Go's `JobRescuer`.
 
-use chrono::{DateTime, Utc};
+use jiff::Timestamp;
 #[cfg(feature = "postgres")]
 use sqlx::AssertSqlSafe;
 use tracing::{debug, error};
@@ -33,8 +33,8 @@ pub(crate) const RESCUE_ERROR: &str = "Stuck job rescued by JobRescuer";
 /// rows that are still `running` with `attempted_at` before the horizon, which
 /// leaves jobs that completed or were claimed again after selection untouched.
 pub(super) async fn run_once(context: &ServiceContext) -> Result<(), MaintenanceError> {
-    let stuck_horizon = Utc::now()
-        - chrono::Duration::from_std(context.inner.maintenance.effective_rescue_after())
+    let stuck_horizon = Timestamp::now()
+        - jiff::SignedDuration::try_from(context.inner.maintenance.effective_rescue_after())
             .map_err(|error| Error::configuration_context("maintenance", error.to_string()))?;
     let mut after_id = 0_i64;
     loop {
@@ -61,7 +61,7 @@ async fn rescue_batch(
     context: &ServiceContext,
     after_id: i64,
     limit: i64,
-    stuck_horizon: DateTime<Utc>,
+    stuck_horizon: Timestamp,
 ) -> Result<Batch, MaintenanceError> {
     match context.inner.database.pool() {
         #[cfg(feature = "sqlite")]
@@ -84,7 +84,7 @@ fn rescue_params(
     inner: &ClientInner,
     after_id: i64,
     limit: i64,
-    stuck_horizon: DateTime<Utc>,
+    stuck_horizon: Timestamp,
 ) -> RescueParams {
     RescueParams {
         after_id,
@@ -101,7 +101,7 @@ fn rescue_params(
 fn rescue_jobs(
     inner: &ClientInner,
     rows: &[JobRow],
-    now: DateTime<Utc>,
+    now: Timestamp,
 ) -> Result<Vec<RescueJob>, Error> {
     let mut jobs = Vec::with_capacity(rows.len());
     for row in rows {
@@ -125,10 +125,10 @@ fn rescue_jobs(
     Ok(jobs)
 }
 
-type Decision = Option<(JobState, Option<DateTime<Utc>>, DateTime<Utc>)>;
+type Decision = Option<(JobState, Option<Timestamp>, Timestamp)>;
 
 /// Go's `makeRetryDecision`, preceded by its cancellation check.
-fn decide(inner: &ClientInner, row: &JobRow, now: DateTime<Utc>) -> Result<Decision, Error> {
+fn decide(inner: &ClientInner, row: &JobRow, now: Timestamp) -> Result<Decision, Error> {
     if cancel_attempted(row.metadata.get_raw("cancel_attempted_at")) {
         return Ok(Some((JobState::Cancelled, Some(now), row.scheduled_at)));
     }
@@ -140,7 +140,7 @@ fn decide(inner: &ClientInner, row: &JobRow, now: DateTime<Utc>) -> Result<Decis
         );
         return Ok(Some((JobState::Discarded, Some(now), row.scheduled_at)));
     }
-    let retry_or_discard = |retry_at: DateTime<Utc>| {
+    let retry_or_discard = |retry_at: Timestamp| {
         if row.attempt < row.max_attempts.max(0) {
             (JobState::Retryable, None, retry_at)
         } else {
@@ -151,10 +151,10 @@ fn decide(inner: &ClientInner, row: &JobRow, now: DateTime<Utc>) -> Result<Decis
     // error. As in Go, whose policy sees the job before the rescue appends
     // that error, the row's `errors` don't include it yet.
     let rescued_error = crate::WorkError::new(RESCUE_ERROR);
-    let client_retry = |row: &JobRow| -> Result<DateTime<Utc>, Error> {
+    let client_retry = |row: &JobRow| -> Result<Timestamp, Error> {
         let delay = inner.retry_policy.next_retry(row, &rescued_error, now);
         Ok(now
-            + chrono::Duration::from_std(delay)
+            + jiff::SignedDuration::try_from(delay)
                 .map_err(|error| Error::invalid_job_context("maintenance", error.to_string()))?)
     };
 
@@ -174,9 +174,9 @@ fn decide(inner: &ClientInner, row: &JobRow, now: DateTime<Utc>) -> Result<Decis
         // A disabled timeout means the job may legitimately run forever.
         return Ok(None);
     };
-    let elapsed = row
+    let elapsed: std::time::Duration = row
         .attempted_at
-        .and_then(|attempted_at| now.signed_duration_since(attempted_at).to_std().ok())
+        .and_then(|attempted_at| now.duration_since(attempted_at).try_into().ok())
         .unwrap_or_default();
     if !timeout.is_zero() && elapsed < timeout {
         return Ok(None);
@@ -184,7 +184,7 @@ fn decide(inner: &ClientInner, row: &JobRow, now: DateTime<Utc>) -> Result<Decis
 
     let retry_at = match inner.workers.next_retry(row, &rescued_error, now) {
         Ok(Some(delay)) => {
-            now + chrono::Duration::from_std(delay)
+            now + jiff::SignedDuration::try_from(delay)
                 .map_err(|error| Error::invalid_job_context("maintenance", error.to_string()))?
         }
         Ok(None) => client_retry(row)?,
@@ -199,12 +199,13 @@ fn decide(inner: &ClientInner, row: &JobRow, now: DateTime<Utc>) -> Result<Decis
 /// Go decodes `cancel_attempted_at` as a `time.Time` and cancels only when it
 /// is a non-zero timestamp; absent, null, or unparsable values do not cancel.
 fn cancel_attempted(value: Option<&serde_json::value::RawValue>) -> bool {
-    let go_zero_time =
-        chrono::NaiveDate::from_ymd_opt(1, 1, 1).and_then(|date| date.and_hms_opt(0, 0, 0));
+    let go_zero_time = "0001-01-01T00:00:00Z"
+        .parse::<Timestamp>()
+        .expect("Go zero time is valid");
     value
         .and_then(|raw| serde_json::from_str::<String>(raw.get()).ok())
-        .and_then(|value| DateTime::parse_from_rfc3339(&value).ok())
-        .is_some_and(|time| Some(time.naive_utc()) != go_zero_time)
+        .and_then(|value| value.parse::<jiff::Timestamp>().ok())
+        .is_some_and(|time| time != go_zero_time)
 }
 
 #[cfg(feature = "postgres")]
@@ -217,7 +218,7 @@ async fn rescue_batch_postgres(
     pool: &sqlx::PgPool,
     after_id: i64,
     limit: i64,
-    stuck_horizon: DateTime<Utc>,
+    stuck_horizon: Timestamp,
 ) -> Result<Batch, MaintenanceError> {
     use super::postgres::{MaintenanceTransaction, cancellable};
 
@@ -276,7 +277,7 @@ async fn rescue_batch_postgres(
                     job_projection("job")
                 )))
                 .bind(after_id)
-                .bind(stuck_horizon)
+                .bind(jiff_sqlx::Timestamp::from(stuck_horizon))
                 .bind(limit)
                 .fetch_all(&mut *transaction.transaction),
             )
@@ -294,7 +295,7 @@ async fn rescue_batch_postgres(
         last_id: rows.last().map(|row| row.id),
         selected: rows.len(),
     };
-    let jobs = rescue_jobs(inner, &rows, Utc::now())?;
+    let jobs = rescue_jobs(inner, &rows, Timestamp::now())?;
     if jobs.is_empty() {
         transaction.commit(pool, &context.cancel).await?;
         return Ok(batch);
@@ -360,14 +361,14 @@ async fn rescue_batch_postgres(
                 params
                     .jobs
                     .iter()
-                    .map(|job| job.finalized_at)
+                    .map(|job| job.finalized_at.map(jiff_sqlx::Timestamp::from))
                     .collect::<Vec<_>>(),
             )
             .bind(
                 params
                     .jobs
                     .iter()
-                    .map(|job| job.scheduled_at)
+                    .map(|job| jiff_sqlx::Timestamp::from(job.scheduled_at))
                     .collect::<Vec<_>>(),
             )
             .bind(
@@ -377,7 +378,7 @@ async fn rescue_batch_postgres(
                     .map(|job| job.state.as_str())
                     .collect::<Vec<_>>(),
             )
-            .bind(stuck_horizon)
+            .bind(jiff_sqlx::Timestamp::from(stuck_horizon))
             .execute(&mut *transaction.transaction),
         )
         .await?;
@@ -392,7 +393,7 @@ async fn rescue_batch_sqlite(
     pool: &sqlx::SqlitePool,
     after_id: i64,
     limit: i64,
-    stuck_horizon: DateTime<Utc>,
+    stuck_horizon: Timestamp,
 ) -> Result<Batch, MaintenanceError> {
     let mut transaction = crate::database::begin_sqlite_write(pool).await?;
     let selected_ids = if inner.pilot.intercepts_rescue() {
@@ -428,7 +429,7 @@ async fn rescue_batch_sqlite(
         last_id: rows.last().map(|row| row.id),
         selected: rows.len(),
     };
-    let jobs = rescue_jobs(inner, &rows, Utc::now())?;
+    let jobs = rescue_jobs(inner, &rows, Timestamp::now())?;
     if !jobs.is_empty() {
         let params = RescueManyParams {
             database: inner.pilot_database_config(),

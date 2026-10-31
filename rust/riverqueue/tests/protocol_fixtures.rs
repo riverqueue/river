@@ -1,6 +1,6 @@
 use std::{io::ErrorKind, path::Path, time::Duration};
 
-use chrono::{DateTime, Utc};
+use jiff::Timestamp;
 use riverqueue::{
     AttemptError, DefaultRetryPolicy, JobRow, JobState, METADATA_KEY_OUTPUT,
     METADATA_KEY_PERIODIC_JOB_ID, METADATA_KEY_RESCUE_COUNT, METADATA_KEY_RESUMABLE_CURSOR,
@@ -28,7 +28,7 @@ struct RetryFixture {
     job_id: i64,
     max_delay_ns: u64,
     min_delay_ns: u64,
-    now: DateTime<Utc>,
+    now: Timestamp,
     seed: u64,
 }
 
@@ -97,7 +97,7 @@ fn go_protocol_values_match_rust() {
     }
 }
 
-fn retry_row(id: i64, now: DateTime<Utc>, previous_errors: usize) -> JobRow {
+fn retry_row(id: i64, now: Timestamp, previous_errors: usize) -> JobRow {
     let mut row = JobRow::new(
         id,
         "fixture_retry",

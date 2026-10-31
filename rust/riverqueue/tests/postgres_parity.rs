@@ -484,9 +484,9 @@ async fn leader_renews_while_maintenance_is_blocked() {
         let pool = database.pool.clone();
         let table = database.table("river_leader");
         async move {
-            sqlx::query_as::<_, (chrono::DateTime<chrono::Utc>, chrono::DateTime<chrono::Utc>)>(
-                sqlx::AssertSqlSafe(format!("SELECT elected_at, expires_at FROM {table}")),
-            )
+            sqlx::query_as::<_, (jiff_sqlx::Timestamp, jiff_sqlx::Timestamp)>(sqlx::AssertSqlSafe(
+                format!("SELECT elected_at, expires_at FROM {table}"),
+            ))
             .fetch_optional(&pool)
             .await
             .unwrap()
@@ -508,7 +508,7 @@ async fn leader_renews_while_maintenance_is_blocked() {
             loop {
                 let (current_elected_at, current_expires_at) = lease().await.unwrap();
                 assert_eq!(current_elected_at, elected_at);
-                if current_expires_at > expires_at {
+                if current_expires_at.to_jiff() > expires_at.to_jiff() {
                     expires_at = current_expires_at;
                     return;
                 }

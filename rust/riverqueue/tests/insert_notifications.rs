@@ -226,7 +226,11 @@ mod postgres {
         // Scheduled jobs send nothing and leave the queue's window alone.
         client
             .insert(NotificationArgs {})
-            .opts(queue("d").with_scheduled_at(chrono::Utc::now() + chrono::Duration::hours(1)))
+            .opts(
+                queue("d").with_scheduled_at(
+                    jiff::Timestamp::now() + jiff::SignedDuration::from_hours(1),
+                ),
+            )
             .await
             .unwrap();
         assert_eq!(notifications.next(&schema).await, Vec::<String>::new());
@@ -385,7 +389,11 @@ mod sqlite {
         // Scheduled jobs send nothing and leave the queue's window alone.
         client
             .insert(NotificationArgs {})
-            .opts(queue("d").with_scheduled_at(chrono::Utc::now() + chrono::Duration::hours(1)))
+            .opts(
+                queue("d").with_scheduled_at(
+                    jiff::Timestamp::now() + jiff::SignedDuration::from_hours(1),
+                ),
+            )
             .await
             .unwrap();
         assert_eq!(notifications.next(&pool).await, Vec::<String>::new());

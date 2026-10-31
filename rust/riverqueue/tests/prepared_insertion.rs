@@ -106,7 +106,7 @@ async fn assert_stored_jobs_insert_like_ordinary_jobs(
         .insert_middleware(middleware.clone())
         .build()
         .unwrap();
-    let scheduled_at = chrono::Utc::now() + chrono::Duration::hours(1);
+    let scheduled_at = jiff::Timestamp::now() + jiff::SignedDuration::from_hours(1);
     let original = client
         .insert(PreparedArgs { value: 7 })
         .opts(
@@ -189,7 +189,7 @@ async fn assert_stored_jobs_insert_like_ordinary_jobs(
 
 /// Two available stored jobs to insert again, without uniqueness.
 fn available_params() -> Vec<PreparedInsertParams> {
-    let now = chrono::Utc::now();
+    let now = jiff::Timestamp::now();
     (1..=2)
         .map(|value| PreparedInsertParams {
             created_at: now,
@@ -199,7 +199,7 @@ fn available_params() -> Vec<PreparedInsertParams> {
             metadata: riverqueue::JobMetadata::default(),
             priority: 1,
             queue: "prepared".to_owned(),
-            scheduled_at: now - chrono::Duration::seconds(1),
+            scheduled_at: now - jiff::SignedDuration::from_secs(1),
             tags: Vec::new(),
             unique_key: None,
             unique_states: None,

@@ -20,7 +20,7 @@ use std::{
     pin::Pin,
 };
 
-use chrono::{DateTime, Utc};
+use jiff::Timestamp;
 #[cfg(feature = "postgres")]
 use serde_json::Value;
 use serde_json::value::RawValue;
@@ -147,7 +147,7 @@ impl<'a, A: JobArgs> IntoFuture for InsertRequest<'a, A> {
                 opts,
                 target,
             } = self;
-            let job = client.prepare_typed(&args, opts, Utc::now())?;
+            let job = client.prepare_typed(&args, opts, Timestamp::now())?;
             client
                 .run_insert(target.into_executor()?, vec![job], |rows| {
                     let row = rows.into_iter().next().ok_or_else(|| {
@@ -195,7 +195,7 @@ impl<'a, A: JobArgs> InsertManyRequest<'a, A> {
     }
 
     fn prepare(client: &Client, jobs: Vec<InsertManyItem<A>>) -> Result<Vec<InsertContext>, Error> {
-        let now = Utc::now();
+        let now = Timestamp::now();
         jobs.into_iter()
             .map(|item| client.prepare_typed(&item.args, item.opts, now))
             .collect()
@@ -285,7 +285,7 @@ impl<'a> IntoFuture for InsertBatchRequest<'a> {
                 client,
                 target,
             } = self;
-            let now = Utc::now();
+            let now = Timestamp::now();
             let mut jobs = Vec::with_capacity(batch.len());
             for item in batch.items {
                 client.validate_known_kind(item.kind)?;
@@ -459,7 +459,7 @@ impl Client {
         &self,
         insert: PeriodicInsert,
         opts: InsertParams,
-        target: DateTime<Utc>,
+        target: Timestamp,
     ) -> Result<JobRow, Error> {
         let job = self.prepare_periodic(
             insert.kind,
@@ -467,7 +467,7 @@ impl Client {
             insert.encoded_args,
             opts,
             target,
-            Utc::now(),
+            Timestamp::now(),
         )?;
         self.run_insert(None, vec![job], |rows| {
             rows.into_iter().next().map(|row| row.job).ok_or_else(|| {
@@ -482,7 +482,7 @@ impl Client {
         &self,
         args: &A,
         opts: InsertOpts,
-        now: DateTime<Utc>,
+        now: Timestamp,
     ) -> Result<InsertContext, Error> {
         self.validate_known_kind(A::KIND)?;
         let encoded_args = crate::encoding::encode_args(args)?;
@@ -508,8 +508,8 @@ impl Client {
         unique_fields: &[&[&str]],
         encoded_args: Box<RawValue>,
         mut opts: InsertParams,
-        target: DateTime<Utc>,
-        now: DateTime<Utc>,
+        target: Timestamp,
+        now: Timestamp,
     ) -> Result<InsertContext, Error> {
         let due_at_target = opts.scheduled_at.is_none();
         opts.scheduled_at.get_or_insert(target);
@@ -528,7 +528,7 @@ impl Client {
         unique_fields: &[&[&str]],
         encoded_args: Box<RawValue>,
         opts: InsertParams,
-        now: DateTime<Utc>,
+        now: Timestamp,
     ) -> Result<InsertContext, Error> {
         validate_insert_parts(kind, &opts, self.inner.allow_legacy_job_kinds)?;
         let unique_key = build_unique_key_parts(
@@ -879,7 +879,7 @@ impl Client {
                 );
                 let record = sqlx::query_as::<_, JobRecord>(AssertSqlSafe(sql))
                     .bind(Json(&encoded_args))
-                    .bind(created_at)
+                    .bind(created_at.map(jiff_sqlx::Timestamp::from))
                     .bind(&kind)
                     // Like River Go's Postgres drivers, a value wider than
                     // the `smallint` column is clamped rather than failing.
@@ -887,7 +887,7 @@ impl Client {
                     .bind(Json(&*metadata))
                     .bind(opts.priority)
                     .bind(&opts.queue)
-                    .bind(opts.scheduled_at)
+                    .bind(opts.scheduled_at.map(jiff_sqlx::Timestamp::from))
                     .bind(state.as_str())
                     .bind(&opts.tags)
                     .bind(unique_key)

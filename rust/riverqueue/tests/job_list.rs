@@ -8,15 +8,15 @@
 
 mod support;
 
-use chrono::{DateTime, Duration, TimeZone, Utc};
+use jiff::{SignedDuration as Duration, Timestamp};
 use riverqueue::{Client, JobListCursor, JobListOrderBy, JobListParams, JobState, SortDirection};
 
 /// A job to seed, with the time fields job lists order by.
 #[derive(Clone, Copy)]
 struct Seed {
-    attempted_at: Option<DateTime<Utc>>,
-    finalized_at: Option<DateTime<Utc>>,
-    scheduled_at: DateTime<Utc>,
+    attempted_at: Option<Timestamp>,
+    finalized_at: Option<Timestamp>,
+    scheduled_at: Timestamp,
     state: JobState,
 }
 
@@ -30,17 +30,17 @@ impl Seed {
         }
     }
 
-    const fn attempted(mut self, at: DateTime<Utc>) -> Self {
+    const fn attempted(mut self, at: Timestamp) -> Self {
         self.attempted_at = Some(at);
         self
     }
 
-    const fn finalized(mut self, at: DateTime<Utc>) -> Self {
+    const fn finalized(mut self, at: Timestamp) -> Self {
         self.finalized_at = Some(at);
         self
     }
 
-    const fn scheduled(mut self, at: DateTime<Utc>) -> Self {
+    const fn scheduled(mut self, at: Timestamp) -> Self {
         self.scheduled_at = at;
         self
     }
@@ -48,11 +48,11 @@ impl Seed {
 
 /// A fixed time with millisecond precision, which both backends store
 /// exactly.
-fn now() -> DateTime<Utc> {
-    Utc.with_ymd_and_hms(2026, 9, 9, 12, 0, 0).unwrap() + Duration::milliseconds(123)
+fn now() -> Timestamp {
+    "2026-09-09T12:00:00Z".parse::<jiff::Timestamp>().unwrap() + Duration::from_millis(123)
 }
 
-fn at(offset: Duration) -> DateTime<Utc> {
+fn at(offset: Duration) -> Timestamp {
     now() + offset
 }
 
@@ -121,13 +121,13 @@ macro_rules! scenarios {
             let fixture = Fixture::new().await;
             let ids = fixture
                 .insert(&[
-                    Seed::new(JobState::Running).attempted(at(Duration::seconds(2))),
+                    Seed::new(JobState::Running).attempted(at(Duration::from_secs(2))),
                     Seed::new(JobState::Available),
-                    Seed::new(JobState::Running).attempted(at(Duration::seconds(1))),
+                    Seed::new(JobState::Running).attempted(at(Duration::from_secs(1))),
                     Seed::new(JobState::Available)
-                        .attempted(at(-Duration::hours(1)))
-                        .scheduled(at(Duration::hours(1))),
-                    Seed::new(JobState::Running).attempted(at(Duration::seconds(1))),
+                        .attempted(at(-Duration::from_hours(1)))
+                        .scheduled(at(Duration::from_hours(1))),
+                    Seed::new(JobState::Running).attempted(at(Duration::from_secs(1))),
                     Seed::new(JobState::Available),
                 ])
                 .await;
@@ -151,17 +151,17 @@ macro_rules! scenarios {
             let fixture = Fixture::new().await;
             let ids = fixture
                 .insert(&[
-                    Seed::new(JobState::Available).scheduled(at(-Duration::hours(2))),
+                    Seed::new(JobState::Available).scheduled(at(-Duration::from_hours(2))),
                     Seed::new(JobState::Completed)
-                        .finalized(at(Duration::seconds(1)))
-                        .scheduled(at(-Duration::hours(3))),
+                        .finalized(at(Duration::from_secs(1)))
+                        .scheduled(at(-Duration::from_hours(3))),
                     Seed::new(JobState::Completed)
                         .finalized(now())
-                        .scheduled(at(-Duration::hours(1))),
-                    Seed::new(JobState::Available).scheduled(at(-Duration::hours(4))),
+                        .scheduled(at(-Duration::from_hours(1))),
+                    Seed::new(JobState::Available).scheduled(at(-Duration::from_hours(4))),
                     Seed::new(JobState::Completed)
-                        .finalized(at(Duration::seconds(1)))
-                        .scheduled(at(-Duration::hours(5))),
+                        .finalized(at(Duration::from_secs(1)))
+                        .scheduled(at(-Duration::from_hours(5))),
                 ])
                 .await;
 
@@ -185,15 +185,15 @@ macro_rules! scenarios {
             let fixture = Fixture::new().await;
             let ids = fixture
                 .insert(&[
-                    Seed::new(JobState::Available).scheduled(at(Duration::seconds(1))),
+                    Seed::new(JobState::Available).scheduled(at(Duration::from_secs(1))),
                     Seed::new(JobState::Cancelled)
-                        .finalized(at(-Duration::hours(1)))
-                        .scheduled(at(Duration::seconds(2))),
-                    Seed::new(JobState::Available).scheduled(at(Duration::seconds(3))),
+                        .finalized(at(-Duration::from_hours(1)))
+                        .scheduled(at(Duration::from_secs(2))),
+                    Seed::new(JobState::Available).scheduled(at(Duration::from_secs(3))),
                     Seed::new(JobState::Cancelled)
-                        .finalized(at(Duration::hours(1)))
-                        .scheduled(at(Duration::seconds(2))),
-                    Seed::new(JobState::Available).scheduled(at(Duration::seconds(4))),
+                        .finalized(at(Duration::from_hours(1)))
+                        .scheduled(at(Duration::from_secs(2))),
+                    Seed::new(JobState::Available).scheduled(at(Duration::from_secs(4))),
                 ])
                 .await;
 
@@ -216,14 +216,14 @@ macro_rules! scenarios {
             let fixture = Fixture::new().await;
             let ids = fixture
                 .insert(&[
-                    Seed::new(JobState::Available).scheduled(at(Duration::seconds(3))),
+                    Seed::new(JobState::Available).scheduled(at(Duration::from_secs(3))),
                     Seed::new(JobState::Running)
-                        .attempted(at(-Duration::hours(1)))
-                        .scheduled(at(Duration::seconds(1))),
+                        .attempted(at(-Duration::from_hours(1)))
+                        .scheduled(at(Duration::from_secs(1))),
                     Seed::new(JobState::Completed)
-                        .finalized(at(-Duration::hours(1)))
-                        .scheduled(at(Duration::seconds(2))),
-                    Seed::new(JobState::Scheduled).scheduled(at(Duration::seconds(1))),
+                        .finalized(at(-Duration::from_hours(1)))
+                        .scheduled(at(Duration::from_secs(2))),
+                    Seed::new(JobState::Scheduled).scheduled(at(Duration::from_secs(1))),
                 ])
                 .await;
 
@@ -274,9 +274,9 @@ mod postgres {
             let mut ids = Vec::with_capacity(seeds.len());
             for seed in seeds {
                 let id: i64 = sqlx::query_scalar(sqlx::AssertSqlSafe(sql.clone()))
-                    .bind(seed.attempted_at)
-                    .bind(seed.finalized_at)
-                    .bind(seed.scheduled_at)
+                    .bind(seed.attempted_at.map(jiff_sqlx::Timestamp::from))
+                    .bind(seed.finalized_at.map(jiff_sqlx::Timestamp::from))
+                    .bind(jiff_sqlx::Timestamp::from(seed.scheduled_at))
                     .bind(seed.state.as_str())
                     .fetch_one(&self.schema.pool)
                     .await
@@ -315,7 +315,7 @@ mod sqlite {
         }
 
         async fn insert(&self, seeds: &[Seed]) -> Vec<i64> {
-            let time = |time: DateTime<Utc>| time.format("%Y-%m-%d %H:%M:%S%.3f").to_string();
+            let time = |time: Timestamp| time.strftime("%Y-%m-%d %H:%M:%S%.3f").to_string();
             let mut ids = Vec::with_capacity(seeds.len());
             for seed in seeds {
                 let id: i64 = sqlx::query_scalar(

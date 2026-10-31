@@ -4,7 +4,7 @@
 
 use std::time::Duration;
 
-use chrono::{DateTime, Utc};
+use jiff::Timestamp;
 #[cfg(feature = "postgres")]
 use sqlx::AssertSqlSafe;
 
@@ -32,13 +32,10 @@ pub(super) const NOTIFICATION_CLEANER_INTERVAL: Duration = Duration::from_mins(1
 #[cfg(feature = "sqlite")]
 const NOTIFICATION_RETENTION: Duration = Duration::from_mins(5);
 
-fn horizon(
-    now: DateTime<Utc>,
-    retention: Option<Duration>,
-) -> Result<Option<DateTime<Utc>>, Error> {
+fn horizon(now: Timestamp, retention: Option<Duration>) -> Result<Option<Timestamp>, Error> {
     retention
         .map(|retention| {
-            chrono::Duration::from_std(retention)
+            jiff::SignedDuration::try_from(retention)
                 .map(|retention| now - retention)
                 .map_err(|error| Error::configuration_context("maintenance", error.to_string()))
         })
@@ -59,7 +56,7 @@ pub(super) async fn clean_jobs(context: &ServiceContext) -> Result<(), Maintenan
     }
     let queues_excluded = context.inner.pilot.job_cleaner_queue_exclusions();
     loop {
-        let now = Utc::now();
+        let now = Timestamp::now();
         let limit = batch_size(&context.breakers.job_cleaner);
         let mut params = FinalizedJobDeleteParams::new(limit);
         params.cancelled_before = horizon(now, maintenance.cancelled_job_retention)?;
@@ -190,7 +187,7 @@ pub(crate) async fn postgres_delete_finalized_jobs(
         return Ok(0);
     }
     let table = schema.qualify("river_job");
-    let now = Utc::now();
+    let now = Timestamp::now();
     let result = sqlx::query(AssertSqlSafe(format!(
         "DELETE FROM {table} WHERE id IN (\
             SELECT id FROM {table} WHERE (\
@@ -203,11 +200,17 @@ pub(crate) async fn postgres_delete_finalized_jobs(
          )"
     )))
     .bind(params.cancelled_before.is_some())
-    .bind(params.cancelled_before.unwrap_or(now))
+    .bind(jiff_sqlx::Timestamp::from(
+        params.cancelled_before.unwrap_or(now),
+    ))
     .bind(params.completed_before.is_some())
-    .bind(params.completed_before.unwrap_or(now))
+    .bind(jiff_sqlx::Timestamp::from(
+        params.completed_before.unwrap_or(now),
+    ))
     .bind(params.discarded_before.is_some())
-    .bind(params.discarded_before.unwrap_or(now))
+    .bind(jiff_sqlx::Timestamp::from(
+        params.discarded_before.unwrap_or(now),
+    ))
     .bind(&params.queues_excluded)
     .bind(params.queues_included.as_deref())
     .bind(params.limit)
@@ -249,8 +252,8 @@ pub(crate) async fn sqlite_delete_finalized_jobs(
 /// Active producers refresh `updated_at`, so their queues survive.
 pub(super) async fn clean_queues(context: &ServiceContext) -> Result<(), MaintenanceError> {
     loop {
-        let updated_before = Utc::now()
-            - chrono::Duration::from_std(context.inner.maintenance.queue_retention)
+        let updated_before = Timestamp::now()
+            - jiff::SignedDuration::try_from(context.inner.maintenance.queue_retention)
                 .map_err(|error| Error::configuration_context("maintenance", error.to_string()))?;
         let limit = batch_size(&context.breakers.queue_cleaner);
         let result = clean_queues_batch(context, updated_before, limit).await;
@@ -264,7 +267,7 @@ pub(super) async fn clean_queues(context: &ServiceContext) -> Result<(), Mainten
 
 async fn clean_queues_batch(
     context: &ServiceContext,
-    updated_before: DateTime<Utc>,
+    updated_before: Timestamp,
     limit: i64,
 ) -> Result<usize, MaintenanceError> {
     match context.inner.database.pool() {
@@ -301,7 +304,7 @@ async fn clean_queues_batch(
                         SELECT name FROM {table} WHERE updated_at < $1 ORDER BY name LIMIT $2\
                      ) RETURNING name"
                 )))
-                .bind(updated_before)
+                .bind(jiff_sqlx::Timestamp::from(updated_before))
                 .bind(limit)
                 .fetch_all(&mut *transaction.transaction),
             )
@@ -325,9 +328,9 @@ pub(super) async fn clean_notifications(
     context: &ServiceContext,
     pool: &sqlx::SqlitePool,
 ) -> Result<u64, MaintenanceError> {
-    let retention = chrono::Duration::from_std(NOTIFICATION_RETENTION)
+    let retention = jiff::SignedDuration::try_from(NOTIFICATION_RETENTION)
         .map_err(|error| Error::configuration_context("maintenance", error.to_string()))?;
-    let created_before = Utc::now() - retention;
+    let created_before = Timestamp::now() - retention;
     let mut deleted = 0;
     loop {
         let limit = batch_size(&context.breakers.notification_cleaner);
@@ -352,7 +355,7 @@ pub(super) async fn clean_notifications(
 mod sqlite_tests {
     use std::sync::Arc;
 
-    use chrono::Utc;
+    use jiff::Timestamp;
     use riverqueue_migrate::SqliteMigrator;
     use sqlx::sqlite::SqlitePoolOptions;
     use tokio_util::sync::CancellationToken;
@@ -371,7 +374,7 @@ mod sqlite_tests {
             .migrate_up()
             .await
             .unwrap();
-        let expired = sqlite_time(Utc::now() - chrono::Duration::hours(2));
+        let expired = sqlite_time(Timestamp::now() - jiff::SignedDuration::from_hours(2));
         for _ in 0..5 {
             sqlx::query(
                 "INSERT INTO river_notification (created_at, payload, topic) \

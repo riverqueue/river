@@ -3,7 +3,7 @@
 
 use std::{sync::Arc, time::Duration};
 
-use chrono::{DateTime, Utc};
+use jiff::Timestamp;
 use tokio::{sync::mpsc, task::JoinSet};
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, error};
@@ -194,7 +194,7 @@ async fn start_or_resign(
     inner: &Arc<ClientInner>,
     cancel: &CancellationToken,
     resign: &mpsc::UnboundedSender<LeadershipWakeup>,
-    elected_at: DateTime<Utc>,
+    elected_at: Timestamp,
 ) -> bool {
     for attempt in 1..=START_ATTEMPTS {
         match start(inner, cancel).await {

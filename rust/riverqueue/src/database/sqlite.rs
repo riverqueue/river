@@ -19,9 +19,9 @@ use std::{
     time::Duration,
 };
 
-use chrono::{DateTime, SubsecRound, Utc};
+use jiff::Timestamp;
 use serde_json::{Map, Value, value::RawValue};
-use sqlx::{AssertSqlSafe, FromRow, QueryBuilder, Sqlite, SqliteConnection};
+use sqlx::{AssertSqlSafe, FromRow, QueryBuilder, Row, Sqlite, SqliteConnection};
 
 use sqlx::sqlite::SqliteRow;
 
@@ -151,14 +151,14 @@ impl From<BackendError> for sqlx::Error {
 
 #[derive(Clone, Debug)]
 pub(crate) struct InsertJob<'a> {
-    pub attempted_at: Option<DateTime<Utc>>,
+    pub attempted_at: Option<Timestamp>,
     pub attempted_by: &'a [String],
     pub attempt: i32,
     /// When unset, SQLite's `datetime('now', 'subsec')`, like Go's driver.
-    pub created_at: Option<DateTime<Utc>>,
+    pub created_at: Option<Timestamp>,
     pub encoded_args: &'a serde_json::value::RawValue,
     pub errors: &'a [AttemptError],
-    pub finalized_at: Option<DateTime<Utc>>,
+    pub finalized_at: Option<Timestamp>,
     pub id: Option<i64>,
     pub kind: &'a str,
     pub max_attempts: i32,
@@ -166,7 +166,7 @@ pub(crate) struct InsertJob<'a> {
     pub priority: i16,
     pub queue: &'a str,
     /// When unset, SQLite's `datetime('now', 'subsec')`, like Go's driver.
-    pub scheduled_at: Option<DateTime<Utc>>,
+    pub scheduled_at: Option<Timestamp>,
     pub state: JobState,
     pub tags: &'a [String],
     pub unique_key: Option<&'a [u8]>,
@@ -188,7 +188,7 @@ pub(crate) struct ClaimJobs<'a> {
     pub kinds: Option<&'a [String]>,
     pub limit: i32,
     pub max_attempted_by: i32,
-    pub now: DateTime<Utc>,
+    pub now: Timestamp,
     pub queue: &'a str,
 }
 
@@ -212,31 +212,31 @@ pub(crate) struct ListJobs<'a> {
 pub(crate) struct CompleteJob<'a> {
     pub attempt: Option<i32>,
     pub error: Option<&'a AttemptError>,
-    pub finalized_at: Option<DateTime<Utc>>,
+    pub finalized_at: Option<Timestamp>,
     pub id: i64,
     pub metadata_updates: Option<&'a Map<String, Value>>,
-    pub now: DateTime<Utc>,
-    pub scheduled_at: Option<DateTime<Utc>>,
+    pub now: Timestamp,
+    pub scheduled_at: Option<Timestamp>,
     pub state: JobState,
 }
 
 #[derive(Clone, Debug)]
 pub(crate) struct RescueJob<'a> {
     pub error: &'a AttemptError,
-    pub finalized_at: Option<DateTime<Utc>>,
+    pub finalized_at: Option<Timestamp>,
     pub id: i64,
-    pub scheduled_at: DateTime<Utc>,
+    pub scheduled_at: Timestamp,
     pub state: JobState,
     /// The rescue applies only to a job still running from before this time.
-    pub stuck_horizon: DateTime<Utc>,
+    pub stuck_horizon: Timestamp,
 }
 
 /// Job cleaner deletion horizons; `None` keeps that state indefinitely.
 #[derive(Clone, Debug)]
 pub(crate) struct CleanupJobs<'a> {
-    pub cancelled_before: Option<DateTime<Utc>>,
-    pub completed_before: Option<DateTime<Utc>>,
-    pub discarded_before: Option<DateTime<Utc>>,
+    pub cancelled_before: Option<Timestamp>,
+    pub completed_before: Option<Timestamp>,
+    pub discarded_before: Option<Timestamp>,
     pub limit: i32,
     pub queues_excluded: &'a [&'a str],
     pub queues_included: Option<&'a [&'a str]>,
@@ -244,8 +244,8 @@ pub(crate) struct CleanupJobs<'a> {
 
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) struct Leader {
-    pub elected_at: DateTime<Utc>,
-    pub expires_at: DateTime<Utc>,
+    pub elected_at: Timestamp,
+    pub expires_at: Timestamp,
     pub leader_id: String,
 }
 
@@ -267,26 +267,55 @@ pub(crate) struct NotificationInput<'a> {
 // makes the row undecodable, like other columns River can't represent.
 // JSON columns are read as bytes, since a value changed out of band might not
 // even be UTF-8.
-#[derive(Clone, Debug, FromRow)]
+#[derive(Clone, Debug)]
 struct JobRecord {
     attempt: i64,
-    attempted_at: Option<DateTime<Utc>>,
+    attempted_at: Option<Timestamp>,
     attempted_by: Option<Vec<u8>>,
-    created_at: DateTime<Utc>,
+    created_at: Timestamp,
     encoded_args: Vec<u8>,
     errors: Option<Vec<u8>>,
-    finalized_at: Option<DateTime<Utc>>,
+    finalized_at: Option<Timestamp>,
     id: i64,
     kind: String,
     max_attempts: i64,
     metadata: Vec<u8>,
     priority: i64,
     queue: String,
-    scheduled_at: DateTime<Utc>,
+    scheduled_at: Timestamp,
     state: String,
     tags: Vec<u8>,
     unique_key: Option<Vec<u8>>,
     unique_states: Option<i64>,
+}
+
+impl<'row> FromRow<'row, SqliteRow> for JobRecord {
+    fn from_row(row: &'row SqliteRow) -> Result<Self, sqlx::Error> {
+        Ok(Self {
+            attempt: row.try_get("attempt")?,
+            attempted_at: sqlite_timestamp(row, "attempted_at")?,
+            attempted_by: row.try_get("attempted_by")?,
+            created_at: sqlite_timestamp(row, "created_at")?.ok_or(sqlx::Error::Decode(
+                Box::new(sqlx::error::UnexpectedNullError),
+            ))?,
+            encoded_args: row.try_get("encoded_args")?,
+            errors: row.try_get("errors")?,
+            finalized_at: sqlite_timestamp(row, "finalized_at")?,
+            id: row.try_get("id")?,
+            kind: row.try_get("kind")?,
+            max_attempts: row.try_get("max_attempts")?,
+            metadata: row.try_get("metadata")?,
+            priority: row.try_get("priority")?,
+            queue: row.try_get("queue")?,
+            scheduled_at: sqlite_timestamp(row, "scheduled_at")?.ok_or(sqlx::Error::Decode(
+                Box::new(sqlx::error::UnexpectedNullError),
+            ))?,
+            state: row.try_get("state")?,
+            tags: row.try_get("tags")?,
+            unique_key: row.try_get("unique_key")?,
+            unique_states: row.try_get("unique_states")?,
+        })
+    }
 }
 
 impl JobRecord {
@@ -390,13 +419,29 @@ pub(crate) fn decode_job_row(row: &SqliteRow) -> DecodedJob {
         .decode()
 }
 
-#[derive(Clone, Debug, FromRow)]
+#[derive(Clone, Debug)]
 struct QueueRecord {
-    created_at: DateTime<Utc>,
+    created_at: Timestamp,
     metadata: String,
     name: String,
-    paused_at: Option<DateTime<Utc>>,
-    updated_at: DateTime<Utc>,
+    paused_at: Option<Timestamp>,
+    updated_at: Timestamp,
+}
+
+impl<'row> FromRow<'row, SqliteRow> for QueueRecord {
+    fn from_row(row: &'row SqliteRow) -> Result<Self, sqlx::Error> {
+        Ok(Self {
+            created_at: sqlite_timestamp(row, "created_at")?.ok_or(sqlx::Error::Decode(
+                Box::new(sqlx::error::UnexpectedNullError),
+            ))?,
+            metadata: row.try_get("metadata")?,
+            name: row.try_get("name")?,
+            paused_at: sqlite_timestamp(row, "paused_at")?,
+            updated_at: sqlite_timestamp(row, "updated_at")?.ok_or(sqlx::Error::Decode(
+                Box::new(sqlx::error::UnexpectedNullError),
+            ))?,
+        })
+    }
 }
 
 impl QueueRecord {
@@ -416,11 +461,25 @@ impl QueueRecord {
     }
 }
 
-#[derive(Clone, Debug, FromRow)]
+#[derive(Clone, Debug)]
 struct LeaderRecord {
-    elected_at: DateTime<Utc>,
-    expires_at: DateTime<Utc>,
+    elected_at: Timestamp,
+    expires_at: Timestamp,
     leader_id: String,
+}
+
+impl<'row> FromRow<'row, SqliteRow> for LeaderRecord {
+    fn from_row(row: &'row SqliteRow) -> Result<Self, sqlx::Error> {
+        Ok(Self {
+            elected_at: sqlite_timestamp(row, "elected_at")?.ok_or(sqlx::Error::Decode(
+                Box::new(sqlx::error::UnexpectedNullError),
+            ))?,
+            expires_at: sqlite_timestamp(row, "expires_at")?.ok_or(sqlx::Error::Decode(
+                Box::new(sqlx::error::UnexpectedNullError),
+            ))?,
+            leader_id: row.try_get("leader_id")?,
+        })
+    }
 }
 
 impl From<LeaderRecord> for Leader {
@@ -466,13 +525,50 @@ fn decode_unique_states(bits: i64) -> Result<Vec<JobState>, String> {
         .collect())
 }
 
-pub(crate) fn sqlite_time(time: DateTime<Utc>) -> String {
-    time.round_subsecs(3)
-        .format("%Y-%m-%d %H:%M:%S%.3f")
-        .to_string()
+// Database timestamps without an offset are UTC. Keep decoding here separate
+// from Jiff's SQLx timestamp adapter, which requires an explicit offset.
+fn sqlite_timestamp(row: &SqliteRow, column: &str) -> Result<Option<Timestamp>, sqlx::Error> {
+    use sqlx::{Decode, TypeInfo, ValueRef};
+    let value = row.try_get_raw(column)?;
+    if value.is_null() {
+        return Ok(None);
+    }
+    let result = match value.type_info().name() {
+        "INTEGER" => Timestamp::from_second(
+            <i64 as Decode<Sqlite>>::decode(value).map_err(sqlx::Error::Decode)?,
+        ),
+        "REAL" => {
+            let days = <f64 as Decode<Sqlite>>::decode(value).map_err(sqlx::Error::Decode)?;
+            jiff::SignedDuration::try_from_secs_f64((days - 2_440_587.5) * 86_400.0)
+                .and_then(|duration| Timestamp::UNIX_EPOCH.checked_add(duration))
+        }
+        _ => {
+            let text = <&str as Decode<Sqlite>>::decode(value).map_err(sqlx::Error::Decode)?;
+            text.parse::<Timestamp>().or_else(|_| {
+                text.parse::<jiff::civil::DateTime>()
+                    .and_then(|datetime| datetime.to_zoned(jiff::tz::TimeZone::UTC))
+                    .map(|zoned| zoned.timestamp())
+            })
+        }
+    };
+    result.map(Some).map_err(|error| sqlx::Error::ColumnDecode {
+        index: column.to_owned(),
+        source: Box::new(error),
+    })
 }
 
-fn sqlite_time_optional(time: Option<DateTime<Utc>>) -> Option<String> {
+pub(crate) fn sqlite_time(time: Timestamp) -> String {
+    time.round(
+        jiff::TimestampRound::new()
+            .smallest(jiff::Unit::Millisecond)
+            .mode(jiff::RoundMode::HalfCeil),
+    )
+    .expect("database timestamp rounds to milliseconds")
+    .strftime("%Y-%m-%d %H:%M:%S%.3f")
+    .to_string()
+}
+
+fn sqlite_time_optional(time: Option<Timestamp>) -> Option<String> {
     time.map(sqlite_time)
 }
 
@@ -896,7 +992,7 @@ fn push_contains_value(
 pub(crate) async fn cancel(
     connection: &mut SqliteConnection,
     id: i64,
-    now: DateTime<Utc>,
+    now: Timestamp,
 ) -> Result<Option<JobRow>, BackendError> {
     let cancel_attempted_at = go_time_json(now);
     let sql = format!(
@@ -945,7 +1041,7 @@ pub(crate) async fn delete(
 pub(crate) async fn retry(
     connection: &mut SqliteConnection,
     id: i64,
-    now: DateTime<Utc>,
+    now: Timestamp,
 ) -> Result<Option<JobRow>, BackendError> {
     let sql = format!(
         r#"
@@ -1115,8 +1211,8 @@ pub(crate) async fn queue_upsert(
     connection: &mut SqliteConnection,
     name: &str,
     metadata: &Map<String, Value>,
-    paused_at: Option<DateTime<Utc>>,
-    now: DateTime<Utc>,
+    paused_at: Option<Timestamp>,
+    now: Timestamp,
 ) -> Result<Queue, BackendError> {
     let metadata = serde_json::to_string(metadata)?;
     let sql = format!(
@@ -1169,7 +1265,7 @@ pub(crate) async fn queue_list(
 pub(crate) async fn queue_pause(
     connection: &mut SqliteConnection,
     name: &str,
-    now: DateTime<Utc>,
+    now: Timestamp,
 ) -> Result<Vec<Queue>, BackendError> {
     queue_set_paused(connection, name, Some(now), now).await
 }
@@ -1177,7 +1273,7 @@ pub(crate) async fn queue_pause(
 pub(crate) async fn queue_resume(
     connection: &mut SqliteConnection,
     name: &str,
-    now: DateTime<Utc>,
+    now: Timestamp,
 ) -> Result<Vec<Queue>, BackendError> {
     queue_set_paused(connection, name, None, now).await
 }
@@ -1185,8 +1281,8 @@ pub(crate) async fn queue_resume(
 async fn queue_set_paused(
     connection: &mut SqliteConnection,
     name: &str,
-    paused_at: Option<DateTime<Utc>>,
-    now: DateTime<Utc>,
+    paused_at: Option<Timestamp>,
+    now: Timestamp,
 ) -> Result<Vec<Queue>, BackendError> {
     let (paused_at_sql, changed_sql) = if paused_at.is_some() {
         ("coalesce(paused_at, ?)", "paused_at IS NULL")
@@ -1220,7 +1316,7 @@ pub(crate) async fn queue_update(
     connection: &mut SqliteConnection,
     name: &str,
     metadata: Option<&Map<String, Value>>,
-    now: DateTime<Utc>,
+    now: Timestamp,
 ) -> Result<Option<Queue>, BackendError> {
     let metadata = metadata.map(serde_json::to_string).transpose()?;
     // Like Go, a queue update without metadata leaves it alone.
@@ -1245,7 +1341,7 @@ pub(crate) async fn queue_update(
 
 pub(crate) async fn queue_delete_expired(
     connection: &mut SqliteConnection,
-    updated_before: DateTime<Utc>,
+    updated_before: Timestamp,
     limit: i32,
 ) -> Result<Vec<String>, BackendError> {
     if limit <= 0 {
@@ -1274,7 +1370,7 @@ pub(crate) async fn queue_delete_expired(
 pub(crate) async fn leader_elect(
     connection: &mut SqliteConnection,
     leader_id: &str,
-    now: DateTime<Utc>,
+    now: Timestamp,
     ttl: Duration,
 ) -> Result<Option<Leader>, BackendError> {
     sqlx::query_as::<_, LeaderRecord>(
@@ -1300,8 +1396,8 @@ pub(crate) async fn leader_elect(
 pub(crate) async fn leader_reelect(
     connection: &mut SqliteConnection,
     leader_id: &str,
-    elected_at: DateTime<Utc>,
-    now: DateTime<Utc>,
+    elected_at: Timestamp,
+    now: Timestamp,
     ttl: Duration,
 ) -> Result<Option<Leader>, BackendError> {
     sqlx::query_as::<_, LeaderRecord>(
@@ -1330,7 +1426,7 @@ pub(crate) async fn leader_reelect(
 pub(crate) async fn leader_resign(
     connection: &mut SqliteConnection,
     leader_id: &str,
-    elected_at: DateTime<Utc>,
+    elected_at: Timestamp,
 ) -> Result<bool, BackendError> {
     let result = sqlx::query(
         r#"
@@ -1348,7 +1444,7 @@ pub(crate) async fn leader_resign(
 
 pub(crate) async fn leader_delete_expired(
     connection: &mut SqliteConnection,
-    now: DateTime<Utc>,
+    now: Timestamp,
 ) -> Result<u64, BackendError> {
     let result = sqlx::query("DELETE FROM river_leader WHERE expires_at < ?")
         .bind(sqlite_time(now))
@@ -1526,7 +1622,7 @@ impl NotificationListener {
 
 pub(crate) async fn notification_cleanup(
     connection: &mut SqliteConnection,
-    created_before: DateTime<Utc>,
+    created_before: Timestamp,
     limit: i64,
 ) -> Result<u64, BackendError> {
     if limit <= 0 {
@@ -1547,7 +1643,7 @@ pub(crate) async fn notification_cleanup(
 pub(crate) async fn stuck_jobs(
     connection: &mut SqliteConnection,
     after_id: i64,
-    attempted_before: DateTime<Utc>,
+    attempted_before: Timestamp,
     limit: i32,
 ) -> Result<Vec<JobRow>, BackendError> {
     if limit <= 0 {
@@ -1734,7 +1830,7 @@ pub(crate) struct ScheduleCandidate {
 /// empty.
 pub(crate) async fn schedule_candidates(
     connection: &mut SqliteConnection,
-    now: DateTime<Utc>,
+    now: Timestamp,
     limit: i32,
 ) -> Result<Vec<ScheduleCandidate>, BackendError> {
     if limit <= 0 {
@@ -1813,7 +1909,7 @@ pub(crate) async fn schedule_set_available(
 pub(crate) async fn schedule_discard_conflicts(
     connection: &mut SqliteConnection,
     ids: &[i64],
-    now: DateTime<Utc>,
+    now: Timestamp,
 ) -> Result<Vec<JobRow>, BackendError> {
     if ids.is_empty() {
         return Ok(Vec::new());
@@ -1850,7 +1946,7 @@ pub(crate) async fn schedule_discard_conflicts(
 
 #[cfg(test)]
 mod tests {
-    use chrono::{TimeDelta, TimeZone, Timelike};
+    use jiff::SignedDuration;
     use serde_json::json;
     use sqlx::{SqlitePool, sqlite::SqlitePoolOptions};
 
@@ -1930,10 +2026,8 @@ mod tests {
     async fn job_lifecycle_and_unique_insert() {
         let pool = setup().await;
         let mut connection = pool.acquire().await.unwrap();
-        let now = Utc
-            .with_ymd_and_hms(2026, 1, 2, 3, 4, 5)
-            .unwrap()
-            .with_nanosecond(123_800_000)
+        let now = "2026-01-02T03:04:05.123800000Z"
+            .parse::<jiff::Timestamp>()
             .unwrap();
         let args = serde_json::value::to_raw_value(&json!({"message": "hello"})).unwrap();
         let metadata = JobMetadata::default();
@@ -2070,7 +2164,7 @@ mod tests {
     async fn maintenance_leadership_and_wakeup_outbox() {
         let pool = setup().await;
         let mut connection = pool.acquire().await.unwrap();
-        let now = Utc::now();
+        let now = Timestamp::now();
         let args = serde_json::value::to_raw_value(&json!({})).unwrap();
         let metadata = JobMetadata::default();
         let scheduled = insert(
@@ -2119,13 +2213,13 @@ mod tests {
                 .is_none()
         );
         // A same-ID lease from another term is neither renewed nor resigned.
-        let other_term = leader.elected_at - TimeDelta::seconds(1);
+        let other_term = leader.elected_at - SignedDuration::from_secs(1);
         assert!(
             leader_reelect(
                 &mut connection,
                 "leader-1",
                 other_term,
-                now + TimeDelta::seconds(1),
+                now + SignedDuration::from_secs(1),
                 Duration::from_secs(30),
             )
             .await
@@ -2141,7 +2235,7 @@ mod tests {
             &mut connection,
             "leader-1",
             leader.elected_at,
-            now + TimeDelta::seconds(1),
+            now + SignedDuration::from_secs(1),
             Duration::from_secs(30),
         )
         .await
@@ -2183,7 +2277,7 @@ mod tests {
     async fn notification_cleanup_is_bounded_and_preserves_recent_rows() {
         let pool = setup().await;
         let mut connection = pool.acquire().await.unwrap();
-        let now = Utc.with_ymd_and_hms(2026, 1, 2, 3, 4, 5).unwrap();
+        let now = "2026-01-02T03:04:05Z".parse::<jiff::Timestamp>().unwrap();
         // The oldest expired row has the highest ID, so cleanup by age differs
         // from cleanup by ID.
         sqlx::query(
@@ -2191,10 +2285,10 @@ mod tests {
              (?, 'old', 'test'), (?, 'recent', 'test'), (?, 'oldest', 'test')",
         )
         .bind(sqlite_time(
-            now - TimeDelta::minutes(5) - TimeDelta::seconds(1),
+            now - SignedDuration::from_mins(5) - SignedDuration::from_secs(1),
         ))
-        .bind(sqlite_time(now - TimeDelta::minutes(4)))
-        .bind(sqlite_time(now - TimeDelta::minutes(6)))
+        .bind(sqlite_time(now - SignedDuration::from_mins(4)))
+        .bind(sqlite_time(now - SignedDuration::from_mins(6)))
         .execute(&mut *connection)
         .await
         .unwrap();
@@ -2206,14 +2300,14 @@ mod tests {
         };
 
         assert_eq!(
-            notification_cleanup(&mut connection, now - TimeDelta::minutes(5), 1)
+            notification_cleanup(&mut connection, now - SignedDuration::from_mins(5), 1)
                 .await
                 .unwrap(),
             1
         );
         assert_eq!(remaining(&mut connection).await, ["old", "recent"]);
         assert_eq!(
-            notification_cleanup(&mut connection, now - TimeDelta::minutes(5), 10)
+            notification_cleanup(&mut connection, now - SignedDuration::from_mins(5), 10)
                 .await
                 .unwrap(),
             1
@@ -2485,7 +2579,7 @@ mod tests {
     async fn claim_caps_attempted_by_without_reversing_history() {
         let pool = setup().await;
         let mut connection = pool.acquire().await.unwrap();
-        let now = Utc.with_ymd_and_hms(2026, 1, 2, 3, 4, 5).unwrap();
+        let now = "2026-01-02T03:04:05Z".parse::<jiff::Timestamp>().unwrap();
         let inserted = insert(
             &mut connection,
             &InsertJob {
@@ -2542,14 +2636,14 @@ mod tests {
     async fn insert_test_job(
         connection: &mut SqliteConnection,
         state: JobState,
-        now: DateTime<Utc>,
+        now: Timestamp,
     ) -> JobRow {
         let running = state == JobState::Running;
         insert(
             connection,
             &InsertJob {
                 attempt: i32::from(running),
-                attempted_at: running.then_some(now - TimeDelta::hours(2)),
+                attempted_at: running.then_some(now - SignedDuration::from_hours(2)),
                 attempted_by: &[],
                 created_at: Some(now),
                 encoded_args: &serde_json::value::to_raw_value(&json!({})).unwrap(),
@@ -2587,7 +2681,7 @@ mod tests {
         .unwrap();
     }
 
-    fn retryable_completion(id: i64, error: &AttemptError, now: DateTime<Utc>) -> CompleteJob<'_> {
+    fn retryable_completion(id: i64, error: &AttemptError, now: Timestamp) -> CompleteJob<'_> {
         CompleteJob {
             attempt: None,
             error: Some(error),
@@ -2595,7 +2689,7 @@ mod tests {
             id,
             metadata_updates: None,
             now,
-            scheduled_at: Some(now + TimeDelta::hours(1)),
+            scheduled_at: Some(now + SignedDuration::from_hours(1)),
             state: JobState::Retryable,
         }
     }
@@ -2606,7 +2700,7 @@ mod tests {
     async fn claim_returns_undecodable_rows_separately() {
         let pool = setup().await;
         let mut connection = pool.acquire().await.unwrap();
-        let now = Utc.with_ymd_and_hms(2026, 1, 2, 3, 4, 5).unwrap();
+        let now = "2026-01-02T03:04:05Z".parse::<jiff::Timestamp>().unwrap();
         let job1 = insert_test_job(&mut connection, JobState::Available, now).await;
         let job2 = insert_test_job(&mut connection, JobState::Available, now).await;
         let job3 = insert_test_job(&mut connection, JobState::Available, now).await;
@@ -2665,7 +2759,7 @@ mod tests {
     async fn complete_returns_undecodable_rows_partially() {
         let pool = setup().await;
         let mut connection = pool.acquire().await.unwrap();
-        let now = Utc.with_ymd_and_hms(2026, 1, 2, 3, 4, 5).unwrap();
+        let now = "2026-01-02T03:04:05Z".parse::<jiff::Timestamp>().unwrap();
         let job1 = insert_test_job(&mut connection, JobState::Running, now).await;
         let job2 = insert_test_job(&mut connection, JobState::Running, now).await;
         set_json_column(&mut connection, job2.id, "tags", r#"{"not":"an array"}"#).await;
@@ -2708,7 +2802,7 @@ mod tests {
     async fn complete_wraps_a_non_array_errors_value() {
         let pool = setup().await;
         let mut connection = pool.acquire().await.unwrap();
-        let now = Utc.with_ymd_and_hms(2026, 1, 2, 3, 4, 5).unwrap();
+        let now = "2026-01-02T03:04:05Z".parse::<jiff::Timestamp>().unwrap();
         let job = insert_test_job(&mut connection, JobState::Running, now).await;
         set_json_column(
             &mut connection,
@@ -2740,7 +2834,7 @@ mod tests {
     async fn stuck_jobs_include_undecodable_rows() {
         let pool = setup().await;
         let mut connection = pool.acquire().await.unwrap();
-        let now = Utc.with_ymd_and_hms(2026, 1, 2, 3, 4, 5).unwrap();
+        let now = "2026-01-02T03:04:05Z".parse::<jiff::Timestamp>().unwrap();
         let job1 = insert_test_job(&mut connection, JobState::Running, now).await;
         let job2 = insert_test_job(&mut connection, JobState::Running, now).await;
         set_json_column(&mut connection, job1.id, "tags", r#"{"not":"an array"}"#).await;
@@ -2758,7 +2852,7 @@ mod tests {
     async fn late_completion_merges_metadata_without_changing_terminal_state() {
         let pool = setup().await;
         let mut connection = pool.acquire().await.unwrap();
-        let now = Utc.with_ymd_and_hms(2026, 1, 2, 3, 4, 5).unwrap();
+        let now = "2026-01-02T03:04:05Z".parse::<jiff::Timestamp>().unwrap();
         let inserted = insert(
             &mut connection,
             &InsertJob {
@@ -2826,21 +2920,65 @@ mod tests {
         }
     }
 
+    #[tokio::test]
+    async fn timestamp_columns_accept_existing_sqlite_representations() {
+        let pool = setup().await;
+        for (stored, expected) in [
+            ("0001-01-01 00:00:00.000", "0001-01-01T00:00:00Z"),
+            ("1969-12-31 23:59:59.999", "1969-12-31T23:59:59.999Z"),
+            ("2026-01-02 03:04:05.123", "2026-01-02T03:04:05.123Z"),
+            (
+                "2026-01-02T03:04:05.123456789Z",
+                "2026-01-02T03:04:05.123456789Z",
+            ),
+            ("2026-01-02 03:04:05.123+02:00", "2026-01-02T01:04:05.123Z"),
+        ] {
+            let row = sqlx::query("SELECT ? AS time")
+                .bind(stored)
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+            assert_eq!(
+                sqlite_timestamp(&row, "time").unwrap(),
+                Some(expected.parse::<Timestamp>().unwrap()),
+                "{stored}"
+            );
+        }
+        for sql in ["SELECT 0 AS time", "SELECT 2440587.5 AS time"] {
+            let row = sqlx::query(sqlx::AssertSqlSafe(sql))
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+            assert_eq!(
+                sqlite_timestamp(&row, "time").unwrap(),
+                Some(Timestamp::UNIX_EPOCH)
+            );
+        }
+        let row = sqlx::query("SELECT NULL AS time")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(sqlite_timestamp(&row, "time").unwrap(), None);
+        let row = sqlx::query("SELECT 'invalid' AS time")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert!(sqlite_timestamp(&row, "time").is_err());
+    }
+
     #[test]
     fn wire_encoders_match_go_sqlite() {
-        let base = Utc.with_ymd_and_hms(2026, 1, 2, 3, 4, 5).unwrap();
-        assert_eq!(
-            sqlite_time(base.with_nanosecond(123_400_000).unwrap()),
-            "2026-01-02 03:04:05.123"
-        );
-        assert_eq!(
-            sqlite_time(base.with_nanosecond(123_800_000).unwrap()),
-            "2026-01-02 03:04:05.124"
-        );
-        assert_eq!(
-            sqlite_time(base.with_nanosecond(999_800_000).unwrap()),
-            "2026-01-02 03:04:06.000"
-        );
+        for (input, expected) in [
+            ("0001-01-01T00:00:00Z", "0001-01-01 00:00:00.000"),
+            ("1969-12-31T23:59:59.9994Z", "1969-12-31 23:59:59.999"),
+            ("1969-12-31T23:59:59.9995Z", "1970-01-01 00:00:00.000"),
+            ("2026-01-02T03:04:05.1234Z", "2026-01-02 03:04:05.123"),
+            ("2026-01-02T03:04:05.1235Z", "2026-01-02 03:04:05.124"),
+            ("2026-01-02T03:04:05.1238Z", "2026-01-02 03:04:05.124"),
+            ("2026-01-02T03:04:05.9998Z", "2026-01-02 03:04:06.000"),
+        ] {
+            assert_eq!(sqlite_time(input.parse().unwrap()), expected, "{input}");
+        }
         assert_eq!(sqlite_ttl(Duration::from_millis(3_255)), "3.255 seconds");
     }
 }

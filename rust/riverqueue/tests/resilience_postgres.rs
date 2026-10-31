@@ -19,7 +19,7 @@ use std::{
 };
 
 use async_trait::async_trait;
-use chrono::{DateTime, Utc};
+use jiff::Timestamp;
 use riverqueue::__private::ClientBuilderExt;
 use riverqueue::{
     __private::{DatabaseConnection, JobSetStateParams, Pilot, PilotError},
@@ -454,7 +454,7 @@ impl RetryPolicy for RetryAnHourLater {
         &self,
         _job: &JobRow,
         _error: &riverqueue::WorkError,
-        _now: DateTime<Utc>,
+        _now: Timestamp,
     ) -> Duration {
         Duration::from_hours(1)
     }
@@ -595,7 +595,7 @@ async fn claimed_rows_decode_individually_and_leniently() {
             i16,
             Vec<serde_json::Value>,
             serde_json::Value,
-            DateTime<Utc>,
+            jiff_sqlx::Timestamp,
         ) = sqlx::query_as(AssertSqlSafe(format!(
             "SELECT state::text, attempt, errors, metadata, scheduled_at FROM {} WHERE id = $1",
             schema.table()
@@ -612,8 +612,8 @@ async fn claimed_rows_decode_individually_and_leniently() {
         assert_eq!(metadata, serde_json::json!([1]));
         if state == "retryable" {
             assert!(
-                scheduled_at > Utc::now() + chrono::Duration::minutes(50),
-                "the client retry policy wasn't used: {scheduled_at}"
+                scheduled_at.to_jiff() > Timestamp::now() + jiff::SignedDuration::from_mins(50),
+                "the client retry policy wasn't used: {scheduled_at:?}"
             );
         }
     }
@@ -973,7 +973,10 @@ async fn out_of_range_snooze_is_clamped_and_cancel_time_matches_go() {
     run.stop().await.unwrap();
     let snoozed = client.jobs().get(snoozed.job.row.id).await.unwrap();
     assert_eq!(snoozed.attempt, 0);
-    assert!(snoozed.scheduled_at > chrono::Utc::now() + chrono::Duration::days(365 * 200));
+    assert!(
+        snoozed.scheduled_at
+            > jiff::Timestamp::now() + jiff::SignedDuration::from_hours(24 * 365 * 200)
+    );
 
     // River Go writes `cancel_attempted_at` as `time.Time` JSON.
     let cancelled = client.jobs().cancel(snoozed.id).await.unwrap();
@@ -989,7 +992,7 @@ async fn out_of_range_snooze_is_clamped_and_cancel_time_matches_go() {
             "trailing zeros are trimmed: {cancel_attempted_at}"
         );
     }
-    chrono::DateTime::parse_from_rfc3339(&cancel_attempted_at).unwrap();
+    cancel_attempted_at.parse::<jiff::Timestamp>().unwrap();
 
     schema.drop().await;
 }
