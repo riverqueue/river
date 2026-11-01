@@ -9,7 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- Added `JobDeleteManyParams.Where`, an escape hatch for deleting jobs by an arbitrary SQL predicate, like `JobListParams.Where` does for lists. For example, it can delete every queued job whose args name a given customer. A `Where` predicate counts as a filter, so it doesn't need `UnsafeAll`, and each predicate is wrapped in parentheses so that an `OR` in it can't widen the deletion past other filters or to running jobs. [PR #1570](https://github.com/riverqueue/river/pull/1570).
+- Added `JobDeleteManyParams.Where`, an escape hatch for deleting jobs by an arbitrary SQL predicate, like `JobListParams.Where` does for lists. For example, it can select queued jobs whose args name a given customer. A `Where` predicate counts as a filter, so it doesn't need `UnsafeAll`, and each predicate is wrapped in parentheses so that an `OR` in it can't widen the deletion past other filters or to running jobs. The existing batch limit (100 jobs by default) and Postgres behavior of skipping locked jobs still apply. [PR #1570](https://github.com/riverqueue/river/pull/1570).
 
 ### Fixed
 
