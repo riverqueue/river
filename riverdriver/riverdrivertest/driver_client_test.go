@@ -327,6 +327,7 @@ func ExerciseClient[TTx any](ctx context.Context, t *testing.T,
 ) {
 	t.Helper()
 
+	exerciseClientJobDeleteManyWhere(ctx, t, driverWithSchema)
 	exerciseClientJobUpdate(ctx, t, driverWithSchema)
 
 	type testBundle struct {

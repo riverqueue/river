@@ -3727,6 +3727,30 @@ func Test_Client_JobDeleteMany(t *testing.T) {
 		require.Equal(t, []int64{job4.ID}, sliceutil.Map(deleteRes.Jobs, func(job *rivertype.JobRow) int64 { return job.ID }))
 	})
 
+	t.Run("FiltersByWhere", func(t *testing.T) {
+		t.Parallel()
+
+		client, bundle := setup(t)
+
+		var (
+			job1 = testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{EncodedArgs: []byte(`{"customer_id": 1}`), Kind: new("send_email"), Schema: bundle.schema})
+			job2 = testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{EncodedArgs: []byte(`{"customer_id": 2}`), Kind: new("send_email"), Schema: bundle.schema})
+			job3 = testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{EncodedArgs: []byte(`{"customer_id": 3}`), Kind: new("send_email"), Schema: bundle.schema})
+			job4 = testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{EncodedArgs: []byte(`{"customer_id": 1}`), Kind: new("other_kind"), Schema: bundle.schema})
+		)
+
+		deleteRes, err := client.JobDeleteMany(ctx, NewJobDeleteManyParams().
+			Kinds("send_email").
+			Where("(args->>'customer_id')::bigint = any(@customer_ids)", NamedArgs{"customer_ids": []int64{1, 2}}))
+		require.NoError(t, err)
+		require.Equal(t, []int64{job1.ID, job2.ID}, sliceutil.Map(deleteRes.Jobs, func(job *rivertype.JobRow) int64 { return job.ID }))
+
+		_, err = client.JobGet(ctx, job3.ID)
+		require.NoError(t, err)
+		_, err = client.JobGet(ctx, job4.ID)
+		require.NoError(t, err)
+	})
+
 	t.Run("DeletesAllWithUnsafeAll", func(t *testing.T) {
 		t.Parallel()
 

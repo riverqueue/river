@@ -2479,7 +2479,13 @@ type JobDeleteManyResult struct {
 // JobDeleteMany deletes many jobs at once based on the conditions defined by
 // JobDeleteManyParams. Running jobs are always ignored.
 //
-//	params := river.NewJobDeleteManyParams().First(10).State(rivertype.JobStateCompleted)
+// Each call deletes at most 100 jobs by default; use JobDeleteManyParams.First
+// to change the batch size. In Postgres, jobs locked by another transaction are
+// skipped, so even an empty result doesn't guarantee that no matching jobs
+// remain. Applications that need to remove every matching job must account for
+// both the batch limit and concurrent transactions.
+//
+//	params := river.NewJobDeleteManyParams().First(10).States(rivertype.JobStateCompleted)
 //	jobRows, err := client.JobDeleteMany(ctx, params)
 //	if err != nil {
 //		// handle error
@@ -2495,7 +2501,10 @@ func (c *Client[TTx]) JobDeleteMany(ctx context.Context, params *JobDeleteManyPa
 // JobDeleteManyTx deletes many jobs at once based on the conditions defined by
 // JobDeleteManyParams. Running jobs are always ignored.
 //
-//	params := river.NewJobDeleteManyParams().First(10).States(river.JobStateCompleted)
+// The batch limit and Postgres locked-row behavior described in JobDeleteMany
+// also apply within a transaction.
+//
+//	params := river.NewJobDeleteManyParams().First(10).States(rivertype.JobStateCompleted)
 //	jobRows, err := client.JobDeleteManyTx(ctx, tx, params)
 //	if err != nil {
 //		// handle error
