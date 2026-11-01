@@ -2,7 +2,7 @@
 
 River is a fast, transactional job queue backed by Postgres or SQLite. It
 includes automatic retries, scheduling, unique jobs, and a web UI, with support
-for Go, [JavaScript/TypeScript], [Ruby], and [Rust]. All implementations are
+for Go, [Java], [JavaScript/TypeScript], [Ruby], and [Rust]. All implementations are
 fully cross-compatible -- enqueue in one language and process in another.
 
 See [homepage], [docs], and [godoc], as well as the [River UI][riverui] and [its
@@ -199,6 +199,7 @@ See [developing River].
 [Batch job insertion]: https://riverqueue.com/docs/batch-job-insertion
 [Cancelling jobs]: https://riverqueue.com/docs/cancelling-jobs
 [Error and panic handling]: https://riverqueue.com/docs/error-handling
+[Java]: https://github.com/riverqueue/river/tree/master/java
 [JavaScript/TypeScript]: https://github.com/riverqueue/river/tree/master/js
 [Multiple queues]: https://riverqueue.com/docs/multiple-queues
 [Periodic and cron jobs]: https://riverqueue.com/docs/periodic-jobs
