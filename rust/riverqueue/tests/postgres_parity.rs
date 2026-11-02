@@ -23,6 +23,33 @@ fn insert_only_client(database: &PostgresSchema) -> Client {
     .unwrap()
 }
 
+#[tokio::test]
+async fn out_of_range_timestamps_return_decode_errors() {
+    let database = PostgresSchema::new("rpp_timestamp_range").await;
+    let client = insert_only_client(&database);
+    let job_id = insert_raw_job(&database, "available", None).await;
+
+    for timestamp in ["10000-01-01 00:00:00+00", "infinity", "-infinity"] {
+        sqlx::query(sqlx::AssertSqlSafe(format!(
+            "UPDATE {} SET scheduled_at = $1::text::timestamptz WHERE id = $2",
+            database.table("river_job")
+        )))
+        .bind(timestamp)
+        .bind(job_id)
+        .execute(&database.pool)
+        .await
+        .unwrap();
+
+        let error = client.jobs().get(job_id).await.unwrap_err();
+        assert!(
+            matches!(error, Error::Database(sqlx::Error::ColumnDecode { .. })),
+            "{timestamp}: {error}",
+        );
+    }
+
+    database.cleanup().await;
+}
+
 #[tokio::test(flavor = "multi_thread")]
 async fn queue_pause_and_resume() {
     let database = PostgresSchema::new("rpp_queue_pause").await;
@@ -484,9 +511,9 @@ async fn leader_renews_while_maintenance_is_blocked() {
         let pool = database.pool.clone();
         let table = database.table("river_leader");
         async move {
-            sqlx::query_as::<_, (chrono::DateTime<chrono::Utc>, chrono::DateTime<chrono::Utc>)>(
-                sqlx::AssertSqlSafe(format!("SELECT elected_at, expires_at FROM {table}")),
-            )
+            sqlx::query_as::<_, (jiff_sqlx::Timestamp, jiff_sqlx::Timestamp)>(sqlx::AssertSqlSafe(
+                format!("SELECT elected_at, expires_at FROM {table}"),
+            ))
             .fetch_optional(&pool)
             .await
             .unwrap()
@@ -508,7 +535,7 @@ async fn leader_renews_while_maintenance_is_blocked() {
             loop {
                 let (current_elected_at, current_expires_at) = lease().await.unwrap();
                 assert_eq!(current_elected_at, elected_at);
-                if current_expires_at > expires_at {
+                if current_expires_at.to_jiff() > expires_at.to_jiff() {
                     expires_at = current_expires_at;
                     return;
                 }

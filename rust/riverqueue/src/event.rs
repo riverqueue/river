@@ -362,7 +362,7 @@ mod tests {
         let dropped = Arc::new(AtomicU64::new(2));
         let (sender, receiver) = mpsc::channel(1);
         let mut events = EventReceiver::new(Arc::clone(&dropped), receiver);
-        let now = chrono::Utc::now();
+        let now = jiff::Timestamp::now();
         sender
             .send(Event::queue(
                 QueueEventKind::Paused,

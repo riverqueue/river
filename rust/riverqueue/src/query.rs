@@ -6,7 +6,7 @@ use base64::{
     Engine as _, alphabet,
     engine::{DecodePaddingMode, GeneralPurpose, GeneralPurposeConfig, general_purpose},
 };
-use chrono::{DateTime, Utc};
+use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 use thiserror::Error;
@@ -22,7 +22,7 @@ pub struct JobListCursor {
     queue: String,
     /// Value of the time field the list is ordered by, or `None` when the
     /// list is ordered by ID alone or the job's value is null.
-    pub(crate) sort_time: Option<DateTime<Utc>>,
+    pub(crate) sort_time: Option<Timestamp>,
 }
 
 impl JobListCursor {
@@ -152,7 +152,7 @@ struct JobListCursorValue {
     queue: String,
     sort_field: String,
     #[serde(with = "crate::encoding::go_time")]
-    time: DateTime<Utc>,
+    time: Timestamp,
 }
 
 /// Field used for stable job-list ordering.
@@ -552,7 +552,7 @@ pub(crate) enum JobListAfter {
     /// last ascending and first descending.
     NullTime { id: i64 },
     /// Jobs following a cursor job with this time.
-    Time { id: i64, time: DateTime<Utc> },
+    Time { id: i64, time: Timestamp },
 }
 
 /// How a validated job list is ordered and where it resumes. Each storage
@@ -584,7 +584,7 @@ impl JobListKeyset {
 
     /// Returns the time of the job the list resumes after, if that job has
     /// one.
-    pub(crate) const fn after_time(&self) -> Option<DateTime<Utc>> {
+    pub(crate) const fn after_time(&self) -> Option<Timestamp> {
         match self.after {
             Some(JobListAfter::Time { time, .. }) => Some(time),
             Some(JobListAfter::Id(_) | JobListAfter::NullTime { .. }) | None => None,
@@ -703,7 +703,7 @@ impl JobListTimeField {
     }
 
     /// Returns the field's value on `job`, or `None` if it's null.
-    const fn value(self, job: &JobRow) -> Option<DateTime<Utc>> {
+    const fn value(self, job: &JobRow) -> Option<Timestamp> {
         match self {
             Self::Attempted => job.attempted_at,
             Self::Finalized => job.finalized_at,
@@ -712,10 +712,10 @@ impl JobListTimeField {
     }
 }
 
-fn go_zero_time() -> DateTime<Utc> {
-    DateTime::parse_from_rfc3339("0001-01-01T00:00:00Z")
+fn go_zero_time() -> Timestamp {
+    "0001-01-01T00:00:00Z"
+        .parse::<jiff::Timestamp>()
         .expect("Go zero time is valid RFC 3339")
-        .with_timezone(&Utc)
 }
 
 #[cfg(test)]
@@ -729,10 +729,8 @@ mod tests {
         "eyJpZCI6OTAwNzE5OTI1NDc0MDk5Mywia2luZCI6ImNvbmZvcm1hbmNlX2N1cnNvcn5-fiIsInF1ZXVlIjoiZGVmYXVsdCIsInNvcnRfZmllbGQiOiJmaW5hbGl6ZWRfYXQiLCJ0aW1lIjoiMjAyNi0wMS0wMlQwMzowNDowNS4xMloifQ==",
     ];
 
-    fn utc(text: &str) -> DateTime<Utc> {
-        DateTime::parse_from_rfc3339(text)
-            .unwrap()
-            .with_timezone(&Utc)
+    fn utc(text: &str) -> Timestamp {
+        text.parse::<jiff::Timestamp>().unwrap()
     }
 
     #[test]
@@ -797,9 +795,9 @@ mod tests {
             order_by: JobListOrderBy::ScheduledAt,
             queue: "priority".to_owned(),
             sort_time: Some(
-                DateTime::parse_from_rfc3339("2026-01-02T03:04:05.6789Z")
-                    .unwrap()
-                    .with_timezone(&Utc),
+                "2026-01-02T03:04:05.6789Z"
+                    .parse::<jiff::Timestamp>()
+                    .unwrap(),
             ),
         };
 

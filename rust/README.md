@@ -20,17 +20,17 @@ Rust version is 1.95.
 |---|---|---|
 | `postgres` | yes | Postgres through SQLx |
 | `sqlite` | no | SQLite 3.45 or newer through SQLx |
-| `chrono-tz` | no | IANA zone names such as `America/New_York` in cron `CRON_TZ=` and `TZ=` prefixes |
+| `tzdb` | no | IANA zone names such as `America/New_York` in cron `CRON_TZ=` and `TZ=` prefixes |
 
 For SQLite alone, use
 `riverqueue = { version = "0.4.0", default-features = false, features = ["sqlite"] }`.
 
-River's API uses types from SQLx (pools and transactions), Chrono
+River's API uses types from SQLx (pools and transactions), Jiff
 (timestamps), `serde_json` (metadata, outputs, and other JSON values), and
 `tokio-util` (the worker's `CancellationToken`). The crate re-exports each one
-as `riverqueue::sqlx`, `riverqueue::chrono`, `riverqueue::serde_json`, and
+as `riverqueue::sqlx`, `riverqueue::jiff`, `riverqueue::serde_json`, and
 `riverqueue::tokio_util`. Use the re-exports, or depend on versions
-compatible with River's (SQLx 0.9, Chrono 0.4, `serde_json` 1, and
+compatible with River's (SQLx 0.9, Jiff 0.2, `serde_json` 1, and
 `tokio-util` 0.7), so the types match. River doesn't choose a TLS
 implementation for SQLx; enable one of SQLx's TLS features in your own SQLx
 dependency if your database connections use TLS.

@@ -8,7 +8,7 @@
 
 use std::fmt::Write as _;
 
-use chrono::{DateTime, DurationRound as _, TimeDelta, Utc};
+use jiff::Timestamp;
 use riverqueue::{
     Client, Job, JobArgs, JobListOrderBy, JobListParams, JobRow, JobState,
     database::DatabaseTransactionExecutor,
@@ -27,7 +27,7 @@ pub struct RequireInsertedOpts {
     max_attempts: Option<i32>,
     priority: Option<i16>,
     queue: Option<String>,
-    scheduled_at: Option<DateTime<Utc>>,
+    scheduled_at: Option<Timestamp>,
     state: Option<JobState>,
     tags: Option<Vec<String>>,
 }
@@ -59,7 +59,7 @@ impl RequireInsertedOpts {
 
     /// Returns the expected scheduled time.
     #[must_use]
-    pub const fn scheduled_at(&self) -> Option<DateTime<Utc>> {
+    pub const fn scheduled_at(&self) -> Option<Timestamp> {
         self.scheduled_at
     }
 
@@ -99,7 +99,7 @@ impl RequireInsertedOpts {
     /// Expects this scheduled time, compared at microsecond precision like
     /// the database stores it.
     #[must_use]
-    pub const fn with_scheduled_at(mut self, scheduled_at: DateTime<Utc>) -> Self {
+    pub const fn with_scheduled_at(mut self, scheduled_at: Timestamp) -> Self {
         self.scheduled_at = Some(scheduled_at);
         self
     }
@@ -164,12 +164,11 @@ impl RequireInsertedOpts {
             return None;
         }
         if let Some(expected) = self.scheduled_at {
-            let micros = TimeDelta::microseconds(1);
-            let expected = expected.duration_trunc(micros).unwrap_or(expected);
-            let actual = job
-                .scheduled_at
-                .duration_trunc(micros)
-                .unwrap_or(job.scheduled_at);
+            let micros = jiff::TimestampRound::new()
+                .smallest(jiff::Unit::Microsecond)
+                .mode(jiff::RoundMode::Floor);
+            let expected = expected.round(micros).unwrap_or(expected);
+            let actual = job.scheduled_at.round(micros).unwrap_or(job.scheduled_at);
             if !check(
                 actual == expected,
                 format!("scheduled at equal to excluded {}", micro_time(expected)),
@@ -208,8 +207,8 @@ impl RequireInsertedOpts {
     }
 }
 
-fn micro_time(time: DateTime<Utc>) -> String {
-    time.to_rfc3339_opts(chrono::SecondsFormat::Micros, true)
+fn micro_time(time: Timestamp) -> String {
+    format!("{time:.6}")
 }
 
 /// One job expected by [`require_many_inserted`].

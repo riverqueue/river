@@ -9,7 +9,7 @@ use std::fmt;
 use std::time::Duration;
 
 #[cfg(feature = "postgres")]
-use chrono::NaiveTime;
+use jiff::civil::Time;
 pub use riverqueue_migrate::{SchemaName, SchemaNameError};
 #[cfg(feature = "postgres")]
 use sqlx::{PgConnection, PgPool, Postgres};
@@ -401,7 +401,7 @@ impl Default for PostgresReindexConfig {
 #[non_exhaustive]
 pub enum PostgresReindexSchedule {
     /// Run each day at the supplied UTC wall-clock time.
-    DailyUtc(NaiveTime),
+    DailyUtc(Time),
     /// Run after each elapsed interval from client startup.
     Interval(Duration),
 }
@@ -409,7 +409,7 @@ pub enum PostgresReindexSchedule {
 #[cfg(feature = "postgres")]
 impl Default for PostgresReindexSchedule {
     fn default() -> Self {
-        Self::DailyUtc(NaiveTime::MIN)
+        Self::DailyUtc(Time::MIN)
     }
 }
 

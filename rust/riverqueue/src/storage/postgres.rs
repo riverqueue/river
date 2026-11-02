@@ -1,6 +1,6 @@
 //! Postgres implementation of River's storage operations.
 
-use chrono::{DateTime, Utc};
+use jiff::Timestamp;
 use serde_json::{Map, Value};
 use sqlx::{AssertSqlSafe, FromRow, PgConnection, Postgres, types::Json};
 
@@ -68,7 +68,7 @@ impl Backend for PostgresBackend<'_> {
             .bind(id)
             .bind(self.schema.as_deref())
             .bind(crate::NOTIFICATION_TOPIC_CONTROL)
-            .bind(go_time_json(Utc::now()))
+            .bind(go_time_json(Timestamp::now()))
             .bind(notify)
             .fetch_optional(&mut *self.connection)
             .await?
@@ -381,18 +381,18 @@ const QUEUE_COLUMNS: &str =
 
 #[derive(FromRow)]
 struct QueueRecord {
-    created_at: DateTime<Utc>,
+    created_at: jiff_sqlx::Timestamp,
     metadata: Json<Value>,
     metadata_text: String,
     name: String,
-    paused_at: Option<DateTime<Utc>>,
-    updated_at: DateTime<Utc>,
+    paused_at: Option<jiff_sqlx::Timestamp>,
+    updated_at: jiff_sqlx::Timestamp,
 }
 
 impl QueueRecord {
     fn into_queue(self) -> Result<Queue, Error> {
         Ok(Queue {
-            created_at: self.created_at,
+            created_at: self.created_at.to_jiff(),
             metadata: self.metadata.0.as_object().cloned().ok_or_else(|| {
                 Error::invalid_job_context(
                     "storage parameters",
@@ -401,8 +401,8 @@ impl QueueRecord {
             })?,
             metadata_text: self.metadata_text,
             name: self.name,
-            paused_at: self.paused_at,
-            updated_at: self.updated_at,
+            paused_at: self.paused_at.map(jiff_sqlx::Timestamp::to_jiff),
+            updated_at: self.updated_at.to_jiff(),
         })
     }
 }
@@ -497,7 +497,7 @@ fn bind_job_list<'query>(
         .bind(&params.tags_all)
         .bind(&params.tags_any)
         .bind(metadata)
-        .bind(keyset.after_time())
+        .bind(keyset.after_time().map(jiff_sqlx::Timestamp::from))
         .bind(keyset.after_id())
         .bind(i64::from(params.limit))
 }

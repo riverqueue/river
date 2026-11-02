@@ -3,7 +3,7 @@
 #![forbid(unsafe_code)]
 #![warn(missing_docs)]
 
-use chrono::Utc;
+use jiff::Timestamp;
 use riverqueue::{
     __private, Client, Error, Job, JobArgs, JobRow, JobState, MAX_ATTEMPTS_DEFAULT,
     PRIORITY_DEFAULT, QUEUE_DEFAULT, WorkContext, WorkError, WorkOutcome, Worker,
@@ -55,7 +55,7 @@ impl<A: JobArgs> TestJobBuilder<A> {
     ///
     /// Returns an error when the arguments can't be encoded as JSON.
     pub fn build(self) -> Result<Job<A>, Error> {
-        let now = Utc::now();
+        let now = Timestamp::now();
         let encoded_args = riverqueue::encoding::encode_args(&self.args)?;
         let defaults = A::default_insert_opts();
         let max_attempts = defaults.max_attempts().unwrap_or(MAX_ATTEMPTS_DEFAULT);
