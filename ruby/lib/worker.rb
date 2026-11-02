@@ -139,8 +139,13 @@ module River
     end
 
     # Stores a worker result under the conventional +"output"+ metadata key.
+    # Raises ArgumentError if its encoded UTF-8 JSON exceeds 32 MiB, leaving any
+    # previously recorded output unchanged.
     def output=(value)
-      update_metadata("output" => value)
+      encoded = JSON.generate(value)
+      raise ArgumentError, "output is too large: #{encoded.bytesize} bytes (max 32 MiB)" if encoded.bytesize > 32 * 1024 * 1024
+
+      @metadata_updates["output"] = JSON.parse(encoded)
     end
 
     def respond_to_missing?(name, include_private = false)

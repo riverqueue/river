@@ -14,6 +14,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Enforce the 32 MiB encoded UTF-8 JSON limit for explicit output in `JobUpdateOptions` and `WorkContext.output`, preserving previous output when validation fails. [PR #1569](https://github.com/riverqueue/river/pull/1569).
 - Fixed a cancelled job that was retried being cancelled again as soon as its new attempt started. Retrying a job now clears its earlier attempt's cancellation request, like River for Go. [PR #1564](https://github.com/riverqueue/river/pull/1564).
 
 ## [0.2.0] - 2026-10-26

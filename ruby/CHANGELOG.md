@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- Enforce the 32 MiB encoded UTF-8 JSON limit for `Job#output=`, preserving previous output when validation fails. [PR #1569](https://github.com/riverqueue/river/pull/1569).
+
 ## [0.15.0] - 2026-10-30
 
 ### Added

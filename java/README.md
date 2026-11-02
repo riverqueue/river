@@ -638,6 +638,10 @@ any `"output"` in the metadata updates. Omit it to leave output unchanged, or ca
 `.output(null)` to store JSON null. `JobUpdateOptions.defaults()` changes nothing.
 Missing jobs throw `RiverException` with code `NOT_FOUND`.
 
+Explicit output in `JobUpdateOptions` and `context.output` is limited to 32 MiB of
+encoded UTF-8 JSON, including JSON escaping. Larger values throw
+`IllegalArgumentException` without changing previously recorded output.
+
 The connection overload requires auto-commit disabled and leaves commit/rollback
 to the caller. Save step results before marking a resumable step complete.
 `context.output` remains buffered until the attempt finishes and may overwrite

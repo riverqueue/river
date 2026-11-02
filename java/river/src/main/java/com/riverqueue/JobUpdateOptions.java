@@ -6,7 +6,8 @@ import tools.jackson.databind.node.ObjectNode;
 /**
  * Immutable updates to job metadata and recorded output. Metadata is merged at the top level;
  * supplied values replace whole values, including nested objects and JSON null. Explicit output
- * takes precedence over the metadata's "output" key.
+ * takes precedence over the metadata's "output" key and must encode to at most 32 MiB of UTF-8
+ * JSON; larger values throw {@link IllegalArgumentException} during construction.
  *
  * @param metadata metadata keys to merge; null means no metadata updates
  * @param output output to set; a null reference leaves it unchanged, a JSON null node stores null
@@ -16,6 +17,7 @@ public record JobUpdateOptions(JsonNode metadata, JsonNode output) {
     metadata = metadata == null ? Json.object() : metadata.deepCopy();
     if (!metadata.isObject()) throw new IllegalArgumentException("metadata must be a JSON object");
     output = output == null ? null : output.deepCopy();
+    if (output != null) RecordedOutput.checkSize(output);
   }
 
   /** Returns a builder for named updates. */
