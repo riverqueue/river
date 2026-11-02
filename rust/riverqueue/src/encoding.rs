@@ -25,8 +25,8 @@
 //! * River clients in other languages may encode byte strings as base64
 //!   strings; a Rust `Vec<u8>` encodes as an array of numbers.
 //! * Canonical timestamps use RFC 3339 with the shortest fractional seconds,
-//!   as Jiff timestamps do by default. [`go_time`] explicitly applies this
-//!   representation to `Timestamp` fields that participate in unique keys.
+//!   as Jiff timestamps do by default. [`go_time`] pins this representation
+//!   for `Timestamp` fields that participate in unique keys.
 //!
 //! Encoding fails for non-finite floats (`NaN` and infinities) instead of
 //! writing them as `null` the way [`serde_json`] does.
@@ -64,9 +64,12 @@ pub fn encode_args<T: Serialize + ?Sized>(args: &T) -> Result<Box<RawValue>, ser
 /// timestamp: RFC 3339 in UTC with `Z` and the shortest fractional seconds,
 /// with no fractional part when it's zero (`2026-01-02T03:04:05.5Z`).
 ///
-/// Use it with `#[serde(with = "riverqueue::encoding::go_time")]` on argument
-/// fields that participate in unique keys shared with other River clients.
-/// Deserialization accepts any RFC 3339 timestamp.
+/// Jiff currently produces the same output by default. Use
+/// `#[serde(with = "riverqueue::encoding::go_time")]` to pin River's format
+/// on argument fields that participate in unique keys shared with other
+/// River clients. Deserialization uses Jiff's timestamp parser, which also
+/// accepts Temporal zone annotations, lowercase `t`/`z`, a space separator,
+/// and offsets with seconds.
 pub mod go_time {
     use jiff::Timestamp;
     use serde::{Deserialize, Deserializer, Serializer};
@@ -84,11 +87,11 @@ pub mod go_time {
         serializer.serialize_str(&super::format_rfc3339_nano(*timestamp))
     }
 
-    /// Deserializes an RFC 3339 timestamp.
+    /// Deserializes a timestamp using Jiff's parser.
     ///
     /// # Errors
     ///
-    /// Returns an error when the input is not an RFC 3339 timestamp.
+    /// Returns an error when Jiff cannot parse the input as a timestamp.
     pub fn deserialize<'de, D: Deserializer<'de>>(deserializer: D) -> Result<Timestamp, D::Error> {
         Timestamp::deserialize(deserializer)
     }

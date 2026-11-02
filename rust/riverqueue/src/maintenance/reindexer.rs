@@ -45,7 +45,9 @@ pub(crate) fn next_run(schedule: PostgresReindexSchedule, after: Timestamp) -> T
                     .timestamp()
             }
         }
-        PostgresReindexSchedule::Interval(interval) => after + interval,
+        PostgresReindexSchedule::Interval(interval) => {
+            after.checked_add(interval).unwrap_or(Timestamp::MAX)
+        }
     }
 }
 
@@ -313,6 +315,19 @@ mod unit_tests {
     use jiff::civil::Time;
 
     use super::{PostgresReindexSchedule, next_run};
+
+    #[test]
+    fn interval_saturates_at_timestamp_max() {
+        // This interval fits Chrono's range but exceeds Jiff's.
+        let interval = std::time::Duration::from_hours(20_000 * 365 * 24);
+        assert_eq!(
+            next_run(
+                PostgresReindexSchedule::Interval(interval),
+                "2026-01-02T03:04:05Z".parse().unwrap(),
+            ),
+            jiff::Timestamp::MAX,
+        );
+    }
 
     #[test]
     fn schedule_advances_from_the_previous_run() {

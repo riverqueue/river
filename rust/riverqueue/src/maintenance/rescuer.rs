@@ -153,9 +153,7 @@ fn decide(inner: &ClientInner, row: &JobRow, now: Timestamp) -> Result<Decision,
     let rescued_error = crate::WorkError::new(RESCUE_ERROR);
     let client_retry = |row: &JobRow| -> Result<Timestamp, Error> {
         let delay = inner.retry_policy.next_retry(row, &rescued_error, now);
-        Ok(now
-            + jiff::SignedDuration::try_from(delay)
-                .map_err(|error| Error::invalid_job_context("maintenance", error.to_string()))?)
+        retry_at(now, delay)
     };
 
     // A worker that cannot evaluate the job, for example because its args no
@@ -183,10 +181,7 @@ fn decide(inner: &ClientInner, row: &JobRow, now: Timestamp) -> Result<Decision,
     }
 
     let retry_at = match inner.workers.next_retry(row, &rescued_error, now) {
-        Ok(Some(delay)) => {
-            now + jiff::SignedDuration::try_from(delay)
-                .map_err(|error| Error::invalid_job_context("maintenance", error.to_string()))?
-        }
+        Ok(Some(delay)) => retry_at(now, delay)?,
         Ok(None) => client_retry(row)?,
         Err(retry_error) => {
             debug!(error = %retry_error, job_id = row.id, "River rescuer used the client retry policy");
@@ -194,6 +189,12 @@ fn decide(inner: &ClientInner, row: &JobRow, now: Timestamp) -> Result<Decision,
         }
     };
     Ok(Some(retry_or_discard(retry_at)))
+}
+
+fn retry_at(now: Timestamp, delay: std::time::Duration) -> Result<Timestamp, Error> {
+    let delay = jiff::SignedDuration::try_from(delay)
+        .map_err(|error| Error::invalid_job_context("maintenance", error.to_string()))?;
+    Ok(now.checked_add(delay).unwrap_or(Timestamp::MAX))
 }
 
 /// Go decodes `cancel_attempted_at` as a `time.Time` and cancels only when it
@@ -204,7 +205,18 @@ fn cancel_attempted(value: Option<&serde_json::value::RawValue>) -> bool {
         .expect("Go zero time is valid");
     value
         .and_then(|raw| serde_json::from_str::<String>(raw.get()).ok())
-        .and_then(|value| value.parse::<jiff::Timestamp>().ok())
+        .and_then(|value| {
+            // Preserve Chrono's acceptance of lowercase designators and a
+            // space separator, but exclude newly accepted Temporal zone
+            // annotations and offsets other than Z or ±hh:mm.
+            let offset = value.get(value.len().saturating_sub(6)..)?;
+            let valid_offset = value.ends_with(['Z', 'z'])
+                || (offset.starts_with(['+', '-']) && offset.as_bytes().get(3) == Some(&b':'));
+            if !valid_offset {
+                return None;
+            }
+            value.parse::<Timestamp>().ok()
+        })
         .is_some_and(|time| time != go_zero_time)
 }
 
@@ -476,9 +488,12 @@ async fn rescue_batch_sqlite(
 
 #[cfg(test)]
 mod unit_tests {
+    use std::time::Duration;
+
+    use jiff::Timestamp;
     use serde_json::json;
 
-    use super::cancel_attempted;
+    use super::{cancel_attempted, retry_at};
 
     #[test]
     fn cancel_attempted_requires_a_non_zero_timestamp_like_go() {
@@ -488,10 +503,30 @@ mod unit_tests {
         };
         assert!(cancel(Some(json!("2026-01-02T03:04:05Z"))));
         assert!(cancel(Some(json!("2026-01-02T03:04:05.123456+00:00"))));
+        // These forms were already accepted before the Jiff migration.
+        assert!(cancel(Some(json!("2026-01-02t03:04:05z"))));
+        assert!(cancel(Some(json!("2026-01-02 03:04:05Z"))));
         assert!(!cancel(None));
         assert!(!cancel(Some(json!(null))));
         assert!(!cancel(Some(json!("0001-01-01T00:00:00Z"))));
         assert!(!cancel(Some(json!("not a time"))));
         assert!(!cancel(Some(json!(true))));
+        for text in [
+            "2026-01-02T03:04:05+00:00[America/New_York]",
+            "2026-01-02T03:04:05+00:00:30",
+            "2026-01-02T03:04:05+00",
+            "2026-01-02T03:04:05+0000",
+        ] {
+            assert!(!cancel(Some(json!(text))), "{text}");
+        }
+    }
+
+    #[test]
+    fn retry_delay_saturates_at_timestamp_max() {
+        let now = "2026-01-02T03:04:05Z".parse().unwrap();
+        assert_eq!(retry_at(now, Duration::ZERO).unwrap(), now);
+        // This delay fits Chrono's range but exceeds Jiff's.
+        let delay = Duration::from_hours(20_000 * 365 * 24);
+        assert_eq!(retry_at(now, delay).unwrap(), Timestamp::MAX);
     }
 }

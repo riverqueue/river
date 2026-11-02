@@ -515,7 +515,6 @@ fn host_name() -> String {
 
 #[cfg(test)]
 mod default_client_id_tests {
-
     use super::*;
 
     #[test]

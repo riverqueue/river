@@ -469,8 +469,9 @@ fn truncate_period(timestamp: Timestamp, period: Duration) -> Result<Timestamp, 
 
 #[cfg(test)]
 mod tests {
-    use serde::{Deserialize, Serialize};
     use std::collections::BTreeMap;
+
+    use serde::{Deserialize, Serialize};
 
     use super::*;
     use crate::{
@@ -955,7 +956,7 @@ mod tests {
                 fraction: whole + jiff::SignedDuration::from_millis(500),
                 micros: whole + jiff::SignedDuration::from_micros(123_456),
                 millis: whole + jiff::SignedDuration::from_millis(120),
-                // Whole seconds need no helper: Jiff and Go agree.
+                // Jiff's default serialization also matches Go's format.
                 whole,
             },
         );

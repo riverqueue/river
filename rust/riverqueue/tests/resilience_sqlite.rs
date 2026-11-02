@@ -391,7 +391,7 @@ async fn claimed_rows_decode_individually_and_accept_go_integer_ranges() {
             i64,
             String,
             String,
-            jiff_sqlx::DateTime,
+            String,
         ) = sqlx::query_as(
             "SELECT state, attempt, json(errors), json(tags), scheduled_at FROM river_job WHERE id = ?",
         )
@@ -410,7 +410,8 @@ async fn claimed_rows_decode_individually_and_accept_go_integer_ranges() {
             assert_eq!(errors[0], serde_json::json!({"not": "an array"}));
             assert!(
                 scheduled_at
-                    .to_jiff()
+                    .parse::<jiff::civil::DateTime>()
+                    .unwrap()
                     .to_zoned(jiff::tz::TimeZone::UTC)
                     .unwrap()
                     .timestamp()

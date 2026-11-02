@@ -295,9 +295,7 @@ impl<'row> FromRow<'row, SqliteRow> for JobRecord {
             attempt: row.try_get("attempt")?,
             attempted_at: sqlite_timestamp(row, "attempted_at")?,
             attempted_by: row.try_get("attempted_by")?,
-            created_at: sqlite_timestamp(row, "created_at")?.ok_or(sqlx::Error::Decode(
-                Box::new(sqlx::error::UnexpectedNullError),
-            ))?,
+            created_at: sqlite_timestamp_required(row, "created_at")?,
             encoded_args: row.try_get("encoded_args")?,
             errors: row.try_get("errors")?,
             finalized_at: sqlite_timestamp(row, "finalized_at")?,
@@ -307,9 +305,7 @@ impl<'row> FromRow<'row, SqliteRow> for JobRecord {
             metadata: row.try_get("metadata")?,
             priority: row.try_get("priority")?,
             queue: row.try_get("queue")?,
-            scheduled_at: sqlite_timestamp(row, "scheduled_at")?.ok_or(sqlx::Error::Decode(
-                Box::new(sqlx::error::UnexpectedNullError),
-            ))?,
+            scheduled_at: sqlite_timestamp_required(row, "scheduled_at")?,
             state: row.try_get("state")?,
             tags: row.try_get("tags")?,
             unique_key: row.try_get("unique_key")?,
@@ -431,15 +427,11 @@ struct QueueRecord {
 impl<'row> FromRow<'row, SqliteRow> for QueueRecord {
     fn from_row(row: &'row SqliteRow) -> Result<Self, sqlx::Error> {
         Ok(Self {
-            created_at: sqlite_timestamp(row, "created_at")?.ok_or(sqlx::Error::Decode(
-                Box::new(sqlx::error::UnexpectedNullError),
-            ))?,
+            created_at: sqlite_timestamp_required(row, "created_at")?,
             metadata: row.try_get("metadata")?,
             name: row.try_get("name")?,
             paused_at: sqlite_timestamp(row, "paused_at")?,
-            updated_at: sqlite_timestamp(row, "updated_at")?.ok_or(sqlx::Error::Decode(
-                Box::new(sqlx::error::UnexpectedNullError),
-            ))?,
+            updated_at: sqlite_timestamp_required(row, "updated_at")?,
         })
     }
 }
@@ -471,12 +463,8 @@ struct LeaderRecord {
 impl<'row> FromRow<'row, SqliteRow> for LeaderRecord {
     fn from_row(row: &'row SqliteRow) -> Result<Self, sqlx::Error> {
         Ok(Self {
-            elected_at: sqlite_timestamp(row, "elected_at")?.ok_or(sqlx::Error::Decode(
-                Box::new(sqlx::error::UnexpectedNullError),
-            ))?,
-            expires_at: sqlite_timestamp(row, "expires_at")?.ok_or(sqlx::Error::Decode(
-                Box::new(sqlx::error::UnexpectedNullError),
-            ))?,
+            elected_at: sqlite_timestamp_required(row, "elected_at")?,
+            expires_at: sqlite_timestamp_required(row, "expires_at")?,
             leader_id: row.try_get("leader_id")?,
         })
     }
@@ -546,6 +534,9 @@ fn sqlite_timestamp(row: &SqliteRow, column: &str) -> Result<Option<Timestamp>, 
             let text = <&str as Decode<Sqlite>>::decode(value).map_err(sqlx::Error::Decode)?;
             text.parse::<Timestamp>().or_else(|_| {
                 text.parse::<jiff::civil::DateTime>()
+                    // Chrono's SQLite format uses four digits for negative
+                    // years; Jiff's default parser requires six.
+                    .or_else(|_| jiff::civil::DateTime::strptime("%Y-%m-%d %H:%M:%S%.f", text))
                     .and_then(|datetime| datetime.to_zoned(jiff::tz::TimeZone::UTC))
                     .map(|zoned| zoned.timestamp())
             })
@@ -557,13 +548,22 @@ fn sqlite_timestamp(row: &SqliteRow, column: &str) -> Result<Option<Timestamp>, 
     })
 }
 
+fn sqlite_timestamp_required(row: &SqliteRow, column: &str) -> Result<Timestamp, sqlx::Error> {
+    sqlite_timestamp(row, column)?.ok_or_else(|| sqlx::Error::ColumnDecode {
+        index: column.to_owned(),
+        source: Box::new(sqlx::error::UnexpectedNullError),
+    })
+}
+
 pub(crate) fn sqlite_time(time: Timestamp) -> String {
     time.round(
         jiff::TimestampRound::new()
             .smallest(jiff::Unit::Millisecond)
             .mode(jiff::RoundMode::HalfCeil),
     )
-    .expect("database timestamp rounds to milliseconds")
+    // Rounding the last half millisecond would exceed Timestamp::MAX.
+    // Formatting truncates it to the last representable millisecond instead.
+    .unwrap_or(time)
     .strftime("%Y-%m-%d %H:%M:%S%.3f")
     .to_string()
 }
@@ -2921,6 +2921,24 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn timestamp_bounds_round_trip() {
+        let pool = setup().await;
+        for (time, encoded) in [
+            (Timestamp::MIN, "-9999-01-02 01:59:59.000"),
+            (Timestamp::MAX, "9999-12-30 22:00:00.999"),
+        ] {
+            assert_eq!(sqlite_time(time), encoded);
+            let row = sqlx::query("SELECT ? AS time")
+                .bind(encoded)
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+            let decoded = sqlite_timestamp_required(&row, "time").unwrap();
+            assert_eq!(decoded.as_millisecond(), time.as_millisecond());
+        }
+    }
+
+    #[tokio::test]
     async fn timestamp_columns_accept_existing_sqlite_representations() {
         let pool = setup().await;
         for (stored, expected) in [
@@ -2959,6 +2977,12 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(sqlite_timestamp(&row, "time").unwrap(), None);
+        let error = sqlite_timestamp_required(&row, "time").unwrap_err();
+        assert!(matches!(
+            error,
+            sqlx::Error::ColumnDecode { index, source }
+                if index == "time" && source.is::<sqlx::error::UnexpectedNullError>()
+        ));
         let row = sqlx::query("SELECT 'invalid' AS time")
             .fetch_one(&pool)
             .await

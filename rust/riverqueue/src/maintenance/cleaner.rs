@@ -36,7 +36,7 @@ fn horizon(now: Timestamp, retention: Option<Duration>) -> Result<Option<Timesta
     retention
         .map(|retention| {
             jiff::SignedDuration::try_from(retention)
-                .map(|retention| now - retention)
+                .map(|retention| now.checked_sub(retention).unwrap_or(Timestamp::MIN))
                 .map_err(|error| Error::configuration_context("maintenance", error.to_string()))
         })
         .transpose()
@@ -252,9 +252,11 @@ pub(crate) async fn sqlite_delete_finalized_jobs(
 /// Active producers refresh `updated_at`, so their queues survive.
 pub(super) async fn clean_queues(context: &ServiceContext) -> Result<(), MaintenanceError> {
     loop {
-        let updated_before = Timestamp::now()
-            - jiff::SignedDuration::try_from(context.inner.maintenance.queue_retention)
-                .map_err(|error| Error::configuration_context("maintenance", error.to_string()))?;
+        let updated_before = horizon(
+            Timestamp::now(),
+            Some(context.inner.maintenance.queue_retention),
+        )?
+        .expect("queue retention is set");
         let limit = batch_size(&context.breakers.queue_cleaner);
         let result = clean_queues_batch(context, updated_before, limit).await;
         record_batch(&context.breakers.queue_cleaner, &result);
@@ -348,6 +350,21 @@ pub(super) async fn clean_notifications(
             return Ok(deleted);
         }
         batch_backoff(&context.cancel).await?;
+    }
+}
+
+#[cfg(test)]
+mod unit_tests {
+    use super::{Duration, Timestamp, horizon};
+
+    #[test]
+    fn retention_horizon_saturates_at_timestamp_min() {
+        let now = "2026-01-02T03:04:05Z".parse().unwrap();
+        assert_eq!(horizon(now, None).unwrap(), None);
+        assert_eq!(horizon(now, Some(Duration::ZERO)).unwrap(), Some(now));
+        // This retention fits Chrono's range but exceeds Jiff's.
+        let retention = Duration::from_hours(20_000 * 365 * 24);
+        assert_eq!(horizon(now, Some(retention)).unwrap(), Some(Timestamp::MIN));
     }
 }
 
