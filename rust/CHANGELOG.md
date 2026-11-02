@@ -10,6 +10,8 @@ Changes to River for Go are recorded in the [repository changelog](../CHANGELOG.
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-11-02
+
 ### Changed
 
 - **Breaking:** Replace Chrono with Jiff 0.2 throughout the Rust API. Job timestamps, insertion options, retry hooks, periodic schedules, and test helpers now use `jiff::Timestamp`; River re-exports Jiff as `riverqueue::jiff`. Database formats and canonical timestamp JSON remain unchanged. [PR #1567](https://github.com/riverqueue/river/pull/1567).

@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-11-02
+
 ### Added
 
 - **Breaking:** Added `client.jobs()` for job reads, cancellation, completion, deletion, retries, and updates, removing the corresponding flat `Client` methods. Insertions remain on `Client`. [PR #1569](https://github.com/riverqueue/river/pull/1569).
