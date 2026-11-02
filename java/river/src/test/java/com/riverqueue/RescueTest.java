@@ -186,7 +186,7 @@ class RescueTest {
       write.get(2, TimeUnit.SECONDS);
       release.complete(null);
       maintained.get(5, TimeUnit.SECONDS);
-      var updated = client.get(job.id());
+      var updated = client.jobs().get(job.id());
       assertEquals(Job.State.RUNNING, updated.state());
       assertEquals(2, updated.attempt());
       assertTrue(updated.errors().isEmpty());
@@ -285,7 +285,7 @@ class RescueTest {
               case "disabled", "long" -> Job.State.RUNNING;
               default -> Job.State.DISCARDED;
             };
-        assertEquals(expected, client.get(entry.getValue()).state(), entry.getKey());
+        assertEquals(expected, client.jobs().get(entry.getValue()).state(), entry.getKey());
       }
     }
     assertEquals("timeout error", errors.remove().getMessage());
@@ -381,7 +381,7 @@ class RescueTest {
               .build()
               .start()) {
         maintained.get(5, TimeUnit.SECONDS);
-        var rescued = client.get(inserted.id());
+        var rescued = client.jobs().get(inserted.id());
         assertEquals(Job.State.AVAILABLE, rescued.state());
         var attempt = worked.get(5, TimeUnit.SECONDS);
         assertEquals(inserted.id(), attempt.id());

@@ -169,7 +169,7 @@ public final class WorkContext<A> {
 
   /** Completes this attempt atomically with application writes in the supplied transaction. */
   public Job<A> complete(Connection transaction) {
-    return client.complete(transaction, job, metadataUpdates());
+    return client.jobs().complete(transaction, job, metadataUpdates());
   }
 
   public void discard(String reason) {
@@ -218,8 +218,14 @@ public final class WorkContext<A> {
     return failure;
   }
 
-  public void output(Object value) {
-    metadata(Protocol.METADATA_OUTPUT, value);
+  /**
+   * Buffers output until the attempt finishes. Throws {@link IllegalArgumentException} if its
+   * encoded UTF-8 JSON exceeds 32 MiB, preserving any previously buffered output.
+   */
+  public synchronized void output(Object value) {
+    var output = Json.tree(value).deepCopy();
+    RecordedOutput.checkSize(output);
+    metadata.set(Protocol.METADATA_OUTPUT, output);
   }
 
   private Job<A> persistCheckpoint(Connection transaction, ObjectNode updates) {

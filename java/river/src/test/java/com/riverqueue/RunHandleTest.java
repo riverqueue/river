@@ -96,7 +96,7 @@ class RunHandleTest {
       var inserted =
           client.insert(TYPE, "cancel", InsertOptions.builder().maxAttempts(1).build()).job();
       var context = entered.get(5, TimeUnit.SECONDS);
-      if (cause == WorkContext.Cancellation.REMOTE) client.cancel(inserted.id());
+      if (cause == WorkContext.Cancellation.REMOTE) client.jobs().cancel(inserted.id());
       else context.requestCancellation(cause);
       var event = outcome.get(5, TimeUnit.SECONDS);
       var expected =
@@ -107,7 +107,7 @@ class RunHandleTest {
                   : Job.State.DISCARDED;
       assertEquals(cause, context.cancellation());
       assertEquals(expected, event.job().state());
-      var job = client.get(inserted.id());
+      var job = client.jobs().get(inserted.id());
       assertEquals(expected, job.state());
       assertEquals(interrupted ? 1 : 0, job.errors().size());
       assertEquals(1, job.attempt());
@@ -161,7 +161,7 @@ class RunHandleTest {
       var job = client.insert(TYPE, "changed").job();
       changed.get(5, TimeUnit.SECONDS);
       workers.stop();
-      assertEquals(state, client.get(job.id()).state());
+      assertEquals(state, client.jobs().get(job.id()).state());
       var expected =
           switch (state) {
             case AVAILABLE, RETRYABLE -> Client.EventKind.JOB_FAILED;
@@ -212,7 +212,7 @@ class RunHandleTest {
         assertNotNull(
             event, "An interrupted handler must not strand completion or its worker slot");
         assertEquals(job.id(), event.job().id());
-        assertEquals(Job.State.COMPLETED, client.get(job.id()).state());
+        assertEquals(Job.State.COMPLETED, client.jobs().get(job.id()).state());
       }
       assertEquals(3, attempts.get());
       assertEquals(1, reported.size());
@@ -283,9 +283,9 @@ class RunHandleTest {
       assertNotNull(finalized.poll(5, TimeUnit.SECONDS), "Every committed claim must settle");
       workers.stop();
       assertEquals(java.util.List.of(good.id()), java.util.List.copyOf(handled));
-      assertEquals(Job.State.DISCARDED, client.get(bad.id()).state());
-      assertEquals(Job.State.COMPLETED, client.get(good.id()).state());
-      assertEquals(1, client.get(bad.id()).errors().size());
+      assertEquals(Job.State.DISCARDED, client.jobs().get(bad.id()).state());
+      assertEquals(Job.State.COMPLETED, client.jobs().get(good.id()).state());
+      assertEquals(1, client.jobs().get(bad.id()).errors().size());
       assertEquals(2, attempts.get());
       // A rolled-back completion batch may report the same failure for both claims.
       assertFalse(reported.isEmpty());
@@ -325,7 +325,7 @@ class RunHandleTest {
       assertNull(context.get(5, TimeUnit.SECONDS).cancellation());
       release.countDown();
       assertEquals(Client.EventKind.JOB_COMPLETED, completed.get(5, TimeUnit.SECONDS).kind());
-      assertEquals(Job.State.COMPLETED, client.get(job.id()).state());
+      assertEquals(Job.State.COMPLETED, client.jobs().get(job.id()).state());
     } finally {
       release.countDown();
       workers.stopAndCancel();
@@ -745,7 +745,7 @@ class RunHandleTest {
         var event = completed.poll(5, TimeUnit.SECONDS);
         assertNotNull(event, "Callback failure must not strand the attempt or its worker slot");
         assertEquals(inserted.job().id(), event.job().id());
-        assertEquals(Job.State.COMPLETED, client.get(event.job().id()).state());
+        assertEquals(Job.State.COMPLETED, client.jobs().get(event.job().id()).state());
       }
     }
     assertEquals(2, handled.get());
@@ -881,7 +881,7 @@ class RunHandleTest {
       assertEquals(
           interrupted ? Client.EventKind.JOB_INTERRUPTED : Client.EventKind.JOB_COMPLETED,
           event.kind());
-      var job = client.get(inserted.id());
+      var job = client.jobs().get(inserted.id());
       assertEquals(interrupted ? Job.State.AVAILABLE : Job.State.COMPLETED, job.state());
       assertEquals(interrupted ? 0 : 1, job.attempt());
       assertTrue(job.errors().isEmpty());
@@ -951,7 +951,7 @@ class RunHandleTest {
       assertEquals(
           cancel ? Client.EventKind.JOB_INTERRUPTED : Client.EventKind.JOB_COMPLETED, event.kind());
       workers.stop();
-      var job = client.get(inserted.id());
+      var job = client.jobs().get(inserted.id());
       assertEquals(cancel ? Job.State.AVAILABLE : Job.State.COMPLETED, job.state());
       assertEquals(cancel ? 0 : 1, job.attempt());
       assertTrue(job.errors().isEmpty());

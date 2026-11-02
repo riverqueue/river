@@ -723,7 +723,7 @@ public final class RunHandle implements AutoCloseable {
                         if (result.next()) rows.add(river.readPartial(result).job());
                         else {
                           try {
-                            rows.add(river.get(c, completion.original.id()));
+                            rows.add(river.jobs().get(c, completion.original.id()));
                           } catch (RiverException error) {
                             if (error.code() != RiverException.Code.NOT_FOUND) throw error;
                             rows.add(null);

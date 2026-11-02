@@ -2298,7 +2298,7 @@
         "bulk_delete_safety"
       ],
       "source": "delete_many_params.go:river.JobDeleteManyParams.First",
-      "java_surface": "JobQuery and Client.deleteMany"
+      "java_surface": "JobQuery and Jobs.deleteMany"
     },
     {
       "applicability": "api_equivalent",
@@ -2310,7 +2310,7 @@
         "bulk_delete_safety"
       ],
       "source": "delete_many_params.go:river.JobDeleteManyParams.IDs",
-      "java_surface": "JobQuery and Client.deleteMany"
+      "java_surface": "JobQuery and Jobs.deleteMany"
     },
     {
       "applicability": "api_equivalent",
@@ -2322,7 +2322,7 @@
         "bulk_delete_safety"
       ],
       "source": "delete_many_params.go:river.JobDeleteManyParams.Kinds",
-      "java_surface": "JobQuery and Client.deleteMany"
+      "java_surface": "JobQuery and Jobs.deleteMany"
     },
     {
       "applicability": "api_equivalent",
@@ -2331,7 +2331,7 @@
       "id": "job_delete_many_params.Priorities",
       "rationale": "Portable bulk-delete filter by priority; not yet accepted by the adapter's delete_many method.",
       "source": "delete_many_params.go:river.JobDeleteManyParams.Priorities",
-      "java_surface": "JobQuery and Client.deleteMany"
+      "java_surface": "JobQuery and Jobs.deleteMany"
     },
     {
       "applicability": "api_equivalent",
@@ -2343,7 +2343,7 @@
         "bulk_delete_safety"
       ],
       "source": "delete_many_params.go:river.JobDeleteManyParams.Queues",
-      "java_surface": "JobQuery and Client.deleteMany"
+      "java_surface": "JobQuery and Jobs.deleteMany"
     },
     {
       "applicability": "api_equivalent",
@@ -2355,7 +2355,7 @@
         "bulk_delete_safety"
       ],
       "source": "delete_many_params.go:river.JobDeleteManyParams.States",
-      "java_surface": "JobQuery and Client.deleteMany"
+      "java_surface": "JobQuery and Jobs.deleteMany"
     },
     {
       "applicability": "api_equivalent",
@@ -2367,7 +2367,7 @@
         "bulk_delete_safety"
       ],
       "source": "delete_many_params.go:river.JobDeleteManyParams.UnsafeAll",
-      "java_surface": "JobQuery and Client.deleteMany"
+      "java_surface": "JobQuery and Jobs.deleteMany"
     },
     {
       "applicability": "api_equivalent",

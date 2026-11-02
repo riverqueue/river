@@ -2,6 +2,7 @@
 
 require "timeout"
 require "riverqueue/testing"
+require_relative "recorded_output_shared_examples"
 require_relative "runtime_draining_shared_examples"
 require_relative "runtime_finishing_shared_examples"
 require_relative "transactional_completion_shared_examples"
@@ -247,6 +248,7 @@ end
 RSpec.shared_examples "client driver end to end" do
   it_behaves_like "cancellation while draining"
   it_behaves_like "externally claimed job finalization"
+  it_behaves_like "recorded output size limit"
   it_behaves_like "transactional job completion"
   it "keeps an omitted cursor-only step recoverable" do
     received = []

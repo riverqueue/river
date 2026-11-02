@@ -6,6 +6,7 @@ import com.riverqueue.InsertOptions;
 import com.riverqueue.Job;
 import com.riverqueue.JobQuery;
 import com.riverqueue.JobType;
+import com.riverqueue.JobUpdateOptions;
 import com.riverqueue.Json;
 import com.riverqueue.Migrator;
 import com.riverqueue.RetryPolicy;
@@ -269,29 +270,26 @@ public final class Adapter implements AutoCloseable {
         river = runtime.instrument(new Client(database));
         yield Json.object();
       }
-      case "get" -> normalized(scoped(params).get(params.path("id").asLong()));
-      case "tx_get" -> normalized(river.get(transaction(params), params.path("id").asLong()));
-      case "list" -> page(river.list(query(params)));
-      case "tx_list" -> page(river.list(transaction(params), query(params)));
-      case "cancel" -> normalized(river.cancel(params.path("id").asLong()));
-      case "tx_cancel" -> normalized(river.cancel(transaction(params), params.path("id").asLong()));
-      case "delete" -> normalized(river.delete(params.path("id").asLong()));
-      case "tx_delete" -> normalized(river.delete(transaction(params), params.path("id").asLong()));
-      case "retry" -> normalized(river.retry(params.path("id").asLong()));
-      case "tx_retry" -> normalized(river.retry(transaction(params), params.path("id").asLong()));
-      case "update" ->
-          normalized(
-              river.transaction(
-                  c ->
-                      params.has("output")
-                          ? river.output(c, params.path("id").asLong(), params.path("output"))
-                          : river.get(c, params.path("id").asLong())));
+      case "get" -> normalized(scoped(params).jobs().get(params.path("id").asLong()));
+      case "tx_get" ->
+          normalized(river.jobs().get(transaction(params), params.path("id").asLong()));
+      case "list" -> page(river.jobs().list(query(params)));
+      case "tx_list" -> page(river.jobs().list(transaction(params), query(params)));
+      case "cancel" -> normalized(river.jobs().cancel(params.path("id").asLong()));
+      case "tx_cancel" ->
+          normalized(river.jobs().cancel(transaction(params), params.path("id").asLong()));
+      case "delete" -> normalized(river.jobs().delete(params.path("id").asLong()));
+      case "tx_delete" ->
+          normalized(river.jobs().delete(transaction(params), params.path("id").asLong()));
+      case "retry" -> normalized(river.jobs().retry(params.path("id").asLong()));
+      case "tx_retry" ->
+          normalized(river.jobs().retry(transaction(params), params.path("id").asLong()));
+      case "update" -> normalized(river.jobs().update(params.path("id").asLong(), updates(params)));
       case "tx_update" ->
           normalized(
-              params.has("output")
-                  ? river.output(
-                      transaction(params), params.path("id").asLong(), params.path("output"))
-                  : river.get(transaction(params), params.path("id").asLong()));
+              river
+                  .jobs()
+                  .update(transaction(params), params.path("id").asLong(), updates(params)));
       case "delete_many" ->
           Json.object()
               .set(
@@ -300,8 +298,10 @@ public final class Adapter implements AutoCloseable {
                       river
                           .transaction(
                               c ->
-                                  river.deleteMany(
-                                      c, query(params), params.path("all").asBoolean(false)))
+                                  river
+                                      .jobs()
+                                      .deleteMany(
+                                          c, query(params), params.path("all").asBoolean(false)))
                           .stream()
                           .map(Adapter::normalized)
                           .toList()));
@@ -328,6 +328,7 @@ public final class Adapter implements AutoCloseable {
                   "jobs",
                   Json.tree(
                       river
+                          .jobs()
                           .deleteMany(
                               transaction(params),
                               query(params),
@@ -592,6 +593,13 @@ public final class Adapter implements AutoCloseable {
         value.path("by_queue").asBoolean(false),
         states,
         value.path("exclude_kind").asBoolean(false));
+  }
+
+  private static JobUpdateOptions updates(JsonNode params) {
+    var builder = JobUpdateOptions.builder();
+    if (params.has("metadata")) builder.metadata(params.path("metadata"));
+    if (params.has("output")) builder.output(params.path("output"));
+    return builder.build();
   }
 
   private void validate(JsonNode schema, JsonNode value) {

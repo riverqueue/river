@@ -10,10 +10,10 @@ Java exposes every Go helper. Stored values and protocol behavior still follow G
 | `JobArgs`, `Job[T]`, worker interfaces and registration | `JobType<A>`, `Job<A>`, `Workers.add(type, lambda)`, `Client.Builder.worker` | Records need no River interface; explicit kinds stay stable when Java classes are renamed. |
 | `Insert`, `InsertTx`, `InsertMany`, `InsertManyTx` | `insert`, `insertMany`, connection-first overloads | Arguments are typed; results contain persisted `Job<JsonNode>` rows, including cross-kind duplicates. Mixed batches use `JobType.submission`. |
 | `InsertOpts`, `UniqueOpts`, struct tags | `InsertOptions`, `Unique`, `JobType.uniqueBy` | Named builders and fluent options avoid positional flags. Explicit JSON paths replace struct tags. |
-| `JobGet`, `JobList`, cursor/order/filter params | `get`, `JobQuery`, `JobQuery.Page` | Raw reads use `JsonNode`; `get(id, type)` checks the kind and decodes a known argument type. Pagination remains explicit. |
-| `JobCancel`, `JobDelete`, `JobDeleteMany`, `JobRetry` and transaction variants | `cancel`, `delete`, `deleteMany`, `retry`, connection-first overloads | Short operation names are unambiguous on `Client`; transaction ownership stays visible in the argument list. |
-| `JobUpdate` output parameter, `RecordOutput` | `Client.output`, `WorkContext.output` | Names describe the supported operation; attempt output is buffered until completion. |
-| `JobCompleteTx` | `Client.complete(connection, job)`, `WorkContext.complete(connection)` | Completion keeps `Job<A>` and commits with application changes. Only a running attempt can be completed. A committed completion remains authoritative if the handler subsequently throws. |
+| `JobGet`, `JobList`, cursor/order/filter params | `client.jobs().get/list`, `JobQuery`, `JobQuery.Page` | Raw reads use `JsonNode`; `jobs().get(id, type)` checks the kind and decodes a known argument type. Pagination remains explicit. |
+| `JobCancel`, `JobDelete`, `JobDeleteMany`, `JobRetry` and transaction variants | `client.jobs().cancel/delete/deleteMany/retry`, connection-first overloads | Job operations live on `Jobs`, alongside `Client.queues()`; transaction ownership stays visible in the argument list. |
+| `JobUpdate`, `JobUpdateTx`, `RecordOutput` | `client.jobs().update`, `JobUpdateOptions`, `WorkContext.output` | Updates merge metadata and set output immediately; connection-first overloads support transactions. Attempt output remains buffered until completion. |
+| `JobCompleteTx` | `client.jobs().complete(connection, job)`, `WorkContext.complete(connection)` | Completion keeps `Job<A>` and commits with application changes. Only a running attempt can be completed. A committed completion remains authoritative if the handler subsequently throws. |
 | Context client, cancellation, cancel/snooze errors | `WorkContext.client`, cancellation methods, `cancel`, `discard`, `snooze` | Java has no Go context parameter convention. Control methods end the attempt; virtual-thread interruption supplements cooperative cancellation. |
 | Plugins, hooks, and middleware | `Plugin`, `HookInsertBegin`, `HookPeriodicJobsStart`, `HookWorkBegin`, `HookWorkEnd`, `JobInsertMiddleware`, `WorkerMiddleware` | `withPlugins` activates every hook and middleware interface on a value. `withHooks` and `withMiddleware` restrict registration to that side. Plugins run first, as in Go. Functional interfaces support lambdas and checked exceptions. |
 | `ResumableSetStepTx`, `ResumableSetStepCursorTx` | `WorkContext.checkpoint(connection[, cursor])` | Checkpoints commit with application writes; failed transactions leave the last committed progress intact. |
@@ -57,8 +57,9 @@ Java exposes every Go helper. Stored values and protocol behavior still follow G
   `Pilot`, `Client.Driver`, protocol JSON helpers, and explicitly marked companion
   methods are not stable application extension APIs.
 
-Options copy collections and metadata on construction; `InsertOptions.metadata()`
-and `JobQuery.metadata()` also return copies. Job/result JSON values are snapshots,
+Options copy collections and metadata on construction; `InsertOptions.metadata()`,
+`JobQuery.metadata()`, and `JobUpdateOptions` JSON accessors also return copies.
+Job/result JSON values are snapshots,
 not database-backed objects. Builders are mutable and should be confined to
 configuration code.
 

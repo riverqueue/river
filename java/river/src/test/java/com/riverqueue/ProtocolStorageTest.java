@@ -49,7 +49,7 @@ class ProtocolStorageTest {
             .build()
             .start()) {
       var job = claimed.get(5, TimeUnit.SECONDS);
-      var metadata = client.get(job.id()).metadata();
+      var metadata = client.jobs().get(job.id()).metadata();
       assertTrue(metadata.required("periodic").asBoolean());
       assertEquals(
           "conformance_periodic",
@@ -108,7 +108,7 @@ class ProtocolStorageTest {
         });
     assertEquals(
         fixture.required("attempt_error"),
-        Json.tree(client.get(inserted.id()).errors().getFirst()));
+        Json.tree(client.jobs().get(inserted.id()).errors().getFirst()));
 
     var completed = new CompletableFuture<Client.Event>();
     var writeFailure = new CompletableFuture<java.sql.SQLException>();
@@ -144,16 +144,16 @@ class ProtocolStorageTest {
         assertNull(
             writeFailure.get(10, TimeUnit.SECONDS), "Rescue callbacks must not hold the writer");
       maintained.get(5, TimeUnit.SECONDS);
-      var rescued = client.get(inserted.id());
+      var rescued = client.jobs().get(inserted.id());
       assertEquals(Job.State.RETRYABLE, rescued.state());
       if (!postgres) assertEquals(2, rescued.priority());
       assertEquals(3, rescued.metadata().required(rescueKey).asInt());
       assertEquals(2, rescued.errors().size());
       assertEquals(fixture.required("attempt_error"), Json.tree(rescued.errors().getFirst()));
 
-      client.retry(inserted.id());
+      client.jobs().retry(inserted.id());
       assertEquals(inserted.id(), completed.get(5, TimeUnit.SECONDS).job().id());
-      var job = client.get(inserted.id());
+      var job = client.jobs().get(inserted.id());
       assertEquals(Job.State.COMPLETED, job.state());
       assertEquals(
           Json.tree(Map.of("ok", true)),
@@ -199,7 +199,7 @@ class ProtocolStorageTest {
             }
             return null;
           });
-      var job = client.get(inserted.id());
+      var job = client.jobs().get(inserted.id());
       assertEquals(state, job.state().value());
       assertEquals(List.of(job.state()), job.uniqueStates());
       assertEquals(bit, job.uniqueStates().getFirst().bit());

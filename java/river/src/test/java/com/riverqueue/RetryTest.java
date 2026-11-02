@@ -52,10 +52,10 @@ class RetryTest {
           }
           return null;
         });
-    var before = client.get(inserted.id());
+    var before = client.jobs().get(inserted.id());
     var notifications = new AtomicInteger();
     client.onInsertCommit(notifications::incrementAndGet);
-    var retried = client.retry(inserted.id());
+    var retried = client.jobs().retry(inserted.id());
     if (state == Job.State.AVAILABLE || state == Job.State.RUNNING) {
       assertEquals(before, retried);
       assertEquals(0, notifications.get());
@@ -139,15 +139,15 @@ class RetryTest {
       if (mode.equals("transaction")) {
         try (var connection = database.connection()) {
           connection.setAutoCommit(false);
-          assertEquals(Job.State.AVAILABLE, actor.retry(connection, inserted.id()).state());
-          assertEquals(Job.State.SCHEDULED, client.get(inserted.id()).state());
+          assertEquals(Job.State.AVAILABLE, actor.jobs().retry(connection, inserted.id()).state());
+          assertEquals(Job.State.SCHEDULED, client.jobs().get(inserted.id()).state());
           assertFalse(worked.isDone());
           connection.rollback();
-          assertEquals(Job.State.SCHEDULED, client.get(inserted.id()).state());
-          actor.retry(connection, inserted.id());
+          assertEquals(Job.State.SCHEDULED, client.jobs().get(inserted.id()).state());
+          actor.jobs().retry(connection, inserted.id());
           connection.commit();
         }
-      } else actor.retry(inserted.id());
+      } else actor.jobs().retry(inserted.id());
       assertEquals(inserted.id(), worked.get(5, TimeUnit.SECONDS).id());
     }
     assertTrue(errors.isEmpty(), () -> "Unexpected worker errors: " + errors);
@@ -163,9 +163,9 @@ class RetryTest {
             .insert(
                 TYPE, "retry", InsertOptions.builder().metadata(Map.of("preserved", true)).build())
             .job();
-    assertTrue(client.cancel(inserted.id()).metadata().has("cancel_attempted_at"));
+    assertTrue(client.jobs().cancel(inserted.id()).metadata().has("cancel_attempted_at"));
 
-    var retried = client.retry(inserted.id());
+    var retried = client.jobs().retry(inserted.id());
     assertEquals(Job.State.AVAILABLE, retried.state());
     assertFalse(retried.metadata().has("cancel_attempted_at"));
     assertTrue(retried.metadata().path("preserved").asBoolean());
@@ -193,14 +193,14 @@ class RetryTest {
                   client.transaction(
                       connection,
                       nested -> {
-                        client.retry(nested, inserted.id());
+                        client.jobs().retry(nested, inserted.id());
                         throw new IllegalStateException("roll back retry");
                       }));
-          assertEquals(inserted, client.get(connection, inserted.id()));
+          assertEquals(inserted, client.jobs().get(connection, inserted.id()));
           assertEquals(0, notifications.get(), "Callbacks must wait for the outer commit");
           return null;
         });
-    assertEquals(inserted, client.get(inserted.id()));
+    assertEquals(inserted, client.jobs().get(inserted.id()));
     assertEquals(earlierInsert ? 1 : 0, notifications.get());
   }
 
@@ -224,12 +224,17 @@ class RetryTest {
                 "CREATE TRIGGER reject_insert BEFORE INSERT ON river_notification "
                     + "WHEN NEW.topic = 'river_insert' BEGIN SELECT RAISE(ABORT, 'reject insert'); END");
           }
-          assertThrows(RiverException.class, () -> client.retry(connection, inserted.id()));
-          assertEquals(inserted, client.get(connection, inserted.id()));
-          client.output(connection, inserted.id(), "outer transaction remains usable");
+          assertThrows(RiverException.class, () -> client.jobs().retry(connection, inserted.id()));
+          assertEquals(inserted, client.jobs().get(connection, inserted.id()));
+          client
+              .jobs()
+              .update(
+                  connection,
+                  inserted.id(),
+                  JobUpdateOptions.builder().output("outer transaction remains usable").build());
           return null;
         });
-    var job = client.get(inserted.id());
+    var job = client.jobs().get(inserted.id());
     assertEquals(Job.State.SCHEDULED, job.state());
     assertEquals(
         "outer transaction remains usable",

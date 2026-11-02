@@ -330,7 +330,7 @@ class SchedulingTest {
             .build()
             .start()) {
       maintained.get(5, TimeUnit.SECONDS);
-      assertEquals(1, client.list(JobQuery.all()).jobs().size());
+      assertEquals(1, client.jobs().list(JobQuery.all()).jobs().size());
       assertEquals("schedule failed", errors.remove().getMessage());
       assertTrue(errors.isEmpty());
     }
@@ -485,7 +485,7 @@ class SchedulingTest {
       }
       release.complete(null);
       maintained.get(5, TimeUnit.SECONDS);
-      assertTrue(client.list(JobQuery.all()).jobs().isEmpty());
+      assertTrue(client.jobs().list(JobQuery.all()).jobs().isEmpty());
     } finally {
       release.complete(null);
       workers.stop();

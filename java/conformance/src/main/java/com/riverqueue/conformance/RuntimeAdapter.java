@@ -72,7 +72,7 @@ final class RuntimeAdapter {
       case "wait" -> waitFor(river, params);
       case "work" -> {
         if (workers != null) throw new IllegalArgumentException("Client already running");
-        var job = river.get(params.path("id").asLong());
+        var job = river.jobs().get(params.path("id").asLong());
         var start =
             Json.object()
                 .put("client_id", params.path("client_id").asString("java-conformance-worker"))
@@ -260,7 +260,7 @@ final class RuntimeAdapter {
   private JsonNode waitFor(Client river, JsonNode params) throws Exception {
     long deadline = System.nanoTime() + Duration.ofSeconds(20).toNanos();
     while (System.nanoTime() < deadline) {
-      var job = river.get(params.path("id").asLong());
+      var job = river.jobs().get(params.path("id").asLong());
       boolean match = params.has("states") ? false : job.state().isFinalized();
       for (var state : params.path("states"))
         if (job.state().value().equals(state.asString())) match = true;

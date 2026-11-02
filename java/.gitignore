@@ -1,5 +1,8 @@
 target/
 .idea/
 *.iml
+.classpath
+.project
+.settings/
 .conformance/
 __pycache__/
