@@ -155,14 +155,12 @@ shared_examples "driver shared examples" do
     expect(client.job_get(job.id)).to have_attributes(state: "available", metadata: job.metadata)
   end
 
-  it "does not clean up a finalized job retried after cleanup selected it" do
+  it "does not clean up a finalized job retried before the cleanup write" do
     job = client.insert(SimpleArgs.new(job_num: 1)).job
     client.job_update(job.id, River::JobUpdateParams.new(finalized_at: Time.now.utc - 120, state: River::JOB_STATE_COMPLETED))
     driver.define_singleton_method(:runtime_query_rows) do |sql|
-      rows = super(sql)
-      job_retry(job.id) if sql.start_with?("SELECT id FROM river_job WHERE")
-
-      rows
+      job_retry(job.id) if sql.start_with?("DELETE FROM river_job")
+      super(sql)
     end
 
     expect(driver.job_delete_finalized(retention: {River::JOB_STATE_COMPLETED => 60})).to eq(0)

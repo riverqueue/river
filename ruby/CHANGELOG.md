@@ -9,6 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Reduce database overhead in the Active Record and Sequel drivers: use `RETURNING` to avoid redundant row fetches, claim batches and clean up finalized jobs in one statement, and omit unnecessary transactions. Return Active Record connections to the pool after operations and avoid allocating models for job reads. Avoid slow Postgres fetching-index scans for updates and deletes targeting a job by ID when state statistics are stale. [PR #1574](https://github.com/riverqueue/river/pull/1574).
+- Prevent ordinary job wakeups from interrupting maintenance error backoff and causing rapid retries during persistent failures. [PR #1574](https://github.com/riverqueue/river/pull/1574).
 - Enforce the 32 MiB encoded UTF-8 JSON limit for `Job#output=`, preserving previous output when validation fails. [PR #1569](https://github.com/riverqueue/river/pull/1569).
 
 ## [0.15.0] - 2026-10-30

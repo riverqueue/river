@@ -8,6 +8,46 @@ require_relative "runtime_finishing_shared_examples"
 require_relative "transactional_completion_shared_examples"
 
 RSpec.shared_examples "Postgres state update races" do
+  it "does not clean a job retried while cleanup waits for its row lock" do
+    client = River::Client.new(@driver)
+    job = client.insert(River::JobArgsHash.new(:race, {})).job
+    client.job_update(job.id, state: :completed, finalized_at: Time.now.utc - 120)
+    locked, release, started = Queue.new, Queue.new, Queue.new
+    retrier = Thread.new do
+      @driver.transaction do
+        client.job_retry(job.id)
+        locked << true
+        release.pop
+      end
+    end
+    Timeout.timeout(5) { locked.pop }
+    cleaner = Thread.new do
+      @driver.transaction do
+        @driver.send(:runtime_execute, "SET LOCAL statement_timeout = '5s'")
+        pid = @driver.send(:runtime_query_rows, "SELECT pg_backend_pid() AS pid").first.values.first
+        started << pid
+        @driver.job_delete_finalized(retention: {completed: 60})
+      end
+    end
+    pid = Timeout.timeout(5) { started.pop }
+    Timeout.timeout(5) do
+      loop do
+        blockers = @driver.send(:runtime_query_rows, "SELECT cardinality(pg_blocking_pids(#{Integer(pid)})) AS count").first.values.first
+        break if blockers.positive?
+
+        Thread.pass
+      end
+    end
+    release << true
+
+    expect(Timeout.timeout(5) { cleaner.value }).to eq(0)
+    expect(client.job_get(job.id).state).to eq("available")
+  ensure
+    release << true if release
+    retrier&.join
+    cleaner&.join
+  end
+
   it "skips a concurrent retry when selecting jobs for bulk deletion" do
     client = River::Client.new(@driver)
     first, second = 2.times.map do

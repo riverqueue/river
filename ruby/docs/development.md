@@ -91,6 +91,56 @@ for synchronizing the SQL with upstream Go.
 for both SQL adapters and Rails. Generate fixtures first with
 `make generate/fixtures` when invoking RSpec directly.
 
+## Benchmark database operations
+
+Run the same driver microbenchmarks against this checkout and an unchanged
+checkout, using the installed gems from the current bundle:
+
+```sh
+RIVER_BENCH_ROOT=/path/to/baseline ITERATIONS=200 SAMPLES=7 \
+  bundle exec ruby scripts/benchmark_driver.rb > /tmp/river-before.json
+ITERATIONS=200 SAMPLES=7 \
+  bundle exec ruby scripts/benchmark_driver.rb > /tmp/river-after.json
+```
+
+The script tests ActiveRecord and Sequel against local Postgres and temporary
+file-backed SQLite databases. `TEST_DATABASE_URL` overrides the default
+`postgres://localhost/river_test`. It creates and removes its own Postgres
+schemas, leaving existing tables untouched. `RIVER_BENCH_ROOT` is the repository
+root, not its `ruby/` directory.
+
+Each operation warms up ten times, then reports the median of the per-sample
+mean durations, allocations per operation, and a separate SQL trace. Fixture
+resets and SQL recording are outside the timed sections. Run comparisons
+sequentially, with tests and other benchmarks stopped; repeat in reverse order
+to check local timing variance. These measurements describe database operations,
+not end-to-end worker throughput, and include the adapters' default SQLite
+journal and synchronization settings.
+
+The thread benchmark performs a metadata update in a new thread and explicitly
+reaps the pool after it exits. This includes the cost of reclaiming a leaked
+connection; it also records how many dead leases remain after a thread finishes.
+SQL traces are omitted for this case because SQLite tracing is connection-local.
+
+To examine completion plans with stale state statistics, use:
+
+```sh
+TEST_DATABASE_URL=postgres://localhost:55436/river_test \
+  RIVER_BENCH_ROOT=/path/to/baseline \
+  bundle exec ruby scripts/benchmark_completion.rb > /tmp/completion-before.json
+TEST_DATABASE_URL=postgres://localhost:55436/river_test \
+  bundle exec ruby scripts/benchmark_completion.rb > /tmp/completion-after.json
+```
+
+This Postgres-only benchmark runs both adapters. It creates 50,000 jobs in
+unclustered ID order, analyzes the table, then changes 5,000 jobs to running
+without updating the statistics. It times completion separately from claiming
+and captures `EXPLAIN (ANALYZE, BUFFERS)` for the actual completion SQL. Override
+`JOBS`, `RUNNING_JOBS`, `ITERATIONS`, and `SAMPLES` to vary the workload; set
+`RUNNING_JOBS=0` for the less contentious case. Autovacuum is disabled only on
+the disposable benchmark table so both runs use the same statistics. This
+models a burst of state changes rather than steady-state worker throughput.
+
 ## Conformance and migrations
 
 `make test/conformance` checks shared Go-generated fixtures without Postgres.

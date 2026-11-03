@@ -47,9 +47,27 @@ module TransactionHelpers
 
   # Returns the SQL that the driver's adapter sends while the block runs.
   def sql_statements(driver)
+    if driver.respond_to?(:connection_class)
+      statements = []
+      if driver.migration_backend == :sqlite
+        driver.connection_class.connection_pool.with_connection do |connection|
+          connection.raw_connection.trace { |sql| statements << sql }
+          begin
+            yield
+          ensure
+            connection.raw_connection.trace(nil)
+          end
+        end
+      else
+        callback = ->(_name, _start, _finish, _id, payload) { statements << payload[:sql] }
+        ActiveSupport::Notifications.subscribed(callback, "sql.active_record") { yield }
+      end
+      return statements
+    end
+
     db = driver.instance_variable_get(:@db)
     output = StringIO.new
-    logger = Logger.new(output, formatter: ->(_severity, _time, _program, message) { "#{message}\n" })
+    logger = Logger.new(output, formatter: ->(_severity, _time, _program, message) { "#{message.tr("\n", " ")}\n" })
     db.loggers << logger
     begin
       yield

@@ -58,12 +58,14 @@ module River::Driver
     def job_insert_many(insert_params_array)
       return [] if insert_params_array.empty?
 
-      return sqlite_job_insert_many(insert_params_array) if @is_sqlite
-
-      transaction do
-        results = postgres_job_insert_many(insert_params_array)
-        postgres_notify_insert(insert_params_array)
-        results
+      runtime_insert_transaction(insert_params_array) do
+        if @is_sqlite
+          sqlite_job_insert_many(insert_params_array)
+        else
+          results = postgres_job_insert_many(insert_params_array)
+          postgres_notify_insert(insert_params_array)
+          results
+        end
       end
     end
 
@@ -209,6 +211,10 @@ module River::Driver
       @db.run(sql)
     end
 
+    private def runtime_job_columns
+      @is_sqlite ? SQLITE_JOB_COLUMNS : "*"
+    end
+
     private def runtime_job_list_without_params
       job_list(:all)
     end
@@ -270,55 +276,53 @@ module River::Driver
     # matching migration 007 and newer River databases.
     private def sqlite_job_insert_many(insert_params_array)
       nonces = sqlite_insert_nonces(insert_params_array)
-      transaction do
-        jobs = insert_params_array.zip(nonces).map { |param, nonce| sqlite_insert_params_to_hash(param, nonce) }
-        inserted_nonces = nonces.to_h { |nonce| [nonce, true] }
+      jobs = insert_params_array.zip(nonces).map { |param, nonce| sqlite_insert_params_to_hash(param, nonce) }
+      inserted_nonces = nonces.to_h { |nonce| [nonce, true] }
 
-        sql = <<~SQL
-          INSERT INTO river_job (
-            args,
-            created_at,
-            kind,
-            max_attempts,
-            metadata,
-            priority,
-            queue,
-            scheduled_at,
-            state,
-            tags,
-            unique_key,
-            unique_states
-          )
-          SELECT
-            jsonb(json_extract(value, '$.args')),
-            datetime('now', 'subsec'),
-            cast(json_extract(value, '$.kind') AS text),
-            cast(json_extract(value, '$.max_attempts') AS integer),
-            jsonb(json_extract(value, '$.metadata')),
-            cast(json_extract(value, '$.priority') AS integer),
-            cast(json_extract(value, '$.queue') AS text),
-            coalesce(cast(json_extract(value, '$.scheduled_at') AS text), datetime('now', 'subsec')),
-            cast(json_extract(value, '$.state') AS text),
-            jsonb(json_extract(value, '$.tags')),
-            CASE
-              WHEN length(cast(json_extract(value, '$.unique_key') AS text)) = 0 THEN NULL
-              ELSE unhex(cast(json_extract(value, '$.unique_key') AS text))
-            END,
-            nullif(cast(json_extract(value, '$.unique_states') AS integer), 0)
-          FROM json_each(cast(? AS blob))
-          WHERE true
-          ON CONFLICT (unique_key) WHERE #{SQLITE_CONFLICT_WHERE}
-          DO UPDATE SET kind = river_job.kind
-          RETURNING #{SQLITE_JOB_COLUMNS}
-        SQL
+      sql = <<~SQL
+        INSERT INTO river_job (
+          args,
+          created_at,
+          kind,
+          max_attempts,
+          metadata,
+          priority,
+          queue,
+          scheduled_at,
+          state,
+          tags,
+          unique_key,
+          unique_states
+        )
+        SELECT
+          jsonb(json_extract(value, '$.args')),
+          datetime('now', 'subsec'),
+          cast(json_extract(value, '$.kind') AS text),
+          cast(json_extract(value, '$.max_attempts') AS integer),
+          jsonb(json_extract(value, '$.metadata')),
+          cast(json_extract(value, '$.priority') AS integer),
+          cast(json_extract(value, '$.queue') AS text),
+          coalesce(cast(json_extract(value, '$.scheduled_at') AS text), datetime('now', 'subsec')),
+          cast(json_extract(value, '$.state') AS text),
+          jsonb(json_extract(value, '$.tags')),
+          CASE
+            WHEN length(cast(json_extract(value, '$.unique_key') AS text)) = 0 THEN NULL
+            ELSE unhex(cast(json_extract(value, '$.unique_key') AS text))
+          END,
+          nullif(cast(json_extract(value, '$.unique_states') AS integer), 0)
+        FROM json_each(cast(? AS blob))
+        WHERE true
+        ON CONFLICT (unique_key) WHERE #{SQLITE_CONFLICT_WHERE}
+        DO UPDATE SET kind = river_job.kind
+        RETURNING #{SQLITE_JOB_COLUMNS}
+      SQL
 
-        rows = @db.fetch(sql, JSON.generate(jobs)).all
-        sqlite_notify_insert(insert_params_array)
+      rows = @db.fetch(sql, JSON.generate(jobs)).all
+      sqlite_notify_insert(insert_params_array)
 
-        rows.map do |row|
-          metadata = JSON.parse(row[:metadata])
-          [sqlite_to_job_row_from_raw(row), !inserted_nonces.key?(metadata[UNIQUE_INSERT_METADATA_KEY])]
-        end
+      rows.map do |row|
+        job = sqlite_to_job_row_from_raw(row)
+        [job, !inserted_nonces.key?(job.metadata[UNIQUE_INSERT_METADATA_KEY])]
       end
     end
 

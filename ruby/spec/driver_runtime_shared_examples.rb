@@ -301,11 +301,19 @@ RSpec.shared_examples "driver job state machine" do
     end
   end
 
+  it "raises decoding errors from returned rows for administrative updates" do
+    job = insert_job(1)
+    driver.send(:runtime_execute, "UPDATE river_job SET metadata = #{driver.send(:runtime_json, "[]")} WHERE id = #{job.id}")
+
+    expect { driver.job_update(job.id, River::JobUpdateParams.new(max_attempts: 30)) }
+      .to raise_error(River::JobRowDecodeError, /metadata/)
+  end
+
   it "preserves a cancellation committed immediately before the completion update" do
     row = insert_job(1, scheduled_at: now - 1)
     driver.job_claim(id: row.id, attempted_by: "test", now: now)
     cancel_before_write = true
-    driver.define_singleton_method(:runtime_returning_ids) do |sql|
+    driver.define_singleton_method(:runtime_query_rows) do |sql|
       if cancel_before_write
         cancel_before_write = false
         job_cancel(row.id)
@@ -1439,6 +1447,12 @@ RSpec.shared_examples "driver queue and leadership state" do
   it "allows a new leader after expiration" do
     driver.leader_acquire("one", now: now, ttl: 10)
 
+    expect(driver.leader_acquire("two", now: now + 11, ttl: 30)).to be true
+  end
+
+  it "recognizes the same leader without extending its lease" do
+    expect(driver.leader_acquire("one", now: now, ttl: 10)).to be true
+    expect(driver.leader_acquire("one", now: now + 5, ttl: 30)).to be true
     expect(driver.leader_acquire("two", now: now + 11, ttl: 30)).to be true
   end
 
