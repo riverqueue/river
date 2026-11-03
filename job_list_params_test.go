@@ -636,3 +636,28 @@ func Test_JobListParams_toDBParamsWithoutFinalizedIndex(t *testing.T) {
 		})
 	}
 }
+
+func TestJobListParams_Where(t *testing.T) {
+	t.Parallel()
+
+	t.Run("MergesNamedArgsWithoutMutatingThem", func(t *testing.T) {
+		t.Parallel()
+
+		var (
+			namedArgs1 = NamedArgs{"a": 1, "b": 2}
+			namedArgs2 = NamedArgs{"b": 3}
+		)
+
+		params := NewJobListParams().Where("a = @a AND b = @b", namedArgs1, namedArgs2)
+		require.Equal(t, map[string]any{"a": 1, "b": 3}, params.where[0].NamedArgs)
+		require.Equal(t, NamedArgs{"a": 1, "b": 2}, namedArgs1)
+		require.Equal(t, NamedArgs{"b": 3}, namedArgs2)
+	})
+
+	t.Run("NilFirstNamedArgs", func(t *testing.T) {
+		t.Parallel()
+
+		params := NewJobListParams().Where("a = @a", nil, NamedArgs{"a": 1})
+		require.Equal(t, map[string]any{"a": 1}, params.where[0].NamedArgs)
+	})
+}
