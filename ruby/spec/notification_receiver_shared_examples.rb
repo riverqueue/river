@@ -89,9 +89,13 @@ RSpec.shared_examples "notification receiving" do |backend|
       client.start
       listener = receive_signal(listeners)
       receive_signal(fetches)
-      pid = listener.instance_variable_get(:@connection).backend_pid
-      @driver.send(:runtime_execute, "SELECT pg_terminate_backend(#{pid})")
+      connection = listener.instance_variable_get(:@connection)
+      notices = Queue.new
+      # libpq otherwise prints the deliberately terminated connection's FATAL notice.
+      connection.set_notice_receiver { |result| notices << result.error_field(PG::PG_DIAG_SQLSTATE) }
+      @driver.send(:runtime_execute, "SELECT pg_terminate_backend(#{connection.backend_pid})")
       expect(receive_signal(listeners)).not_to equal(listener)
+      expect(receive_signal(notices)).to eq("57P01") # admin_shutdown, independent of server locale
 
       row = River::Client.new(@driver).insert(River::JobArgsHash.new(:notification, {}), queue: :notifications).job
       expect(receive_signal(worked)).to eq(row.id)
