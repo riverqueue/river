@@ -28,6 +28,9 @@ import tools.jackson.databind.JsonNode;
  * application owns its connection pool; inserting jobs does not require a running client.
  */
 public final class Client {
+  /** Default queue name, used when neither insert options nor job-type defaults specify a queue. */
+  public static final String QUEUE_DEFAULT = "default";
+
   private final Builder config;
   private final String id;
   private final List<Consumer<Event>> subscribers = new CopyOnWriteArrayList<>();
