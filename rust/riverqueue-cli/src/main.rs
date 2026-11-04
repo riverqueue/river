@@ -24,7 +24,7 @@ Usage:
 
 Commands:
   migrate-down  Run down migrations
-  migrate-list  List applied migration versions
+  migrate-list  List migrations, marking the latest applied version with *
   migrate-up    Run up migrations
   validate      Check that all migrations are applied
   bench         Benchmark job throughput against a disposable database
