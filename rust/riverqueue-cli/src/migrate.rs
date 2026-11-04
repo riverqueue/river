@@ -1,6 +1,6 @@
 //! Migration commands for River's canonical migration line.
 
-use std::error::Error;
+use std::{error::Error, time::Duration};
 
 #[cfg(feature = "postgres")]
 use riverqueue::database::SchemaName;
@@ -8,7 +8,7 @@ use riverqueue::database::SchemaName;
 use riverqueue_migrate::PostgresMigrator;
 #[cfg(feature = "sqlite")]
 use riverqueue_migrate::SqliteMigrator;
-use riverqueue_migrate::{Direction, MigrateOpts, MigrateResult, ValidateResult};
+use riverqueue_migrate::{Direction, MigrateOpts, MigrateResult, Migration, ValidateResult};
 #[cfg(feature = "postgres")]
 use sqlx::PgPool;
 #[cfg(feature = "sqlite")]
@@ -21,6 +21,7 @@ struct Args {
     dry_run: bool,
     max_steps: Option<usize>,
     schema: Option<String>,
+    show_sql: bool,
     target_version: Option<i64>,
 }
 
@@ -32,6 +33,15 @@ enum CommandMigrator {
 }
 
 impl CommandMigrator {
+    fn all_versions(&self) -> &'static [Migration] {
+        match self {
+            #[cfg(feature = "postgres")]
+            Self::Postgres(_) => PostgresMigrator::all_versions(),
+            #[cfg(feature = "sqlite")]
+            Self::Sqlite(_) => SqliteMigrator::all_versions(),
+        }
+    }
+
     async fn existing_versions(&self) -> Result<Vec<i64>, riverqueue_migrate::Error> {
         match self {
             #[cfg(feature = "postgres")]
@@ -106,18 +116,28 @@ pub(crate) async fn run(
     match args.command.as_str() {
         "migrate-down" => {
             print_migrations(
-                migrator
+                &migrator
                     .migrate(Direction::Down, migrate_opts(&args))
                     .await?,
+                &args,
             );
         }
         "migrate-list" => {
-            for version in migrator.existing_versions().await? {
-                println!("{version:03}");
+            let current = migrator.existing_versions().await?.last().copied();
+            for migration in migrator.all_versions() {
+                let prefix = match current {
+                    Some(version) if version == migration.version => "* ",
+                    Some(_) => "  ",
+                    None => "",
+                };
+                println!("{prefix}{:03} {}", migration.version, migration.name);
             }
         }
         "migrate-up" => {
-            print_migrations(migrator.migrate(Direction::Up, migrate_opts(&args)).await?);
+            print_migrations(
+                &migrator.migrate(Direction::Up, migrate_opts(&args)).await?,
+                &args,
+            );
         }
         "validate" => {
             let result = migrator.validate(args.target_version).await?;
@@ -125,11 +145,52 @@ pub(crate) async fn run(
                 eprintln!("{result}");
                 std::process::exit(2);
             }
-            println!("River migrations valid");
         }
         command => return Err(format!("unknown command {command:?}\n{}", usage()).into()),
     }
     Ok(())
+}
+
+fn format_duration(duration: Duration) -> String {
+    // Match the Go CLI's truncation and duration units, including minutes and hours.
+    let precision = if duration > Duration::from_secs(1) {
+        10_000_000
+    } else if duration < Duration::from_millis(1) {
+        10
+    } else {
+        10_000
+    };
+    let nanos = duration.as_nanos() / precision * precision;
+    if nanos == 0 {
+        return "0s".to_owned();
+    }
+    let mut prefix = String::new();
+    let (value, scale, digits, unit) = if nanos < 1_000 {
+        (nanos, 1, 0, "ns")
+    } else if nanos < 1_000_000 {
+        (nanos, 1_000, 3, "µs")
+    } else if nanos < 1_000_000_000 {
+        (nanos, 1_000_000, 6, "ms")
+    } else {
+        let seconds = nanos / 1_000_000_000;
+        if seconds >= 3_600 {
+            prefix = format!("{}h{}m", seconds / 3_600, seconds / 60 % 60);
+        } else if seconds >= 60 {
+            prefix = format!("{}m", seconds / 60);
+        }
+        (nanos % 60_000_000_000, 1_000_000_000, 9, "s")
+    };
+    let fraction = value % scale;
+    if fraction == 0 {
+        format!("{prefix}{}{unit}", value / scale)
+    } else {
+        let fraction = format!("{fraction:0digits$}");
+        format!(
+            "{prefix}{}.{}{unit}",
+            value / scale,
+            fraction.trim_end_matches('0')
+        )
+    }
 }
 
 fn migrate_opts(args: &Args) -> MigrateOpts {
@@ -163,6 +224,7 @@ fn parse_args(
                 args.max_steps = Some(raw.next().ok_or("--max-steps requires a value")?.parse()?);
             }
             "--schema" => args.schema = Some(raw.next().ok_or("--schema requires a value")?),
+            "--show-sql" => args.show_sql = true,
             "--target-version" => {
                 args.target_version = Some(
                     raw.next()
@@ -180,18 +242,79 @@ fn parse_args(
     Ok(Some(args))
 }
 
-fn print_migrations(result: MigrateResult) {
-    for version in result.versions {
-        println!(
-            "{:03} {:?} {} ({:?})",
-            version.version, result.direction, version.name, version.duration
-        );
-        if !version.sql.is_empty() && version.duration.is_zero() {
-            println!("{}", version.sql);
+fn print_migrations(result: &MigrateResult, args: &Args) {
+    if result.versions.is_empty() {
+        println!("no migrations to apply");
+        return;
+    }
+    let direction = match result.direction {
+        Direction::Down => "down",
+        Direction::Up => "up",
+    };
+    let name_width = result
+        .versions
+        .iter()
+        .map(|version| version.name.len())
+        .max()
+        .unwrap_or(0);
+    for version in &result.versions {
+        if args.dry_run {
+            println!("migration {:03} [{direction}] [DRY RUN]", version.version);
+        } else {
+            println!(
+                "applied migration {:03} [{direction}] {:name_width$} [{}]",
+                version.version,
+                version.name,
+                format_duration(version.duration)
+            );
         }
+        if args.show_sql {
+            println!("{}", "-".repeat(80));
+            println!(
+                "-- River main migration {:03} [{direction}]",
+                version.version
+            );
+            println!("{}\n", version.sql.trim());
+        }
+    }
+    if args
+        .max_steps
+        .is_some_and(|steps| result.versions.len() < steps)
+    {
+        println!("no more migrations to apply");
     }
 }
 
 fn usage() -> &'static str {
-    "usage: riverqueue <migrate-up|migrate-down|migrate-list|validate> [--database-url URL] [--schema NAME] [--target-version N] [--max-steps N] [--dry-run]"
+    "usage: riverqueue <migrate-up|migrate-down|migrate-list|validate> [--database-url URL] [--schema NAME] [--target-version N] [--max-steps N] [--dry-run] [--show-sql]"
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn duration_format_matches_go() {
+        for (nanos, expected) in [
+            (0, "0s"),
+            (9, "0s"),
+            (999, "990ns"),
+            (1_000, "1µs"),
+            (1_332, "1.33µs"),
+            (765_625, "765.62µs"),
+            (1_000_000, "1ms"),
+            (4_422_125, "4.42ms"),
+            (13_280_834, "13.28ms"),
+            (234_910_750, "234.91ms"),
+            (1_000_000_000, "1s"),
+            (3_937_042_000, "3.93s"),
+            (34_042_234_000, "34.04s"),
+            (60_000_000_000, "1m0s"),
+            (154_042_234_000, "2m34.04s"),
+            (3_600_000_000_000, "1h0m0s"),
+            (3_754_042_234_000, "1h2m34.04s"),
+        ] {
+            assert_eq!(format_duration(Duration::from_nanos(nanos)), expected);
+        }
+    }
 }
