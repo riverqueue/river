@@ -557,6 +557,38 @@ RSpec.describe River::ClientRuntime do
     expect(calls).to eq([:job_schedule, :job_rescue_stuck, :job_delete_finalized])
   end
 
+  it "keeps maintenance error backoff asleep during ordinary worker wakeups and wakes for stop" do
+    attempts = Queue.new
+    waiting = Queue.new
+    driver = Object.new
+    driver.define_singleton_method(:leader_acquire) do |*, **|
+      attempts << true
+      raise "database unavailable"
+    end
+    driver.define_singleton_method(:leader_release) { |_| }
+    value = runtime(driver: driver)
+    [:@condition, :@maintenance_condition].each do |name|
+      value.instance_variable_get(name).define_singleton_method(:wait) do |mutex, duration|
+        waiting << true
+        super(mutex, duration)
+      end
+    end
+    value.start
+    thread = Thread.new { value.send(:maintenance_loop) }
+    Timeout.timeout(1) {
+      attempts.pop
+      waiting.pop
+    }
+
+    5.times { value.wake }
+    expect { Timeout.timeout(0.1) { attempts.pop } }.to raise_error(Timeout::Error)
+    value.stop
+    expect(thread.join(1)).to equal(thread)
+  ensure
+    value&.stop
+    thread&.join
+  end
+
   it "retries a temporarily failing maintenance loop" do
     driver = Object.new
     driver.define_singleton_method(:leader_acquire) { |_id, **| raise "temporary maintenance failure" }
@@ -567,7 +599,7 @@ RSpec.describe River::ClientRuntime do
       checks >= 3
     end
 
-    value.define_singleton_method(:wait) { |_duration| }
+    value.define_singleton_method(:wait) { |_duration, **| }
 
     expect { value.send(:maintenance_loop) }.not_to raise_error
     expect(checks).to eq(3)
@@ -583,7 +615,7 @@ RSpec.describe River::ClientRuntime do
       checks >= 2
     end
 
-    value.define_singleton_method(:wait) { |_duration| }
+    value.define_singleton_method(:wait) { |_duration, **| }
 
     expect { value.send(:maintenance_loop) }.not_to raise_error
     expect(checks).to eq(2)

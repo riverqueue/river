@@ -31,7 +31,7 @@ module River::Driver
 
       @connection_class = connection_class
       @postgres_capabilities_cache = PostgresCapabilities::Cache.new
-      @is_sqlite = connection_class.connection.adapter_name.downcase.include?("sqlite")
+      @is_sqlite = connection_class.connection_pool.with_connection { |connection| connection.adapter_name.downcase.include?("sqlite") }
       # Do not inherit application scopes, callbacks, or schema caches. Each
       # driver owns its model, but all operations use the selected class's pool.
       @job_model = Class.new(::ActiveRecord::Base) do
@@ -59,13 +59,7 @@ module River::Driver
     end
 
     def job_get_by_id(id)
-      if @is_sqlite
-        row = sqlite_job_rows("WHERE id = ? LIMIT 1", [id]).first
-        row ? sqlite_to_job_row_from_raw(row) : nil
-      else
-        row = @job_model.find_by(id: id)
-        row ? to_job_row_from_model(row) : nil
-      end
+      runtime_query_jobs("SELECT #{runtime_job_columns} FROM river_job WHERE id = #{Integer(id)} LIMIT 1").first
     end
 
     def job_insert(insert_params)
@@ -75,12 +69,14 @@ module River::Driver
     def job_insert_many(insert_params_many)
       return [] if insert_params_many.empty?
 
-      return sqlite_job_insert_many(insert_params_many) if @is_sqlite
-
-      transaction do
-        results = postgres_job_insert_many(insert_params_many)
-        postgres_notify_insert(insert_params_many)
-        results
+      runtime_insert_transaction(insert_params_many) do
+        if @is_sqlite
+          sqlite_job_insert_many(insert_params_many)
+        else
+          results = postgres_job_insert_many(insert_params_many)
+          postgres_notify_insert(insert_params_many)
+          results
+        end
       end
     end
 
@@ -114,13 +110,14 @@ module River::Driver
     # result. Joins an open, joinable transaction instead of opening a
     # savepoint.
     def transaction(&)
-      legacy = runtime_legacy_subtransactions?
-      # A joined Active Record block swallows ActiveRecord::Rollback without
-      # rolling anything back. Yield directly so that the transaction's owner
-      # receives it and rolls back, as Sequel does with Sequel::Rollback.
-      return yield if !legacy && @connection_class.connection.current_transaction.joinable?
+      @connection_class.connection_pool.with_connection do |connection|
+        legacy = runtime_legacy_subtransactions?
+        # A joined Active Record block swallows ActiveRecord::Rollback without
+        # rolling anything back. Let the transaction's owner receive it.
+        next yield if !legacy && connection.current_transaction.joinable?
 
-      @connection_class.transaction(requires_new: legacy, &)
+        connection.transaction(requires_new: legacy, &)
+      end
     end
 
     SQLITE_CONFLICT_WHERE = <<~SQL.chomp.freeze
@@ -245,7 +242,11 @@ module River::Driver
     end
 
     private def runtime_execute(sql)
-      @connection_class.connection.execute(sql)
+      @connection_class.connection_pool.with_connection { |connection| connection.execute(sql) }
+    end
+
+    private def runtime_job_columns
+      @is_sqlite ? SQLITE_JOB_COLUMNS : "*"
     end
 
     private def runtime_job_list_without_params
@@ -253,11 +254,7 @@ module River::Driver
     end
 
     private def runtime_job_rows(suffix)
-      if @is_sqlite
-        sqlite_job_rows(suffix).map { |row| sqlite_to_job_row_from_raw(row) }
-      else
-        @job_model.find_by_sql("SELECT * FROM river_job #{suffix}").map { |row| to_job_row_from_model(row) }
-      end
+      runtime_query_jobs("SELECT #{runtime_job_columns} FROM river_job #{suffix}")
     end
 
     private def runtime_notification_connection
@@ -274,15 +271,25 @@ module River::Driver
     end
 
     private def runtime_query_rows(sql)
-      if @is_sqlite
-        @connection_class.connection.raw_connection.execute(sql).to_a
-      else
-        @connection_class.connection.select_all(sql).to_a
+      @connection_class.connection_pool.with_connection do |connection|
+        if @is_sqlite
+          connection.raw_connection.execute(sql).to_a
+        else
+          # exec_query invalidates the query cache for writes with RETURNING.
+          # Deserialize without allocating an Active Record model per job.
+          result = connection.exec_query(sql)
+          types = result.column_types
+          result.rows.map do |row|
+            result.columns.each_with_index.to_h do |column, index|
+              [column, types.fetch(index).deserialize(row[index])]
+            end
+          end
+        end
       end
     end
 
     private def runtime_quote(value)
-      @connection_class.connection.quote(value)
+      @connection_class.connection_pool.with_connection { |connection| connection.quote(value) }
     end
 
     private def runtime_value(row, key)
@@ -313,61 +320,59 @@ module River::Driver
     # matching migration 007 and newer River databases.
     private def sqlite_job_insert_many(insert_params_many)
       nonces = sqlite_insert_nonces(insert_params_many)
-      transaction do
-        jobs = insert_params_many.zip(nonces).map { |param, nonce| sqlite_insert_params_to_hash(param, nonce) }
-        inserted_nonces = nonces.to_h { |nonce| [nonce, true] }
+      jobs = insert_params_many.zip(nonces).map { |param, nonce| sqlite_insert_params_to_hash(param, nonce) }
+      inserted_nonces = nonces.to_h { |nonce| [nonce, true] }
 
-        sql = <<~SQL
-          INSERT INTO river_job (
-            args,
-            created_at,
-            kind,
-            max_attempts,
-            metadata,
-            priority,
-            queue,
-            scheduled_at,
-            state,
-            tags,
-            unique_key,
-            unique_states
-          )
-          SELECT
-            jsonb(json_extract(value, '$.args')),
-            datetime('now', 'subsec'),
-            cast(json_extract(value, '$.kind') AS text),
-            cast(json_extract(value, '$.max_attempts') AS integer),
-            jsonb(json_extract(value, '$.metadata')),
-            cast(json_extract(value, '$.priority') AS integer),
-            cast(json_extract(value, '$.queue') AS text),
-            coalesce(cast(json_extract(value, '$.scheduled_at') AS text), datetime('now', 'subsec')),
-            cast(json_extract(value, '$.state') AS text),
-            jsonb(json_extract(value, '$.tags')),
-            CASE
-              WHEN length(cast(json_extract(value, '$.unique_key') AS text)) = 0 THEN NULL
-              ELSE unhex(cast(json_extract(value, '$.unique_key') AS text))
-            END,
-            nullif(cast(json_extract(value, '$.unique_states') AS integer), 0)
-          FROM json_each(cast(? AS blob))
-          WHERE true
-          ON CONFLICT (unique_key) WHERE #{SQLITE_CONFLICT_WHERE}
-          DO UPDATE SET kind = river_job.kind
-          RETURNING #{SQLITE_JOB_COLUMNS}
-        SQL
+      sql = <<~SQL
+        INSERT INTO river_job (
+          args,
+          created_at,
+          kind,
+          max_attempts,
+          metadata,
+          priority,
+          queue,
+          scheduled_at,
+          state,
+          tags,
+          unique_key,
+          unique_states
+        )
+        SELECT
+          jsonb(json_extract(value, '$.args')),
+          datetime('now', 'subsec'),
+          cast(json_extract(value, '$.kind') AS text),
+          cast(json_extract(value, '$.max_attempts') AS integer),
+          jsonb(json_extract(value, '$.metadata')),
+          cast(json_extract(value, '$.priority') AS integer),
+          cast(json_extract(value, '$.queue') AS text),
+          coalesce(cast(json_extract(value, '$.scheduled_at') AS text), datetime('now', 'subsec')),
+          cast(json_extract(value, '$.state') AS text),
+          jsonb(json_extract(value, '$.tags')),
+          CASE
+            WHEN length(cast(json_extract(value, '$.unique_key') AS text)) = 0 THEN NULL
+            ELSE unhex(cast(json_extract(value, '$.unique_key') AS text))
+          END,
+          nullif(cast(json_extract(value, '$.unique_states') AS integer), 0)
+        FROM json_each(cast(? AS blob))
+        WHERE true
+        ON CONFLICT (unique_key) WHERE #{SQLITE_CONFLICT_WHERE}
+        DO UPDATE SET kind = river_job.kind
+        RETURNING #{SQLITE_JOB_COLUMNS}
+      SQL
 
-        rows = @connection_class.connection.raw_connection.execute(sql, [JSON.generate(jobs)])
-        sqlite_notify_insert(insert_params_many)
+      rows = @connection_class.connection_pool.with_connection { |connection| connection.raw_connection.execute(sql, [JSON.generate(jobs)]) }
+      sqlite_notify_insert(insert_params_many)
 
-        rows.map do |row|
-          metadata = JSON.parse(row["metadata"])
-          [sqlite_to_job_row_from_raw(row), !inserted_nonces.key?(metadata[UNIQUE_INSERT_METADATA_KEY])]
-        end
+      rows.map do |row|
+        job = sqlite_to_job_row_from_raw(row)
+        [job, !inserted_nonces.key?(job.metadata[UNIQUE_INSERT_METADATA_KEY])]
       end
     end
 
     private def sqlite_job_rows(suffix, binds = [])
       sql = "SELECT #{SQLITE_JOB_COLUMNS} FROM river_job #{suffix}"
-      @connection_class.connection.raw_connection.execute(sql, binds)
+      @connection_class.connection_pool.with_connection { |connection| connection.raw_connection.execute(sql, binds) }
     end
 
     private def sqlite_notify_insert(insert_params_many)
@@ -381,13 +386,15 @@ module River::Driver
         {payload: JSON.generate({queue: queue}), topic: "river_insert"}
       end
 
-      @connection_class.connection.raw_connection.execute(<<~SQL, [JSON.generate(notifications)])
-        INSERT INTO river_notification (payload, topic)
-        SELECT
-          json_extract(value, '$.payload'),
-          json_extract(value, '$.topic')
-        FROM json_each(cast(? AS blob))
-      SQL
+      @connection_class.connection_pool.with_connection do |connection|
+        connection.raw_connection.execute(<<~SQL, [JSON.generate(notifications)])
+          INSERT INTO river_notification (payload, topic)
+          SELECT
+            json_extract(value, '$.payload'),
+            json_extract(value, '$.topic')
+          FROM json_each(cast(? AS blob))
+        SQL
+      end
     end
 
     private def sqlite_to_job_row_from_model(river_job)

@@ -63,12 +63,11 @@ RSpec.describe "River shared driver runtime edge cases", database: :sqlite do
   end
 
   it "returns a freshly read job if deletion loses a race" do
-    existing = Struct.new(:state).new(River::JOB_STATE_AVAILABLE)
     replacement = Struct.new(:state).new(River::JOB_STATE_RUNNING)
-    reads = [existing, replacement]
     driver = Object.new.extend(River::Driver::Runtime)
-    driver.define_singleton_method(:job_get_by_id) { |_id| reads.shift }
-    driver.define_singleton_method(:runtime_returning_ids) { |_sql| [] }
+    driver.define_singleton_method(:job_get_by_id) { |_id| replacement }
+    driver.define_singleton_method(:runtime_job_columns) { "*" }
+    driver.define_singleton_method(:runtime_query_jobs) { |_sql| [] }
 
     expect(driver.job_delete(1)).to equal(replacement)
   end
@@ -86,8 +85,8 @@ RSpec.describe "River shared driver runtime edge cases", database: :sqlite do
     driver = Object.new.extend(River::Driver::Runtime)
     driver.define_singleton_method(:runtime_postgres?) { true }
     driver.define_singleton_method(:runtime_quote) { |value| "'#{value}'" }
-    driver.define_singleton_method(:transaction) { |&block| block.call }
-    driver.define_singleton_method(:runtime_returning_ids) do |statement|
+    driver.define_singleton_method(:runtime_job_columns) { "*" }
+    driver.define_singleton_method(:runtime_query_rows) do |statement|
       sql = statement
       []
     end

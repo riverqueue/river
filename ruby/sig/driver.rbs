@@ -172,10 +172,13 @@ module River
       def runtime_cursor_clause: (untyped) -> String
       def runtime_execute: (String) -> untyped
       def runtime_in_clause: (untyped, untyped) -> untyped
+      def runtime_insert_transaction: (Array[JobInsertParams]) { () -> untyped } -> untyped
       def runtime_job_attempt_predicate: (untyped) -> String
+      def runtime_job_columns: () -> String
       def runtime_job_list_without_params: () -> untyped
       def runtime_job_list: (JobListParams, ?for_delete: bool) -> Array[JobRow]
       def runtime_job_rows: (String) -> untyped
+      def runtime_job_state_column: () -> String
       def runtime_json: (untyped) -> untyped
       def runtime_legacy_subtransactions?: () -> bool
       def runtime_merge_metadata: (untyped) -> untyped
@@ -188,12 +191,14 @@ module River
       def runtime_parse_json: (untyped) -> untyped
       def runtime_parse_time: (untyped) -> untyped
       def runtime_postgres?: () -> bool
+      def runtime_query_jobs: (String, ?tolerate_decode_errors: bool) -> Array[JobRow]
       def runtime_query_rows: (String) -> untyped
       def runtime_queue_columns: () -> untyped
       def runtime_queue_from_row: (untyped) -> untyped
       def runtime_quote: (untyped) -> String
       def runtime_rescue_retry: (untyped, untyped, untyped, untyped, untyped) -> Time
       def runtime_returning_ids: (untyped) -> untyped
+      def runtime_running_job_predicate: (untyped, ?expected_job: untyped, ?uncancelled: bool) -> String
       def runtime_schedule_postgres: (Time, Integer) -> Array[String]
       def runtime_schedule_sqlite: (Time, Integer) -> Array[String]
       def runtime_state: (untyped) -> untyped
