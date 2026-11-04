@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.16.0] - 2026-11-04
+
 ### Added
 
 - Add `output:` to `Client#job_update` and `River::JobUpdateParams` to persist job output immediately with an atomic metadata update that preserves other keys. Explicit `output: nil` stores JSON null; when `metadata:` is also supplied, output is applied to that replacement metadata. [PR #1568](https://github.com/riverqueue/river/pull/1568).
