@@ -143,6 +143,12 @@ func (s *JobRescuer) Start(ctx context.Context) error {
 	}
 
 	s.StaggerStart(ctx)
+	select {
+	case <-ctx.Done():
+		stopped()
+		return nil
+	default:
+	}
 
 	go func() {
 		started()
@@ -161,9 +167,10 @@ func (s *JobRescuer) Start(ctx context.Context) error {
 
 			res, err := s.runOnce(ctx)
 			if err != nil {
-				if !errors.Is(err, context.Canceled) {
-					s.Logger.ErrorContext(ctx, s.Name+": Error rescuing jobs", slog.String("error", err.Error()))
+				if ctx.Err() != nil {
+					return
 				}
+				s.Logger.ErrorContext(ctx, s.Name+": Error rescuing jobs", slog.String("error", err.Error()))
 				continue
 			}
 

@@ -591,7 +591,9 @@ export class RuntimeServices {
         });
       }
     } catch (error: unknown) {
-      if (signal?.aborted === true && Object.is(error, signal.reason)) return;
+      // Drivers may report a socket or SQL error when cancellation interrupts
+      // a query. Check the service signal; batch timeouts must still be logged.
+      if (signal?.aborted === true) return;
       this.#lastError = errorMessage(error);
       // Maintenance retries on its own interval, which already bounds the
       // retry rate, exactly like River's other runtimes.

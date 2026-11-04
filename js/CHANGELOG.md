@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Fixed maintenance services logging failures during shutdown or leadership loss when a driver returned a socket or SQL error instead of the cancellation reason. Genuine query timeouts and database failures are still reported. [PR #1577](https://github.com/riverqueue/river/pull/1577).
 - Fixed a cancelled job that was retried being cancelled again when the client checked for cancellation requests, which it does while polling and after its notification stream reconnects. Retrying a job now clears its earlier attempt's cancellation request, like River for Go. [PR #1564](https://github.com/riverqueue/river/pull/1564).
 
 ## [0.3.0] - 2026-10-26

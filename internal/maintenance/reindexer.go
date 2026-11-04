@@ -114,6 +114,12 @@ func (s *Reindexer) Start(ctx context.Context) error {
 	}
 
 	s.StaggerStart(ctx)
+	select {
+	case <-ctx.Done():
+		stopped()
+		return nil
+	default:
+	}
 
 	go func() {
 		started()
@@ -140,18 +146,20 @@ func (s *Reindexer) Start(ctx context.Context) error {
 			case <-timerUntilNextRun.C:
 				reindexableIndexNames, err := s.reindexableIndexNames(ctx)
 				if err != nil {
-					if !errors.Is(err, context.Canceled) {
-						s.Logger.ErrorContext(ctx, s.Name+": Error listing reindexable indexes", slog.String("error", err.Error()))
+					if ctx.Err() != nil {
+						return
 					}
+					s.Logger.ErrorContext(ctx, s.Name+": Error listing reindexable indexes", slog.String("error", err.Error()))
 					scheduleNextRun()
 					continue
 				}
 
 				for _, indexName := range reindexableIndexNames {
 					if _, err := s.reindexOne(ctx, indexName); err != nil {
-						if !errors.Is(err, context.Canceled) {
-							s.Logger.ErrorContext(ctx, s.Name+": Error reindexing", slog.String("error", err.Error()), slog.String("index_name", indexName))
+						if ctx.Err() != nil {
+							return
 						}
+						s.Logger.ErrorContext(ctx, s.Name+": Error reindexing", slog.String("error", err.Error()), slog.String("index_name", indexName))
 						continue
 					}
 				}

@@ -146,6 +146,12 @@ func (s *JobCleaner) Start(ctx context.Context) error { //nolint:dupl
 	}
 
 	s.StaggerStart(ctx)
+	select {
+	case <-ctx.Done():
+		stopped()
+		return nil
+	default:
+	}
 
 	go func() {
 		started()
@@ -164,9 +170,10 @@ func (s *JobCleaner) Start(ctx context.Context) error { //nolint:dupl
 
 			res, err := s.runOnce(ctx)
 			if err != nil {
-				if !errors.Is(err, context.Canceled) {
-					s.Logger.ErrorContext(ctx, s.Name+": Error cleaning jobs", slog.String("error", err.Error()))
+				if ctx.Err() != nil {
+					return
 				}
+				s.Logger.ErrorContext(ctx, s.Name+": Error cleaning jobs", slog.String("error", err.Error()))
 				continue
 			}
 

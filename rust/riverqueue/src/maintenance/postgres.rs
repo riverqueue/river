@@ -126,7 +126,7 @@ where
             None => std::future::pending().await,
         }
     };
-    tokio::select! {
+    let result = tokio::select! {
         biased;
         result = &mut operation => result.map_err(MaintenanceError::from),
         () = cancel.cancelled() => {
@@ -139,6 +139,14 @@ where
             let _ = tokio::time::timeout(CANCEL_GRACE, operation).await;
             Err(MaintenanceError::TimedOut)
         }
+    };
+    // A completed query can report a driver error as cancellation arrives,
+    // including while a timed-out query is being drained. Keep successful
+    // results (especially commits), but don't report shutdown as a failure.
+    if result.is_err() && cancel.is_cancelled() {
+        Err(MaintenanceError::Cancelled)
+    } else {
+        result
     }
 }
 
@@ -162,5 +170,58 @@ pub(super) async fn cancel_backend(pool: &PgPool, backend_pid: i32) {
                 "River timed out cancelling a maintenance statement"
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use sqlx::postgres::PgPoolOptions;
+    use tokio_util::sync::CancellationToken;
+
+    use super::{MaintenanceError, cancellable_within};
+
+    #[tokio::test]
+    async fn completed_query_error_during_cancellation_is_cancelled() {
+        let pool = PgPoolOptions::new()
+            .connect_lazy("postgres://localhost/unused")
+            .unwrap();
+        let cancel = CancellationToken::new();
+        cancel.cancel();
+
+        let result = cancellable_within(&pool, 0, &cancel, None, async {
+            Err::<(), _>(sqlx::Error::PoolClosed)
+        })
+        .await;
+
+        assert!(matches!(result, Err(MaintenanceError::Cancelled)));
+    }
+
+    #[tokio::test]
+    async fn completed_query_error_without_cancellation_is_reported() {
+        let pool = PgPoolOptions::new()
+            .connect_lazy("postgres://localhost/unused")
+            .unwrap();
+        let cancel = CancellationToken::new();
+
+        let result = cancellable_within(&pool, 0, &cancel, None, async {
+            Err::<(), _>(sqlx::Error::PoolClosed)
+        })
+        .await;
+
+        assert!(matches!(result, Err(MaintenanceError::Failed(_))));
+    }
+
+    #[tokio::test]
+    async fn completed_query_success_during_cancellation_is_preserved() {
+        let pool = PgPoolOptions::new()
+            .connect_lazy("postgres://localhost/unused")
+            .unwrap();
+        let cancel = CancellationToken::new();
+        cancel.cancel();
+
+        let result =
+            cancellable_within(&pool, 0, &cancel, None, async { Ok::<_, sqlx::Error>(42) }).await;
+
+        assert_eq!(result.unwrap(), 42);
     }
 }
