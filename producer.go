@@ -37,11 +37,12 @@ import (
 )
 
 const (
-	jobCancelPollBatchSize        = 1000
-	jobCancelPollIntervalDefault  = time.Minute
-	producerReportIntervalDefault = 30 * time.Second
-	queuePollIntervalDefault      = 2 * time.Second
-	queueReportIntervalDefault    = 10 * time.Minute
+	jobCancelPollBatchSize           = 1000
+	jobCancelPollIntervalDefault     = time.Minute
+	producerReportIntervalDefault    = 30 * time.Second
+	queuePollIntervalDefault         = 2 * time.Second
+	queueReportIntervalDefault       = 10 * time.Minute
+	queueSettingsPollIntervalDefault = time.Minute
 )
 
 // Test-only properties.
@@ -123,6 +124,13 @@ type producerConfig struct {
 	// queue setting changes and job cancellation requests in poll-only mode
 	// (when no notifier is provided).
 	QueuePollInterval time.Duration
+
+	// QueueSettingsPollInterval is the amount of time between checks for
+	// queue setting changes (pause, resume, metadata) when a notifier is
+	// configured. Notifications normally deliver changes right away, so this is
+	// only a fallback for ones that were lost, like while the notifier was
+	// reconnecting. In poll-only mode, QueuePollInterval is used instead.
+	QueueSettingsPollInterval time.Duration
 	// QueueReportInterval is the amount of time between periodic reports
 	// of the queue status.
 	QueueReportInterval          time.Duration
@@ -151,6 +159,12 @@ func (c *producerConfig) mustValidate() *producerConfig {
 	}
 	if c.JobCancelPollInterval <= 0 {
 		panic("producerConfig.JobCancelPollInterval must be greater than zero")
+	}
+	if c.QueueSettingsPollInterval == 0 {
+		c.QueueSettingsPollInterval = queueSettingsPollIntervalDefault
+	}
+	if c.QueueSettingsPollInterval <= 0 {
+		panic("producerConfig.QueueSettingsPollInterval must be greater than zero")
 	}
 	if c.JobStuckCount == nil {
 		c.JobStuckCount = &atomic.Int32{}
@@ -457,15 +471,15 @@ func (p *producer) StartWorkContext(fetchCtx, workCtx context.Context) error {
 		subroutineWG.Add(1)
 		go p.reportProducerStatusLoop(subroutineCtx, &subroutineWG)
 
-		// Runs with a notifier too, in case a cancel notification is lost.
+		// Both run with a notifier too, in case a notification is lost.
 		subroutineWG.Add(1)
 		go p.pollForJobCancellations(subroutineCtx, &subroutineWG)
 
+		subroutineWG.Add(1)
+		go p.pollForSettingChanges(subroutineCtx, &subroutineWG, initiallyPaused, initialMetadata)
+
 		if p.config.Notifier == nil {
 			p.Logger.DebugContext(subroutineCtx, p.Name+": No notifier configured; starting in poll mode", "client_id", p.config.ClientID)
-
-			subroutineWG.Add(1)
-			go p.pollForSettingChanges(subroutineCtx, &subroutineWG, initiallyPaused, initialMetadata)
 		}
 
 		p.fetchAndRunLoop(fetchCtx, workCtx)
@@ -1107,10 +1121,19 @@ func (p *producer) pollForJobCancellationsOnce(ctx context.Context) error {
 	return nil
 }
 
+// Without a notifier, polling is the only way to learn about queue setting
+// changes. With one, it's a slower fallback because a notification is lost if
+// it's sent while the notifier isn't listening, like while it's reconnecting.
+// Pause and resume are idempotent, so a change seen by both is applied once.
 func (p *producer) pollForSettingChanges(ctx context.Context, wg *sync.WaitGroup, lastPaused bool, lastMetadata []byte) {
 	defer wg.Done()
 
-	ticker := time.NewTicker(p.config.QueuePollInterval)
+	interval := p.config.QueuePollInterval
+	if p.config.Notifier != nil {
+		interval = p.config.QueueSettingsPollInterval
+	}
+
+	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 	for {
 		select {

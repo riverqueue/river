@@ -441,6 +441,12 @@ func (n *Notifier) waitOnce(ctx context.Context) error {
 		// the ping a no-op that always returned context.Canceled. With the fix,
 		// dead or flaky connections are now actively detected, which may trigger
 		// reconnections that were previously silently swallowed.
+		//
+		// The ping also needs a timeout. A connection that goes silent without
+		// an error, like after a dropped network path, would otherwise block
+		// here and the notifier would never reconnect.
+		pingCtx, pingCancel := context.WithTimeout(pingCtx, listenerTimeout)
+		defer pingCancel()
 		if err := n.listener.Ping(pingCtx); err != nil {
 			return err
 		}

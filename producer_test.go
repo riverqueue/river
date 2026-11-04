@@ -635,6 +635,50 @@ func testProducer(t *testing.T, makeProducer func(ctx context.Context, t *testin
 		}
 	})
 
+	// A pause or resume whose notification was lost, like while the notifier
+	// was reconnecting, is still found by polling.
+	t.Run("QueueSettingsPolling", func(t *testing.T) {
+		t.Parallel()
+
+		producer, bundle := setup(t)
+		AddWorker(bundle.workers, &noOpWorker{})
+
+		// Each mode polls on its own interval. The other one is too long for the
+		// test to pass if it's used instead.
+		if producer.config.Notifier == nil {
+			producer.config.QueuePollInterval = 20 * time.Millisecond
+			producer.config.QueueSettingsPollInterval = time.Hour
+		} else {
+			producer.config.QueuePollInterval = time.Hour
+			producer.config.QueueSettingsPollInterval = 20 * time.Millisecond
+		}
+
+		startProducer(t, ctx, ctx, producer)
+
+		// Pause and resume without a notification. Only polling can find them.
+		require.NoError(t, bundle.exec.QueuePause(ctx, &riverdriver.QueuePauseParams{
+			Name:   producer.config.Queue,
+			Schema: producer.config.Schema,
+		}))
+		producer.testSignals.Paused.WaitOrTimeout()
+
+		mustInsert(ctx, t, producer, bundle, &noOpArgs{})
+		select {
+		case update := <-bundle.jobUpdates:
+			t.Fatalf("Unexpected job update: %+v", update)
+		case <-time.After(200 * time.Millisecond):
+		}
+
+		require.NoError(t, bundle.exec.QueueResume(ctx, &riverdriver.QueueResumeParams{
+			Name:   producer.config.Queue,
+			Schema: producer.config.Schema,
+		}))
+		producer.testSignals.Resumed.WaitOrTimeout()
+
+		update := riversharedtest.WaitOrTimeout(t, bundle.jobUpdates)
+		require.Equal(t, rivertype.JobStateCompleted, update.Job.State)
+	})
+
 	// A cancellation request found by polling cancels the attempt that was
 	// checked, not a newer one running under the same ID by the time the
 	// check returns, like one started after the job was retried.

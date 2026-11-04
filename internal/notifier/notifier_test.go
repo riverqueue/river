@@ -776,6 +776,37 @@ func TestNotifier_Start(t *testing.T) {
 		})
 	})
 
+	t.Run("PingTimeoutReconnects", func(t *testing.T) {
+		t.Parallel()
+
+		synctest.Test(t, func(t *testing.T) {
+			bundle := setup(t)
+
+			// The first ping hangs like one on a connection that went silent.
+			var numPings int
+			bundle.listener.pingFunc = func(ctx context.Context) error {
+				numPings++
+				if numPings == 1 {
+					<-ctx.Done()
+					return ctx.Err()
+				}
+				return nil
+			}
+
+			require.NoError(t, bundle.notifier.Start(context.Background()))
+			bundle.notifier.testSignals.ListeningBegin.WaitOrTimeout()
+
+			// Fake time: wait out the ping interval and the ping timeout.
+			time.Sleep(5*time.Second + listenerTimeout)
+			require.ErrorIs(t, bundle.notifier.testSignals.BackoffError.WaitOrTimeout(), context.DeadlineExceeded)
+			bundle.notifier.testSignals.ListeningBegin.WaitOrTimeout()
+
+			synctest.Wait()
+			bundle.notifier.Stop()
+			bundle.notifier.testSignals.BackoffError.RequireEmpty()
+		})
+	})
+
 	t.Run("ListenerDeadlineExceeded", func(t *testing.T) {
 		t.Parallel()
 
