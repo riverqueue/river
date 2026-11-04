@@ -68,12 +68,14 @@ module River
 
     # Values to apply, with omitted fields represented internally by UNSET.
     attr_reader :attempt, :attempted_at, :attempted_by, :errors, :finalized_at,
-      :max_attempts, :metadata, :state
+      :max_attempts, :metadata, :output, :state
 
-    # Creates a partial set of updates for a persisted job.
+    # Creates a partial set of updates for a persisted job. Output replaces only
+    # metadata["output"] unless metadata is also supplied, in which case output
+    # is applied to that replacement Hash. Explicit nil stores JSON null.
     def initialize(attempt: UNSET, attempted_at: UNSET, attempted_by: UNSET,
       errors: UNSET, finalized_at: UNSET, max_attempts: UNSET, metadata: UNSET,
-      state: UNSET)
+      output: UNSET, state: UNSET)
       @attempt = attempt
       @attempted_at = attempted_at
       @attempted_by = attempted_by
@@ -81,6 +83,7 @@ module River
       @finalized_at = finalized_at
       @max_attempts = max_attempts
       @metadata = metadata
+      @output = output
       @state = state.is_a?(Symbol) ? state.to_s : state
     end
 
