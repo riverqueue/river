@@ -258,12 +258,42 @@ func (m *periodicJobInternalMapper) toInternal(periodicJob *PeriodicJob) *mainte
 	}
 	return &maintenance.PeriodicJob{
 		ID: opts.ID,
-		ConstructorFunc: func() (*rivertype.JobInsertParams, error) {
+		ConstructorFunc: func(scheduledAt time.Time) (*rivertype.JobInsertParams, error) {
 			args, options := periodicJob.constructorFunc()
 			if args == nil {
 				return nil, maintenance.ErrNoJobToInsert
 			}
-			return insertParamsFromConfigArgsAndOptions(m.archetype, m.config, args, options)
+
+			// Copy constructor options so a reused options struct doesn't retain
+			// this occurrence's time. Explicit schedules from either source win.
+			var insertOpts InsertOpts
+			if options != nil {
+				insertOpts = *options
+			}
+			if insertOpts.ScheduledAt.IsZero() {
+				if argsWithOpts, ok := args.(JobArgsWithInsertOpts); ok {
+					insertOpts.ScheduledAt = argsWithOpts.InsertOpts().ScheduledAt
+				}
+			}
+
+			scheduledAtDefaulted := insertOpts.ScheduledAt.IsZero()
+			if scheduledAtDefaulted {
+				insertOpts.ScheduledAt = scheduledAt
+			}
+
+			insertParams, err := insertParamsFromConfigArgsAndOptions(m.archetype, m.config, args, &insertOpts)
+			if err != nil {
+				return nil, err
+			}
+
+			// The default time describes the occurrence for uniqueness, while
+			// periodic jobs remain available immediately, even if inserted early.
+			// Preserve pending jobs and explicitly requested scheduled jobs.
+			if scheduledAtDefaulted && insertParams.State == rivertype.JobStateScheduled {
+				insertParams.State = rivertype.JobStateAvailable
+			}
+
+			return insertParams, nil
 		},
 		RunOnStart:   opts.RunOnStart,
 		ScheduleFunc: periodicJob.scheduleFunc.Next,
