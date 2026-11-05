@@ -113,12 +113,9 @@ func (s *Reindexer) Start(ctx context.Context) error {
 		return nil
 	}
 
-	s.StaggerStart(ctx)
-	select {
-	case <-ctx.Done():
+	if !s.StaggerStart(ctx) {
 		stopped()
 		return nil
-	default:
 	}
 
 	go func() {

@@ -124,13 +124,14 @@ type QueueMaintainerServiceBase struct {
 
 // StaggerStart is called when queue maintainer services start. It jitters by
 // sleeping for a short random period so services don't all perform their first
-// run at exactly the same time.
-func (s *QueueMaintainerServiceBase) StaggerStart(ctx context.Context) {
-	if s.staggerStartupDisabled {
-		return
+// run at exactly the same time. Returns false if the context was cancelled
+// before or during the sleep, in which case the caller should mark itself
+// stopped and return instead of starting its run loop.
+func (s *QueueMaintainerServiceBase) StaggerStart(ctx context.Context) bool {
+	if !s.staggerStartupDisabled {
+		serviceutil.CancellableSleep(ctx, randutil.DurationBetween(0*time.Second, 1*time.Second))
 	}
-
-	serviceutil.CancellableSleep(ctx, randutil.DurationBetween(0*time.Second, 1*time.Second))
+	return ctx.Err() == nil
 }
 
 // StaggerStartupDisable sets whether the short staggered sleep on start up

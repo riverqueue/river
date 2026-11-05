@@ -30,8 +30,11 @@ type maintenanceShutdownExecutor struct {
 	operationFunc func(context.Context, string) error
 }
 
-func (e *maintenanceShutdownExecutor) IndexesExist(ctx context.Context, params *riverdriver.IndexesExistParams) (map[string]bool, error) {
-	return map[string]bool{"index": true}, e.operationFunc(ctx, "IndexesExist")
+func (e *maintenanceShutdownExecutor) IndexesExist(ctx context.Context, _ *riverdriver.IndexesExistParams) (map[string]bool, error) {
+	if err := e.operationFunc(ctx, "IndexesExist"); err != nil {
+		return nil, err
+	}
+	return map[string]bool{"index": true}, nil
 }
 
 func (e *maintenanceShutdownExecutor) IndexReindex(ctx context.Context, _ *riverdriver.IndexReindexParams) error {
@@ -47,7 +50,10 @@ func (e *maintenanceShutdownExecutor) JobDeleteBefore(ctx context.Context, _ *ri
 }
 
 func (e *maintenanceShutdownExecutor) JobGetStuck(ctx context.Context, _ *riverdriver.JobGetStuckParams) ([]*rivertype.JobRow, error) {
-	return []*rivertype.JobRow{{ID: 1, Kind: "unknown", Metadata: []byte(`{}`)}}, e.operationFunc(ctx, "JobGetStuck")
+	if err := e.operationFunc(ctx, "JobGetStuck"); err != nil {
+		return nil, err
+	}
+	return []*rivertype.JobRow{{ID: 1, Kind: "unknown", Metadata: []byte(`{}`)}}, nil
 }
 
 func (e *maintenanceShutdownExecutor) JobRescueMany(ctx context.Context, _ *riverdriver.JobRescueManyParams) (*struct{}, error) {
@@ -189,6 +195,8 @@ func TestMaintenance_ShutdownErrorLogging(t *testing.T) {
 }
 
 // Exercise synchronous startup failures through the leader's real retry loop.
+// The elector is intentionally nil: synctest.Wait does not advance the clock,
+// so tests stop during the first backoff, before retries can exhaust and resign.
 func maintenanceStartupService(archetype *baseservice.Archetype, service startstop.Service) startstop.Service {
 	leader := NewQueueMaintainerLeader(archetype, &QueueMaintainerLeaderConfig{
 		QueueMaintainer: NewQueueMaintainer(archetype, []startstop.Service{service}),

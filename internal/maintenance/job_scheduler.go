@@ -113,12 +113,9 @@ func (s *JobScheduler) Start(ctx context.Context) error { //nolint:dupl
 		return nil
 	}
 
-	s.StaggerStart(ctx)
-	select {
-	case <-ctx.Done():
+	if !s.StaggerStart(ctx) {
 		stopped()
 		return nil
-	default:
 	}
 
 	go func() {
