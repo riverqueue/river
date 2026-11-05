@@ -109,13 +109,12 @@ pub trait ClientBuilderExt: Sized {
     /// jobs, should reject that configuration the same way.
     fn leader_election_disabled(&self) -> bool;
 
-    /// Sets how often a client with a notifier checks its running jobs for
-    /// cancellation requests in case a notification was lost, a minute by
-    /// default. Checks happen on the two-second poll for queue settings, so
-    /// shorter intervals check that often. It's a control for tests, not a
-    /// tuning option.
+    /// Sets how often a client with a notifier checks for lost job cancellation
+    /// and queue control notifications, a minute by default. Checks happen on
+    /// the two-second poll for queue settings, so shorter intervals check that
+    /// often. It's a control for tests, not a tuning option.
     #[must_use]
-    fn job_cancel_poll_interval(self, interval: Duration) -> Self;
+    fn notification_poll_interval(self, interval: Duration) -> Self;
 
     /// Installs a pilot from a companion crate.
     #[must_use]
@@ -129,13 +128,13 @@ pub trait ClientBuilderExt: Sized {
 }
 
 impl ClientBuilderExt for crate::ClientBuilder {
-    fn job_cancel_poll_interval(mut self, interval: Duration) -> Self {
-        self.job_cancel_poll_interval = interval;
-        self
-    }
-
     fn leader_election_disabled(&self) -> bool {
         self.leader_election_disabled
+    }
+
+    fn notification_poll_interval(mut self, interval: Duration) -> Self {
+        self.notification_poll_interval = interval;
+        self
     }
 
     fn pilot<P: Pilot>(self, pilot: P) -> Self {

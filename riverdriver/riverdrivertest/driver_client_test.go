@@ -1778,6 +1778,42 @@ func ExerciseClient[TTx any](ctx context.Context, t *testing.T,
 		require.Equal(t, insertRes2.Job.ID, event.Job.ID)
 	})
 
+	t.Run("QueuePauseAndResumeWithoutNotifications", func(t *testing.T) {
+		t.Parallel()
+
+		config, bundle := setupConfig(t)
+		config.PollOnly = true
+		client, err := river.NewClient(bundle.driver, config)
+		require.NoError(t, err)
+		events := subscribe(t, client)
+		startClient(ctx, t, client)
+
+		// Driver operations persist controls without sending notifications.
+		// Exercise the polling path on every supported database and driver.
+		require.NoError(t, bundle.exec.QueuePause(ctx, &riverdriver.QueuePauseParams{
+			Name: river.QueueDefault, Schema: bundle.schema,
+		}))
+		require.Equal(t, river.EventKindQueuePaused, riversharedtest.WaitOrTimeout(t, events).Kind)
+		inserted, err := client.Insert(ctx, &noOpArgs{}, nil)
+		require.NoError(t, err)
+		select {
+		case event := <-events:
+			t.Fatalf("Unexpected event while queue was paused: %+v", event)
+		case <-time.After(100 * time.Millisecond):
+		}
+		job, err := client.JobGet(ctx, inserted.Job.ID)
+		require.NoError(t, err)
+		require.Equal(t, rivertype.JobStateAvailable, job.State)
+
+		require.NoError(t, bundle.exec.QueueResume(ctx, &riverdriver.QueueResumeParams{
+			Name: river.QueueDefault, Schema: bundle.schema,
+		}))
+		require.Equal(t, river.EventKindQueueResumed, riversharedtest.WaitOrTimeout(t, events).Kind)
+		completed := riversharedtest.WaitOrTimeout(t, events)
+		require.Equal(t, river.EventKindJobCompleted, completed.Kind)
+		require.Equal(t, inserted.Job.ID, completed.Job.ID)
+	})
+
 	t.Run("QueueUpdate", func(t *testing.T) {
 		t.Parallel()
 

@@ -1,4 +1,4 @@
-//! Cancellation of running jobs found by polling, in clients without
+//! Running job cancellations and queue controls found by polling, in clients without
 //! notifications and in clients whose notification was lost, on every
 //! backend.
 //!
@@ -11,12 +11,16 @@ mod support;
 
 use std::{convert::Infallible, sync::Arc, time::Duration};
 
+use async_trait::async_trait;
 use riverqueue::{
-    __private::{ClientBuilderExt, Database},
+    __private::{
+        ClientBuilderExt, Database, Pilot, PilotError, PilotProducer, ProducerConfiguration,
+        ProducerStartContext,
+    },
     Client, EventKind, Job, JobArgs, JobState, QueueConfig, WorkContext, WorkOutcome, Workers,
 };
 use serde::{Deserialize, Serialize};
-use tokio::sync::Semaphore;
+use tokio::sync::{Semaphore, mpsc};
 
 /// Every wait in these tests is bounded by this timeout. It covers a few of
 /// the two-second polls for cancellation requests.
@@ -87,6 +91,60 @@ impl Backend {
                 .unwrap();
             }
         }
+    }
+    /// Changes queue state without notifying, as if the listener were down.
+    async fn set_paused_without_notification(&self, paused: bool) {
+        match self {
+            #[cfg(all(feature = "postgres", river_postgres_tests))]
+            Self::Postgres(schema) => {
+                sqlx::query(sqlx::AssertSqlSafe(format!(
+                    "UPDATE {} SET paused_at = CASE WHEN $1 THEN CURRENT_TIMESTAMP ELSE NULL END, \
+                     metadata = jsonb_build_object('paused', $1::boolean) WHERE name = 'default'",
+                    schema.table("river_queue")
+                )))
+                .bind(paused)
+                .execute(&schema.pool)
+                .await
+                .unwrap();
+            }
+            #[cfg(feature = "sqlite")]
+            Self::Sqlite(pool, _) => {
+                sqlx::query(
+                    "UPDATE river_queue SET paused_at = CASE WHEN ? THEN \
+                     strftime('%Y-%m-%dT%H:%M:%fZ', 'now') ELSE NULL END, \
+                     metadata = jsonb_object('paused', json(CASE WHEN ? THEN 'true' ELSE 'false' END)) \
+                     WHERE name = 'default'",
+                )
+                .bind(paused)
+                .bind(paused)
+                .execute(pool)
+                .await
+                .unwrap();
+            }
+        }
+    }
+}
+
+/// Records metadata offered to a producer session by queue state recovery.
+#[derive(Clone)]
+struct QueueSettingsPilot {
+    metadata: mpsc::UnboundedSender<serde_json::Map<String, serde_json::Value>>,
+}
+
+#[async_trait]
+impl Pilot for QueueSettingsPilot {
+    async fn start_producer(
+        &self,
+        _context: ProducerStartContext,
+    ) -> Result<Option<Box<dyn PilotProducer>>, PilotError> {
+        Ok(Some(Box::new(self.clone())))
+    }
+}
+
+#[async_trait]
+impl PilotProducer for QueueSettingsPilot {
+    fn configuration_changed(&self, configuration: &ProducerConfiguration) {
+        let _ = self.metadata.send(configuration.queue.metadata.clone());
     }
 }
 
@@ -163,7 +221,7 @@ async fn checks_for_lost_cancellations_only_after_interval(backend: Backend) {
 async fn polls_for_lost_cancellation_notification(backend: Backend) {
     let started = Arc::new(Semaphore::new(0));
     let client = Client::builder(backend.database())
-        .job_cancel_poll_interval(Duration::ZERO)
+        .notification_poll_interval(Duration::ZERO)
         .queue(riverqueue::QUEUE_DEFAULT, QueueConfig::new(1))
         .without_leader_election()
         .workers(waiting_workers(&started))
@@ -191,6 +249,78 @@ async fn polls_for_lost_cancellation_notification(backend: Backend) {
     tokio::time::timeout(TIMEOUT, run.stop())
         .await
         .expect("the client should stop")
+        .unwrap();
+    backend.cleanup().await;
+}
+
+/// A notifier must not disable polling of queue controls: a lost pause
+/// stops claims and a lost resume starts them again without reconnecting.
+async fn polls_for_lost_queue_controls(backend: Backend, poll_only: bool) {
+    let started = Arc::new(Semaphore::new(0));
+    let (metadata, mut metadata_updates) = mpsc::unbounded_channel();
+    let builder = Client::builder(backend.database())
+        .pilot(QueueSettingsPilot { metadata })
+        .notification_poll_interval(Duration::ZERO)
+        .queue(riverqueue::QUEUE_DEFAULT, QueueConfig::new(1))
+        .without_leader_election()
+        .workers(waiting_workers(&started));
+    let builder = if poll_only {
+        builder.without_notifications()
+    } else {
+        builder
+    };
+    let client = builder.build().unwrap();
+    let mut events = client
+        .subscribe(&[EventKind::QueuePaused, EventKind::QueueResumed])
+        .unwrap();
+    let mut run = client.start().unwrap();
+    run.wait_ready().await.unwrap();
+
+    backend.set_paused_without_notification(true).await;
+    let paused = tokio::time::timeout(TIMEOUT, events.recv())
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(paused.kind(), EventKind::QueuePaused);
+    assert_eq!(
+        serde_json::Value::Object(
+            tokio::time::timeout(TIMEOUT, metadata_updates.recv())
+                .await
+                .unwrap()
+                .unwrap()
+        ),
+        serde_json::json!({"paused": true})
+    );
+    client.insert(WaitArgs {}).await.unwrap();
+    assert!(
+        tokio::time::timeout(Duration::from_millis(100), started.acquire())
+            .await
+            .is_err()
+    );
+
+    backend.set_paused_without_notification(false).await;
+    let resumed = tokio::time::timeout(TIMEOUT, events.recv())
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(resumed.kind(), EventKind::QueueResumed);
+    assert_eq!(
+        serde_json::Value::Object(
+            tokio::time::timeout(TIMEOUT, metadata_updates.recv())
+                .await
+                .unwrap()
+                .unwrap()
+        ),
+        serde_json::json!({"paused": false})
+    );
+    tokio::time::timeout(TIMEOUT, started.acquire())
+        .await
+        .unwrap()
+        .unwrap()
+        .forget();
+    tokio::time::timeout(TIMEOUT, run.stop_and_cancel())
+        .await
+        .unwrap()
         .unwrap();
     backend.cleanup().await;
 }
@@ -260,6 +390,17 @@ mod postgres {
     }
 
     #[tokio::test]
+    async fn polls_for_lost_queue_controls() {
+        for poll_only in [false, true] {
+            super::polls_for_lost_queue_controls(
+                Backend::Postgres(support::PostgresSchema::new("river_poll_queue_controls").await),
+                poll_only,
+            )
+            .await;
+        }
+    }
+
+    #[tokio::test]
     async fn polls_for_remote_cancellation() {
         super::polls_for_remote_cancellation(Backend::Postgres(
             support::PostgresSchema::new("river_poll_cancel").await,
@@ -282,6 +423,14 @@ mod sqlite {
     async fn polls_for_lost_cancellation_notification() {
         let (pool, path) = support::sqlite_file_pool(4).await;
         super::polls_for_lost_cancellation_notification(Backend::Sqlite(pool, path)).await;
+    }
+
+    #[tokio::test]
+    async fn polls_for_lost_queue_controls() {
+        for poll_only in [false, true] {
+            let (pool, path) = support::sqlite_file_pool(4).await;
+            super::polls_for_lost_queue_controls(Backend::Sqlite(pool, path), poll_only).await;
+        }
     }
 
     #[tokio::test]

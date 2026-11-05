@@ -2816,8 +2816,9 @@ func (c *Client[TTx]) QueueListTx(ctx context.Context, tx TTx, params *QueueList
 // queues at once, use the special queue name "*".
 //
 // Clients with a configured notifier should receive a notification about the
-// paused queue(s) within a few milliseconds of the transaction commit. Clients
-// in poll-only mode will pause after their next poll for queue configuration.
+// paused queue(s) within a few milliseconds of the transaction commit. Missed
+// notifications are recovered by polling once a minute. Clients in poll-only
+// mode will pause after their next poll for queue configuration.
 //
 // The provided context is used for the underlying Postgres update and can be
 // used to cancel the operation or apply a timeout. The opts are reserved for
@@ -2856,8 +2857,9 @@ func (c *Client[TTx]) QueuePause(ctx context.Context, name string, opts *QueuePa
 // queues at once, use the special queue name "*".
 //
 // Clients with a configured notifier should receive a notification about the
-// paused queue(s) within a few milliseconds of the transaction commit. Clients
-// in poll-only mode will pause after their next poll for queue configuration.
+// paused queue(s) within a few milliseconds of the transaction commit. Missed
+// notifications are recovered by polling once a minute. Clients in poll-only
+// mode will pause after their next poll for queue configuration.
 //
 // The provided context is used for the underlying Postgres update and can be
 // used to cancel the operation or apply a timeout. The opts are reserved for
@@ -2886,8 +2888,9 @@ func (c *Client[TTx]) QueuePauseTx(ctx context.Context, tx TTx, name string, opt
 // name "*".
 //
 // Clients with a configured notifier should receive a notification about the
-// resumed queue(s) within a few milliseconds of the transaction commit. Clients
-// in poll-only mode will resume after their next poll for queue configuration.
+// resumed queue(s) within a few milliseconds of the transaction commit. Missed
+// notifications are recovered by polling once a minute. Clients in poll-only
+// mode will resume after their next poll for queue configuration.
 //
 // The provided context is used for the underlying Postgres update and can be
 // used to cancel the operation or apply a timeout. The opts are reserved for
@@ -2927,8 +2930,9 @@ func (c *Client[TTx]) QueueResume(ctx context.Context, name string, opts *QueueP
 // name "*".
 //
 // Clients with a configured notifier should receive a notification about the
-// resumed queue(s) within a few milliseconds of the transaction commit. Clients
-// in poll-only mode will resume after their next poll for queue configuration.
+// resumed queue(s) within a few milliseconds of the transaction commit. Missed
+// notifications are recovered by polling once a minute. Clients in poll-only
+// mode will resume after their next poll for queue configuration.
 //
 // The provided context is used for the underlying Postgres update and can be
 // used to cancel the operation or apply a timeout. The opts are reserved for

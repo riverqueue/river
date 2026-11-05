@@ -3567,56 +3567,63 @@ describe("Client runtime", () => {
     expect(errors).toContain("River onEvent hook failed");
   });
 
-  it("reports persisted queue pause transitions recovered by polling", async () => {
-    const driver = new FakeRuntimeDriver();
-    const definition = defineJob({ kind: "test" });
-    const observed: string[] = [];
-    const client = new Client(driver, {
-      hooks: {
-        onEvent: ({ kind }) => {
-          observed.push(kind);
+  it.each([false, true])(
+    "recovers lost queue controls with pollOnly=%s",
+    async (pollOnly) => {
+      const driver = new FakeRuntimeDriver();
+      const definition = defineJob({ kind: "test" });
+      const observed: string[] = [];
+      const client = new Client(driver, {
+        hooks: {
+          onEvent: ({ kind }) => {
+            observed.push(kind);
+          },
         },
-      },
-      leaderElectionDisabled: true,
-      pollOnly: true,
-      queueControlPollInterval: { milliseconds: 1 },
-      queueHeartbeatInterval: { milliseconds: 60_000 },
-      queues: {
-        default: { maxWorkers: 1, pollInterval: { milliseconds: 10_000 } },
-      },
-      workers: new Workers().add(definition, () => undefined),
-    });
-    const events = client.subscribe({
-      kinds: ["queue_paused", "queue_resumed"],
-    });
-    const run = await client.start();
-    const queue = driver.queues.get("default")!;
-    const pausedAt = Temporal.Now.instant();
+        leaderElectionDisabled: true,
+        pollOnly,
+        queueControlPollInterval: { milliseconds: 1 },
+        queueHeartbeatInterval: { milliseconds: 60_000 },
+        queues: {
+          default: { maxWorkers: 1, pollInterval: { milliseconds: 10_000 } },
+        },
+        workers: new Workers().add(definition, () => undefined),
+      });
+      const events = client.subscribe({
+        kinds: ["queue_paused", "queue_resumed"],
+      });
+      const run = await client.start();
+      const queue = driver.queues.get("default")!;
+      const pausedAt = Temporal.Now.instant();
 
-    driver.queues.set("default", { ...queue, pausedAt, updatedAt: pausedAt });
-    await waitUntil(() => run.diagnostics.queues.default?.paused === true);
-    expect((await events.next()).value).toMatchObject({
-      kind: "queue_paused",
-      queue: { name: "default", pausedAt },
-    });
+      driver.queues.set("default", { ...queue, pausedAt, updatedAt: pausedAt });
+      await waitUntil(() => run.diagnostics.queues.default?.paused === true);
+      expect((await events.next()).value).toMatchObject({
+        kind: "queue_paused",
+        queue: { name: "default", pausedAt },
+      });
 
-    const resumedAt = Temporal.Now.instant();
-    driver.queues.set("default", {
-      ...queue,
-      pausedAt: null,
-      updatedAt: resumedAt,
-    });
-    await waitUntil(() => run.diagnostics.queues.default?.paused === false);
-    expect((await events.next()).value).toMatchObject({
-      kind: "queue_resumed",
-      queue: { name: "default", pausedAt: null },
-    });
-    expect(observed.filter((kind) => kind === "queue_paused")).toHaveLength(1);
-    expect(observed.filter((kind) => kind === "queue_resumed")).toHaveLength(1);
+      const resumedAt = Temporal.Now.instant();
+      driver.queues.set("default", {
+        ...queue,
+        pausedAt: null,
+        updatedAt: resumedAt,
+      });
+      await waitUntil(() => run.diagnostics.queues.default?.paused === false);
+      expect((await events.next()).value).toMatchObject({
+        kind: "queue_resumed",
+        queue: { name: "default", pausedAt: null },
+      });
+      expect(observed.filter((kind) => kind === "queue_paused")).toHaveLength(
+        1
+      );
+      expect(observed.filter((kind) => kind === "queue_resumed")).toHaveLength(
+        1
+      );
 
-    events.close();
-    await run.stop();
-  });
+      events.close();
+      await run.stop();
+    }
+  );
 
   it("publishes same-client queue control exactly once", async () => {
     const driver = new FakeRuntimeDriver();

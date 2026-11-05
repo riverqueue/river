@@ -13,6 +13,7 @@ Changes to River for Go are recorded in the [repository changelog](../CHANGELOG.
 ### Fixed
 
 - Align migration CLI output with Go: `migrate-list` shows every bundled version and name, marking the latest applied version with `*`; migration progress uses the Go format and reports when nothing remains to apply; successful validation is silent. SQL output now requires `--show-sql`, including with `--dry-run`. [PR #1580](https://github.com/riverqueue/river/pull/1580).
+- Recover queue pause, resume, and metadata changes whose notifications were lost by polling persisted settings once a minute, including while the listener remains disconnected. [Issue #1579](https://github.com/riverqueue/river/issues/1579).
 
 ## [0.5.0] - 2026-11-02
 

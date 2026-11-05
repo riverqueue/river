@@ -145,7 +145,7 @@ fn jittered_fetch_poll_interval(interval: Duration) -> Duration {
 /// request, checking every [`QUEUE_CONFIG_POLL_INTERVAL`] while the client
 /// has no notifier, like River Go's producers without one. With a notifier,
 /// it's a fallback for a notification that was lost, like while the notifier
-/// was reconnecting, so it checks only every `job_cancel_poll_interval`.
+/// was reconnecting, so it checks only every `notification_poll_interval`.
 /// Whether the client has a notifier is checked each time, since a Postgres
 /// server's lack of `LISTEN`/`NOTIFY` is detected only once the client runs.
 /// It keeps checking after `stopping` fires, so jobs can still be cancelled
@@ -158,7 +158,7 @@ async fn poll_job_cancellations(inner: Arc<ClientInner>, stopping: CancellationT
     let mut last_checked = tokio::time::Instant::now();
     loop {
         poll.tick().await;
-        if inner.has_notifier() && last_checked.elapsed() < inner.job_cancel_poll_interval {
+        if inner.has_notifier() && last_checked.elapsed() < inner.notification_poll_interval {
             continue;
         }
         last_checked = tokio::time::Instant::now();
@@ -731,6 +731,7 @@ pub(super) async fn run_queue(
     tokio::pin!(poll);
     let mut queue_config_poll = tokio::time::interval(QUEUE_CONFIG_POLL_INTERVAL);
     queue_config_poll.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+    let mut last_queue_poll = tokio::time::Instant::now();
 
     let outcome = loop {
         if let Some(failure) = attempts.failure.take() {
@@ -761,13 +762,17 @@ pub(super) async fn run_queue(
                 // More capacity may allow a claim now.
                 (true, false)
             },
-            // Like Go's `pollForSettingChanges`, only a client without a
-            // notifier polls queue state; one with a notifier learns of
-            // changes from control notifications, and a listener reconnect
-            // broadcasts a refresh of every queue. Whether a Postgres
-            // server supports notifications is detected only once the client
-            // runs, so this is checked on each tick.
-            _ = queue_config_poll.tick() => (false, !inner.has_notifier()),
+            // Notifications and reconnects normally refresh settings immediately.
+            // Keep a slower fallback too, including while the listener stays
+            // disconnected. Server capabilities are detected after startup.
+            _ = queue_config_poll.tick() => {
+                let refresh = !inner.has_notifier()
+                    || last_queue_poll.elapsed() >= inner.notification_poll_interval;
+                if refresh {
+                    last_queue_poll = tokio::time::Instant::now();
+                }
+                (false, refresh)
+            },
             () = &mut poll => {
                 poll.as_mut().reset(
                     tokio::time::Instant::now()
