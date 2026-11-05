@@ -10,6 +10,10 @@ Changes to River for Go are recorded in the [repository changelog](../CHANGELOG.
 
 ## [Unreleased]
 
+### Added
+
+- Add `riverqueue migrate-get` to export Postgres or SQLite migration SQL without a database connection, with Go-compatible version selection, exclusions, ordering, schema substitution, and migration headers.
+
 ## [0.5.1] - 2026-11-05
 
 ### Fixed
