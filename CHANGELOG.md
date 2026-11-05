@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.51.1] - 2026-11-05
+
 ### Fixed
 
 - Fixed a client ignoring queue pause, resume, or metadata changes until it restarted when the queue control notification was lost, as happens if it's sent while the client's notifier is reconnecting. Clients with a notifier now also check their queues' settings once a minute. [Issue #1579](https://github.com/riverqueue/river/issues/1579).

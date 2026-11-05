@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.1] - 2026-11-05
+
 ### Fixed
 
 - Fixed maintenance services logging failures during shutdown or leadership loss when a driver returned a socket or SQL error instead of the cancellation reason. Genuine query timeouts and database failures are still reported. [PR #1577](https://github.com/riverqueue/river/pull/1577).

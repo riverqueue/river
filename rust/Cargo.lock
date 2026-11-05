@@ -953,7 +953,7 @@ dependencies = [
 
 [[package]]
 name = "riverqueue"
-version = "0.5.0"
+version = "0.5.1"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -977,7 +977,7 @@ dependencies = [
 
 [[package]]
 name = "riverqueue-cli"
-version = "0.5.0"
+version = "0.5.1"
 dependencies = [
  "riverqueue",
  "riverqueue-migrate",
@@ -989,7 +989,7 @@ dependencies = [
 
 [[package]]
 name = "riverqueue-macros"
-version = "0.5.0"
+version = "0.5.1"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -1001,7 +1001,7 @@ dependencies = [
 
 [[package]]
 name = "riverqueue-migrate"
-version = "0.5.0"
+version = "0.5.1"
 dependencies = [
  "serde_json",
  "sqlx",
@@ -1011,7 +1011,7 @@ dependencies = [
 
 [[package]]
 name = "riverqueue-test"
-version = "0.5.0"
+version = "0.5.1"
 dependencies = [
  "jiff",
  "riverqueue",
