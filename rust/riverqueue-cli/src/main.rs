@@ -16,6 +16,7 @@ use std::{env, error::Error, process::ExitCode};
 #[cfg(feature = "postgres")]
 mod bench;
 mod migrate;
+mod migrate_get;
 
 const HELP: &str = "River for Rust
 
@@ -24,13 +25,16 @@ Usage:
 
 Commands:
   migrate-down  Run down migrations
+  migrate-get   Export migration SQL without connecting to a database
   migrate-list  List migrations, marking the latest applied version with *
   migrate-up    Run up migrations
   validate      Check that all migrations are applied
   bench         Benchmark job throughput against a disposable database
 
 Run `riverqueue <command> --help` for a command's options. Commands read the
-database URL from --database-url or the DATABASE_URL environment variable.
+database URL from --database-url or the DATABASE_URL environment variable,
+except migrate-get, which defaults to Postgres and uses --database-url only
+to select the database dialect.
 ";
 
 #[tokio::main]
@@ -56,6 +60,7 @@ async fn run(mut arguments: Vec<String>) -> Result<(), Box<dyn Error + Send + Sy
         "-V" | "--version" | "version" => println!("riverqueue {}", env!("CARGO_PKG_VERSION")),
         #[cfg(feature = "postgres")]
         "bench" => bench::run(arguments, database_url_env).await?,
+        "migrate-get" => migrate_get::run(arguments)?,
         "migrate-down" | "migrate-list" | "migrate-up" | "validate" => {
             migrate::run(command, arguments, database_url_env).await?;
         }
