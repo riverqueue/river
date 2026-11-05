@@ -37,12 +37,11 @@ import (
 )
 
 const (
-	jobCancelPollBatchSize           = 1000
-	jobCancelPollIntervalDefault     = time.Minute
-	producerReportIntervalDefault    = 30 * time.Second
-	queuePollIntervalDefault         = 2 * time.Second
-	queueReportIntervalDefault       = 10 * time.Minute
-	queueSettingsPollIntervalDefault = time.Minute
+	jobCancelPollBatchSize          = 1000
+	notificationPollIntervalDefault = time.Minute
+	producerReportIntervalDefault   = 30 * time.Second
+	queuePollIntervalDefault        = 2 * time.Second
+	queueReportIntervalDefault      = 10 * time.Minute
 )
 
 // Test-only properties.
@@ -93,13 +92,6 @@ type producerConfig struct {
 	// LISTEN/NOTIFY, but this provides a fallback.
 	FetchPollInterval time.Duration
 
-	// JobCancelPollInterval is the amount of time between checks for
-	// cancellation of running jobs when a notifier is configured. Notifications
-	// normally deliver cancellations right away, so this is only a fallback for
-	// ones that were lost, like while the notifier was reconnecting. In
-	// poll-only mode, QueuePollInterval is used instead.
-	JobCancelPollInterval time.Duration
-
 	PluginLookupByJob  *pluginlookup.JobPluginLookup
 	PluginLookupGlobal *pluginlookup.PluginLookup
 	JobStuckHandler    JobStuckHandler
@@ -107,6 +99,12 @@ type producerConfig struct {
 	JobStuckThreshold  time.Duration
 	JobTimeout         time.Duration
 	MaxWorkers         int
+
+	// NotificationPollInterval is the fallback interval for job cancellations
+	// and queue settings when a notifier is configured. Notifications normally
+	// deliver these changes immediately, but may be lost while disconnected.
+	// In poll-only mode, QueuePollInterval is used instead.
+	NotificationPollInterval time.Duration
 
 	// Notifier is a notifier for subscribing to new job inserts and job
 	// control. If nil, the producer will operate in poll-only mode.
@@ -124,13 +122,6 @@ type producerConfig struct {
 	// queue setting changes and job cancellation requests in poll-only mode
 	// (when no notifier is provided).
 	QueuePollInterval time.Duration
-
-	// QueueSettingsPollInterval is the amount of time between checks for
-	// queue setting changes (pause, resume, metadata) when a notifier is
-	// configured. Notifications normally deliver changes right away, so this is
-	// only a fallback for ones that were lost, like while the notifier was
-	// reconnecting. In poll-only mode, QueuePollInterval is used instead.
-	QueueSettingsPollInterval time.Duration
 	// QueueReportInterval is the amount of time between periodic reports
 	// of the queue status.
 	QueueReportInterval          time.Duration
@@ -154,18 +145,6 @@ func (c *producerConfig) mustValidate() *producerConfig {
 	if c.FetchPollInterval <= 0 {
 		panic("producerConfig.FetchPollInterval must be greater than zero")
 	}
-	if c.JobCancelPollInterval == 0 {
-		c.JobCancelPollInterval = jobCancelPollIntervalDefault
-	}
-	if c.JobCancelPollInterval <= 0 {
-		panic("producerConfig.JobCancelPollInterval must be greater than zero")
-	}
-	if c.QueueSettingsPollInterval == 0 {
-		c.QueueSettingsPollInterval = queueSettingsPollIntervalDefault
-	}
-	if c.QueueSettingsPollInterval <= 0 {
-		panic("producerConfig.QueueSettingsPollInterval must be greater than zero")
-	}
 	if c.JobStuckCount == nil {
 		c.JobStuckCount = &atomic.Int32{}
 	}
@@ -181,6 +160,12 @@ func (c *producerConfig) mustValidate() *producerConfig {
 	if c.MaxWorkers == 0 {
 		panic("producerConfig.MaxWorkers is required")
 	}
+	if c.NotificationPollInterval == 0 {
+		c.NotificationPollInterval = notificationPollIntervalDefault
+	}
+	if c.NotificationPollInterval <= 0 {
+		panic("producerConfig.NotificationPollInterval must be greater than zero")
+	}
 	if c.ProducerReportInterval == 0 {
 		c.ProducerReportInterval = producerReportIntervalDefault
 	}
@@ -191,7 +176,7 @@ func (c *producerConfig) mustValidate() *producerConfig {
 		c.QueuePollInterval = queuePollIntervalDefault
 	}
 	if c.QueuePollInterval <= 0 {
-		panic("producerConfig.QueueSettingsPollInterval must be greater than zero")
+		panic("producerConfig.QueuePollInterval must be greater than zero")
 	}
 	if c.QueueReportInterval == 0 {
 		c.QueueReportInterval = queueReportIntervalDefault
@@ -269,6 +254,7 @@ type producer struct {
 	// Receives control messages from the notifier goroutine. Written by notifier
 	// goroutine, only read from main goroutine.
 	queueControlCh chan *controlEventPayload
+	queueMetadata  []byte // last applied metadata; owned by the main goroutine
 	retryPolicy    ClientRetryPolicy
 	testSignals    producerTestSignals
 }
@@ -381,6 +367,7 @@ func (p *producer) StartWorkContext(fetchCtx, workCtx context.Context) error {
 		}
 	}
 	p.paused = initiallyPaused
+	p.queueMetadata = initialMetadata
 
 	id := p.id.Load()
 	id, p.state, err = p.pilot.ProducerInit(fetchCtx, p.exec, &riverpilot.ProducerInitParams{
@@ -476,7 +463,7 @@ func (p *producer) StartWorkContext(fetchCtx, workCtx context.Context) error {
 		go p.pollForJobCancellations(subroutineCtx, &subroutineWG)
 
 		subroutineWG.Add(1)
-		go p.pollForSettingChanges(subroutineCtx, &subroutineWG, initiallyPaused, initialMetadata)
+		go p.pollForSettingChanges(fetchCtx, &subroutineWG)
 
 		if p.config.Notifier == nil {
 			p.Logger.DebugContext(subroutineCtx, p.Name+": No notifier configured; starting in poll mode", "client_id", p.config.ClientID)
@@ -533,6 +520,9 @@ type controlEventPayload struct {
 	JobID    int64           `json:"job_id,omitempty"`
 	Metadata json.RawMessage `json:"metadata,omitempty"`
 	Queue    string          `json:"queue"`
+
+	// Poll snapshots may repeat metadata already applied from a notification.
+	fromPoll bool
 }
 
 type insertPayload struct {
@@ -602,6 +592,10 @@ func (p *producer) fetchAndRunLoop(fetchCtx, workCtx context.Context) {
 				// will have to wait for the next poll event for a cancel to take effect.
 				p.maybeCancelJob(workCtx, msg.JobID)
 			case controlActionMetadataChanged:
+				if msg.fromPoll && metadataEqual(p.queueMetadata, msg.Metadata) {
+					continue
+				}
+				p.queueMetadata = msg.Metadata
 				p.Logger.DebugContext(workCtx, p.Name+": Queue metadata changed", slog.String("queue", p.config.Queue), slog.String("queue_in_message", msg.Queue))
 				p.testSignals.MetadataChanged.Signal(struct{}{})
 				if err := p.pilot.QueueMetadataChanged(workCtx, p.exec, &riverpilot.QueueMetadataChangedParams{
@@ -1069,7 +1063,7 @@ func (p *producer) pollForJobCancellations(ctx context.Context, wg *sync.WaitGro
 
 	interval := p.config.QueuePollInterval
 	if p.config.Notifier != nil {
-		interval = p.config.JobCancelPollInterval
+		interval = p.config.NotificationPollInterval
 	}
 
 	ticker := time.NewTicker(interval)
@@ -1125,12 +1119,12 @@ func (p *producer) pollForJobCancellationsOnce(ctx context.Context) error {
 // changes. With one, it's a slower fallback because a notification is lost if
 // it's sent while the notifier isn't listening, like while it's reconnecting.
 // Pause and resume are idempotent, so a change seen by both is applied once.
-func (p *producer) pollForSettingChanges(ctx context.Context, wg *sync.WaitGroup, lastPaused bool, lastMetadata []byte) {
+func (p *producer) pollForSettingChanges(ctx context.Context, wg *sync.WaitGroup) {
 	defer wg.Done()
 
 	interval := p.config.QueuePollInterval
 	if p.config.Notifier != nil {
-		interval = p.config.QueueSettingsPollInterval
+		interval = p.config.NotificationPollInterval
 	}
 
 	ticker := time.NewTicker(interval)
@@ -1159,47 +1153,22 @@ func (p *producer) pollForSettingChanges(ctx context.Context, wg *sync.WaitGroup
 				continue
 			}
 
-			// Look for a change in the paused state:
-			shouldBePaused := (updatedQueue.PausedAt != nil)
-			if lastPaused != shouldBePaused {
-				action := controlActionPause
-				if !shouldBePaused {
-					action = controlActionResume
-				}
-				payload := &controlEventPayload{
-					Action: action,
-					Queue:  p.config.Queue,
-				}
-				p.Logger.DebugContext(ctx, p.Name+": Queue control state changed from polling",
-					slog.String("queue", p.config.Queue),
-					slog.String("action", string(action)),
-					slog.Bool("paused", shouldBePaused),
-				)
-
-				select {
-				case p.queueControlCh <- payload:
-					lastPaused = shouldBePaused
-				default:
-					p.Logger.WarnContext(ctx, p.Name+": Queue control notification dropped due to full buffer", slog.String("action", string(action)))
-				}
+			// Reconcile every snapshot with the state the main goroutine actually
+			// applied, including notifications received between polls. Comparing
+			// only with the last poll would miss a notified pause followed by a
+			// lost resume that returns the database to its previous state.
+			action := controlActionPause
+			if updatedQueue.PausedAt == nil {
+				action = controlActionResume
 			}
-
-			// Look for a change in the queue's metadata:
-			if !metadataEqual(lastMetadata, updatedQueue.Metadata) {
-				payload := &controlEventPayload{
-					Action:   controlActionMetadataChanged,
-					Queue:    p.config.Queue,
-					Metadata: updatedQueue.Metadata,
-				}
-				p.Logger.DebugContext(ctx, p.Name+": Queue metadata changed from polling",
-					slog.String("queue", p.config.Queue),
-				)
-
+			for _, payload := range []*controlEventPayload{
+				{Action: action, Queue: p.config.Queue},
+				{Action: controlActionMetadataChanged, Metadata: updatedQueue.Metadata, Queue: p.config.Queue, fromPoll: true},
+			} {
 				select {
 				case p.queueControlCh <- payload:
-					lastMetadata = updatedQueue.Metadata
 				default:
-					p.Logger.WarnContext(ctx, p.Name+": Queue control notification dropped due to full buffer", slog.String("action", string(controlActionMetadataChanged)))
+					p.Logger.WarnContext(ctx, p.Name+": Queue control notification dropped due to full buffer", slog.String("action", string(payload.Action)))
 				}
 			}
 

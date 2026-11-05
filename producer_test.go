@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"slices"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -87,6 +88,17 @@ type jobGetCancelRequestedFuncExecutor struct {
 
 func (e *jobGetCancelRequestedFuncExecutor) JobGetCancelRequested(ctx context.Context, params *riverdriver.JobGetCancelRequestedParams) ([]int64, error) {
 	return e.jobGetCancelRequestedFunc(params)
+}
+
+// queueGetFuncExecutor replaces QueueGet on the wrapped executor.
+type queueGetFuncExecutor struct {
+	riverdriver.Executor
+
+	queueGetFunc func(context.Context, *riverdriver.QueueGetParams) (*rivertype.Queue, error)
+}
+
+func (e *queueGetFuncExecutor) QueueGet(ctx context.Context, params *riverdriver.QueueGetParams) (*rivertype.Queue, error) {
+	return e.queueGetFunc(ctx, params)
 }
 
 // undecodableKindPilot reports locked jobs of one kind as undecodable. Postgres'
@@ -569,10 +581,10 @@ func testProducer(t *testing.T, makeProducer func(ctx context.Context, t *testin
 				// Each mode polls on its own interval. The other one is too long
 				// for the test to pass if it's used instead.
 				if producer.config.Notifier == nil {
-					producer.config.JobCancelPollInterval = time.Hour
+					producer.config.NotificationPollInterval = time.Hour
 					producer.config.QueuePollInterval = 20 * time.Millisecond
 				} else {
-					producer.config.JobCancelPollInterval = 20 * time.Millisecond
+					producer.config.NotificationPollInterval = 20 * time.Millisecond
 					producer.config.QueuePollInterval = time.Hour
 				}
 
@@ -633,50 +645,6 @@ func testProducer(t *testing.T, makeProducer func(ctx context.Context, t *testin
 				require.Equal(t, rivertype.JobStateCancelled, update.Job.State)
 			})
 		}
-	})
-
-	// A pause or resume whose notification was lost, like while the notifier
-	// was reconnecting, is still found by polling.
-	t.Run("QueueSettingsPolling", func(t *testing.T) {
-		t.Parallel()
-
-		producer, bundle := setup(t)
-		AddWorker(bundle.workers, &noOpWorker{})
-
-		// Each mode polls on its own interval. The other one is too long for the
-		// test to pass if it's used instead.
-		if producer.config.Notifier == nil {
-			producer.config.QueuePollInterval = 20 * time.Millisecond
-			producer.config.QueueSettingsPollInterval = time.Hour
-		} else {
-			producer.config.QueuePollInterval = time.Hour
-			producer.config.QueueSettingsPollInterval = 20 * time.Millisecond
-		}
-
-		startProducer(t, ctx, ctx, producer)
-
-		// Pause and resume without a notification. Only polling can find them.
-		require.NoError(t, bundle.exec.QueuePause(ctx, &riverdriver.QueuePauseParams{
-			Name:   producer.config.Queue,
-			Schema: producer.config.Schema,
-		}))
-		producer.testSignals.Paused.WaitOrTimeout()
-
-		mustInsert(ctx, t, producer, bundle, &noOpArgs{})
-		select {
-		case update := <-bundle.jobUpdates:
-			t.Fatalf("Unexpected job update: %+v", update)
-		case <-time.After(200 * time.Millisecond):
-		}
-
-		require.NoError(t, bundle.exec.QueueResume(ctx, &riverdriver.QueueResumeParams{
-			Name:   producer.config.Queue,
-			Schema: producer.config.Schema,
-		}))
-		producer.testSignals.Resumed.WaitOrTimeout()
-
-		update := riversharedtest.WaitOrTimeout(t, bundle.jobUpdates)
-		require.Equal(t, rivertype.JobStateCompleted, update.Job.State)
 	})
 
 	// A cancellation request found by polling cancels the attempt that was
@@ -1334,8 +1302,7 @@ func testProducer(t *testing.T, makeProducer func(ctx context.Context, t *testin
 		// Update with equivalent metadata but different field ordering:
 		reorderedMetadata := []byte(`{"baz":123,"foo":"bar"}`)
 		updateMetadata(reorderedMetadata)
-		// do not emit a notification here because this isn't a "real" update and
-		// notifier mode doesn't check for metadata equivalence.
+		// Omit the notification so polling must recognize equivalent metadata.
 
 		// Should not receive a metadata changed signal since the JSON is equivalent:
 		select {
@@ -1355,6 +1322,141 @@ func testProducer(t *testing.T, makeProducer func(ctx context.Context, t *testin
 
 		// Should receive a metadata changed signal since the JSON is different:
 		producer.testSignals.MetadataChanged.WaitOrTimeout()
+	})
+
+	// A pause, resume, or metadata change whose notification was lost, like
+	// while the notifier was reconnecting, is still found by polling.
+	t.Run("QueueSettingsPolling", func(t *testing.T) {
+		t.Parallel()
+
+		producer, bundle := setup(t)
+		AddWorker(bundle.workers, &noOpWorker{})
+
+		// Each mode polls on its own interval. The other one is too long for the
+		// test to pass if it's used instead.
+		if producer.config.Notifier == nil {
+			producer.config.QueuePollInterval = 20 * time.Millisecond
+			producer.config.NotificationPollInterval = time.Hour
+		} else {
+			producer.config.QueuePollInterval = time.Hour
+			producer.config.NotificationPollInterval = 20 * time.Millisecond
+		}
+
+		startProducer(t, ctx, ctx, producer)
+
+		// Pause and resume without a notification. Only polling can find them.
+		require.NoError(t, bundle.exec.QueuePause(ctx, &riverdriver.QueuePauseParams{
+			Name:   producer.config.Queue,
+			Schema: producer.config.Schema,
+		}))
+		producer.testSignals.Paused.WaitOrTimeout()
+
+		mustInsert(ctx, t, producer, bundle, &noOpArgs{})
+		select {
+		case update := <-bundle.jobUpdates:
+			t.Fatalf("Unexpected job update: %+v", update)
+		case <-time.After(200 * time.Millisecond):
+		}
+
+		require.NoError(t, bundle.exec.QueueResume(ctx, &riverdriver.QueueResumeParams{
+			Name:   producer.config.Queue,
+			Schema: producer.config.Schema,
+		}))
+		producer.testSignals.Resumed.WaitOrTimeout()
+
+		update := riversharedtest.WaitOrTimeout(t, bundle.jobUpdates)
+		require.Equal(t, rivertype.JobStateCompleted, update.Job.State)
+
+		// Metadata is also recovered when its notification is lost.
+		_, err := bundle.exec.QueueUpdate(ctx, &riverdriver.QueueUpdateParams{
+			Metadata:         []byte(`{"version":1}`),
+			MetadataDoUpdate: true,
+			Name:             producer.config.Queue,
+			Schema:           producer.config.Schema,
+		})
+		require.NoError(t, err)
+		producer.testSignals.MetadataChanged.WaitOrTimeout()
+	})
+
+	t.Run("QueueSettingsPollingDeduplicatesMetadata", func(t *testing.T) {
+		t.Parallel()
+
+		producer, bundle := setup(t)
+
+		producer.config.NotificationPollInterval = 20 * time.Millisecond
+		producer.config.QueuePollInterval = 20 * time.Millisecond
+
+		// Hold the first poll until the notification has been applied, so
+		// the poll must compare against metadata learned from a notification.
+		var allowPoll testsignal.TestSignal[struct{}]
+		allowPoll.Init(t)
+		var firstPoll sync.Once
+		producer.exec = &queueGetFuncExecutor{
+			Executor: producer.exec,
+			queueGetFunc: func(ctx context.Context, params *riverdriver.QueueGetParams) (*rivertype.Queue, error) {
+				firstPoll.Do(func() {
+					select {
+					case <-allowPoll.WaitC():
+					case <-ctx.Done():
+					}
+				})
+				return bundle.exec.QueueGet(ctx, params)
+			},
+		}
+		startProducer(t, ctx, ctx, producer)
+
+		metadata := []byte(`{"version":1}`)
+		_, err := bundle.exec.QueueUpdate(ctx, &riverdriver.QueueUpdateParams{
+			Metadata:         metadata,
+			MetadataDoUpdate: true,
+			Name:             producer.config.Queue,
+			Schema:           producer.config.Schema,
+		})
+		require.NoError(t, err)
+		producer.TriggerQueueControlEvent(&controlEventPayload{
+			Action:   controlActionMetadataChanged,
+			Metadata: metadata,
+			Queue:    producer.config.Queue,
+		})
+		producer.testSignals.MetadataChanged.WaitOrTimeout()
+
+		allowPoll.Signal(struct{}{})
+		producer.testSignals.PolledQueueConfig.WaitOrTimeout()
+		select {
+		case <-producer.testSignals.MetadataChanged.WaitC():
+			t.Fatal("Polling repeated metadata already delivered by notification")
+		case <-time.After(100 * time.Millisecond):
+		}
+	})
+
+	t.Run("QueueSettingsPollingReconcilesNotifications", func(t *testing.T) {
+		t.Parallel()
+
+		producer, _ := setup(t)
+		producer.config.NotificationPollInterval = 50 * time.Millisecond
+		producer.config.QueuePollInterval = 50 * time.Millisecond
+		startProducer(t, ctx, ctx, producer)
+
+		// A pause and metadata update were notified, then both reverted in
+		// the database without another notification. The database still has
+		// its initial state, so comparing only successive polls misses this.
+		producer.TriggerQueueControlEvent(&controlEventPayload{Action: controlActionPause, Queue: producer.config.Queue})
+		producer.testSignals.Paused.WaitOrTimeout()
+		producer.TriggerQueueControlEvent(&controlEventPayload{
+			Action: controlActionMetadataChanged, Metadata: []byte(`{"version":1}`), Queue: producer.config.Queue,
+		})
+		producer.testSignals.MetadataChanged.WaitOrTimeout()
+
+		producer.testSignals.Resumed.WaitOrTimeout()
+		producer.testSignals.MetadataChanged.WaitOrTimeout()
+		// Further polls of unchanged settings must not emit duplicate events.
+		select {
+		case <-producer.testSignals.MetadataChanged.WaitC():
+			t.Fatal("Unchanged metadata was applied again")
+		case <-time.After(100 * time.Millisecond):
+		}
+		producer.testSignals.Paused.RequireEmpty()
+		producer.testSignals.Resumed.RequireEmpty()
 	})
 }
 
@@ -1384,7 +1486,7 @@ func emitQueueNotification(t *testing.T, ctx context.Context, exec riverdriver.E
 		"action": action,
 	}
 	if metadata != nil {
-		payload["metadata"] = metadata
+		payload["metadata"] = json.RawMessage(metadata)
 	}
 
 	payloadBytes, err := json.Marshal(payload)

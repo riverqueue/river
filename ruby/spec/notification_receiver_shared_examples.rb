@@ -255,6 +255,32 @@ RSpec.shared_examples "notification receiving" do |backend|
     client&.stop_and_cancel
   end
 
+  [false, true].each do |poll_only|
+    it "recovers lost queue controls with poll_only=#{poll_only}" do
+      # Suppress both native notifications and SQLite outbox entries. The
+      # notifier remains configured, but only persisted state can recover.
+      @driver.define_singleton_method(:runtime_notify) { |*_args| }
+      worked = Queue.new
+      client = receiver_client(fetch_poll_interval: 0.01, poll_only: poll_only) { |job| worked << job.id }
+      events = client.subscribe(:queue_paused, :queue_resumed)
+      client.start
+      other = River::Client.new(@driver)
+
+      other.queue_pause(:notifications)
+      expect(receive_signal(events).kind).to eq(:queue_paused)
+      row = other.insert(River::JobArgsHash.new(:notification, {}), queue: :notifications).job
+      expect { Timeout.timeout(0.1) { worked.pop } }.to raise_error(Timeout::Error)
+      expect(other.job_get(row.id).state).to eq("available")
+
+      other.queue_resume(:notifications)
+      expect(receive_signal(events).kind).to eq(:queue_resumed)
+      expect(receive_signal(worked)).to eq(row.id)
+    ensure
+      client&.stop_and_cancel
+      events&.close
+    end
+  end
+
   it "observes remote queue pause and wildcard resume without waiting for a poll" do
     fetches = observe_fetches
     worked = Queue.new

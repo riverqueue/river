@@ -556,6 +556,47 @@ class RunHandleTest {
     }
   }
 
+  @ParameterizedTest
+  @ValueSource(booleans = {false, true})
+  @SuppressWarnings("try") // Resources intentionally scope background activity.
+  void fetchesRespectLostQueueControlNotifications(boolean pollOnly) throws Exception {
+    var client = client();
+    var worked = new LinkedBlockingQueue<Job<String>>();
+    java.util.function.Consumer<Boolean> setPaused =
+        paused ->
+            client.transaction(
+                connection -> {
+                  // Persist the control without NOTIFY or a SQLite outbox entry,
+                  // as if the listener were disconnected for both operations.
+                  try (var statement =
+                      Sql.prepare(
+                          connection,
+                          Sql.query(client.database(), paused ? "queue_pause" : "queue_resume"),
+                          client.database().timestamp(Instant.now()),
+                          "default",
+                          "default")) {
+                    assertEquals(1, statement.executeUpdate());
+                  }
+                  return null;
+                });
+    try (var run =
+        workers(client)
+            .pollOnly(pollOnly)
+            .pollInterval(Duration.ofMillis(10))
+            .worker(TYPE, context -> worked.add(context.job()))
+            .build()
+            .start()) {
+      setPaused.accept(true);
+      var inserted = client.insert(TYPE, "lost controls").job();
+      assertNull(worked.poll(100, TimeUnit.MILLISECONDS));
+      assertEquals(Job.State.AVAILABLE, client.jobs().get(inserted.id()).state());
+      setPaused.accept(false);
+      var completed = worked.poll(5, TimeUnit.SECONDS);
+      assertNotNull(completed);
+      assertEquals(inserted.id(), completed.id());
+    }
+  }
+
   @Test
   @SuppressWarnings("try") // Resources intentionally scope background activity.
   void goQueueNotificationsRespectTopicsAndSurviveMalformedPayloads() throws Exception {

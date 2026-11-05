@@ -9,7 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
-- Fixed a client ignoring `Client.QueuePause` or `Client.QueueResume` until it restarted when the queue control notification was lost, as happens if it's sent while the client's notifier is reconnecting. Clients with a notifier now also check their queues' settings once a minute. [Issue #1579](https://github.com/riverqueue/river/issues/1579).
+- Fixed a client ignoring queue pause, resume, or metadata changes until it restarted when the queue control notification was lost, as happens if it's sent while the client's notifier is reconnecting. Clients with a notifier now also check their queues' settings once a minute. [Issue #1579](https://github.com/riverqueue/river/issues/1579).
 - Fixed the notifier never reconnecting when its connection went silent without an error, like after a dropped network path, because its health check ping had no timeout. The ping now times out after 10 seconds. [Issue #1579](https://github.com/riverqueue/river/issues/1579).
 
 ## [0.51.0] - 2026-10-31
