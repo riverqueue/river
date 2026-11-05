@@ -107,7 +107,10 @@ func (s *SQLiteNotificationCleaner) Start(ctx context.Context) error { //nolint:
 		return nil
 	}
 
-	s.StaggerStart(ctx)
+	if !s.StaggerStart(ctx) {
+		stopped()
+		return nil
+	}
 
 	go func() {
 		started()
@@ -126,9 +129,10 @@ func (s *SQLiteNotificationCleaner) Start(ctx context.Context) error { //nolint:
 
 			res, err := s.runOnce(ctx)
 			if err != nil {
-				if !errors.Is(err, context.Canceled) {
-					s.Logger.ErrorContext(ctx, s.Name+": Error cleaning SQLite notifications", slog.String("error", err.Error()))
+				if ctx.Err() != nil {
+					return
 				}
+				s.Logger.ErrorContext(ctx, s.Name+": Error cleaning SQLite notifications", slog.String("error", err.Error()))
 				continue
 			}
 

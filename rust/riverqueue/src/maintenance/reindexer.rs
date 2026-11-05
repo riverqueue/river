@@ -97,6 +97,9 @@ pub(super) async fn run(context: std::sync::Arc<ServiceContext>, pool: sqlx::PgP
                         Ok(false) => {}
                         Err(MaintenanceError::Cancelled) => return,
                         Err(reindex_error) => {
+                            if context.cancel.is_cancelled() {
+                                return;
+                            }
                             error!(error = %crate::error::Chain(&reindex_error), index_name, "River reindexer failed");
                         }
                     }
@@ -104,6 +107,9 @@ pub(super) async fn run(context: std::sync::Arc<ServiceContext>, pool: sqlx::PgP
             }
             Err(MaintenanceError::Cancelled) => return,
             Err(list_error) => {
+                if context.cancel.is_cancelled() {
+                    return;
+                }
                 error!(error = %crate::error::Chain(&list_error), "River reindexer could not list indexes");
             }
         }

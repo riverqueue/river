@@ -107,13 +107,16 @@ func NewJobScheduler(archetype *baseservice.Archetype, config *JobSchedulerConfi
 	})
 }
 
-func (s *JobScheduler) Start(ctx context.Context) error {
+func (s *JobScheduler) Start(ctx context.Context) error { //nolint:dupl
 	ctx, shouldStart, started, stopped := s.StartInit(ctx)
 	if !shouldStart {
 		return nil
 	}
 
-	s.StaggerStart(ctx)
+	if !s.StaggerStart(ctx) {
+		stopped()
+		return nil
+	}
 
 	go func() {
 		started()

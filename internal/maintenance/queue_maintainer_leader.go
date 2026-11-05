@@ -146,6 +146,10 @@ func (s *QueueMaintainerLeader) tryStart(ctx context.Context, epoch int64, term 
 			return
 		}
 
+		if ctx.Err() != nil {
+			return
+		}
+
 		s.Logger.ErrorContext(ctx, s.Name+": Error starting queue maintainer",
 			slog.String("err", lastErr.Error()), slog.Int("attempt", attempt))
 

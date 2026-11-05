@@ -858,6 +858,86 @@ describe("RuntimeServices", () => {
     expect(calls).toBe(1);
   });
 
+  it.each(["resign", "stop"] as const)(
+    "does not report driver-specific maintenance errors during %s",
+    async (shutdown) => {
+      const shared = new SharedLeadership();
+      const events: RiverEvent[] = [];
+      const logged: string[] = [];
+      const signals: AbortSignal[] = [];
+      // A backend can reject with a socket or SQL error instead of the
+      // AbortSignal's reason when cancellation interrupts a query.
+      const interrupted = (signal: AbortSignal): Promise<never> => {
+        signals.push(signal);
+        return new Promise((_resolve, reject) => {
+          signal.addEventListener(
+            "abort",
+            () => reject(new Error("connection closed during query")),
+            { once: true }
+          );
+        });
+      };
+      const driver: RuntimeDriver = {
+        ...serviceDriver(shared),
+        maintenanceCleanJobs: (_leader, _params, _timeoutMs, signal) =>
+          interrupted(signal),
+        maintenanceCleanNotifications: (_leader, _horizon, _limit, batch) =>
+          interrupted(batch!.signal),
+        maintenanceCleanQueues: (_leader, _horizon, _limit, batch) =>
+          interrupted(batch!.signal),
+        maintenanceGetStuck: (_leader, _horizon, _afterId, _limit, batch) =>
+          interrupted(batch!.signal),
+        maintenanceReindex: (_leader, _indexes, _timeoutMs, signal) =>
+          interrupted(signal),
+        maintenanceSchedule: (_leader, _params, batch) =>
+          interrupted(batch!.signal),
+      };
+      const services = new RuntimeServices({
+        client: {} as Client,
+        clientId: "leader",
+        driver,
+        emit: (event) => {
+          events.push(event);
+          return Promise.resolve();
+        },
+        logger: {
+          error: (message) => logged.push(message),
+          warn: (message) => logged.push(message),
+        },
+        maintenance: {
+          electionIntervalMs: 60_000,
+          jobCleanerIntervalMs: 60_000,
+          notificationCleanerIntervalMs: 60_000,
+          queueCleanerIntervalMs: 60_000,
+          reindexerSchedule: (after) => after.add({ milliseconds: 1 }),
+          rescuerIntervalMs: 60_000,
+          schedulerIntervalMs: 60_000,
+        },
+        now: () => Temporal.Now.instant(),
+        periodicJobs: new PeriodicJobs(),
+        random: () => 0,
+        rescue: () => Promise.resolve(null),
+      });
+      const controller = new AbortController();
+      const running = services.run(controller.signal);
+      try {
+        await waitUntil(() => signals.length === 6);
+        if (shutdown === "resign") {
+          await expect(services.resignLeadership()).resolves.toBe(true);
+        }
+      } finally {
+        controller.abort();
+        await running;
+      }
+
+      expect(signals.every((signal) => signal.aborted)).toBe(true);
+      expect(logged).toEqual([]);
+      expect(
+        events.filter(({ kind }) => kind === "maintenance_failed")
+      ).toEqual([]);
+    }
+  );
+
   it("aborts backend work immediately when its exact term is resigned", async () => {
     const shared = new SharedLeadership();
     const signals: AbortSignal[] = [];

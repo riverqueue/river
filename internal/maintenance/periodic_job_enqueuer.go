@@ -18,6 +18,7 @@ import (
 	"github.com/riverqueue/river/rivershared/riversharedmaintenance"
 	"github.com/riverqueue/river/rivershared/startstop"
 	"github.com/riverqueue/river/rivershared/testsignal"
+	"github.com/riverqueue/river/rivershared/util/dbutil"
 	"github.com/riverqueue/river/rivershared/util/maputil"
 	"github.com/riverqueue/river/rivershared/util/sliceutil"
 	"github.com/riverqueue/river/rivershared/util/testutil"
@@ -319,7 +320,10 @@ func (s *PeriodicJobEnqueuer) Start(ctx context.Context) error {
 		return nil
 	}
 
-	s.StaggerStart(ctx)
+	if !s.StaggerStart(ctx) {
+		stopped()
+		return nil
+	}
 
 	var (
 		initialPeriodicJobs    []*riverpilot.PeriodicJob
@@ -390,6 +394,10 @@ func (s *PeriodicJobEnqueuer) Start(ctx context.Context) error {
 		var lastHandleSeen rivertype.PeriodicJobHandle = -1 // so handle 0 is considered
 
 		validateInsertRunOnStartAndScheduleNewlyAdded := func() {
+			if ctx.Err() != nil {
+				return
+			}
+
 			var (
 				insertParamsMany        []*rivertype.JobInsertParams
 				now                     = s.Time.Now()
@@ -532,38 +540,49 @@ func (s *PeriodicJobEnqueuer) Start(ctx context.Context) error {
 }
 
 func (s *PeriodicJobEnqueuer) insertBatch(ctx context.Context, insertParamsMany []*rivertype.JobInsertParams, periodicJobUpsertParams *riverpilot.PeriodicJobUpsertManyParams, periodicJobsToKeepAlive map[rivertype.PeriodicJobHandle]*PeriodicJob) {
-	if len(insertParamsMany) < 1 && len(periodicJobUpsertParams.Jobs) < 1 {
+	if ctx.Err() != nil || (len(insertParamsMany) < 1 && len(periodicJobUpsertParams.Jobs) < 1) {
 		return
 	}
 
+	// Check the service context when logging, so query timeouts still surface
+	// while shutdown errors (including driver-specific errors) stay quiet.
+	serviceCtx := ctx
 	ctx, cancel := context.WithTimeout(ctx, riversharedmaintenance.TimeoutDefault)
 	defer cancel()
 
 	tx, err := s.exec.Begin(ctx)
 	if err != nil {
-		s.Logger.ErrorContext(ctx, s.Name+": Error starting transaction", "error", err.Error())
+		if serviceCtx.Err() == nil {
+			s.Logger.ErrorContext(ctx, s.Name+": Error starting transaction", "error", err.Error())
+		}
 		return
 	}
-	defer tx.Rollback(ctx)
+	defer dbutil.RollbackWithoutCancel(ctx, tx)
 
 	if len(insertParamsMany) > 0 {
 		if _, err := s.Config.Insert(ctx, tx, insertParamsMany); err != nil {
-			s.Logger.ErrorContext(ctx, s.Name+": Error inserting periodic jobs",
-				"error", err.Error(), "num_jobs", len(insertParamsMany))
+			if serviceCtx.Err() == nil {
+				s.Logger.ErrorContext(ctx, s.Name+": Error inserting periodic jobs",
+					"error", err.Error(), "num_jobs", len(insertParamsMany))
+			}
 			return
 		}
 	}
 
 	if len(periodicJobUpsertParams.Jobs) > 0 {
 		if _, err = s.Config.Pilot.PeriodicJobUpsertMany(ctx, tx, periodicJobUpsertParams); err != nil {
-			s.Logger.ErrorContext(ctx, s.Name+": Error upserting periodic job next run times",
-				"error", err.Error(), "num_jobs", len(insertParamsMany), "num_next_run_at_upserts", len(periodicJobUpsertParams.Jobs))
+			if serviceCtx.Err() == nil {
+				s.Logger.ErrorContext(ctx, s.Name+": Error upserting periodic job next run times",
+					"error", err.Error(), "num_jobs", len(insertParamsMany), "num_next_run_at_upserts", len(periodicJobUpsertParams.Jobs))
+			}
 			return
 		}
 	}
 
 	if err := tx.Commit(ctx); err != nil {
-		s.Logger.ErrorContext(ctx, s.Name+": Error committing transaction", "error", err.Error())
+		if serviceCtx.Err() == nil {
+			s.Logger.ErrorContext(ctx, s.Name+": Error committing transaction", "error", err.Error())
+		}
 		return
 	}
 
@@ -649,7 +668,9 @@ func (s *PeriodicJobEnqueuer) periodicJobKeepAliveAndReapPeriodically(ctx contex
 							ID:     ids,
 							Schema: s.Config.Schema,
 						}); err != nil {
-							s.Logger.ErrorContext(ctx, s.Name+": Error executing periodic job keep alive and reap", "error", err.Error())
+							if ctx.Err() == nil {
+								s.Logger.ErrorContext(ctx, s.Name+": Error executing periodic job keep alive and reap", "error", err.Error())
+							}
 							return
 						}
 					}

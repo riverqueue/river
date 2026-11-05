@@ -106,7 +106,10 @@ func (s *QueueCleaner) Start(ctx context.Context) error {
 		return nil
 	}
 
-	s.StaggerStart(ctx)
+	if !s.StaggerStart(ctx) {
+		stopped()
+		return nil
+	}
 
 	go func() {
 		started()
@@ -125,9 +128,10 @@ func (s *QueueCleaner) Start(ctx context.Context) error {
 
 			res, err := s.runOnce(ctx)
 			if err != nil {
-				if !errors.Is(err, context.Canceled) {
-					s.Logger.ErrorContext(ctx, s.Name+": Error cleaning queues", slog.String("error", err.Error()))
+				if ctx.Err() != nil {
+					return
 				}
+				s.Logger.ErrorContext(ctx, s.Name+": Error cleaning queues", slog.String("error", err.Error()))
 				continue
 			}
 
