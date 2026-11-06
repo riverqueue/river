@@ -13,7 +13,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
-- Isolate batch peer decoding failures so valid peers continue working, preserving each failed peer's own error through handler failures and completion retries. [PR #XXX](https://github.com/riverqueue/river/pull/XXX).
+- Isolate batch peer decoding failures so valid peers continue working, preserving each failed peer's own error through handler failures and completion retries. [PR #1586](https://github.com/riverqueue/river/pull/1586).
 
 ## [0.3.0] - 2026-11-02
 
