@@ -5,6 +5,25 @@ require "tmpdir"
 require_relative "../lib/migration_cli"
 
 RSpec.shared_examples "migration command" do |adapter|
+  %w[sqlite: sqlite:// sqlite3: sqlite3://].each do |prefix|
+    it "accepts #{prefix} file and memory URLs with #{adapter}", database: :sqlite do
+      Dir.mktmpdir("river-cli-urls-") do |directory|
+        path = File.join(directory, "river.sqlite3")
+        out = StringIO.new
+        err = StringIO.new
+        relative = Pathname.new(path).relative_path_from(Pathname.pwd)
+        url = "#{prefix}#{relative}"
+
+        expect(River::MigrationCLI.run(["migrate-get", "--database-url", url, "--version", "1", "--up"], err: err, out: out)).to eq(0), err.string
+        expect(File.exist?(path)).to be(false)
+        expect(River::MigrationCLI.run(["migrate-up", "--database-url", url], err: err, out: out)).to eq(0), err.string
+        expect(File.exist?(path)).to be(true)
+        expect(River::MigrationCLI.run(["validate", "--database-url", "sqlite://#{path}"], err: err, out: out)).to eq(0), err.string
+        expect(River::MigrationCLI.run(["migrate-up", "--database-url", "#{prefix}:memory:"], err: err, out: out)).to eq(0), err.string
+      end
+    end
+  end
+
   it "supports help and reports usage errors" do
     out = StringIO.new
     err = StringIO.new

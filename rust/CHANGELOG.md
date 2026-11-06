@@ -10,6 +10,10 @@ Changes to River for Go are recorded in the [repository changelog](../CHANGELOG.
 
 ## [Unreleased]
 
+### Fixed
+
+- Accept `sqlite:` URL hints in offline migration SQL export, matching migration commands and preserving the existing `sqlite://` forms. [PR #1588](https://github.com/riverqueue/river/pull/1588).
+
 ## [0.6.0] - 2026-11-05
 
 ### Added

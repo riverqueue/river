@@ -18,12 +18,14 @@ Create the database first, then run:
 bundle exec river migrate-status --database-url postgres://localhost/my_app
 bundle exec river migrate-up --database-url postgres://localhost/my_app
 
-# SQLite, using Sequel:
+# SQLite, using either driver:
 bundle exec river migrate-up --database-url sqlite://storage/river.sqlite3
 ```
 
-`DATABASE_URL` supplies the URL when `--database-url` is omitted. ActiveRecord
-uses `sqlite3:` URLs instead of Sequel's `sqlite:` URLs. To target an existing
+`DATABASE_URL` supplies the URL when `--database-url` is omitted. Both drivers
+accept `sqlite://path`, `sqlite:path`, and the `sqlite3:` aliases. For an in-memory
+database, use `sqlite::memory:` or `sqlite://:memory:`. See the shared
+[SQLite URL reference](../../docs/sqlite-urls.md) for path handling. To target an existing
 Postgres schema, pass `--schema jobs`; otherwise the connection's current
 schema is used. Schema names must be simple SQL identifiers. SQLite always
 uses its main schema.
@@ -91,7 +93,7 @@ migration-tracking table and can usually be omitted with another framework.
 Preserve version boundaries and apply each migration in its own transaction.
 
 Export defaults to Postgres and ignores `DATABASE_URL`. Use
-`--database-url sqlite://` (or `sqlite3://`) to select SQLite SQL; the URL is only
+`--database-url sqlite:` or `sqlite://` (including the `sqlite3:` aliases) to select SQLite SQL; the URL is only
 a dialect hint. `--schema jobs` qualifies Postgres objects with that schema.
 Without it, objects are unqualified. Schema placeholders are always substituted.
 

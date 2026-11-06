@@ -151,7 +151,7 @@ default.
 	}
 
 	addDatabaseURLFlag := func(cmd *cobra.Command, databaseURL *string) {
-		cmd.Flags().StringVar(databaseURL, "database-url", "", "URL of the database (should look like `postgres://...`)")
+		cmd.Flags().StringVar(databaseURL, "database-url", "", "URL of the database (postgres://..., sqlite://path, or sqlite:path)")
 	}
 	addLineFlag := func(cmd *cobra.Command, line *string) {
 		cmd.Flags().StringVar(line, "line", "", "migration line to operate on (default: main)")

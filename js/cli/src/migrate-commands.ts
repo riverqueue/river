@@ -457,9 +457,9 @@ function sqlDialect(
   url: string | undefined
 ): MigrationBackend {
   if (url === undefined) return "postgres";
+  if (/^sqlite:/i.test(url)) return "sqlite";
   const scheme = /^([a-z][a-z0-9+.-]*):\/\//i.exec(url)?.[1]?.toLowerCase();
   if (scheme === "postgres" || scheme === "postgresql") return "postgres";
-  if (scheme === "sqlite") return "sqlite";
   throw new UsageError(
     "--database-url must start with postgres://, postgresql://, or sqlite://",
     command

@@ -43,7 +43,8 @@ const SQLITE_BUSY_TIMEOUT_MS = 5_000;
  *
  * `postgres://` and `postgresql://` URLs select Postgres. `sqlite://PATH`
  * selects SQLite, where `PATH` is a file path (`sqlite:///abs/river.db` or
- * `sqlite://relative/river.db`), `:memory:`, or a `file:` URL. Without a URL,
+ * `sqlite://relative/river.db`), `:memory:`, or a `file:` URL. The `//` is
+ * optional: `sqlite:relative/river.db` and `sqlite::memory:` also work. Without a URL,
  * Postgres is configured from `PG*` environment variables when
  * `PGDATABASE` is set, as node-postgres and River's Go CLI do.
  */
@@ -63,13 +64,15 @@ export function parseDatabaseUrl(
     );
   }
 
-  const scheme = /^([a-z][a-z0-9+.-]*):\/\//i.exec(url)?.[1]?.toLowerCase();
+  const scheme = /^sqlite:/i.test(url)
+    ? "sqlite"
+    : /^([a-z][a-z0-9+.-]*):\/\//i.exec(url)?.[1]?.toLowerCase();
   switch (scheme) {
     case "postgres":
     case "postgresql":
       return { backend: "postgres", connectionString: url };
     case "sqlite": {
-      const path = url.slice("sqlite://".length);
+      const path = url.slice("sqlite:".length).replace(/^\/\//, "");
       if (path.length === 0) {
         throw new UsageError(
           "a SQLite --database-url needs a path, such as sqlite:///var/lib/river.db",
