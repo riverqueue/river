@@ -576,14 +576,11 @@ func (p *JobListParams) Where(sql string, namedArgsMany ...NamedArgs) *JobListPa
 	paramsCopy := p.copy()
 
 	var allNamedArgs NamedArgs
-	if len(namedArgsMany) > 0 {
-		for i, namedArgs := range namedArgsMany {
-			if i == 0 {
-				allNamedArgs = namedArgs
-			} else {
-				maps.Copy(allNamedArgs, namedArgs)
-			}
+	for _, namedArgs := range namedArgsMany {
+		if allNamedArgs == nil {
+			allNamedArgs = make(NamedArgs, len(namedArgs))
 		}
+		maps.Copy(allNamedArgs, namedArgs)
 	}
 
 	paramsCopy.where = append(paramsCopy.where, dblist.WherePredicate{NamedArgs: allNamedArgs, SQL: sql})
