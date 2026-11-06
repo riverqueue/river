@@ -66,9 +66,10 @@ public final class WorkContext<A> {
   /**
    * Internal companion-attempt seam used by River Pro's batch worker. Peers use the runtime timeout
    * during decoding, then their worker override. A peer that ignores cancellation beyond the stuck
-   * threshold interrupts the thread claiming and working the batch.
+   * threshold interrupts the thread claiming and working the batch. Decoding failures are omitted
+   * from the returned peers and fail only their own attempts when the parent finishes.
    */
-  public <T> java.util.List<WorkContext<T>> claimPeers(
+  public <T> PeerClaims<T> claimPeers(
       JobType<T> type, Client.Transaction<java.util.List<Client.Decoded>> claim) {
     if (runtime == null) throw new IllegalStateException("No worker runtime");
     return runtime.claimPeers(this, type, claim);
@@ -93,7 +94,14 @@ public final class WorkContext<A> {
     return context;
   }
 
-  record Peer(Job<JsonNode> row, WorkContext<?> context) {}
+  record Peer(Job<JsonNode> row, WorkContext<?> context, Exception failure) {}
+
+  /** Internal claim result; count includes undecodable peers retained for completion. */
+  public record PeerClaims<T>(int count, java.util.List<WorkContext<T>> peers) {
+    public PeerClaims {
+      peers = java.util.List.copyOf(peers);
+    }
+  }
 
   /**
    * Waits for the cancellation signal. Call {@link #checkCancelled()} afterward if leaving work

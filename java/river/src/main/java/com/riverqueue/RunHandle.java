@@ -530,7 +530,7 @@ public final class RunHandle implements AutoCloseable {
           .work(context, () -> workMiddleware(context, index + 1, next));
   }
 
-  <A> List<WorkContext<A>> claimPeers(
+  <A> WorkContext.PeerClaims<A> claimPeers(
       WorkContext<?> parent, JobType<A> type, Client.Transaction<List<Client.Decoded>> operation) {
     parent.checkRuntimeCancellation();
     var rows =
@@ -540,12 +540,11 @@ public final class RunHandle implements AutoCloseable {
               river.pilot().afterPeerClaim(connection, river.driver(), claimed);
               return claimed;
             });
-    // Register every committed claim before decoding any arguments. A decoding failure must still
-    // leave all claimed jobs owned by this attempt so its failure settles the entire batch.
+    // Register every committed claim before decoding so failures cannot orphan running peers.
     for (var decoded : rows) {
       var context = new WorkContext<>(river, decoded.job(), false);
       context.timeout = config.jobTimeout;
-      parent.peers.put(decoded.job().id(), new WorkContext.Peer(decoded.job(), context));
+      parent.peers.put(decoded.job().id(), new WorkContext.Peer(decoded.job(), context, null));
       activeThreads.put(decoded.job().id(), Thread.currentThread());
       active.put(decoded.job().id(), context);
       // Publish before checking the parent so a concurrent cancellation cannot miss both.
@@ -553,19 +552,29 @@ public final class RunHandle implements AutoCloseable {
     }
     var contexts = new ArrayList<WorkContext<A>>();
     for (var decoded : rows) {
-      if (decoded.failure() != null) throw decoded.failure();
       var provisional = parent.peers.get(decoded.job().id()).context();
-      // Decode the plugin's wire representation once, including when evaluating the timeout.
-      var job = decoded.job().mapArgs(ignored -> river.pilot().decode(decoded.job()));
-      var context =
-          provisional.withDecodedJob(job.mapArgs(args -> Json.decode(args, type.argsType())));
-      var registration = config.handlers.get(job.kind());
-      context.timeout = registration == null ? config.jobTimeout : timeout(registration, job);
-      parent.peers.put(decoded.job().id(), new WorkContext.Peer(decoded.job(), context));
-      active.put(decoded.job().id(), context);
-      contexts.add(context);
+      try {
+        if (decoded.failure() != null) throw decoded.failure();
+        // Decode the pilot's wire representation once, including when evaluating the timeout.
+        var job = decoded.job().mapArgs(ignored -> river.pilot().decode(decoded.job()));
+        var context =
+            provisional.withDecodedJob(job.mapArgs(args -> Json.decode(args, type.argsType())));
+        var registration = config.handlers.get(job.kind());
+        context.timeout = registration == null ? config.jobTimeout : timeout(registration, job);
+        parent.peers.put(decoded.job().id(), new WorkContext.Peer(decoded.job(), context, null));
+        active.put(decoded.job().id(), context);
+        contexts.add(context);
+      } catch (Exception failure) {
+        // Cancellation still interrupts the shared batch thread rather than becoming a decode
+        // error.
+        if (provisional.isCancelled() || Thread.currentThread().isInterrupted()) throw failure;
+        parent.peers.put(
+            decoded.job().id(),
+            new WorkContext.Peer(decoded.job(), provisional, provisional.finish(failure)));
+        activeThreads.remove(decoded.job().id());
+      }
     }
-    return List.copyOf(contexts);
+    return new WorkContext.PeerClaims<>(rows.size(), contexts);
   }
 
   void completePeer(WorkContext<?> parent, WorkContext<?> context, Exception failure) {
@@ -573,7 +582,8 @@ public final class RunHandle implements AutoCloseable {
     if (peer == null || peer.context() != context)
       throw new IllegalArgumentException("Peer is not owned by this batch attempt");
     if (parent.cancellation() != null) context.requestCancellation(parent.cancellation());
-    failure = context.finish(failure);
+    // Preserve decode errors across handler failures and retries of durable completion.
+    failure = context.finish(peer.failure() == null ? failure : peer.failure());
     activeThreads.remove(context.job().id());
     complete(peer.row(), context, failure);
     parent.peers.remove(context.job().id(), peer);

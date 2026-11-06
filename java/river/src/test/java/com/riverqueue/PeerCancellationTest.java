@@ -91,7 +91,7 @@ class PeerCancellationTest {
                             }
                             return jobs;
                           });
-                  var peer = peers.getFirst();
+                  var peer = peers.peers().getFirst();
                   typed.complete(peer);
                   finish.join();
                   context.completePeer(peer, new InterruptedException("peer interrupted"));
@@ -207,13 +207,14 @@ class PeerCancellationTest {
                               }
                               return jobs;
                             });
-                    assertEquals(1, peers.size());
+                    assertEquals(1, peers.count());
                     entered.complete(null);
                     try {
                       release.await();
                     } catch (InterruptedException error) {
                       assertEquals(
-                          WorkContext.Cancellation.TIMEOUT, peers.getFirst().cancellation());
+                          WorkContext.Cancellation.TIMEOUT,
+                          peers.peers().getFirst().cancellation());
                       assertNull(context.cancellation(), "The parent's timeout is disabled");
                       interrupted.complete(null);
                       throw error;

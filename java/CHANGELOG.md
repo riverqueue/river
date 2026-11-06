@@ -11,6 +11,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Expose `Client.QUEUE_DEFAULT` (`"default"`) for queue configuration and operations, matching the default queue constant in other River clients.
 
+### Fixed
+
+- Isolate batch peer decoding failures so valid peers continue working, preserving each failed peer's own error through handler failures and completion retries. [PR #XXX](https://github.com/riverqueue/river/pull/XXX).
+
 ## [0.3.0] - 2026-11-02
 
 ### Added
