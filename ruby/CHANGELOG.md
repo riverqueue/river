@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- Accept `sqlite:` and `sqlite://` URLs with both Active Record and Sequel, including `:memory:` databases, while preserving the `sqlite3:` aliases. [PR #1588](https://github.com/riverqueue/river/pull/1588).
+
 ## [0.16.0] - 2026-11-04
 
 ### Added

@@ -8,6 +8,8 @@ import (
 	"fmt"
 	"maps"
 	"net/url"
+	"os"
+	"path/filepath"
 	"runtime/debug"
 	"strconv"
 	"strings"
@@ -542,6 +544,70 @@ func TestBaseCommandSetDriverProcurerSQLite(t *testing.T) {
 -- River main migration 001 [up]
 SELECT 'up 1' FROM river_table
 		`), strings.TrimSpace(out.String()))
+}
+
+func TestBaseCommandSetSQLiteURLs(t *testing.T) {
+	t.Parallel()
+
+	runFunc := func(t *testing.T, databaseURL string, args ...string) string {
+		t.Helper()
+
+		var out bytes.Buffer
+		cli := NewCLI(&Config{Name: "River"})
+		cli.SetOut(&out)
+		cmd := cli.BaseCommandSet()
+		cmd.SetArgs(append(args, "--database-url", databaseURL))
+		require.NoError(t, cmd.Execute())
+		return out.String()
+	}
+
+	t.Run("DialectHint", func(t *testing.T) {
+		t.Parallel()
+
+		for _, databaseURL := range []string{"sqlite:", "sqlite://"} {
+			sql := runFunc(t, databaseURL, "migrate-get", "--version", "1", "--up")
+			require.Contains(t, sql, "id integer PRIMARY KEY")
+		}
+	})
+
+	t.Run("File", func(t *testing.T) {
+		t.Parallel()
+
+		for _, prefix := range []string{"sqlite:", "sqlite://"} {
+			t.Run(prefix, func(t *testing.T) {
+				t.Parallel()
+
+				path := filepath.Join(t.TempDir(), "river.db")
+				workingDir, err := os.Getwd()
+				require.NoError(t, err)
+				relativePath, err := filepath.Rel(workingDir, path)
+				require.NoError(t, err)
+				databaseURL := prefix + relativePath
+
+				sql := runFunc(t, databaseURL, "migrate-get", "--version", "1", "--up")
+				require.Contains(t, sql, "CREATE TABLE")
+				require.NoFileExists(t, path)
+				runFunc(t, databaseURL, "migrate-up")
+				require.FileExists(t, path)
+				runFunc(t, "sqlite://"+path, "validate")
+			})
+		}
+	})
+
+	t.Run("Memory", func(t *testing.T) {
+		t.Parallel()
+
+		for _, databaseURL := range []string{"sqlite::memory:", "sqlite://:memory:"} {
+			t.Run(databaseURL, func(t *testing.T) {
+				t.Parallel()
+
+				sql := runFunc(t, databaseURL, "migrate-get", "--version", "1", "--up")
+				require.Contains(t, sql, "CREATE TABLE")
+				out := runFunc(t, databaseURL, "migrate-up")
+				require.Contains(t, out, "applied migration 008")
+			})
+		}
+	})
 }
 
 func TestMigrateGet(t *testing.T) {

@@ -79,28 +79,41 @@ fn sqlite_does_not_create_database() {
             .unwrap()
             .as_nanos()
     ));
-    let database_url = format!("sqlite://{}?mode=rwc", path.display());
-    let output = success(run(&database_url, &["--version", "1", "--up"]));
-    assert!(output.contains("id integer PRIMARY KEY"));
-    assert!(!path.exists(), "export must not create a database file");
+    for prefix in ["sqlite:", "sqlite://"] {
+        let database_url = format!("{prefix}{}?mode=rwc", path.display());
+        let output = success(run(&database_url, &["--version", "1", "--up"]));
+        assert!(output.contains("id integer PRIMARY KEY"));
+        assert!(!path.exists(), "export must not create a database file");
+    }
 }
 
 #[cfg(feature = "sqlite")]
 #[test]
 fn sqlite_export() {
-    exercise_export(
+    for url in [
+        "sqlite:",
         "sqlite://",
-        riverqueue_migrate::SqliteMigrator::all_versions(),
-    );
+        "sqlite::memory:",
+        "sqlite://:memory:",
+    ] {
+        exercise_export(url, riverqueue_migrate::SqliteMigrator::all_versions());
+    }
 }
 
 #[cfg(not(feature = "sqlite"))]
 #[test]
 fn sqlite_requires_feature() {
-    failure(
-        run("sqlite://", &["--all", "--up"]),
-        "SQLite support requires the `sqlite` feature",
-    );
+    for url in [
+        "sqlite:",
+        "sqlite://",
+        "sqlite::memory:",
+        "sqlite://:memory:",
+    ] {
+        failure(
+            run(url, &["--all", "--up"]),
+            "SQLite support requires the `sqlite` feature",
+        );
+    }
 }
 
 fn command(arguments: &[&str]) -> Command {

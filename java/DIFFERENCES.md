@@ -10,6 +10,9 @@
 - A `DataSource` and its pool belong to the application. `Database.connect`
   uses DriverManager without pooling; callers wanting pooled connections supply
   a data source. River-owned JDBC connections are closed after each transaction.
+- SQLite connections accept the shared `sqlite:` and `sqlite://` forms, plus
+  native `jdbc:sqlite:` URLs passed unchanged to JDBC. See the
+  [SQLite URL reference](../docs/sqlite-urls.md) for the portable forms.
 - Caller-owned transactions use JDBC savepoints. Hooks run within those
   savepoints, so a failed River operation leaves the outer transaction usable.
 - Cancellation is cooperative and followed by interruption after the configured

@@ -70,9 +70,13 @@ func RunCommand[TOpts CommandOpts](ctx context.Context, bundle *RunCommandBundle
 			protocol = "postgres"
 		} else if bundle.DatabaseURL != nil {
 			databaseURL = bundle.DatabaseURL
-			var ok bool
-			protocol, urlWithoutProtocol, ok = strings.Cut(*databaseURL, "://")
-			if !ok {
+			var hasProtocol bool
+			if sqlitePath, sqlite := strings.CutPrefix(*databaseURL, "sqlite:"); sqlite {
+				protocol, urlWithoutProtocol, hasProtocol = "sqlite", strings.TrimPrefix(sqlitePath, "//"), true
+			} else {
+				protocol, urlWithoutProtocol, hasProtocol = strings.Cut(*databaseURL, "://")
+			}
+			if !hasProtocol {
 				return false, fmt.Errorf("expected database URL (`%s`) to be formatted like `postgres://...`", *bundle.DatabaseURL)
 			}
 		}

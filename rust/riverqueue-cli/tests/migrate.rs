@@ -56,6 +56,27 @@ async fn sqlite_migration_output() {
     std::fs::remove_file(path).unwrap();
 }
 
+#[cfg(feature = "sqlite")]
+#[test]
+fn sqlite_url_forms() {
+    for url in ["sqlite::memory:", "sqlite://:memory:"] {
+        let output = success(run(url, None, &["migrate-up"]));
+        assert!(output.contains("applied migration 008"));
+    }
+    let path = std::path::PathBuf::from(format!(
+        "river-cli-forms-{}-{}.db",
+        std::process::id(),
+        nonce()
+    ));
+    let short = format!("sqlite:{}?mode=rwc", path.display());
+    let absolute = std::env::current_dir().unwrap().join(&path);
+    let long = format!("sqlite://{}?mode=rwc", absolute.display());
+    success(run(&short, None, &["migrate-up"]));
+    assert!(path.exists());
+    success(run(&long, None, &["validate"]));
+    std::fs::remove_file(path).unwrap();
+}
+
 fn assert_listing(command: &impl Fn(&[&str]) -> Output, current: Option<i64>) {
     let names = [
         "create_river_migration",

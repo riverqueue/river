@@ -18,6 +18,10 @@ riverqueue migrate-up --database-url postgres://localhost/app --schema river
 riverqueue migrate-up --database-url sqlite://app.sqlite3
 ```
 
+SQLite URLs accept either `sqlite://` or `sqlite:` before the path, including
+`sqlite://:memory:` and `sqlite::memory:`. Add `?mode=rwc` to create a missing
+file. See the shared [SQLite URL reference](../../docs/sqlite-urls.md).
+
 `migrate-down`, `migrate-list`, and `validate` take the same connection
 options. `--target-version N`, `--max-steps N`, and `--dry-run` limit or
 preview a migration run. Applications can instead migrate from Rust with the
