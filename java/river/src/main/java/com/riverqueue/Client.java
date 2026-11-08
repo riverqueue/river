@@ -851,7 +851,9 @@ public final class Client {
             : original.uniqueStates().stream().mapToInt(Job.State::bit).reduce(0, (a, b) -> a | b);
     boolean postgres = database.dialect() == Database.Dialect.POSTGRES;
     try {
-      if (!postgres && key != null && (stateMask & Job.State.of(state).bit()) != 0) {
+      if (database.dialect() == Database.Dialect.SQLITE
+          && key != null
+          && (stateMask & Job.State.of(state).bit()) != 0) {
         try (var statement = Sql.prepare(connection, Sql.query(database, "writer_lock"))) {
           statement.executeUpdate();
         }
@@ -893,13 +895,7 @@ public final class Client {
         key == null ? null : HexFormat.of().parseHex(key),
         mask
       };
-      String insertSql = Sql.query(database, "insert");
-      if (postgres)
-        insertSql =
-            insertSql.replace(
-                "{duplicate}",
-                Sql.query(database, nonce ? "insert_duplicate_nonce" : "insert_duplicate_xmax"));
-      try (var statement = Sql.prepare(connection, insertSql, params);
+      try (var statement = Sql.mutation(database, connection, "insert", params);
           var rows = statement.executeQuery()) {
         if (!rows.next())
           throw new RiverException(RiverException.Code.REJECTED, "Insertion returned no row");
@@ -910,6 +906,15 @@ public final class Client {
                     .path(Protocol.METADATA_UNIQUE_NONCE)
                     .equals(metadata.path(Protocol.METADATA_UNIQUE_NONCE))
                 : rows.getBoolean("duplicate");
+        if (duplicate
+            && database.dialect() == Database.Dialect.MYSQL
+            && (key == null
+                || (stateMask & Job.State.of(state).bit()) == 0
+                || !key.equals(job.uniqueKey())
+                || job.uniqueStates() == null
+                || !job.uniqueStates().contains(job.state())))
+          throw new RiverException(
+              RiverException.Code.REJECTED, "Insertion violated an unrelated unique constraint");
         if (!duplicate) pilot.afterInsert(connection, driver(), job);
         if (!duplicate && job.state() == Job.State.AVAILABLE) notifyInsert(connection, job.queue());
         return new Job.InsertResult(job, duplicate);
@@ -972,6 +977,9 @@ public final class Client {
   /** Runs a callback in a new transaction, committing on success and rolling back on failure. */
   public <T> T transaction(Transaction<T> action) {
     try (var connection = database.connection()) {
+      int isolation = connection.getTransactionIsolation();
+      if (database.dialect() == Database.Dialect.MYSQL)
+        connection.setTransactionIsolation(Connection.TRANSACTION_READ_COMMITTED);
       connection.setAutoCommit(false);
       var previous = ownedCommit.get();
       var commit = new Commit(connection);
@@ -993,6 +1001,8 @@ public final class Client {
       } finally {
         if (previous == null) ownedCommit.remove();
         else ownedCommit.set(previous);
+        if (database.dialect() == Database.Dialect.MYSQL)
+          connection.setTransactionIsolation(isolation);
       }
     } catch (SQLException e) {
       throw databaseError("River transaction", e);

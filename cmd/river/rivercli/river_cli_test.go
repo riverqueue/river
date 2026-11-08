@@ -170,7 +170,7 @@ func TestBaseCommandSetIntegration(t *testing.T) {
 		cmd, _ := setup(t)
 
 		cmd.SetArgs([]string{"migrate-down", "--database-url", "post://"})
-		require.EqualError(t, cmd.Execute(), "unsupported database URL (`post://`); try one with a `postgres://`, `postgresql://`, or `sqlite://` scheme/prefix")
+		require.EqualError(t, cmd.Execute(), "unsupported database URL (`post://`); try one with a `mysql://`, `postgres://`, `postgresql://`, or `sqlite://` scheme/prefix")
 	})
 
 	t.Run("MigrateUpWithAppliedTargetVersion", func(t *testing.T) {

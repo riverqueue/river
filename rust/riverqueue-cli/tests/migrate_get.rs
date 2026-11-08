@@ -26,6 +26,24 @@ fn help_documents_export() {
     }
 }
 
+#[cfg(feature = "mysql")]
+#[test]
+fn mysql_export() {
+    exercise_export(
+        "mysql://",
+        riverqueue_migrate::MySqlMigrator::all_versions(),
+    );
+}
+
+#[cfg(not(feature = "mysql"))]
+#[test]
+fn mysql_requires_feature() {
+    failure(
+        run("mysql://", &["--all", "--up"]),
+        "MySQL support requires the `mysql` feature",
+    );
+}
+
 #[cfg(feature = "postgres")]
 #[test]
 fn postgres_export() {
@@ -221,8 +239,8 @@ fn exercise_invalid_arguments(database_url: &str) {
             "migration line does not exist: missing",
         ),
         (
-            vec!["--all", "--up", "--database-url", "mysql://"],
-            "--database-url must use a postgres://, postgresql://, or sqlite:// prefix",
+            vec!["--all", "--up", "--database-url", "unknown://"],
+            "--database-url must use a mysql://, postgres://, postgresql://, or sqlite:// prefix",
         ),
     ] {
         failure(run(database_url, &arguments), error);

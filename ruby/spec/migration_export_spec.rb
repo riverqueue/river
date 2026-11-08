@@ -34,6 +34,12 @@ RSpec.describe River::MigrationCLI do
     expect(stdout).not_to include("TEMPLATE")
   end
 
+  it "exports MySQL SQL with schema substitution without connecting" do
+    expect(run("--version", "2", "--up", "--database-url", "mysql://invalid.invalid", "--schema", "jobs")).to eq(0), err.string
+    expect(out.string).to include("CREATE TABLE `jobs`.river_job", "utf8mb4_0900_bin")
+    expect(out.string).not_to include("TEMPLATE")
+  end
+
   it "exports no SQL when every selected version is excluded" do
     expect(run("--version", "1", "--exclude-version", "1", "--up")).to eq(0)
     expect(out.string).to eq("")
@@ -118,7 +124,7 @@ RSpec.describe River::MigrationCLI do
     [["--all", "--up", "--down"], "pass exactly one of --up or --down"],
     [["--version", "1,999", "--up"], "migration 999 does not exist"],
     [["--version", "1,999", "--exclude-version", "999", "--up"], "migration 999 does not exist"],
-    [["--all", "--up", "--database-url", "mysql://user:secret@localhost"], "--database-url must use"],
+    [["--all", "--up", "--database-url", "unknown://user:secret@localhost"], "--database-url must use"],
     [["--all", "--up", "--database-url", "sqlite://", "--schema", "jobs"], "SQLite does not support"],
     [["--all", "--up", "--schema", 'bad"schema'], "schema must be a simple SQL identifier"],
     [["--all", "--up", "--dry-run"], "--dry-run cannot be used with migrate-get"],

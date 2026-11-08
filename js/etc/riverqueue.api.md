@@ -2658,6 +2658,11 @@ interface RiverTransactionRegistry {
 }
 
 interface RiverTransactionRegistry {
+  /** A mysql2 connection with an open transaction. */
+  "@riverqueue/driver-mysql": PoolConnection;
+}
+
+interface RiverTransactionRegistry {
   /** node-postgres clients (`pg.Client` or a pool's `PoolClient`). */
   "@riverqueue/driver-pg": ClientBase;
 }

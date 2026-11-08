@@ -10,6 +10,10 @@ Changes to River for Go are recorded in the [repository changelog](../CHANGELOG.
 
 ## [Unreleased]
 
+### Added
+
+- Add MySQL support through the `mysql` feature, including transactional job operations, workers, notification delivery, maintenance, test helpers, and CLI migrations.
+
 ## [0.6.0] - 2026-11-05
 
 ### Added

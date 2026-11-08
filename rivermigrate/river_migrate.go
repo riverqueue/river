@@ -339,11 +339,17 @@ func (m *Migrator[TTx]) Migrate(ctx context.Context, direction Direction, opts *
 //
 // This variant lets a caller run migrations within a transaction. Postgres DDL
 // is transactional, so migration changes aren't visible until the transaction
-// commits, and are rolled back if the transaction rolls back.
+// commits, and are rolled back if the transaction rolls back. MySQL rejects this
+// method because its DDL implicitly commits the caller's transaction. Use Migrate
+// instead.
 //
 // Deprecated: Use Migrate instead. Certain migrations cannot be batched together
 // in a single transaction, so this method is not recommended.
 func (m *Migrator[TTx]) MigrateTx(ctx context.Context, tx TTx, direction Direction, opts *MigrateOpts) (*MigrateResult, error) {
+	if m.driver.DatabaseName() == riverdriver.DatabaseNameMySQL {
+		return nil, errors.New("MySQL migrations cannot run in a transaction because DDL commits implicitly; use Migrate instead")
+	}
+
 	switch direction {
 	case DirectionDown:
 		return m.migrateDown(ctx, m.driver.UnwrapExecutor(tx), direction, opts, true)
@@ -583,7 +589,7 @@ func (m *Migrator[TTx]) applyMigrations(ctx context.Context, exec riverdriver.Ex
 
 	var schema string
 	if m.schema != "" {
-		schema = dbutil.SafeIdentifier(m.schema) + "."
+		schema = m.driver.SafeIdentifier(m.schema) + "."
 	}
 	schemaReplacement := map[string]sqlctemplate.Replacement{
 		"schema": {Value: schema},

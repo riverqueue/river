@@ -179,6 +179,8 @@ type JobListParams struct {
 	where          []dblist.WherePredicate
 }
 
+const jobListMetadataPredicatePostgres = `metadata @> @metadata_fragment::jsonb`
+
 // NewJobListParams creates a new JobListParams to return available jobs sorted
 // by time in ascending order, returning 100 jobs at most.
 func NewJobListParams() *JobListParams {
@@ -357,9 +359,9 @@ func (p *JobListParams) toDBParams() (*dblist.JobListParams, error) {
 		// first descending.
 		case p.after.time.IsZero():
 			if sortOrder == dblist.SortOrderAsc {
-				where = append(where, dblist.WherePredicate{NamedArgs: namedArgs, SQL: fmt.Sprintf(`("%s" IS NULL AND "id" > @after_id)`, timeField)})
+				where = append(where, dblist.WherePredicate{NamedArgs: namedArgs, SQL: fmt.Sprintf(`(%s IS NULL AND id > @after_id)`, timeField)})
 			} else {
-				where = append(where, dblist.WherePredicate{NamedArgs: namedArgs, SQL: fmt.Sprintf(`("%s" IS NOT NULL OR "id" < @after_id)`, timeField)})
+				where = append(where, dblist.WherePredicate{NamedArgs: namedArgs, SQL: fmt.Sprintf(`(%s IS NOT NULL OR id < @after_id)`, timeField)})
 			}
 
 		default:
@@ -367,11 +369,11 @@ func (p *JobListParams) toDBParams() (*dblist.JobListParams, error) {
 			if sortOrder == dblist.SortOrderAsc {
 				var orNull string
 				if timeFieldNullable {
-					orNull = fmt.Sprintf(` OR "%s" IS NULL`, timeField)
+					orNull = fmt.Sprintf(` OR %s IS NULL`, timeField)
 				}
-				where = append(where, dblist.WherePredicate{NamedArgs: namedArgs, SQL: fmt.Sprintf(`("%s" > @cursor_time OR ("%s" = @cursor_time AND "id" > @after_id)%s)`, timeField, timeField, orNull)})
+				where = append(where, dblist.WherePredicate{NamedArgs: namedArgs, SQL: fmt.Sprintf(`(%s > @cursor_time OR (%s = @cursor_time AND id > @after_id)%s)`, timeField, timeField, orNull)})
 			} else {
-				where = append(where, dblist.WherePredicate{NamedArgs: namedArgs, SQL: fmt.Sprintf(`("%s" < @cursor_time OR ("%s" = @cursor_time AND "id" < @after_id))`, timeField, timeField)})
+				where = append(where, dblist.WherePredicate{NamedArgs: namedArgs, SQL: fmt.Sprintf(`(%s < @cursor_time OR (%s = @cursor_time AND id < @after_id))`, timeField, timeField)})
 			}
 		}
 	}
@@ -389,6 +391,22 @@ func (p *JobListParams) toDBParams() (*dblist.JobListParams, error) {
 		TagsAny:    p.tagsAny,
 		Where:      where,
 	}, nil
+}
+
+func (p *JobListParams) withMetadataPredicateSQL(buildFunc func(string, string, string) (string, map[string]any, error)) (*JobListParams, error) {
+	paramsCopy := p.copy()
+	for i := range paramsCopy.where {
+		predicate := &paramsCopy.where[i]
+		if predicate.SQL == jobListMetadataPredicatePostgres {
+			fragment, _ := predicate.NamedArgs["metadata_fragment"].(string)
+			var err error
+			predicate.SQL, predicate.NamedArgs, err = buildFunc("metadata", "metadata_fragment", fragment)
+			if err != nil {
+				return nil, err
+			}
+		}
+	}
+	return paramsCopy, nil
 }
 
 // After returns an updated filter set that will only return jobs
@@ -452,7 +470,7 @@ func (p *JobListParams) Metadata(json string) *JobListParams {
 	paramsCopy.metadataCalled = true
 	paramsCopy.where = append(paramsCopy.where, dblist.WherePredicate{
 		NamedArgs: map[string]any{"metadata_fragment": json},
-		SQL:       `metadata @> @metadata_fragment::jsonb`,
+		SQL:       jobListMetadataPredicatePostgres,
 	})
 	return paramsCopy
 }

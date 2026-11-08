@@ -213,6 +213,11 @@ export declare function driverMigrationTarget(
  */
 export type DriverMigrationTarget =
   | {
+      readonly backend: "mysql";
+      readonly pool: object;
+      readonly schema: string | undefined;
+    }
+  | {
       readonly client: object;
       readonly schema: string | undefined;
     }

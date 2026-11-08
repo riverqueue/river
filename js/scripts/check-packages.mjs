@@ -38,6 +38,7 @@ const packageSpecs = [
   { directory: ".", name: "riverqueue" },
   { directory: "migrate", name: "@riverqueue/migrate" },
   { directory: "driver/knex", name: "@riverqueue/driver-knex" },
+  { directory: "driver/mysql", name: "@riverqueue/driver-mysql" },
   { directory: "driver/pg", name: "@riverqueue/driver-pg" },
   { directory: "driver/prisma", name: "@riverqueue/driver-prisma" },
   { directory: "driver/sqlite", name: "@riverqueue/driver-sqlite" },
@@ -374,6 +375,11 @@ async function verifyConsumers(archiveByPackageName) {
       .filter(([name]) => name !== "@riverqueue/cli")
       .map(([name, archivePath]) => [name, `file:${archivePath}`])
   );
+  // Consumers supply the drivers' runtime peers when automatic peer installs
+  // are disabled to exercise JavaScript usage without type packages.
+  for (const name of ["@prisma/client", "knex", "mysql2", "pg"]) {
+    dependencies[name] = rootPackageJson.devDependencies[name];
+  }
   await writeFile(
     join(consumerDirectory, "package.json"),
     `${JSON.stringify(
@@ -389,8 +395,10 @@ async function verifyConsumers(archiveByPackageName) {
     )}\n`
   );
   // Install libraries before the CLI, which owns a polyfill for its executable.
-  // Libraries must not install type packages or a Temporal implementation.
-  await npmInstall(consumerDirectory);
+  // Verify JavaScript consumers can run without type packages or a Temporal
+  // implementation. mysql2 requires @types/node as a peer, so omit peer-only
+  // dependencies until the TypeScript consumer checks below.
+  await npmInstall(consumerDirectory, ["--omit=peer"]);
   await assert.rejects(
     stat(join(consumerDirectory, "node_modules", "@js-temporal/polyfill")),
     { code: "ENOENT" },
@@ -402,6 +410,7 @@ async function verifyConsumers(archiveByPackageName) {
     `
 import * as river from "riverqueue";
 import * as knexDriver from "@riverqueue/driver-knex";
+import * as mysql from "@riverqueue/driver-mysql";
 import * as pg from "@riverqueue/driver-pg";
 import * as prisma from "@riverqueue/driver-prisma";
 import * as sqlite from "@riverqueue/driver-sqlite";
@@ -409,7 +418,7 @@ import * as migrate from "@riverqueue/migrate";
 import * as testing from "@riverqueue/test";
 import * as workerThreads from "@riverqueue/worker-threads";
 
-for (const packageNamespace of [river, knexDriver, pg, prisma, sqlite, migrate, testing, workerThreads]) {
+for (const packageNamespace of [river, knexDriver, mysql, pg, prisma, sqlite, migrate, testing, workerThreads]) {
   if (Object.keys(packageNamespace).length === 0) throw new Error("empty package namespace");
 }
 
@@ -435,7 +444,7 @@ if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed) ||
   packageJson.dependencies["@riverqueue/cli"] =
     `file:${archiveByPackageName.get("@riverqueue/cli")}`;
   await writeFile(packagePath, `${JSON.stringify(packageJson, null, 2)}\n`);
-  await npmInstall(consumerDirectory);
+  await npmInstall(consumerDirectory, ["--omit=peer"]);
   for (const dependency of ["@types/node", "@types/pg"]) {
     await assert.rejects(
       stat(join(consumerDirectory, "node_modules", dependency)),
@@ -445,7 +454,7 @@ if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed) ||
   }
 
   // Library consumers still explicitly choose and preload their implementation.
-  await installTemporalSetup(consumerDirectory);
+  await installTemporalSetup(consumerDirectory, ["--omit=peer"]);
   await run(process.execPath, [join(consumerDirectory, "import.mjs")], {
     temporalDirectory: consumerDirectory,
   });
@@ -498,6 +507,7 @@ const packageNames = [
   "riverqueue",
   "@riverqueue/cli",
   "@riverqueue/driver-knex",
+  "@riverqueue/driver-mysql",
   "@riverqueue/driver-pg",
   "@riverqueue/driver-prisma",
   "@riverqueue/driver-sqlite",
@@ -1066,7 +1076,7 @@ async function verifyExamples(archiveByPackageName) {
   }
 }
 
-async function installTemporalSetup(directory) {
+async function installTemporalSetup(directory, installArgs = []) {
   const packagePath = join(directory, "package.json");
   const packageJson = JSON.parse(await readFile(packagePath, "utf8"));
   packageJson.dependencies = {
@@ -1075,7 +1085,7 @@ async function installTemporalSetup(directory) {
       rootPackageJson.devDependencies["@js-temporal/polyfill"],
   };
   await writeFile(packagePath, `${JSON.stringify(packageJson, null, 2)}\n`);
-  await npmInstall(directory);
+  await npmInstall(directory, installArgs);
   await copyFile(
     resolve(repositoryRoot, "scripts", "temporal-setup.mjs"),
     join(directory, "temporal-setup.mjs")

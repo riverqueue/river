@@ -12,6 +12,7 @@ import java.util.List;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
+import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.RegisterExtension;
 import org.junit.jupiter.api.io.TempDir;
@@ -49,6 +50,50 @@ class ClientTest {
   }
 
   @Test
+  @Tag("mysql")
+  void cleanupSkipsLockedJobs() throws Exception {
+    var client = database();
+    var database = client.database();
+    org.junit.jupiter.api.Assumptions.assumeTrue(database.dialect() == Database.Dialect.MYSQL);
+    var locked = client.insert(EMAIL, new Email("locked@example.com")).job();
+    var unlocked = client.insert(EMAIL, new Email("unlocked@example.com")).job();
+    for (int i = 0; i < 999; i++) client.insert(EMAIL, new Email("expired@example.com"));
+    try (var connection = database.connection();
+        var statement = connection.createStatement()) {
+      statement.execute(
+          "UPDATE "
+              + database.prefix()
+              + "river_job SET state='completed', finalized_at='1970-01-01 00:00:00'");
+    }
+    Client.Transaction<Integer> clean =
+        connection -> {
+          try (var statement = connection.createStatement()) {
+            statement.execute("SET SESSION innodb_lock_wait_timeout=2");
+          }
+          return MySql.clean(
+              database,
+              connection,
+              database.timestamp(NOW),
+              database.timestamp(NOW),
+              database.timestamp(NOW));
+        };
+    client.transaction(
+        connection -> {
+          try (var statement =
+                  Sql.prepare(connection, Sql.query(database, "lock_get"), locked.id());
+              var rows = statement.executeQuery()) {
+            assertTrue(rows.next());
+            assertEquals(1000, client.transaction(clean));
+          }
+          assertThrows(RiverException.class, () -> client.jobs().get(unlocked.id()));
+          assertEquals(locked.id(), client.jobs().get(locked.id()).id());
+          return null;
+        });
+    assertEquals(1, client.transaction(clean));
+    assertTrue(client.jobs().list(JobQuery.all()).jobs().isEmpty());
+  }
+
+  @Test
   void completionMetadataReplacesTopLevelKeys() {
     var client = database();
     var database = client.database();
@@ -74,9 +119,10 @@ class ClientTest {
         client.transaction(
             connection -> {
               try (var statement =
-                      Sql.prepare(
+                      Sql.mutation(
+                          database,
                           connection,
-                          Sql.query(database, "claim"),
+                          "claim",
                           database.timestamp(NOW),
                           "worker",
                           "default",
@@ -185,9 +231,10 @@ class ClientTest {
         client.transaction(
             connection -> {
               try (var statement =
-                      Sql.prepare(
+                      Sql.mutation(
+                          database,
                           connection,
-                          Sql.query(database, "claim"),
+                          "claim",
                           database.timestamp(NOW),
                           "old-worker",
                           "default",
@@ -486,6 +533,10 @@ class ClientTest {
   @Test
   void checkedHookFailureRollsBackInsideCallerTransaction() throws Exception {
     var base = database();
+    try (var connection = base.database().connection();
+        var statement = connection.createStatement()) {
+      statement.execute("CREATE TABLE " + base.database().prefix() + "hook_write (id INTEGER)");
+    }
     var river =
         base.withHooks(
             new HookInsertBegin() {
@@ -495,7 +546,7 @@ class ClientTest {
                   throws java.sql.SQLException {
                 try (var statement = connection.createStatement()) {
                   statement.execute(
-                      "CREATE TABLE " + base.database().prefix() + "hook_write (id INTEGER)");
+                      "INSERT INTO " + base.database().prefix() + "hook_write VALUES (1)");
                 }
                 throw new java.sql.SQLException("hook rejected");
               }
@@ -510,15 +561,12 @@ class ClientTest {
                       connection, List.of(EMAIL.submission(new Email("rejected@example.com")))));
       assertEquals(RiverException.Code.DATABASE, failure.code());
       assertInstanceOf(java.sql.SQLException.class, failure.getCause());
-      try (var rows =
-          connection
-              .getMetaData()
-              .getTables(
-                  null,
-                  river.database().schema().isEmpty() ? null : river.database().schema(),
-                  "hook_write",
-                  null)) {
-        assertFalse(rows.next());
+      try (var statement = connection.createStatement();
+          var rows =
+              statement.executeQuery(
+                  "SELECT count(*) FROM " + base.database().prefix() + "hook_write")) {
+        assertTrue(rows.next());
+        assertEquals(0, rows.getInt(1));
       }
       var kept = base.insert(connection, EMAIL, new Email("kept@example.com")).job();
       connection.commit();
@@ -763,6 +811,41 @@ class ClientTest {
     assertEquals(first.job().id(), duplicate.job().id());
     assertFalse(different.uniqueSkippedAsDuplicate());
     assertNotEquals(first.job().id(), different.job().id());
+  }
+
+  @ParameterizedTest
+  @Tag("mysql")
+  @ValueSource(strings = {"inactive_existing", "inactive_incoming"})
+  void unrelatedUniqueConflictsAreRejectedWhenReinserting(String mode) throws Exception {
+    var client = database();
+    var database = client.database();
+    org.junit.jupiter.api.Assumptions.assumeTrue(database.dialect() == Database.Dialect.MYSQL);
+    var inserted =
+        client
+            .insert(
+                EMAIL,
+                new Email("unique@example.com"),
+                InsertOptions.builder().unique(Unique.args()).build())
+            .job();
+    try (var connection = database.connection();
+        var statement = connection.createStatement()) {
+      statement.execute(
+          "CREATE UNIQUE INDEX custom_kind ON " + database.prefix() + "river_job(kind)");
+      statement.execute(
+          "UPDATE "
+              + database.prefix()
+              + "river_job SET state='running', unique_states="
+              + (mode.equals("inactive_incoming") ? "64" : "NULL"));
+    }
+    var original = client.jobs().get(inserted.id());
+    // Reinsertion uses available; either its key or the existing key is inactive.
+    var error =
+        assertThrows(
+            RiverException.class,
+            () -> client.transaction(connection -> client.driver().reinsert(connection, original)));
+    assertTrue(error.getMessage().contains("unrelated unique constraint"));
+    assertEquals(original, client.jobs().get(original.id()));
+    assertEquals(1, client.jobs().list(JobQuery.all()).jobs().size());
   }
 
   record Report(int accountId) {}

@@ -738,6 +738,11 @@ export type PilotFactory<
  * a `node:sqlite` database.
  */
 export type DriverMigrationTarget =
+  | {
+      readonly backend: "mysql";
+      readonly pool: object;
+      readonly schema: string | undefined;
+    }
   | { readonly client: object; readonly schema: string | undefined }
   | {
       readonly database: object;

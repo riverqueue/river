@@ -114,9 +114,10 @@ module River
       raise ArgumentError, "pass exactly one of --up or --down" if !!options[:up] == !!options[:down]
 
       backend = case options[:url] || "postgres://"
+      when /\Amysql2?:/i then :mysql
       when /\Apostgres(?:ql)?:/i then :postgresql
       when /\Asqlite3?:/i then :sqlite
-      else raise ArgumentError, "--database-url must use postgres:, postgresql:, sqlite:, or sqlite3:"
+      else raise ArgumentError, "--database-url must use mysql:, mysql2:, postgres:, postgresql:, sqlite:, or sqlite3:"
       end
       schema = options[:schema]
       raise ArgumentError, "SQLite does not support a migration schema option" if backend == :sqlite && schema
@@ -136,7 +137,12 @@ module River
         out.puts if index.positive?
         out.puts("-- River #{options[:line]} migration #{migration.version.to_s.rjust(3, "0")} [#{direction}]")
         sql = options[:down] ? migration.sql_down : migration.sql_up
-        out.puts(sql.gsub("/* TEMPLATE: schema */", schema ? %("#{schema}".) : "").strip)
+        schema_prefix = if schema
+          (backend == :mysql) ? "`#{schema}`." : %("#{schema}".)
+        else
+          ""
+        end
+        out.puts(sql.gsub("/* TEMPLATE: schema */", schema_prefix).strip)
       end
       0
     end

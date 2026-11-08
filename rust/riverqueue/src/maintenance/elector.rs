@@ -11,6 +11,8 @@ use tokio_util::sync::CancellationToken;
 use tracing::{debug, error, info, warn};
 
 use crate::database::DatabasePool;
+#[cfg(feature = "mysql")]
+use crate::database::mysql;
 #[cfg(feature = "sqlite")]
 use crate::database::sqlite;
 use crate::{Error, client::ClientInner};
@@ -445,6 +447,19 @@ impl DatabaseLeaderStore {
 impl LeaderStore for DatabaseLeaderStore {
     async fn elect(&self, ttl: Duration) -> Result<Option<Timestamp>, Error> {
         match self.inner.database.pool() {
+            #[cfg(feature = "mysql")]
+            DatabasePool::MySql(pool) => {
+                let mut transaction = crate::database::mysql::Transaction::begin(pool).await?;
+                let now = Timestamp::now();
+                mysql::leader_delete_expired(&mut transaction, now)
+                    .await
+                    .map_err(mysql_error)?;
+                let leader = mysql::leader_elect(&mut transaction, &self.inner.id, now, ttl)
+                    .await
+                    .map_err(mysql_error)?;
+                transaction.commit().await?;
+                Ok(leader.map(|leader| leader.elected_at))
+            }
             #[cfg(feature = "sqlite")]
             DatabasePool::Sqlite(pool) => {
                 let mut transaction = crate::database::begin_sqlite_write(pool).await?;
@@ -489,6 +504,21 @@ impl LeaderStore for DatabaseLeaderStore {
         ttl: Duration,
     ) -> Result<Option<Timestamp>, Error> {
         match self.inner.database.pool() {
+            #[cfg(feature = "mysql")]
+            DatabasePool::MySql(pool) => {
+                let mut transaction = crate::database::mysql::Transaction::begin(pool).await?;
+                let leader = mysql::leader_reelect(
+                    &mut transaction,
+                    &self.inner.id,
+                    elected_at,
+                    Timestamp::now(),
+                    ttl,
+                )
+                .await
+                .map_err(mysql_error)?;
+                transaction.commit().await?;
+                Ok(leader.map(|leader| leader.elected_at))
+            }
             #[cfg(feature = "sqlite")]
             DatabasePool::Sqlite(pool) => {
                 let mut transaction = crate::database::begin_sqlite_write(pool).await?;
@@ -526,6 +556,17 @@ impl LeaderStore for DatabaseLeaderStore {
 
     async fn resign(&self, elected_at: Timestamp) -> Result<bool, Error> {
         match self.inner.database.pool() {
+            #[cfg(feature = "mysql")]
+            DatabasePool::MySql(pool) => {
+                let mut transaction = crate::database::mysql::Transaction::begin(pool).await?;
+                let resigned = mysql::leader_resign(&mut transaction, &self.inner.id, elected_at)
+                    .await
+                    .map_err(mysql_error)?;
+                // Like Go's MySQL driver, a resignation writes no outbox
+                // row; other clients bid at their next election attempt.
+                transaction.commit().await?;
+                Ok(resigned)
+            }
             #[cfg(feature = "sqlite")]
             DatabasePool::Sqlite(pool) => {
                 let mut transaction = crate::database::begin_sqlite_write(pool).await?;
@@ -569,6 +610,10 @@ impl LeaderStore for DatabaseLeaderStore {
     }
 }
 
+#[cfg(feature = "mysql")]
+fn mysql_error(error: mysql::BackendError) -> Error {
+    Error::Database(error.into())
+}
 #[cfg(feature = "sqlite")]
 fn sqlite_error(error: sqlite::BackendError) -> Error {
     Error::Database(error.into())

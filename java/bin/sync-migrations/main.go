@@ -38,6 +38,7 @@ func run(root string, check bool) error {
 		dialect string
 		driver  string
 	}{
+		{"mysql", "rivermysql"},
 		{"postgres", "riverpgxv5"},
 		{"sqlite", "riversqlite"},
 	} {
@@ -68,7 +69,7 @@ func run(root string, check bool) error {
 			}
 		}
 		if names != nil && !slices.Equal(current, names) {
-			return errors.New("migration names differ between Postgres and SQLite; review the Java catalog")
+			return errors.New("migration names differ between database backends; review the Java catalog")
 		}
 		names = current
 	}

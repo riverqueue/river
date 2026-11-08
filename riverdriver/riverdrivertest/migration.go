@@ -14,6 +14,7 @@ import (
 	"github.com/riverqueue/river/rivermigrate"
 	"github.com/riverqueue/river/rivershared/riversharedtest"
 	"github.com/riverqueue/river/rivershared/testfactory"
+	"github.com/riverqueue/river/rivertype"
 )
 
 func exerciseMigration[TTx any](ctx context.Context, t *testing.T,
@@ -87,6 +88,36 @@ func exerciseMigration[TTx any](ctx context.Context, t *testing.T,
 
 		// Should contain at minimum a main migration line.
 		require.Contains(t, driver.GetMigrationLines(), riverdriver.MigrationLineMain)
+	})
+
+	t.Run("MigrateTxRejectsMySQLWithoutCommittingCallerWrites", func(t *testing.T) {
+		t.Parallel()
+
+		driver, schema := driverWithSchema(ctx, t, nil)
+		if driver.DatabaseName() != riverdriver.DatabaseNameMySQL {
+			t.Skip("MySQL DDL commits implicitly")
+		}
+		migrator, err := rivermigrate.New(driver, &rivermigrate.Config{Schema: schema})
+		require.NoError(t, err)
+		execTx, err := driver.GetExecutor().Begin(ctx)
+		require.NoError(t, err)
+		t.Cleanup(func() { _ = execTx.Rollback(ctx) })
+
+		_, err = execTx.QueueCreateOrSetUpdatedAt(ctx, &riverdriver.QueueCreateOrSetUpdatedAtParams{
+			Metadata: []byte(`{}`),
+			Name:     "migration-rollback-probe",
+			Schema:   schema,
+		})
+		require.NoError(t, err)
+		_, err = migrator.MigrateTx(ctx, driver.UnwrapTx(execTx), rivermigrate.DirectionDown, &rivermigrate.MigrateOpts{MaxSteps: 2}) //nolint:staticcheck // Verify the deprecated API cannot commit caller writes.
+		require.ErrorContains(t, err, "MySQL migrations cannot run in a transaction")
+		require.NoError(t, execTx.Rollback(ctx))
+
+		_, err = driver.GetExecutor().QueueGet(ctx, &riverdriver.QueueGetParams{Name: "migration-rollback-probe", Schema: schema})
+		require.ErrorIs(t, err, rivertype.ErrNotFound)
+		result, err := migrator.Validate(ctx, nil)
+		require.NoError(t, err)
+		require.True(t, result.OK)
 	})
 
 	// This doesn't map to a particular function, but make sure the driver is
@@ -253,6 +284,11 @@ func exerciseMigration[TTx any](ctx context.Context, t *testing.T,
 	t.Run("MigrateVersionEightRejectsProSchema", func(t *testing.T) {
 		t.Parallel()
 
+		driver, _ := driverWithSchema(ctx, t, nil)
+		if driver.DatabaseName() != riverdriver.DatabaseNameSQLite {
+			t.Skip("SQLite table rebuild")
+		}
+
 		for _, testCase := range []struct {
 			name string
 			sql  string
@@ -279,9 +315,6 @@ func exerciseMigration[TTx any](ctx context.Context, t *testing.T,
 							},
 							Lines: []string{riverdriver.MigrationLineMain},
 						})
-						if driver.DatabaseName() != riverdriver.DatabaseNameSQLite {
-							t.Skip("SQLite table rebuild")
-						}
 						exec := driver.GetExecutor()
 						job := testfactory.Job(ctx, t, exec, &testfactory.JobOpts{Schema: schema})
 

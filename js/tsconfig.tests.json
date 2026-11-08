@@ -23,6 +23,9 @@
       ],
       "@riverqueue/driver-knex": [
         "./driver/knex/src/index.ts"
+      ],
+      "@riverqueue/driver-mysql": [
+        "./driver/mysql/src/index.ts"
       ]
     }
   },

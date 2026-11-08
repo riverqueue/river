@@ -114,7 +114,8 @@ RSpec.shared_examples "notification receiving" do |backend|
 
     @driver.transaction do
       client.request_resign
-      expect(Thread.new { first.poll(0.01) }.value).to be_empty
+      # MySQL locking reads wait for the transaction, so read after commit.
+      expect(Thread.new { first.poll(0.01) }.value).to be_empty unless backend == :mysql
     end
 
     expected = [["river_leadership", {"action" => "request_resign", "leader_id" => ""}]]
@@ -128,6 +129,46 @@ RSpec.shared_examples "notification receiving" do |backend|
   ensure
     first&.close
     second&.close
+  end
+
+  if backend == :mysql
+    [false, true].each do |during_subscribe|
+      it "waits for lower uncommitted notification IDs #{during_subscribe ? "when subscribing" : "when polling"}" do
+        listener = @driver.notification_listener unless during_subscribe
+        inserted = Queue.new
+        release = Queue.new
+        writer = Thread.new do
+          @driver.transaction do
+            @driver.send(:runtime_notify, "river_insert", queue: "first")
+            inserted << true
+            release.pop
+          end
+        end
+        receive_signal(inserted)
+        @driver.send(:runtime_notify, "river_insert", queue: "second")
+        reader = Thread.new do
+          during_subscribe ? @driver.notification_listener : listener.poll(0.01)
+        end
+        expect(reader.join(0.05)).to be_nil
+        release << true
+        writer.value
+        if during_subscribe
+          listener = reader.value
+          @driver.send(:runtime_notify, "river_insert", queue: "new")
+          expect(read_notifications(listener)).to eq([["river_insert", {"queue" => "new"}]])
+        else
+          expect(reader.value.map { |topic, payload| [topic, JSON.parse(payload)] }).to eq([
+            ["river_insert", {"queue" => "first"}],
+            ["river_insert", {"queue" => "second"}]
+          ])
+        end
+      ensure
+        release << true if release
+        writer&.join
+        reader&.join
+        listener&.close
+      end
+    end
   end
 
   it "fails startup if subscribing fails and allows a subsequent start" do

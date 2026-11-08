@@ -97,7 +97,11 @@ class ProtocolStorageTest {
                   "UPDATE "
                       + database.prefix()
                       + "river_job SET state = 'running', attempt = 3, attempted_at = ?, errors = "
-                      + (postgres ? "ARRAY[?::jsonb]" : "json_array(json(?))")
+                      + (switch (database.dialect()) {
+                        case MYSQL -> "JSON_ARRAY(CAST(? AS JSON))";
+                        case POSTGRES -> "ARRAY[?::jsonb]";
+                        case SQLITE -> "json_array(json(?))";
+                      })
                       + " WHERE id = ?",
                   database.timestamp(Instant.EPOCH),
                   Json.encode(fixture.required("attempt_error")),
@@ -120,7 +124,7 @@ class ProtocolStorageTest {
                 .errorHandler(errors::add)
                 .retryPolicy(
                     job -> {
-                      if (!postgres) {
+                      if (database.dialect() == Database.Dialect.SQLITE) {
                         // Retry selection runs after the read transaction closes. Keep the normal
                         // busy timeout for unrelated worker writes; a transaction held by this
                         // callback would stay locked until the timeout expires.
@@ -140,13 +144,13 @@ class ProtocolStorageTest {
                 .start();
         var subscription =
             workers.client().subscribe(completed::complete, Client.EventKind.JOB_COMPLETED)) {
-      if (!postgres)
+      if (database.dialect() == Database.Dialect.SQLITE)
         assertNull(
             writeFailure.get(10, TimeUnit.SECONDS), "Rescue callbacks must not hold the writer");
       maintained.get(5, TimeUnit.SECONDS);
       var rescued = client.jobs().get(inserted.id());
       assertEquals(Job.State.RETRYABLE, rescued.state());
-      if (!postgres) assertEquals(2, rescued.priority());
+      if (database.dialect() == Database.Dialect.SQLITE) assertEquals(2, rescued.priority());
       assertEquals(3, rescued.metadata().required(rescueKey).asInt());
       assertEquals(2, rescued.errors().size());
       assertEquals(fixture.required("attempt_error"), Json.tree(rescued.errors().getFirst()));

@@ -163,11 +163,9 @@ impl QueueGetRequest<'_> {
     async fn run(self) -> Result<Queue, Error> {
         let inner = &self.client.inner;
         let mut session = self.target.session(inner, Access::Autocommit).await?;
-        session
-            .storage(inner)
-            .queue_get(&self.name)
-            .await?
-            .ok_or_else(|| Error::NotFound(crate::Record::Queue(self.name.clone())))
+        let queue = session.storage(inner).queue_get(&self.name).await?;
+        session.commit().await?;
+        queue.ok_or_else(|| Error::NotFound(crate::Record::Queue(self.name.clone())))
     }
 }
 
@@ -181,7 +179,9 @@ impl QueueListRequest<'_> {
     async fn run(self) -> Result<Vec<Queue>, Error> {
         let inner = &self.client.inner;
         let mut session = self.target.session(inner, Access::Autocommit).await?;
-        session.storage(inner).queue_list(&self.params).await
+        let queues = session.storage(inner).queue_list(&self.params).await?;
+        session.commit().await?;
+        Ok(queues)
     }
 }
 

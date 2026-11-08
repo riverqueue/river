@@ -2,6 +2,7 @@ package riverdrivertest
 
 import (
 	"context"
+	"fmt"
 	"sort"
 	"strconv"
 	"testing"
@@ -278,6 +279,8 @@ func exerciseJobRead[TTx any](ctx context.Context, t *testing.T, executorWithTx 
 			exec, _ := setup(ctx, t)
 
 			unknown := testfactory.Job(ctx, t, exec, &testfactory.JobOpts{Kind: new("unknown"), Priority: new(1)})
+			unknownCase := testfactory.Job(ctx, t, exec, &testfactory.JobOpts{Kind: new("KNOWN1"), Priority: new(1)})
+			unknownSpace := testfactory.Job(ctx, t, exec, &testfactory.JobOpts{Kind: new("known1 "), Priority: new(1)})
 			known1 := testfactory.Job(ctx, t, exec, &testfactory.JobOpts{Kind: new("known1"), Priority: new(2)})
 			known2 := testfactory.Job(ctx, t, exec, &testfactory.JobOpts{Kind: new("known2"), Priority: new(3)})
 			otherQueue := testfactory.Job(ctx, t, exec, &testfactory.JobOpts{Kind: new("known1"), Priority: new(1), Queue: new("other")})
@@ -298,7 +301,7 @@ func exerciseJobRead[TTx any](ctx context.Context, t *testing.T, executorWithTx 
 				require.Equal(t, rivertype.JobStateRunning, jobs[0].State)
 			}
 
-			for _, expected := range []*rivertype.JobRow{unknown, otherQueue} {
+			for _, expected := range []*rivertype.JobRow{unknown, unknownCase, unknownSpace, otherQueue} {
 				job, err := exec.JobGetByID(ctx, &riverdriver.JobGetByIDParams{ID: expected.ID})
 				require.NoError(t, err)
 				require.Equal(t, expected, job)
@@ -616,14 +619,58 @@ func exerciseJobRead[TTx any](ctx context.Context, t *testing.T, executorWithTx 
 			}
 		})
 
+		t.Run("ReturnedRowsMatchStored", func(t *testing.T) {
+			t.Parallel()
+
+			for _, customNow := range []bool{false, true} {
+				t.Run(fmt.Sprintf("CustomNow=%t", customNow), func(t *testing.T) {
+					t.Parallel()
+
+					exec, bundle := setup(ctx, t)
+
+					var now *time.Time
+					if customNow {
+						now = new(time.Now().UTC().Add(time.Minute).Truncate(bundle.driver.TimePrecision()))
+					}
+					for i := range 3 {
+						testfactory.Job(ctx, t, exec, &testfactory.JobOpts{
+							Attempt:     new(i + 1),
+							AttemptedBy: []string{"first", "second", "third"},
+							EncodedArgs: []byte(`{"large":9007199254740993}`),
+							Metadata:    []byte(`{"keep":true}`),
+							Tags:        []string{"tag"},
+						})
+					}
+					jobs := getAvailable(t, exec, &riverdriver.JobGetAvailableParams{
+						ClientID:       testClientID,
+						MaxAttemptedBy: maxAttemptedBy,
+						MaxToLock:      maxToLock,
+						Now:            now,
+						Queue:          rivercommon.QueueDefault,
+					})
+					require.Len(t, jobs, 3)
+					for _, job := range jobs {
+						stored, err := exec.JobGetByID(ctx, &riverdriver.JobGetByIDParams{ID: job.ID})
+						require.NoError(t, err)
+						require.Equal(t, stored, job)
+						require.Equal(t, []string{"first", "second", "third", testClientID}, job.AttemptedBy)
+						require.Equal(t, rivertype.JobStateRunning, job.State)
+						if now != nil {
+							require.Equal(t, now, job.AttemptedAt)
+						}
+					}
+				})
+			}
+		})
+
 		// Every locked job is returned, with decode errors keyed by job ID so
 		// the caller can fail only the attempts whose rows couldn't be decoded.
 		t.Run("UndecodableJobsReturnedWithDecodeErrors", func(t *testing.T) {
 			t.Parallel()
 
 			exec, bundle := setup(ctx, t)
-			if bundle.driver.DatabaseName() != riverdriver.DatabaseNameSQLite {
-				t.Skip("only SQLite's JSON columns can hold values that don't decode")
+			if bundle.driver.DatabaseName() == riverdriver.DatabaseNamePostgres {
+				t.Skip("Postgres uses native array columns")
 			}
 
 			job1 := testfactory.Job(ctx, t, exec, &testfactory.JobOpts{})
@@ -631,9 +678,9 @@ func exerciseJobRead[TTx any](ctx context.Context, t *testing.T, executorWithTx 
 			job3 := testfactory.Job(ctx, t, exec, &testfactory.JobOpts{})
 			job4 := testfactory.Job(ctx, t, exec, &testfactory.JobOpts{})
 
-			sqliteSetJobJSONColumn(ctx, t, exec, job2.ID, "errors", `{"not":"an array"}`)
-			sqliteSetJobJSONColumn(ctx, t, exec, job2.ID, "tags", `{"not":"an array"}`)
-			sqliteSetJobJSONColumn(ctx, t, exec, job4.ID, "tags", `{"not":"an array"}`)
+			setJobJSONColumn(ctx, t, exec, bundle.driver, "", job2.ID, "errors", `{"not":"an array"}`)
+			setJobJSONColumn(ctx, t, exec, bundle.driver, "", job2.ID, "tags", `{"not":"an array"}`)
+			setJobJSONColumn(ctx, t, exec, bundle.driver, "", job4.ID, "tags", `{"not":"an array"}`)
 
 			res, err := exec.JobGetAvailable(ctx, &riverdriver.JobGetAvailableParams{
 				ClientID:       testClientID,
@@ -725,6 +772,7 @@ func exerciseJobRead[TTx any](ctx context.Context, t *testing.T, executorWithTx 
 		job2 := testfactory.Job(ctx, t, exec, &testfactory.JobOpts{Kind: new("kind2")})
 
 		// Not returned.
+		_ = testfactory.Job(ctx, t, exec, &testfactory.JobOpts{Kind: new("KIND1")})
 		_ = testfactory.Job(ctx, t, exec, &testfactory.JobOpts{Kind: new("kind3")})
 
 		jobs, err := exec.JobGetByKindMany(ctx, &riverdriver.JobGetByKindManyParams{
@@ -902,8 +950,8 @@ func exerciseJobRead[TTx any](ctx context.Context, t *testing.T, executorWithTx 
 			t.Parallel()
 
 			exec, bundle := setup(ctx, t)
-			if bundle.driver.DatabaseName() != riverdriver.DatabaseNameSQLite {
-				t.Skip("only SQLite's JSON columns can hold values that don't decode")
+			if bundle.driver.DatabaseName() == riverdriver.DatabaseNamePostgres {
+				t.Skip("Postgres uses native array columns")
 			}
 
 			var (
@@ -914,7 +962,7 @@ func exerciseJobRead[TTx any](ctx context.Context, t *testing.T, executorWithTx 
 			stuckJob1 := testfactory.Job(ctx, t, exec, &testfactory.JobOpts{AttemptedAt: &beforeHorizon, State: new(rivertype.JobStateRunning)})
 			stuckJob2 := testfactory.Job(ctx, t, exec, &testfactory.JobOpts{AttemptedAt: &beforeHorizon, State: new(rivertype.JobStateRunning)})
 
-			sqliteSetJobJSONColumn(ctx, t, exec, stuckJob1.ID, "tags", `{"not":"an array"}`)
+			setJobJSONColumn(ctx, t, exec, bundle.driver, "", stuckJob1.ID, "tags", `{"not":"an array"}`)
 
 			stuckJobs, err := exec.JobGetStuck(ctx, &riverdriver.JobGetStuckParams{
 				Max:          10,

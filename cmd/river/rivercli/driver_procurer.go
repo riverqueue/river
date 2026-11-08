@@ -9,6 +9,7 @@ import (
 
 	"github.com/riverqueue/river/cmd/river/riverbench"
 	"github.com/riverqueue/river/riverdriver"
+	"github.com/riverqueue/river/riverdriver/rivermysql"
 	"github.com/riverqueue/river/riverdriver/riverpgxv5"
 	"github.com/riverqueue/river/riverdriver/riversqlite"
 	"github.com/riverqueue/river/rivermigrate"
@@ -21,6 +22,11 @@ type DriverProcurer interface {
 	GetBenchmarker(config *riverbench.Config) BenchmarkerInterface
 	GetMigrator(config *rivermigrate.Config) (MigratorInterface, error)
 	QueryRow(ctx context.Context, sql string, args ...any) riverdriver.Row
+}
+
+// DriverProcurerMySQL optionally initializes a custom procurer with a MySQL pool.
+type DriverProcurerMySQL interface {
+	InitMySQL(pool *sql.DB)
 }
 
 // DriverProcurerPgxV5 optionally initializes a custom procurer with a pgx/v5 pool.
@@ -49,6 +55,22 @@ type MigratorInterface interface {
 	GetVersion(version int) (rivermigrate.Migration, error)
 	Migrate(ctx context.Context, direction rivermigrate.Direction, opts *rivermigrate.MigrateOpts) (*rivermigrate.MigrateResult, error)
 	Validate(ctx context.Context, opts *rivermigrate.ValidateOpts) (*rivermigrate.ValidateResult, error)
+}
+
+type mysqlDriverProcurer struct {
+	dbPool *sql.DB
+}
+
+func (p *mysqlDriverProcurer) GetBenchmarker(config *riverbench.Config) BenchmarkerInterface {
+	return riverbench.NewBenchmarker(rivermysql.New(p.dbPool), config)
+}
+
+func (p *mysqlDriverProcurer) GetMigrator(config *rivermigrate.Config) (MigratorInterface, error) {
+	return rivermigrate.New(rivermysql.New(p.dbPool), config)
+}
+
+func (p *mysqlDriverProcurer) QueryRow(ctx context.Context, query string, args ...any) riverdriver.Row {
+	return rivermysql.New(p.dbPool).GetExecutor().QueryRow(ctx, query, args...)
 }
 
 type pgxV5DriverProcurer struct {

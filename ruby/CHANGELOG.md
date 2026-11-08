@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Add MySQL support to the Active Record and Sequel drivers, including worker execution, transactional job operations, and canonical migrations.
+
 ## [0.16.0] - 2026-11-04
 
 ### Added

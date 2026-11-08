@@ -5,6 +5,8 @@ use std::{
     io::{self, Write},
 };
 
+#[cfg(feature = "mysql")]
+use riverqueue_migrate::MySqlMigrator;
 #[cfg(feature = "postgres")]
 use riverqueue_migrate::PostgresMigrator;
 #[cfg(feature = "sqlite")]
@@ -30,7 +32,7 @@ Options:
 Pass exactly one of --all or --version, and exactly one of --up or --down.
 Explicit versions retain their supplied order, including for down migrations.
 No database connection is made. DATABASE_URL is ignored; use --database-url
-to select Postgres (postgres:// or postgresql://) or SQLite (sqlite://).
+to select MySQL (mysql://), Postgres (postgres:// or postgresql://), or SQLite (sqlite://).
 Only the main migration line is bundled.
 
 Examples:
@@ -127,15 +129,22 @@ fn all_versions(database_url: &str) -> Result<&'static [Migration], Box<dyn Erro
             #[cfg(not(feature = "postgres"))]
             return Err("Postgres support requires the `postgres` feature".into());
         }
+        Some("mysql") => {
+            #[cfg(feature = "mysql")]
+            return Ok(MySqlMigrator::all_versions());
+            #[cfg(not(feature = "mysql"))]
+            return Err("MySQL support requires the `mysql` feature".into());
+        }
         Some("sqlite") => {
             #[cfg(feature = "sqlite")]
             return Ok(SqliteMigrator::all_versions());
             #[cfg(not(feature = "sqlite"))]
             return Err("SQLite support requires the `sqlite` feature".into());
         }
-        _ => {
-            Err("--database-url must use a postgres://, postgresql://, or sqlite:// prefix".into())
-        }
+        _ => Err(
+            "--database-url must use a mysql://, postgres://, postgresql://, or sqlite:// prefix"
+                .into(),
+        ),
     }
 }
 

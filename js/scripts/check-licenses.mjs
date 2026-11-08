@@ -10,6 +10,7 @@ const packageDirectories = [
   ".",
   "migrate",
   "driver/knex",
+  "driver/mysql",
   "driver/pg",
   "driver/prisma",
   "driver/sqlite",

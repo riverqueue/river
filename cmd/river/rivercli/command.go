@@ -7,11 +7,14 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"net"
+	"net/url"
 	"os"
 	"strconv"
 	"strings"
 	"time"
 
+	"github.com/go-sql-driver/mysql"
 	"github.com/jackc/pgx/v5/pgxpool"
 	_ "modernc.org/sqlite"
 )
@@ -80,6 +83,19 @@ func RunCommand[TOpts CommandOpts](ctx context.Context, bundle *RunCommandBundle
 		driverProcurer := bundle.DriverProcurer
 		if databaseURL != nil {
 			switch protocol {
+			case "mysql":
+				dbPool, err := openMySQLPool(*databaseURL)
+				if err != nil {
+					return false, err
+				}
+				defer dbPool.Close()
+
+				if procurer, ok := driverProcurer.(DriverProcurerMySQL); ok {
+					procurer.InitMySQL(dbPool)
+				} else {
+					driverProcurer = &mysqlDriverProcurer{dbPool: dbPool}
+				}
+
 			case "postgres", "postgresql":
 				dbPool, err := openPgxV5DBPool(ctx, *databaseURL, bundle.StatementTimeout)
 				if err != nil {
@@ -109,7 +125,7 @@ func RunCommand[TOpts CommandOpts](ctx context.Context, bundle *RunCommandBundle
 				}
 
 			default:
-				return false, fmt.Errorf("unsupported database URL (`%s`); try one with a `postgres://`, `postgresql://`, or `sqlite://` scheme/prefix", *bundle.DatabaseURL)
+				return false, fmt.Errorf("unsupported database URL (`%s`); try one with a `mysql://`, `postgres://`, `postgresql://`, or `sqlite://` scheme/prefix", *bundle.DatabaseURL)
 			}
 		}
 
@@ -131,6 +147,18 @@ func RunCommand[TOpts CommandOpts](ctx context.Context, bundle *RunCommandBundle
 		os.Exit(1)
 	}
 	return nil
+}
+
+func openMySQLPool(databaseURL string) (*sql.DB, error) {
+	config, err := parseMySQLURL(databaseURL)
+	if err != nil {
+		return nil, err
+	}
+	connector, err := mysql.NewConnector(config)
+	if err != nil {
+		return nil, fmt.Errorf("error configuring MySQL connection: %w", err)
+	}
+	return sql.OpenDB(connector), nil
 }
 
 func openPgxV5DBPool(ctx context.Context, databaseURL string, statementTimeout *time.Duration) (*pgxpool.Pool, error) {
@@ -191,6 +219,35 @@ func openSQLitePool(protocol, urlWithoutProtocol string) (*sql.DB, error) {
 	dbPool.SetMaxOpenConns(1)
 
 	return dbPool, nil
+}
+
+func parseMySQLURL(databaseURL string) (*mysql.Config, error) {
+	parsed, err := url.Parse(databaseURL)
+	if err != nil {
+		return nil, fmt.Errorf("error parsing MySQL database URL: %w", err)
+	}
+	config := mysql.NewConfig()
+	config.Addr = net.JoinHostPort(cmp.Or(parsed.Hostname(), "localhost"), cmp.Or(parsed.Port(), "3306"))
+	config.DBName = strings.TrimPrefix(parsed.Path, "/")
+	config.Net = "tcp"
+	config.ParseTime = true
+	config.MultiStatements = true
+	if parsed.User != nil {
+		config.User = parsed.User.Username()
+		config.Passwd, _ = parsed.User.Password()
+	}
+	// Parse the URL query with the driver's own option handling (including TLS),
+	// then enforce the timestamp and migration options River requires.
+	if parsed.RawQuery != "" {
+		config, err = mysql.ParseDSN(config.FormatDSN() + "&" + parsed.RawQuery)
+		if err != nil {
+			return nil, fmt.Errorf("error parsing MySQL connection options: %w", err)
+		}
+	}
+	config.Loc = time.UTC
+	config.MultiStatements = true
+	config.ParseTime = true
+	return config, nil
 }
 
 // Determines if there's a minimum number of `PG*` env vars configured to

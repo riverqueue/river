@@ -18,6 +18,7 @@ export type {
   Migrator,
   MigratorOptions,
   MigratorSource,
+  MySqlMigrationTarget,
   PgClientMigrationTarget,
   PgPoolMigrationTarget,
   SqliteMigrationTarget,
@@ -30,3 +31,5 @@ export type {
   PgMigrationPoolClient,
   PgMigrationQueryResult,
 } from "./postgres.js";
+
+export type { MySqlMigrationConnection, MySqlMigrationPool } from "./mysql.js";

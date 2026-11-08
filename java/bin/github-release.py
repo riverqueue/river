@@ -156,7 +156,7 @@ def prepare(directory):
                 "verify",
                 "org.apache.maven.plugins:maven-deploy-plugin:3.2.0:deploy",
                 "-Driver.test.database=sqlite",
-                "-DexcludedGroups=postgres",
+                "-DexcludedGroups=mysql,postgres",
                 "-DaltDeploymentRepository=" + destination,
                 "-DaltReleaseDeploymentRepository=" + destination,
             ],

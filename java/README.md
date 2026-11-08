@@ -1,6 +1,6 @@
 # River for Java
 
-Java 21 client and worker runtime for River's Postgres and SQLite
+Java 21 client and worker runtime for River's MySQL, Postgres, and SQLite
 schemas. Jobs are ordinary River jobs: another language can insert, cancel,
 retry, or work them using the same database.
 
@@ -32,14 +32,14 @@ Java 21 or newer is required. Add `com.riverqueue:river:0.4.0` and a JDBC driver
 
 The River repository is public and requires no credentials. Maven Central supplies third-party dependencies.
 
-For SQLite, replace the Postgres JDBC dependency with `org.xerial:sqlite-jdbc:3.53.4.0`. To install a local copy of River from source, see the [development guide](docs/development.md#building-from-source).
+For MySQL, use `com.mysql:mysql-connector-j:26.7.0`. For SQLite, replace the Postgres JDBC dependency with `org.xerial:sqlite-jdbc:3.53.4.0`. To install a local copy of River from source, see the [development guide](docs/development.md#building-from-source).
 
 ## Quick start
 
 Define job arguments as a record, give the job a stable kind, and register a
 worker lambda. This complete `Example.java` starts a client, inserts a job,
 waits for its completion, and stops the workers. Set `DATABASE_URL` to a
-Postgres URL or a file-backed SQLite JDBC URL.
+MySQL or Postgres URL, or a file-backed SQLite JDBC URL.
 
 ```java
 import com.riverqueue.*;
@@ -135,8 +135,8 @@ river-java migrate-get --version 3 --up > river_3.up.sql
 river-java migrate-get --driver sqlite --all --up > river_sqlite.up.sql
 ```
 
-SQL export defaults to Postgres without a database URL. Use `--driver sqlite`
-for SQLite, or select the dialect through the URL. Export accepts comma-separated
+SQL export defaults to Postgres without a database URL. Use `--driver mysql` or `--driver sqlite`
+for MySQL or SQLite, or select the dialect through the URL. Export accepts comma-separated
 `--version` values or `--all`; `--exclude-version 1` excludes migration history
 setup when exporting for another migration framework. Exit codes are `0` for
 success, `1` for an operation failure, and `2` for invalid arguments.
@@ -826,6 +826,26 @@ Workers.Handler<SendEmail> sendEmail = context ->
     mailer.send(context.args().address(), context.args().subject());
 clientBuilder.worker(email, sendEmail);
 ```
+
+## MySQL
+
+Use MySQL 8.0 or later with the latest patch release. `Database.connect` accepts
+`mysql://user:password@localhost/my_app` and `jdbc:mysql://localhost/my_app`.
+Applications with an existing pool can use `new Database(dataSource, Database.Dialect.MYSQL)`.
+`withSchema("background_jobs")` selects a separate MySQL database for River's tables.
+
+Workers claim jobs with `FOR UPDATE SKIP LOCKED` and receive notifications
+through the durable outbox, including cancellation and leadership resignation.
+River-owned transactions use READ COMMITTED; caller transactions keep their
+configured isolation level. Inserts and job completion participate in caller
+transactions through the same APIs as Postgres.
+
+MySQL DDL commits implicitly. Migration history is recorded after each successful
+version, but a failed version may leave partially applied DDL. Inspect and repair
+it before retrying. A named database lock prevents concurrent migration runners.
+
+See the shared [MySQL design notes](../docs/development.md#mysql-design-and-operation) for JSON numeric limits,
+exact string comparisons, and server packet-size requirements.
 
 ## SQLite
 
