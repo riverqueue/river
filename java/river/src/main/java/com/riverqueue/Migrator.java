@@ -36,20 +36,28 @@ public final class Migrator {
   private void apply(Connection connection, Migration migration, boolean down) throws SQLException {
     int version = migration.version();
     boolean main = line.equals("main");
-    if (down && (!main || version > 1)) {
-      String query = main && version < 5 ? "migration_delete_legacy" : "migration_line_delete";
-      Object[] params = main && version < 5 ? new Object[] {version} : new Object[] {line, version};
-      try (var statement = Sql.prepare(connection, Sql.query(database, query), params)) {
-        statement.executeUpdate();
-      }
-    }
+    boolean mysql = database.dialect() == Database.Dialect.MYSQL;
+    if (down && !mysql) removeVersion(connection, version);
     execute(connection, sql(version, down ? Direction.DOWN : Direction.UP));
+    if (down && mysql) removeVersion(connection, version);
     if (!down) {
       String query = main && version < 5 ? "migration_insert_legacy" : "migration_line_insert";
       Object[] params = main && version < 5 ? new Object[] {version} : new Object[] {line, version};
       try (var statement = Sql.prepare(connection, Sql.query(database, query), params)) {
         statement.executeUpdate();
       }
+    }
+  }
+
+  private void removeVersion(Connection connection, int version) throws SQLException {
+    boolean main = line.equals("main");
+    if (main && version == 1) return;
+    boolean legacy =
+        main && (version < 5 || database.dialect() == Database.Dialect.MYSQL && version == 5);
+    String query = legacy ? "migration_delete_legacy" : "migration_line_delete";
+    Object[] params = legacy ? new Object[] {version} : new Object[] {line, version};
+    try (var statement = Sql.prepare(connection, Sql.query(database, query), params)) {
+      statement.executeUpdate();
     }
   }
 
@@ -65,7 +73,9 @@ public final class Migrator {
     try (var statement = connection.createStatement()) {
       // Xerial's executeUpdate executes the entire script, including trigger bodies.
       if (database.dialect() == Database.Dialect.SQLITE) statement.executeUpdate(sql);
-      else statement.execute(sql);
+      else if (database.dialect() == Database.Dialect.MYSQL) {
+        for (String part : MySql.statements(sql)) statement.execute(part);
+      } else statement.execute(sql);
     }
   }
 
@@ -109,8 +119,7 @@ public final class Migrator {
   }
 
   private static List<Migration> mainMigrations(Database.Dialect dialect) {
-    String directory =
-        "migration/" + (dialect == Database.Dialect.POSTGRES ? "postgres/" : "sqlite/");
+    String directory = "migration/" + dialect.name().toLowerCase(java.util.Locale.ROOT) + "/";
     var migrations = new ArrayList<Migration>();
     for (int i = 0; i < NAMES.size(); i++) {
       String name = NAMES.get(i);
@@ -167,6 +176,10 @@ public final class Migrator {
         connection.setAutoCommit(false);
         if (database.dialect() == Database.Dialect.POSTGRES) {
           execute(connection, Sql.query(database, "migration_lock"));
+          locked = true;
+        } else if (database.dialect() == Database.Dialect.MYSQL) {
+          if (!booleanQuery(connection, "migration_lock"))
+            throw new SQLException("Another migrator holds the database lock");
           locked = true;
         }
         var existing = existing(connection);

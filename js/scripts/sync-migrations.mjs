@@ -14,6 +14,7 @@ const riverRoot = resolve(repositoryRoot, "..");
 const targetRoot = resolve(repositoryRoot, "migrate/migrations");
 const check = process.argv.includes("--check");
 const sources = {
+  mysql: "riverdriver/rivermysql/migration/main",
   postgres: "riverdriver/riverpgxv5/migration/main",
   sqlite: "riverdriver/riversqlite/migration/main",
 };

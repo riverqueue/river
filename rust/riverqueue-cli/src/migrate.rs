@@ -4,11 +4,15 @@ use std::{error::Error, time::Duration};
 
 #[cfg(feature = "postgres")]
 use riverqueue::database::SchemaName;
+#[cfg(feature = "mysql")]
+use riverqueue_migrate::MySqlMigrator;
 #[cfg(feature = "postgres")]
 use riverqueue_migrate::PostgresMigrator;
 #[cfg(feature = "sqlite")]
 use riverqueue_migrate::SqliteMigrator;
 use riverqueue_migrate::{Direction, MigrateOpts, MigrateResult, Migration, ValidateResult};
+#[cfg(feature = "mysql")]
+use sqlx::MySqlPool;
 #[cfg(feature = "postgres")]
 use sqlx::PgPool;
 #[cfg(feature = "sqlite")]
@@ -28,6 +32,8 @@ struct Args {
 enum CommandMigrator {
     #[cfg(feature = "postgres")]
     Postgres(PostgresMigrator),
+    #[cfg(feature = "mysql")]
+    MySql(MySqlMigrator),
     #[cfg(feature = "sqlite")]
     Sqlite(SqliteMigrator),
 }
@@ -37,6 +43,8 @@ impl CommandMigrator {
         match self {
             #[cfg(feature = "postgres")]
             Self::Postgres(_) => PostgresMigrator::all_versions(),
+            #[cfg(feature = "mysql")]
+            Self::MySql(_) => MySqlMigrator::all_versions(),
             #[cfg(feature = "sqlite")]
             Self::Sqlite(_) => SqliteMigrator::all_versions(),
         }
@@ -46,6 +54,8 @@ impl CommandMigrator {
         match self {
             #[cfg(feature = "postgres")]
             Self::Postgres(migrator) => migrator.existing_versions().await,
+            #[cfg(feature = "mysql")]
+            Self::MySql(migrator) => migrator.existing_versions().await,
             #[cfg(feature = "sqlite")]
             Self::Sqlite(migrator) => migrator.existing_versions().await,
         }
@@ -59,6 +69,8 @@ impl CommandMigrator {
         match self {
             #[cfg(feature = "postgres")]
             Self::Postgres(migrator) => migrator.migrate(direction, opts).await,
+            #[cfg(feature = "mysql")]
+            Self::MySql(migrator) => migrator.migrate(direction, opts).await,
             #[cfg(feature = "sqlite")]
             Self::Sqlite(migrator) => migrator.migrate(direction, opts).await,
         }
@@ -71,6 +83,8 @@ impl CommandMigrator {
         match self {
             #[cfg(feature = "postgres")]
             Self::Postgres(migrator) => migrator.validate(target_version).await,
+            #[cfg(feature = "mysql")]
+            Self::MySql(migrator) => migrator.validate(target_version).await,
             #[cfg(feature = "sqlite")]
             Self::Sqlite(migrator) => migrator.validate(target_version).await,
         }
@@ -87,7 +101,19 @@ pub(crate) async fn run(
         println!("{}", usage());
         return Ok(());
     };
-    let migrator = if args.database_url.starts_with("sqlite:") {
+    let migrator = if args.database_url.starts_with("mysql:") {
+        #[cfg(not(feature = "mysql"))]
+        return Err("MySQL support requires the `mysql` feature".into());
+        #[cfg(feature = "mysql")]
+        {
+            if args.schema.is_some() {
+                return Err("select the MySQL database in --database-url".into());
+            }
+            CommandMigrator::MySql(MySqlMigrator::new(
+                MySqlPool::connect(&args.database_url).await?,
+            ))
+        }
+    } else if args.database_url.starts_with("sqlite:") {
         #[cfg(not(feature = "sqlite"))]
         return Err("SQLite support requires the `sqlite` feature".into());
         #[cfg(feature = "sqlite")]

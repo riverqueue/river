@@ -20,6 +20,7 @@ all-features = true
 [features]
 default = ["postgres"]
 postgres = ["sqlx/postgres"]
+mysql = ["sqlx/mysql", "sqlx/tls-rustls"]
 sqlite = ["sqlx/sqlite"]
 
 [dependencies]

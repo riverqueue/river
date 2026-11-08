@@ -78,9 +78,10 @@ class PeerCancellationTest {
                             var jobs = new ArrayList<Client.Decoded>();
                             var now = database.timestamp(Instant.now());
                             try (var statement =
-                                    Sql.prepare(
+                                    Sql.mutation(
+                                        database,
                                         connection,
-                                        Sql.query(database, "claim"),
+                                        "claim",
                                         now,
                                         "batch",
                                         "peers",
@@ -194,9 +195,10 @@ class PeerCancellationTest {
                               var jobs = new ArrayList<Client.Decoded>();
                               var now = database.timestamp(Instant.now());
                               try (var statement =
-                                      Sql.prepare(
+                                      Sql.mutation(
+                                          database,
                                           connection,
-                                          Sql.query(database, "claim"),
+                                          "claim",
                                           now,
                                           "batch",
                                           "peers",

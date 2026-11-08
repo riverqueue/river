@@ -1,6 +1,18 @@
 # frozen_string_literal: true
 
 RSpec.shared_examples "historical attempt error decoding" do
+  it "completes an attempt when stored metadata becomes unreadable" do
+    row = client.insert(River::JobArgsHash.new(:decode, {})).job
+    claimed = driver.job_claim(id: row.id, attempted_by: "test")
+    encoded = driver.send(:runtime_json, "[]")
+    driver.send(:runtime_execute, "UPDATE river_job SET metadata = #{encoded} WHERE id = #{row.id}")
+
+    completed = driver.job_complete(id: row.id, finalized_at: Time.now.utc, expected_job: claimed)
+
+    expect(completed).to have_attributes(state: "completed", __decode_error: be_a(River::JobRowDecodeError))
+    expect(driver.send(:runtime_read_job, row.id).state).to eq("completed")
+  end
+
   it "isolates non-object metadata across reads, unique inserts, claims, and finalization" do
     rows = [[], "invalid metadata", 7, true].map.with_index do |metadata, index|
       args = River::JobArgsHash.new(:decode, {index: index})

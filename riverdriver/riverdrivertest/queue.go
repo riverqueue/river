@@ -77,6 +77,23 @@ func exerciseQueue[TTx any](ctx context.Context, t *testing.T, executorWithTx fu
 			require.WithinDuration(t, now, *queue.PausedAt, bundle.driver.TimePrecision())
 		})
 
+		t.Run("PreservesExactNames", func(t *testing.T) {
+			t.Parallel()
+
+			exec, _ := setup(ctx, t)
+
+			for _, name := range []string{"queue", "queue ", "QUEUE", "café", "cafe"} {
+				queue, err := exec.QueueCreateOrSetUpdatedAt(ctx, &riverdriver.QueueCreateOrSetUpdatedAtParams{Name: name})
+				require.NoError(t, err)
+				require.Equal(t, name, queue.Name)
+			}
+			for _, name := range []string{"queue", "queue ", "QUEUE", "café", "cafe"} {
+				queue, err := exec.QueueGet(ctx, &riverdriver.QueueGetParams{Name: name})
+				require.NoError(t, err)
+				require.Equal(t, name, queue.Name)
+			}
+		})
+
 		t.Run("UpdatesTheUpdatedAtOfExistingQueue", func(t *testing.T) {
 			t.Parallel()
 

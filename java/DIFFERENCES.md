@@ -54,7 +54,7 @@
   `attempt` and `attempted_at`. Go updates by job ID alone. Java rejects a stale
   attempt's checkpoint to prevent it from changing a replacement attempt.
 - SQLite follows Go's JSONB storage and millisecond timestamp representation;
-  Postgres uses microsecond timestamps. These are shared storage contracts,
+  MySQL and Postgres use microsecond timestamps. These are shared storage contracts,
   not configurable Java serialization choices.
 
 Stored uniqueness hashes, job state values, migration versions, and notification

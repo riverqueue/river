@@ -12,7 +12,7 @@ repository.workspace = true
 homepage.workspace = true
 # Only what builds and documents the crate ships; tests and their fixtures stay
 # in the repository.
-include = ["src/**", "docs/**", "examples/**", "LICENSE", "README.md"]
+include = ["src/**", "!src/**/tests/**", "docs/**", "examples/**", "LICENSE", "README.md"]
 
 [package.metadata.docs.rs]
 all-features = true
@@ -24,6 +24,7 @@ sqlite = ["riverqueue-migrate/sqlite", "sqlx/sqlite"]
 # Resolves IANA zone names such as `America/New_York` in cron `CRON_TZ=`
 # prefixes from a bundled time zone database.
 tzdb = ["jiff/tzdb-bundle-always"]
+mysql = ["riverqueue-migrate/mysql", "sqlx/mysql", "sqlx/tls-rustls", "dep:sqlx-core"]
 
 [dependencies]
 async-trait.workspace = true
@@ -38,6 +39,7 @@ serde.workspace = true
 serde_json.workspace = true
 sha2.workspace = true
 sqlx = { workspace = true, features = ["derive", "json"] }
+sqlx-core = { workspace = true, optional = true }
 thiserror.workspace = true
 tokio.workspace = true
 tokio-util.workspace = true

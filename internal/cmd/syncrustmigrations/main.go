@@ -23,6 +23,10 @@ func main() {
 
 	databases := []database{
 		{
+			canonicalDir: "riverdriver/rivermysql/migration/main",
+			mirrorDir:    "rust/riverqueue-migrate/migrations/mysql/main",
+		},
+		{
 			canonicalDir: "riverdriver/riverpgxv5/migration/main",
 			mirrorDir:    "rust/riverqueue-migrate/migrations/main",
 		},

@@ -58,7 +58,7 @@ func exerciseClientJobDeleteManyWhere[TTx any](ctx context.Context, t *testing.T
 			)
 
 			predicate := "(args->>'customer_id')::bigint IN (@customer_a, @customer_b)"
-			if bundle.driver.DatabaseName() == riverdriver.DatabaseNameSQLite {
+			if bundle.driver.DatabaseName() != riverdriver.DatabaseNamePostgres {
 				predicate = "args ->> '$.customer_id' IN (@customer_a, @customer_b)"
 			}
 

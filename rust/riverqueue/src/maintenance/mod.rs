@@ -29,6 +29,8 @@ mod scheduler;
 #[cfg(all(test, feature = "postgres", river_postgres_tests))]
 mod tests;
 
+#[cfg(feature = "mysql")]
+pub(crate) use cleaner::mysql_delete_finalized_jobs;
 #[cfg(feature = "postgres")]
 pub(crate) use cleaner::postgres_delete_finalized_jobs;
 #[cfg(feature = "sqlite")]
@@ -190,6 +192,12 @@ impl From<sqlx::Error> for MaintenanceError {
     }
 }
 
+#[cfg(feature = "mysql")]
+impl From<crate::database::mysql::BackendError> for MaintenanceError {
+    fn from(error: crate::database::mysql::BackendError) -> Self {
+        Self::Failed(Error::Database(error.into()))
+    }
+}
 #[cfg(feature = "sqlite")]
 impl From<crate::database::sqlite::BackendError> for MaintenanceError {
     fn from(error: crate::database::sqlite::BackendError) -> Self {
@@ -267,7 +275,7 @@ impl ReducedBatchBreaker {
 #[derive(Debug)]
 pub(crate) struct Breakers {
     pub(crate) job_cleaner: Mutex<ReducedBatchBreaker>,
-    #[cfg(feature = "sqlite")]
+    #[cfg(any(feature = "sqlite", feature = "mysql"))]
     pub(crate) notification_cleaner: Mutex<ReducedBatchBreaker>,
     pub(crate) queue_cleaner: Mutex<ReducedBatchBreaker>,
     pub(crate) rescuer: Mutex<ReducedBatchBreaker>,
@@ -278,7 +286,7 @@ impl Breakers {
     fn new(sizes: BatchSizes) -> Self {
         Self {
             job_cleaner: Mutex::new(ReducedBatchBreaker::new(sizes)),
-            #[cfg(feature = "sqlite")]
+            #[cfg(any(feature = "sqlite", feature = "mysql"))]
             notification_cleaner: Mutex::new(ReducedBatchBreaker::new(sizes)),
             queue_cleaner: Mutex::new(ReducedBatchBreaker::new(sizes)),
             rescuer: Mutex::new(ReducedBatchBreaker::new(sizes)),
@@ -361,6 +369,28 @@ async fn batch_backoff(cancel: &CancellationToken) -> Result<(), MaintenanceErro
     }
 }
 
+/// Runs a MySQL operation under the term token and a client-side deadline.
+///
+/// Dropping a batch also drops its transaction; SQLx rolls it back before
+/// reusing the connection.
+#[cfg(feature = "mysql")]
+async fn mysql_cancellable<T, E>(
+    cancel: &CancellationToken,
+    timeout: Duration,
+    operation: impl Future<Output = Result<T, E>>,
+) -> Result<T, MaintenanceError>
+where
+    MaintenanceError: From<E>,
+{
+    tokio::select! {
+        biased;
+        () = cancel.cancelled() => Err(MaintenanceError::Cancelled),
+        result = tokio::time::timeout(timeout, operation) => match result {
+            Ok(result) => result.map_err(MaintenanceError::from),
+            Err(_) => Err(MaintenanceError::TimedOut),
+        },
+    }
+}
 /// Runs a SQLite operation under the term token and a client-side deadline.
 ///
 /// SQLite executes statements on the client, so dropping the future cannot

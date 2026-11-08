@@ -5,6 +5,41 @@ require_relative "../../../spec/driver_shared_examples"
 require_relative "../../../spec/row_decoding_shared_examples"
 
 RSpec.describe River::Driver::ActiveRecord do
+  it "selects MySQL through the configured pool and only sets isolation on owned transactions" do
+    connection = Struct.new(:adapter_name, :open_transactions, :current_transaction, :calls).new(
+      "Mysql2", 0, Struct.new(:joinable?).new(false), []
+    )
+    def connection.transaction(**options)
+      calls << options
+      yield
+    end
+
+    def connection.exec_query(sql)
+      calls << sql
+      [{"id" => 1}]
+    end
+    pool = Object.new
+    pool.define_singleton_method(:with_connection) { |&block| block.call(connection) }
+    connection_class = Class.new(ActiveRecord::Base) { self.abstract_class = true }
+    connection_class.define_singleton_method(:connection_pool) { pool }
+    driver = described_class.new(connection_class: connection_class)
+    expect(driver).to be_a(River::Driver::MySQLRuntime)
+    expect(driver.migration_backend).to eq(:mysql)
+    expect(driver.send(:runtime_unique_violation_class)).to eq(ActiveRecord::RecordNotUnique)
+
+    expect(driver.transaction { :outer }).to eq(:outer)
+    connection.open_transactions = 1
+    expect(driver.transaction { :nested }).to eq(:nested)
+
+    rows = [{"id" => 1}]
+    expect(driver.send(:runtime_query_rows, "SELECT id FROM river_job")).to eq(rows)
+    expect(connection.calls).to eq([
+      {requires_new: false, isolation: :read_committed},
+      {requires_new: false},
+      "SELECT id FROM river_job"
+    ])
+  end
+
   before do
     if ENV["RIVER_DEBUG"] == "1" || ENV["RIVER_DEBUG"] == "true"
       ActiveRecord::Base.logger = Logger.new($stdout)

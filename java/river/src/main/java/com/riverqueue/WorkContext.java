@@ -255,9 +255,10 @@ public final class WorkContext<A> {
             transaction,
             connection -> {
               try (var statement =
-                      Sql.prepare(
+                      Sql.mutation(
+                          client.database(),
                           connection,
-                          Sql.query(client.database(), "checkpoint"),
+                          "checkpoint",
                           currentStep,
                           Json.encode(updates.isEmpty() ? null : updates),
                           job.id(),

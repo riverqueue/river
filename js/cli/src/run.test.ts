@@ -163,7 +163,7 @@ describe("argument errors", () => {
 
   it.each([
     [
-      ["migrate-up", "--database-url", "mysql://localhost/river"],
+      ["migrate-up", "--database-url", "oracle://localhost/river"],
       "--database-url must start with postgres://",
     ],
     [

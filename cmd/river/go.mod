@@ -5,10 +5,12 @@ go 1.26.0
 toolchain go1.26.6
 
 require (
+	github.com/go-sql-driver/mysql v1.10.0
 	github.com/jackc/pgx/v5 v5.11.0
 	github.com/lmittmann/tint v1.2.1
 	github.com/riverqueue/river v0.51.1
 	github.com/riverqueue/river/riverdriver v0.51.1
+	github.com/riverqueue/river/riverdriver/rivermysql v0.0.0-00010101000000-000000000000
 	github.com/riverqueue/river/riverdriver/riverpgxv5 v0.51.1
 	github.com/riverqueue/river/riverdriver/riversqlite v0.51.1
 	github.com/riverqueue/river/rivershared v0.51.1
@@ -19,6 +21,7 @@ require (
 )
 
 require (
+	filippo.io/edwards25519 v1.2.0 // indirect
 	github.com/dustin/go-humanize v1.1.0 // indirect
 	github.com/google/uuid v1.6.0 // indirect
 	github.com/inconshreveable/mousetrap v1.1.0 // indirect
@@ -42,3 +45,7 @@ require (
 	modernc.org/mathutil v1.7.1 // indirect
 	modernc.org/memory v1.12.1 // indirect
 )
+
+// Remove this replacement after rivermysql has had its first coordinated
+// release with the other Go modules.
+replace github.com/riverqueue/river/riverdriver/rivermysql => ../../riverdriver/rivermysql

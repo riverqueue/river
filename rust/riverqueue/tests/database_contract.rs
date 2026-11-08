@@ -28,6 +28,29 @@ fn sqlite_pool() -> SqlitePool {
     SqlitePoolOptions::new().connect_lazy_with(SqliteConnectOptions::new())
 }
 
+#[cfg(feature = "mysql")]
+fn mysql_pool() -> sqlx::MySqlPool {
+    sqlx::mysql::MySqlPoolOptions::new().connect_lazy_with(sqlx::mysql::MySqlConnectOptions::new())
+}
+
+#[tokio::test]
+#[cfg(feature = "mysql")]
+async fn mysql_sources_and_transactions_implement_the_database_contract() {
+    use riverqueue::database::MySqlDatabase;
+    fn mysql_transaction(database: &Database, transaction: &mut Transaction<'_, sqlx::MySql>) {
+        assert_eq!(require_executor(database, transaction), DatabaseKind::MySql);
+    }
+    let _: for<'executor, 'transaction> fn(
+        &Database,
+        &'executor mut Transaction<'transaction, sqlx::MySql>,
+    ) = mysql_transaction;
+    let pool = mysql_pool();
+    let database = require_source(MySqlDatabase::new(pool.clone()));
+    assert_eq!(database.kind(), DatabaseKind::MySql);
+    assert_eq!(database.postgres_schema(), None);
+    assert_eq!(require_source(pool).kind(), DatabaseKind::MySql);
+}
+
 fn require_executor<'executor, E: DatabaseTransactionExecutor<'executor>>(
     database: &Database,
     executor: E,

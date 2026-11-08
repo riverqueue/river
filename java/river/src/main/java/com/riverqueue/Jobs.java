@@ -35,9 +35,10 @@ public final class Jobs {
           var before = locked(c, id);
           if (before.state().isFinalized()) return before;
           try (var statement =
-                  Sql.prepare(
+                  Sql.mutation(
+                      river.database(),
                       c,
-                      Sql.query(river.database(), "cancel"),
+                      "cancel",
                       river.database().timestamp(clock.instant()),
                       Json.encode(clock.instant()),
                       id);
@@ -66,9 +67,10 @@ public final class Jobs {
         connection,
         c -> {
           try (var statement =
-                  Sql.prepare(
+                  Sql.mutation(
+                      river.database(),
                       c,
-                      Sql.query(river.database(), "complete"),
+                      "complete",
                       "completed",
                       river.database().timestamp(clock.instant()),
                       null,
@@ -105,7 +107,7 @@ public final class Jobs {
           var job = locked(c, id);
           if (job.state() == Job.State.RUNNING)
             throw new RiverException(RiverException.Code.REJECTED, "Cannot delete a running job");
-          try (var statement = Sql.prepare(c, Sql.query(river.database(), "delete"), id);
+          try (var statement = Sql.mutation(river.database(), c, "delete", id);
               var rows = statement.executeQuery()) {
             rows.next();
             var deleted = river.read(rows);
@@ -144,6 +146,13 @@ public final class Jobs {
           try (var statement = Sql.prepare(c, sql, params.toArray())) {
             for (var job : jobs) {
               statement.setLong(params.size() + 1, job.id());
+              if (river.database().dialect() == Database.Dialect.MYSQL) {
+                if (statement.executeUpdate() != 0) {
+                  river.pilot().afterDelete(c, river.driver(), job);
+                  result.add(job);
+                }
+                continue;
+              }
               try (var rows = statement.executeQuery()) {
                 // Recheck every filter atomically: a peer may have updated this job since listing.
                 if (!rows.next()) continue;
@@ -245,9 +254,10 @@ public final class Jobs {
         c -> {
           var before = locked(c, id);
           try (var statement =
-                  Sql.prepare(
+                  Sql.mutation(
+                      river.database(),
                       c,
-                      Sql.query(river.database(), "retry"),
+                      "retry",
                       river.database().timestamp(clock.instant()),
                       id,
                       river.database().timestamp(clock.instant()));
@@ -283,7 +293,7 @@ public final class Jobs {
         connection,
         c -> {
           try (var statement =
-                  Sql.prepare(c, Sql.query(river.database(), "update"), Json.encode(updates), id);
+                  Sql.mutation(river.database(), c, "update", Json.encode(updates), id);
               var rows = statement.executeQuery()) {
             if (!rows.next())
               throw new RiverException(RiverException.Code.NOT_FOUND, "Job " + id + " not found");

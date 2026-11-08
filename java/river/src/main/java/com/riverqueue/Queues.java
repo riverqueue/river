@@ -114,9 +114,10 @@ public final class Queues {
     var value = Json.tree(metadata);
     if (!value.isObject()) throw new IllegalArgumentException("Queue metadata must be an object");
     try (var statement =
-            Sql.prepare(
+            Sql.mutation(
+                river.database(),
                 connection,
-                Sql.query(river.database(), "queue_update"),
+                "queue_update",
                 Json.encode(metadata),
                 river.database().timestamp(Instant.now()),
                 name);

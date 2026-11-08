@@ -1,0 +1,1 @@
+ALTER TABLE /* TEMPLATE: schema */river_job MODIFY COLUMN tags JSON NULL;

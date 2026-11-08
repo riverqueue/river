@@ -4,7 +4,7 @@ require "securerandom"
 
 module River::Driver
   # Provides an ActiveRecord driver for River supporting Postgres, YugabyteDB,
-  # and SQLite.
+  # MySQL, and SQLite.
   #
   # Used in conjunction with a River client like:
   #
@@ -17,7 +17,7 @@ module River::Driver
     # Connection class whose pool and transaction context this driver uses.
     attr_reader :connection_class
 
-    # Uses an established Postgres or SQLite connection. The class must be
+    # Uses an established Postgres, MySQL, or SQLite connection. The class must be
     # ActiveRecord::Base or an abstract Active Record class. Routing follows its
     # current role/shard; configure consumers explicitly for each database.
     def initialize(connection_class: ::ActiveRecord::Base)
@@ -32,6 +32,8 @@ module River::Driver
       @connection_class = connection_class
       @postgres_capabilities_cache = PostgresCapabilities::Cache.new
       @is_sqlite = connection_class.connection_pool.with_connection { |connection| connection.adapter_name.downcase.include?("sqlite") }
+      @is_mysql = connection_class.connection_pool.with_connection { |connection| connection.adapter_name.downcase.include?("mysql") }
+      extend River::Driver::MySQLRuntime if @is_mysql
       # Do not inherit application scopes, callbacks, or schema caches. Each
       # driver owns its model, but all operations use the selected class's pool.
       @job_model = Class.new(::ActiveRecord::Base) do
@@ -91,7 +93,11 @@ module River::Driver
     end
 
     # Backend used by River::Migrator.
-    def migration_backend = @is_sqlite ? :sqlite : :postgresql
+    def migration_backend = if @is_mysql
+                              :mysql
+                            else
+                              (@is_sqlite ? :sqlite : :postgresql)
+                            end
 
     # Pins a raw connection for migration SQL and refreshes cached model columns.
     def migration_connection
@@ -116,7 +122,9 @@ module River::Driver
         # rolling anything back. Let the transaction's owner receive it.
         next yield if !legacy && connection.current_transaction.joinable?
 
-        connection.transaction(requires_new: legacy, &)
+        options = {requires_new: legacy}
+        options[:isolation] = :read_committed if @is_mysql && connection.open_transactions.zero?
+        connection.transaction(**options, &)
       end
     end
 
@@ -267,13 +275,15 @@ module River::Driver
     end
 
     private def runtime_postgres?
-      !@is_sqlite
+      !@is_sqlite && !@is_mysql
     end
 
     private def runtime_query_rows(sql)
       @connection_class.connection_pool.with_connection do |connection|
         if @is_sqlite
           connection.raw_connection.execute(sql).to_a
+        elsif @is_mysql
+          connection.exec_query(sql).to_a
         else
           # exec_query invalidates the query cache for writes with RETURNING.
           # Deserialize without allocating an Active Record model per job.
@@ -290,6 +300,10 @@ module River::Driver
 
     private def runtime_quote(value)
       @connection_class.connection_pool.with_connection { |connection| connection.quote(value) }
+    end
+
+    private def runtime_unique_violation_class
+      ::ActiveRecord::RecordNotUnique
     end
 
     private def runtime_value(row, key)

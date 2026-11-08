@@ -15,7 +15,10 @@ import (
 	"strings"
 )
 
-var forbiddenPath = regexp.MustCompile(`(^|/)(fixtures?|testdata|tests|conformance)/|(?:Test|Tests)(?:\$[^/]*)?\.(class|java)$`)
+// Dependencies in the shaded CLI may have production classes ending in Test
+// (for example, protobuf's UnredactedDebugFormatForTest). Check that suffix
+// only in River's namespace.
+var forbiddenPath = regexp.MustCompile(`(^|/)(fixtures?|testdata|tests|conformance)/|^com/riverqueue/.*(?:Test|Tests)(?:\$[^/]*)?\.(class|java)$`)
 
 func main() {
 	if err := run("java"); err != nil {

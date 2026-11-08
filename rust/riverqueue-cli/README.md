@@ -16,7 +16,11 @@ implementation. Apply them before starting clients:
 riverqueue migrate-up --database-url postgres://localhost/app
 riverqueue migrate-up --database-url postgres://localhost/app --schema river
 riverqueue migrate-up --database-url sqlite://app.sqlite3
+riverqueue migrate-up --database-url mysql://localhost/app
 ```
+
+The CLI includes Postgres, MySQL, and SQLite support by default. For MySQL,
+select an existing database in the URL; `--schema` is a Postgres option.
 
 `migrate-down`, `migrate-list`, and `validate` take the same connection
 options. `--target-version N`, `--max-steps N`, and `--dry-run` limit or
@@ -37,7 +41,7 @@ with exit status 2; connection and usage errors exit with status 1.
 
 `migrate-get` exports SQL for another migration framework without connecting to
 a database. It defaults to Postgres and ignores `DATABASE_URL`;
-use `--database-url sqlite://` to export SQLite SQL.
+use `--database-url mysql://` or `--database-url sqlite://` to select its SQL dialect.
 
 ```sh
 riverqueue migrate-get --version 3 --up > river_3.up.sql

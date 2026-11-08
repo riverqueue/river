@@ -211,6 +211,29 @@ func exerciseLeader[TTx any](ctx context.Context, t *testing.T, executorWithTx f
 			require.Equal(t, leader.ElectedAt, leaderFromDB.ElectedAt)
 		})
 
+		t.Run("ReelectsWithoutChangingExpiry", func(t *testing.T) {
+			t.Parallel()
+
+			exec, bundle := setup(ctx, t)
+
+			now := time.Now().UTC().Truncate(bundle.driver.TimePrecision())
+			leader, err := exec.LeaderAttemptElect(ctx, &riverdriver.LeaderElectParams{
+				LeaderID: testClientID,
+				Now:      &now,
+				TTL:      leaderTTL,
+			})
+			require.NoError(t, err)
+
+			updatedLeader, err := exec.LeaderAttemptReelect(ctx, &riverdriver.LeaderReelectParams{
+				ElectedAt: leader.ElectedAt,
+				LeaderID:  testClientID,
+				Now:       &now,
+				TTL:       leaderTTL,
+			})
+			require.NoError(t, err)
+			require.Equal(t, leader, updatedLeader)
+		})
+
 		t.Run("WithoutNow", func(t *testing.T) {
 			t.Parallel()
 

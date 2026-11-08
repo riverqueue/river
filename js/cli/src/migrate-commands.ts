@@ -1,3 +1,4 @@
+import { createPool } from "mysql2/promise";
 import { quoteIdentifier } from "riverqueue/unstable-driver";
 import {
   createMigrator,
@@ -33,7 +34,7 @@ const TEMPLATE_SCHEMA = "/* TEMPLATE: schema */";
 
 const DATABASE_URL_OPTION: OptionSpec = {
   description:
-    "Database to use: postgres://..., postgresql://..., or sqlite://PATH " +
+    "Database to use: mysql://..., postgres://..., postgresql://..., or sqlite://PATH " +
     "(defaults to PG* environment variables when PGDATABASE is set)",
   type: "string",
   valueName: "URL",
@@ -47,7 +48,7 @@ const LINE_OPTION: OptionSpec = {
 
 const SCHEMA_OPTION: OptionSpec = {
   description:
-    "Postgres schema containing River's tables (default: the search_path)",
+    "MySQL database or Postgres schema containing River's tables (default: the connection's current schema)",
   type: "string",
   valueName: "NAME",
 };
@@ -319,7 +320,18 @@ async function runMigrateGet(
       });
 
   const direction = down ? "down" : "up";
-  const prefix = schema === undefined ? "" : `${quoteIdentifier(schema)}.`;
+  if (
+    backend === "mysql" &&
+    schema !== undefined &&
+    !/^[A-Za-z_][A-Za-z0-9_]{0,45}$/.test(schema)
+  )
+    throw new UsageError("Invalid MySQL schema name", command);
+  const prefix =
+    schema === undefined
+      ? ""
+      : backend === "mysql"
+        ? `\`${schema}\`.`
+        : `${quoteIdentifier(schema)}.`;
   let printed = false;
   for (const migration of selected) {
     if (excluded.has(migration.version)) continue;
@@ -370,6 +382,25 @@ async function withMigrator(
       );
     } finally {
       database.close();
+    }
+  }
+
+  if (location.backend === "mysql") {
+    if (statementTimeoutMs !== undefined)
+      throw new UsageError(
+        "--statement-timeout only applies to Postgres",
+        command
+      );
+    const pool = createPool(location.connectionString);
+    try {
+      return await run(
+        createMigrator(
+          { backend: "mysql", pool, schema },
+          { line, migrations: lineMigrations(context, line, "mysql") }
+        )
+      );
+    } finally {
+      await pool.end();
     }
   }
 
@@ -459,9 +490,10 @@ function sqlDialect(
   if (url === undefined) return "postgres";
   const scheme = /^([a-z][a-z0-9+.-]*):\/\//i.exec(url)?.[1]?.toLowerCase();
   if (scheme === "postgres" || scheme === "postgresql") return "postgres";
+  if (scheme === "mysql") return "mysql";
   if (scheme === "sqlite") return "sqlite";
   throw new UsageError(
-    "--database-url must start with postgres://, postgresql://, or sqlite://",
+    "--database-url must start with postgres://, postgresql://, mysql://, or sqlite://",
     command
   );
 }

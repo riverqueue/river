@@ -1,13 +1,17 @@
 package riverdrivertest_test
 
 import (
+	"cmp"
 	"context"
 	"database/sql"
+	"os"
 	"runtime"
 	"strconv"
+	"strings"
 	"testing"
 	"time"
 
+	"github.com/go-sql-driver/mysql"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/jackc/pgx/v5/stdlib"
@@ -22,6 +26,7 @@ import (
 	"github.com/riverqueue/river/riverdriver"
 	"github.com/riverqueue/river/riverdriver/riverdatabasesql"
 	"github.com/riverqueue/river/riverdriver/riverdrivertest"
+	"github.com/riverqueue/river/riverdriver/rivermysql"
 	"github.com/riverqueue/river/riverdriver/riverpgxv5"
 	"github.com/riverqueue/river/riverdriver/riversqlite"
 	"github.com/riverqueue/river/rivershared/riversharedtest"
@@ -230,6 +235,62 @@ func TestDriverRiverLiteLibSQL(t *testing.T) { //nolint:dupl
 
 				ProcurePool: procurePool,
 			})
+			return driver.UnwrapExecutor(tx), driver
+		})
+}
+
+func TestDriverRiverMySQL(t *testing.T) {
+	t.Parallel()
+
+	riversharedtest.SkipIfMySQLNotEnabled(t)
+
+	ctx := context.Background()
+	exerciseDriverMySQL(ctx, t, riversharedtest.DBPoolMySQL(ctx, t))
+}
+
+func TestDriverRiverMySQLInterpolateParams(t *testing.T) {
+	t.Parallel()
+
+	riversharedtest.SkipIfMySQLNotEnabled(t)
+
+	config, err := mysql.ParseDSN(cmp.Or(os.Getenv("TEST_MYSQL_URL"),
+		"root@tcp(localhost:3306)/?parseTime=true&multiStatements=true&loc=UTC&time_zone=%27%2B00%3A00%27"))
+	require.NoError(t, err)
+	config.InterpolateParams = true
+	connector, err := mysql.NewConnector(config)
+	require.NoError(t, err)
+	pool := sql.OpenDB(connector)
+	t.Cleanup(func() { require.NoError(t, pool.Close()) })
+	exerciseDriverMySQL(context.Background(), t, pool)
+}
+
+func exerciseDriverMySQL(ctx context.Context, t *testing.T, pool *sql.DB) {
+	t.Helper()
+
+	driver := rivermysql.New(pool)
+
+	riverdrivertest.Exercise(ctx, t,
+		func(ctx context.Context, t *testing.T, opts *riverdbtest.TestSchemaOpts) (riverdriver.Driver[*sql.Tx], string) {
+			t.Helper()
+
+			return driver, riverdbtest.TestSchema(ctx, t, driver, opts)
+		},
+		func(ctx context.Context, t *testing.T) (riverdriver.Executor, riverdriver.Driver[*sql.Tx]) {
+			t.Helper()
+
+			tx, schema := riverdbtest.TestTx(ctx, t, driver, &riverdbtest.TestTxOpts{
+				// Disable schema sharing to reduce InnoDB deadlocks from
+				// parallel tests contending on the same database.
+				DisableSchemaSharing: true,
+			})
+
+			// MySQL has no search_path equivalent, so USE the test schema
+			// database so that unqualified queries resolve correctly.
+			if schema != "" {
+				_, err := tx.ExecContext(ctx, "USE `"+strings.ReplaceAll(schema, "`", "``")+"`") //nolint:gosec // The identifier is quoted and supplied by TestTx.
+				require.NoError(t, err)
+			}
+
 			return driver.UnwrapExecutor(tx), driver
 		})
 }

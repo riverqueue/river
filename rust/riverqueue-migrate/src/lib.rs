@@ -1,4 +1,4 @@
-// The README's example uses both backends, so it's the crate documentation
+// The README's Postgres and SQLite example needs both features, so it's the crate documentation
 // (and its example runs as a doctest) when both are enabled, as on docs.rs.
 #![cfg_attr(
     all(feature = "postgres", feature = "sqlite"),
@@ -6,7 +6,7 @@
 )]
 #![cfg_attr(
     not(all(feature = "postgres", feature = "sqlite")),
-    doc = "River's Postgres and SQLite migrations for Rust. The full crate documentation, \
+    doc = "River's MySQL, Postgres, and SQLite migrations for Rust. The full crate documentation, \
            from the README, builds with both the `postgres` and `sqlite` features, as on \
            [docs.rs](https://docs.rs/riverqueue-migrate)."
 )]
@@ -14,8 +14,10 @@
 #![forbid(unsafe_code)]
 #![warn(missing_docs)]
 
-#[cfg(not(any(feature = "postgres", feature = "sqlite")))]
-compile_error!("riverqueue-migrate requires at least one database feature: `postgres` or `sqlite`");
+#[cfg(not(any(feature = "postgres", feature = "sqlite", feature = "mysql")))]
+compile_error!(
+    "riverqueue-migrate requires at least one database feature: `mysql`, `postgres`, or `sqlite`"
+);
 
 use std::time::Duration;
 #[cfg(feature = "postgres")]
@@ -25,7 +27,11 @@ use std::time::Instant;
 use sqlx::{PgPool, Row};
 use thiserror::Error;
 
+#[cfg(feature = "mysql")]
+mod mysql;
 mod schema;
+#[cfg(feature = "mysql")]
+pub use mysql::{MYSQL_MIGRATIONS, MySqlMigrator};
 #[cfg(feature = "sqlite")]
 mod sqlite;
 
@@ -484,6 +490,7 @@ impl PostgresMigrator {
 
 /// Runs a migration step on its own task and waits for it, so the step
 /// finishes even when the caller stops waiting.
+#[cfg(any(feature = "postgres", feature = "sqlite"))]
 async fn run_to_completion(
     step: impl std::future::Future<Output = Result<(), Error>> + Send + 'static,
 ) -> Result<(), Error> {

@@ -8,7 +8,7 @@ require_relative "support/client_test_database"
 
 RSpec.describe "River notification receiver" do
   %i[active_record sequel].each do |adapter|
-    %i[postgres sqlite].each do |backend|
+    %i[mysql postgres sqlite].each do |backend|
       context "#{adapter} with #{backend}", database: backend do
         around do |example|
           ClientTestDatabase.public_send(:"with_#{adapter}", backend) do |driver|

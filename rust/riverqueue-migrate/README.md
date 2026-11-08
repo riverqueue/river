@@ -1,9 +1,9 @@
 # riverqueue-migrate
 
-River's Postgres and SQLite migrations for Rust, identical to the ones other
-River clients apply, so a client in any language can migrate a database the
-others use. The `riverqueue` command from the `riverqueue-cli` crate runs the
-same migrations from a shell.
+River's Postgres, MySQL, and SQLite migrations for Rust, identical to the ones
+other River clients apply, so a client in any language can migrate a database
+the others use. The `riverqueue` command from the `riverqueue-cli` crate runs
+the same migrations from a shell.
 
 Use `PostgresMigrator` for Postgres and `SqliteMigrator` for SQLite:
 
@@ -33,3 +33,10 @@ async fn migrate(postgres: PgPool, sqlite: SqlitePool) -> Result<(), Box<dyn std
     Ok(())
 }
 ```
+
+Enable the `mysql` feature to use `MySqlMigrator::new(pool)` with a SQLx
+`MySqlPool`. The database named in the pool's URL must already exist. MySQL
+uses the same eight canonical migrations as River for Go. A named lock
+serializes migration runs. Because MySQL commits DDL implicitly, successful
+statements remain applied after an error; only a fully successful migration
+is added to the migration history.

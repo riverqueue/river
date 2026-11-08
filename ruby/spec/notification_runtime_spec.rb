@@ -60,6 +60,29 @@ RSpec.describe "River notification dispatch and recovery" do
     runtime.stop(cancel: true)
   end
 
+  [[], [{id: 4}]].each do |history|
+    it "preserves a MySQL outbox cursor across failed reads with #{history.length} historical rows" do
+      queries = []
+      responses = [history, RuntimeError.new("connection lost"), [{id: 10, topic: "river_insert", payload: "{}"}], []]
+      query = lambda do |sql|
+        queries << sql
+        response = responses.shift
+        raise response if response.is_a?(Exception)
+
+        response
+      end
+      listener = River::Driver::NotificationListener::MySQL.new(query)
+      expect { listener.poll(0) }.to raise_error("connection lost")
+      expect(listener.poll(0)).to eq([["river_insert", "{}"]])
+      expect(listener.poll(0)).to be_empty
+      expect(queries[1]).to eq(queries[2])
+      expect(queries[1]).to include("id > #{history.empty? ? 0 : 4}")
+      expect(queries[3]).to include("id > 10")
+    ensure
+      listener&.close
+    end
+  end
+
   it "preserves maintenance wakeups received before the elector starts waiting" do
     condition = runtime.instance_variable_get(:@maintenance_condition)
     condition.define_singleton_method(:wait) { |*_args| raise "unexpected maintenance wait" }

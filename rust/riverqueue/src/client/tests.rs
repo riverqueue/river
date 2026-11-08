@@ -151,7 +151,9 @@ async fn go_notification_fixtures_dispatch_correctly() {
     // in both Postgres-only and SQLite-only builds.
     #[cfg(feature = "postgres")]
     let pool = sqlx::PgPool::connect_lazy("postgres://localhost/unused").unwrap();
-    #[cfg(not(feature = "postgres"))]
+    #[cfg(all(not(feature = "postgres"), feature = "mysql"))]
+    let pool = sqlx::MySqlPool::connect_lazy("mysql://localhost/unused").unwrap();
+    #[cfg(all(not(feature = "postgres"), not(feature = "mysql"), feature = "sqlite"))]
     let pool = sqlx::SqlitePool::connect_lazy("sqlite::memory:").unwrap();
 
     for name in names {

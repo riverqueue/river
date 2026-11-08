@@ -5,6 +5,23 @@ require_relative "../../../spec/driver_shared_examples"
 require_relative "../../../spec/row_decoding_shared_examples"
 
 RSpec.describe River::Driver::Sequel do
+  it "selects the MySQL runtime and migrations for mysql2 connections" do
+    database = Sequel.mock
+    def database.database_type = :mysql
+    driver = described_class.new(database)
+    expect(driver).to be_a(River::Driver::MySQLRuntime)
+    expect(driver.migration_backend).to eq(:mysql)
+    expect(driver.send(:runtime_unique_violation_class)).to eq(Sequel::UniqueConstraintViolation)
+    calls = []
+    original = database.method(:transaction)
+    database.define_singleton_method(:transaction) do |**options, &block|
+      calls << options
+      original.call(**options, &block)
+    end
+    expect(driver.transaction { driver.transaction { :nested } }).to eq(:nested)
+    expect(calls).to eq([{isolation: :committed}, {}])
+  end
+
   if DB
     context "with Postgres", database: :postgres do
       around(:each) { |ex| test_transaction(&ex) }

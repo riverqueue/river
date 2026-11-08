@@ -158,13 +158,24 @@ shared_examples "driver shared examples" do
   it "does not clean up a finalized job retried before the cleanup write" do
     job = client.insert(SimpleArgs.new(job_num: 1)).job
     client.job_update(job.id, River::JobUpdateParams.new(finalized_at: Time.now.utc - 120, state: River::JOB_STATE_COMPLETED))
+    retried = false
     driver.define_singleton_method(:runtime_query_rows) do |sql|
-      job_retry(job.id) if sql.start_with?("DELETE FROM river_job")
+      if !retried && (sql.start_with?("DELETE FROM river_job") ||
+          (migration_backend == :mysql && sql.start_with?("SELECT id FROM river_job WHERE")))
+        retried = true
+        job_retry(job.id)
+      end
       super(sql)
     end
 
     expect(driver.job_delete_finalized(retention: {River::JOB_STATE_COMPLETED => 60})).to eq(0)
     expect(client.job_get(job.id).state).to eq(River::JOB_STATE_AVAILABLE)
+  end
+
+  it "preserves exact queue names" do
+    names = ["queue", "queue ", "QUEUE", "café", "cafe"]
+    names.each { |name| expect(driver.queue_upsert(name).name).to eq(name) }
+    names.each { |name| expect(driver.queue_get(name).name).to eq(name) }
   end
 
   it "keeps static driver constants shareable across Ractor boundaries" do
@@ -568,13 +579,23 @@ shared_examples "driver shared examples" do
 
       stored = inserted.map do |result|
         driver.send(:runtime_query_rows, <<~SQL).first.values.first
-          SELECT #{postgres ? "args::text" : "json(args)"} AS args FROM river_job WHERE id = #{result.job.id}
+          SELECT #{if postgres
+                     "args::text"
+                   else
+                     ((driver.migration_backend == :mysql) ? "CAST(args AS CHAR)" : "json(args)")
+                   end} AS args FROM river_job WHERE id = #{result.job.id}
         SQL
       end
-      expect(stored).to all(eq(postgres ?
+      expected = postgres ?
         '{"decimal": 1.10, "unicode": "café", "exponent": 1000, "high_precision": 1234567890.1234567890}' :
-        encoded))
-      expect(inserted.map { |result| result.job.args }).to all(eq(JSON.parse(encoded)))
+        encoded
+      if driver.migration_backend == :mysql
+        # MySQL normalizes its native JSON representation, including numbers.
+        literal = driver.send(:runtime_quote, encoded)
+        expected = driver.send(:runtime_query_rows, "SELECT CAST(CAST(#{literal} AS JSON) AS CHAR) AS args").first.values.first
+      end
+      expect(stored).to all(eq(expected))
+      expect(inserted.map { |result| result.job.args }).to all(eq(JSON.parse(expected)))
     end
   end
 
