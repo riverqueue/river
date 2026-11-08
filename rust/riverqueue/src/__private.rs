@@ -26,7 +26,9 @@ use tokio_util::sync::CancellationToken;
 pub use crate::client::{ExtensionClient, PreparedInsertRequest, RawInsertRequest, WeakClient};
 pub use crate::database::erased::{Database, ErasedExecutor, ErasedTransaction};
 #[cfg(feature = "mysql")]
-pub use crate::database::mysql::{Connection as MySqlConnectionGuard, Transaction as MySqlTransactionGuard};
+pub use crate::database::mysql::{
+    Connection as MySqlConnectionGuard, Transaction as MySqlTransactionGuard,
+};
 pub use crate::pilot::{
     JobDeleteBeforeContext, JobDeleteBeforeNext, JobDeleteContext, JobDeleteManyContext,
     JobDeleteManyNext, JobDeleteNext, PilotDatabase, PilotProducer, PilotTransaction,

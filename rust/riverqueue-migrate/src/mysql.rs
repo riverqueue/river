@@ -130,10 +130,11 @@ impl MySqlMigrator {
         opts: MigrateOpts,
     ) -> Result<MigrateResult, Error> {
         let mut connection = self.pool.acquire().await?;
-        let acquired: Option<i64> =
-            sqlx::query_scalar("SELECT GET_LOCK(CONCAT('river_migrate:', LEFT(SHA2(DATABASE(), 256), 48)), 10)")
-                .fetch_one(&mut *connection)
-                .await?;
+        let acquired: Option<i64> = sqlx::query_scalar(
+            "SELECT GET_LOCK(CONCAT('river_migrate:', LEFT(SHA2(DATABASE(), 256), 48)), 10)",
+        )
+        .fetch_one(&mut *connection)
+        .await?;
         if acquired != Some(1) {
             return Err(sqlx::Error::Protocol(
                 "could not acquire MySQL migration lock; select a database in the connection URL"
@@ -144,9 +145,11 @@ impl MySqlMigrator {
         // A task abort or panic closes the connection, releasing its named lock.
         connection.close_on_drop();
         let result = migrate_on(&mut connection, direction, opts).await;
-        let released = sqlx::query("SELECT RELEASE_LOCK(CONCAT('river_migrate:', LEFT(SHA2(DATABASE(), 256), 48)))")
-            .execute(&mut *connection)
-            .await;
+        let released = sqlx::query(
+            "SELECT RELEASE_LOCK(CONCAT('river_migrate:', LEFT(SHA2(DATABASE(), 256), 48)))",
+        )
+        .execute(&mut *connection)
+        .await;
         match result {
             Ok(result) => {
                 released?;

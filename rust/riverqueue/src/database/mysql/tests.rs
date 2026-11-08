@@ -923,6 +923,15 @@ async fn unrelated_unique_constraints_preserve_the_native_error() {
     };
     assert!(error.is_unique_violation());
     assert!(error.message().contains("extra_kind_unique"));
-    assert_eq!(db.client.jobs().list(JobListParams::default()).await.unwrap().jobs.len(), 1);
+    assert_eq!(
+        db.client
+            .jobs()
+            .list(JobListParams::default())
+            .await
+            .unwrap()
+            .jobs
+            .len(),
+        1
+    );
     db.close().await;
 }

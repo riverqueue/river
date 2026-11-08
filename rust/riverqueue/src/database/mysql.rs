@@ -466,14 +466,27 @@ async fn insert_row(
         sql.push_str(" ON DUPLICATE KEY UPDATE id = LAST_INSERT_ID(id)");
     }
     sqlx::query(AssertSqlSafe(sql))
-    .bind(params.id).bind(params.encoded_args.get()).bind(params.attempt)
-    .bind(mysql_time_optional(params.attempted_at)).bind(serde_json::to_string(params.attempted_by)?)
-    .bind(mysql_time_optional(params.created_at)).bind(serde_json::to_string(params.errors)?)
-    .bind(mysql_time_optional(params.finalized_at)).bind(params.kind).bind(params.max_attempts)
-    .bind(serde_json::to_string(&metadata)?).bind(params.priority).bind(params.queue)
-    .bind(mysql_time_optional(params.scheduled_at)).bind(params.state.as_str())
-    .bind(serde_json::to_string(params.tags)?).bind(params.unique_key).bind(params.unique_states.map(i16::from))
-    .execute(connection).await.map_err(Into::into)
+        .bind(params.id)
+        .bind(params.encoded_args.get())
+        .bind(params.attempt)
+        .bind(mysql_time_optional(params.attempted_at))
+        .bind(serde_json::to_string(params.attempted_by)?)
+        .bind(mysql_time_optional(params.created_at))
+        .bind(serde_json::to_string(params.errors)?)
+        .bind(mysql_time_optional(params.finalized_at))
+        .bind(params.kind)
+        .bind(params.max_attempts)
+        .bind(serde_json::to_string(&metadata)?)
+        .bind(params.priority)
+        .bind(params.queue)
+        .bind(mysql_time_optional(params.scheduled_at))
+        .bind(params.state.as_str())
+        .bind(serde_json::to_string(params.tags)?)
+        .bind(params.unique_key)
+        .bind(params.unique_states.map(i16::from))
+        .execute(connection)
+        .await
+        .map_err(Into::into)
 }
 
 pub(crate) async fn claim(
