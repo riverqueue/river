@@ -10,6 +10,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 
 - Accept `sqlite:path` and `sqlite::memory:` in the CLI alongside the existing `sqlite://` forms, including offline migration SQL export. [PR #1588](https://github.com/riverqueue/river/pull/1588).
+- Fixed `JobListParams.Where` writing into the first `NamedArgs` it's given when merging multiple sets of named arguments, which could leak arguments into a map the caller reused for another query. It also no longer panics when the first set is `nil`. [PR #1575](https://github.com/riverqueue/river/pull/1575).
 
 ## [0.51.1] - 2026-11-05
 
