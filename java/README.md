@@ -6,7 +6,7 @@ retry, or work them using the same database.
 
 ## Installation
 
-Java 21 or newer is required. Add `com.riverqueue:river:0.4.0` and a JDBC driver to your application's dependencies. Jackson 3 is included transitively.
+Java 21 or newer is required. Add `com.riverqueue:river:0.4.1` and a JDBC driver to your application's dependencies. Jackson 3 is included transitively.
 
 ```xml
 <repositories>
@@ -21,7 +21,7 @@ Java 21 or newer is required. Add `com.riverqueue:river:0.4.0` and a JDBC driver
 <dependency>
   <groupId>com.riverqueue</groupId>
   <artifactId>river</artifactId>
-  <version>0.4.0</version>
+  <version>0.4.1</version>
 </dependency>
 <dependency>
   <groupId>org.postgresql</groupId>
@@ -100,7 +100,7 @@ jbang app install --name river-java --java 21 \
   --java-options=--enable-native-access=ALL-UNNAMED \
   --repos https://riverqueue.com/maven --repos central \
   --main com.riverqueue.cli.MigrationCli \
-  com.riverqueue:river-cli:0.4.0
+  com.riverqueue:river-cli:0.4.1
 export PATH="$HOME/.jbang/bin:$PATH"
 export DATABASE_URL=postgres://localhost/myapp
 # For SQLite: export DATABASE_URL=jdbc:sqlite:/absolute/path/myapp.db
@@ -166,7 +166,7 @@ cat > pom.xml <<'EOF'
   <modelVersion>4.0.0</modelVersion>
   <groupId>local</groupId><artifactId>river-cli-install</artifactId><version>1</version>
   <repositories><repository><id>river</id><url>https://riverqueue.com/maven</url></repository></repositories>
-  <dependencies><dependency><groupId>com.riverqueue</groupId><artifactId>river-cli</artifactId><version>0.4.0</version></dependency></dependencies>
+  <dependencies><dependency><groupId>com.riverqueue</groupId><artifactId>river-cli</artifactId><version>0.4.1</version></dependency></dependencies>
 </project>
 EOF
 mvn --batch-mode --no-transfer-progress \

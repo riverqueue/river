@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.1] - 2026-11-09
+
 ### Fixed
 
 - Normalize `sqlite://` URLs before opening JDBC connections so relative paths remain relative and `sqlite://:memory:` opens an in-memory database. Preserve `sqlite:` and native `jdbc:sqlite:` URLs. [PR #1588](https://github.com/riverqueue/river/pull/1588).

@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.2] - 2026-11-09
+
 ### Fixed
 
 - Accept `sqlite:path` and `sqlite::memory:` in the CLI alongside the existing `sqlite://` forms, including offline migration SQL export. [PR #1588](https://github.com/riverqueue/river/pull/1588).
