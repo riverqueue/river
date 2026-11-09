@@ -7,7 +7,9 @@ require_relative "../lib/migration_cli"
 RSpec.shared_examples "migration command" do |adapter|
   %w[sqlite: sqlite:// sqlite3: sqlite3://].each do |prefix|
     it "accepts #{prefix} file and memory URLs with #{adapter}", database: :sqlite do
-      Dir.mktmpdir("river-cli-urls-") do |directory|
+      # Keep the relative path below the working directory so a lost first
+      # segment cannot be hidden by a run of ../ components.
+      Dir.mktmpdir("river-cli-urls-", Dir.pwd) do |directory|
         path = File.join(directory, "river.sqlite3")
         out = StringIO.new
         err = StringIO.new
@@ -20,6 +22,19 @@ RSpec.shared_examples "migration command" do |adapter|
         expect(File.exist?(path)).to be(true)
         expect(River::MigrationCLI.run(["validate", "--database-url", "sqlite://#{path}"], err: err, out: out)).to eq(0), err.string
         expect(River::MigrationCLI.run(["migrate-up", "--database-url", "#{prefix}:memory:"], err: err, out: out)).to eq(0), err.string
+      end
+    end
+
+    %w[migrate-down migrate-status migrate-up validate].each do |command|
+      it "rejects an empty #{prefix} path for #{command} with #{adapter}", database: :sqlite do
+        out = StringIO.new
+        err = StringIO.new
+        args = [command, "--database-url", prefix]
+        args << "--yes" if command == "migrate-down"
+
+        expect(River::MigrationCLI.run(args, err: err, out: out)).to eq(1)
+        expect(err.string).to include("needs a path or `:memory:`")
+        expect(out.string).to be_empty
       end
     end
   end

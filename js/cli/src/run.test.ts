@@ -430,6 +430,21 @@ describe("SQLite migrations", () => {
     rmSync(directory, { force: true, recursive: true });
   });
 
+  it.each(["sqlite:", "sqlite://"])("rejects empty %s paths", async (url) => {
+    for (const command of [
+      "migrate-down",
+      "migrate-list",
+      "migrate-up",
+      "validate",
+    ]) {
+      const result = await invoke([command, "--database-url", url]);
+
+      expect(result.exitCode).toBe(1);
+      expect(result.stderr).toContain("a SQLite --database-url needs a path");
+      expect(result.stdout).toBe("");
+    }
+  });
+
   it.each(["sqlite:", "sqlite://"])(
     "opens the same file with %s and its alternate form",
     async (prefix) => {

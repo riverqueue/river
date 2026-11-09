@@ -412,7 +412,7 @@ func (c *bench) Run(ctx context.Context, opts *benchOpts) (bool, error) {
 		// In the special case of a purely ephemeral memory database, migrate
 		// the schema up to make sure it's fully prepared for use. (Otherwise
 		// there's no way to raise it.)
-		if parsedDatabaseURL.Host == ":memory:" {
+		if parsedDatabaseURL.Host == ":memory:" || parsedDatabaseURL.Opaque == ":memory:" {
 			migrator, err := c.DriverProcurer.GetMigrator(&rivermigrate.Config{
 				Schema: opts.Schema,
 			})

@@ -99,6 +99,10 @@ func RunCommand[TOpts CommandOpts](ctx context.Context, bundle *RunCommandBundle
 				}
 
 			case "sqlite":
+				if _, isMigrateGet := any(command).(*migrateGet); urlWithoutProtocol == "" && !isMigrateGet {
+					return false, fmt.Errorf("SQLite database URL (`%s`) needs a path or `:memory:`", *databaseURL)
+				}
+
 				dbPool, err := openSQLitePool(protocol, urlWithoutProtocol)
 				if err != nil {
 					return false, err

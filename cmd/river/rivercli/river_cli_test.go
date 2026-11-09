@@ -561,12 +561,42 @@ func TestBaseCommandSetSQLiteURLs(t *testing.T) {
 		return out.String()
 	}
 
+	t.Run("BenchMemory", func(t *testing.T) {
+		t.Parallel()
+
+		for _, databaseURL := range []string{"sqlite::memory:", "sqlite://:memory:"} {
+			t.Run(databaseURL, func(t *testing.T) {
+				t.Parallel()
+
+				runFunc(t, databaseURL, "bench", "--num-total-jobs", "10")
+			})
+		}
+	})
+
 	t.Run("DialectHint", func(t *testing.T) {
 		t.Parallel()
 
 		for _, databaseURL := range []string{"sqlite:", "sqlite://"} {
 			sql := runFunc(t, databaseURL, "migrate-get", "--version", "1", "--up")
 			require.Contains(t, sql, "id integer PRIMARY KEY")
+		}
+	})
+
+	t.Run("EmptyPathRejected", func(t *testing.T) {
+		t.Parallel()
+
+		for _, databaseURL := range []string{"sqlite:", "sqlite://"} {
+			for _, command := range []string{"bench", "migrate-down", "migrate-list", "migrate-up", "validate"} {
+				t.Run(databaseURL+"/"+command, func(t *testing.T) {
+					t.Parallel()
+
+					cli := NewCLI(&Config{Name: "River"})
+					cli.SetOut(&bytes.Buffer{})
+					cmd := cli.BaseCommandSet()
+					cmd.SetArgs([]string{command, "--database-url", databaseURL})
+					require.ErrorContains(t, cmd.Execute(), "needs a path or `:memory:`")
+				})
+			}
 		}
 	})
 

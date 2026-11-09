@@ -35,6 +35,20 @@ async fn postgres_migration_output() {
 }
 
 #[cfg(feature = "sqlite")]
+#[test]
+fn sqlite_empty_paths_are_rejected() {
+    for url in ["sqlite:", "sqlite://"] {
+        for command in ["migrate-down", "migrate-list", "migrate-up", "validate"] {
+            let output = run(url, None, &[command]);
+            assert_eq!(output.status.code(), Some(1));
+            assert_eq!(String::from_utf8(output.stdout).unwrap(), "");
+            let error = String::from_utf8(output.stderr).unwrap();
+            assert!(error.contains("needs a path or `:memory:`"), "{error}");
+        }
+    }
+}
+
+#[cfg(feature = "sqlite")]
 #[tokio::test]
 async fn sqlite_migration_output() {
     let path =

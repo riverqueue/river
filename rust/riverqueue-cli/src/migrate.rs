@@ -239,6 +239,9 @@ fn parse_args(
     if args.database_url.is_empty() {
         args.database_url = database_url_env.ok_or("--database-url or DATABASE_URL is required")?;
     }
+    if matches!(args.database_url.as_str(), "sqlite:" | "sqlite://") {
+        return Err("SQLite database URL needs a path or `:memory:`".into());
+    }
     Ok(Some(args))
 }
 

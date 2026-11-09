@@ -56,16 +56,17 @@ module River
         raise ArgumentError, "down migrations may delete data; pass --yes to confirm"
       end
 
-      adapter = detect_driver
       sqlite_path = url.sub(/\Asqlite3?:/i, "").delete_prefix("//") if url.match?(/\Asqlite3?:/i)
+      raise ArgumentError, "SQLite database URL needs a path or `:memory:`" if sqlite_path == ""
 
+      adapter = detect_driver
       if adapter == "activerecord"
         require "riverqueue-activerecord"
         active_record_base = Object.const_get("ActiveRecord::Base")
         connection = if sqlite_path == ":memory:"
           {adapter: "sqlite3", database: sqlite_path}
         elsif sqlite_path
-          "sqlite3://#{sqlite_path}"
+          "sqlite3:#{sqlite_path}"
         else
           url
         end

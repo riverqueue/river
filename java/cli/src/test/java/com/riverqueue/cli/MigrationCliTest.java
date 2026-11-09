@@ -118,6 +118,18 @@ class MigrationCliTest {
   }
 
   @Test
+  void sqliteEmptyPathsAreRejected() {
+    for (String url : List.of("sqlite:", "sqlite://", "jdbc:sqlite:")) {
+      for (String command : List.of("migrate-down", "migrate-list", "migrate-up")) {
+        var result = run(Map.of(), command, "--database-url", url);
+        assertEquals(2, result.exit(), result.err());
+        assertTrue(result.err().contains("needs a path or `:memory:`"), result.err());
+        assertTrue(result.out().isEmpty());
+      }
+    }
+  }
+
+  @Test
   void sqliteUrlForms() {
     for (String prefix : List.of("sqlite:", "sqlite://", "jdbc:sqlite:")) {
       var hint = run(Map.of(), "migrate-get", "--database-url", prefix, "--version", "1", "--up");
