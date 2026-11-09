@@ -35,6 +35,20 @@ async fn postgres_migration_output() {
 }
 
 #[cfg(feature = "sqlite")]
+#[test]
+fn sqlite_empty_paths_are_rejected() {
+    for url in ["sqlite:", "sqlite://"] {
+        for command in ["migrate-down", "migrate-list", "migrate-up", "validate"] {
+            let output = run(url, None, &[command]);
+            assert_eq!(output.status.code(), Some(1));
+            assert_eq!(String::from_utf8(output.stdout).unwrap(), "");
+            let error = String::from_utf8(output.stderr).unwrap();
+            assert!(error.contains("needs a path or `:memory:`"), "{error}");
+        }
+    }
+}
+
+#[cfg(feature = "sqlite")]
 #[tokio::test]
 async fn sqlite_migration_output() {
     let path =
@@ -53,6 +67,27 @@ async fn sqlite_migration_output() {
     exercise_migrations(&command);
 
     pool.close().await;
+    std::fs::remove_file(path).unwrap();
+}
+
+#[cfg(feature = "sqlite")]
+#[test]
+fn sqlite_url_forms() {
+    for url in ["sqlite::memory:", "sqlite://:memory:"] {
+        let output = success(run(url, None, &["migrate-up"]));
+        assert!(output.contains("applied migration 008"));
+    }
+    let path = std::path::PathBuf::from(format!(
+        "river-cli-forms-{}-{}.db",
+        std::process::id(),
+        nonce()
+    ));
+    let short = format!("sqlite:{}?mode=rwc", path.display());
+    let absolute = std::env::current_dir().unwrap().join(&path);
+    let long = format!("sqlite://{}?mode=rwc", absolute.display());
+    success(run(&short, None, &["migrate-up"]));
+    assert!(path.exists());
+    success(run(&long, None, &["validate"]));
     std::fs::remove_file(path).unwrap();
 }
 

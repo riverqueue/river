@@ -41,7 +41,12 @@ public final class Database {
 
   public static Database connect(String url, String applicationName) {
     if (url.startsWith("sqlite:") || url.startsWith("jdbc:sqlite:")) {
-      String jdbc = url.startsWith("jdbc:") ? url : "jdbc:" + url;
+      String jdbc;
+      if (url.startsWith("jdbc:")) jdbc = url;
+      else {
+        String path = url.substring("sqlite:".length());
+        jdbc = "jdbc:sqlite:" + (path.startsWith("//") ? path.substring(2) : path);
+      }
       return new Database(() -> DriverManager.getConnection(jdbc), Dialect.SQLITE, "");
     }
     String jdbc;

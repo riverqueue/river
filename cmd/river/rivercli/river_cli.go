@@ -151,7 +151,7 @@ default.
 	}
 
 	addDatabaseURLFlag := func(cmd *cobra.Command, databaseURL *string) {
-		cmd.Flags().StringVar(databaseURL, "database-url", "", "URL of the database (should look like `postgres://...`)")
+		cmd.Flags().StringVar(databaseURL, "database-url", "", "URL of the database (postgres://..., sqlite://path, or sqlite:path)")
 	}
 	addLineFlag := func(cmd *cobra.Command, line *string) {
 		cmd.Flags().StringVar(line, "line", "", "migration line to operate on (default: main)")
@@ -412,7 +412,7 @@ func (c *bench) Run(ctx context.Context, opts *benchOpts) (bool, error) {
 		// In the special case of a purely ephemeral memory database, migrate
 		// the schema up to make sure it's fully prepared for use. (Otherwise
 		// there's no way to raise it.)
-		if parsedDatabaseURL.Host == ":memory:" {
+		if parsedDatabaseURL.Host == ":memory:" || parsedDatabaseURL.Opaque == ":memory:" {
 			migrator, err := c.DriverProcurer.GetMigrator(&rivermigrate.Config{
 				Schema: opts.Schema,
 			})

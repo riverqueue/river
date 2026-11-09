@@ -1,6 +1,6 @@
-import { mkdtempSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, relative } from "node:path";
 import { PassThrough } from "node:stream";
 
 import type { Migration, MigrationBackend } from "@riverqueue/migrate";
@@ -169,10 +169,6 @@ describe("argument errors", () => {
     [
       ["migrate-up", "--database-url", "sqlite://"],
       "a SQLite --database-url needs a path",
-    ],
-    [
-      ["migrate-up", "--database-url", "sqlite::memory:"],
-      "--database-url must start with",
     ],
     [
       [
@@ -359,7 +355,13 @@ describe("migrate-get", () => {
     expect(headers).toEqual(["007", "006", "005", "004", "003", "002"]);
   });
 
-  it("prints SQLite SQL when the URL selects SQLite", async () => {
+  it.each([
+    "sqlite:",
+    "sqlite://",
+    "sqlite::memory:",
+    "sqlite://:memory:",
+    "sqlite:unused.db",
+  ])("prints SQLite SQL for %s", async (url) => {
     const postgres = await invoke(["migrate-get", "--version", "2", "--up"]);
     const sqlite = await invoke([
       "migrate-get",
@@ -367,7 +369,7 @@ describe("migrate-get", () => {
       "2",
       "--up",
       "--database-url",
-      "sqlite://",
+      url,
     ]);
 
     expect(sqlite.exitCode).toBe(0);
@@ -427,6 +429,57 @@ describe("SQLite migrations", () => {
   afterEach(() => {
     rmSync(directory, { force: true, recursive: true });
   });
+
+  it.each(["sqlite:", "sqlite://"])("rejects empty %s paths", async (url) => {
+    for (const command of [
+      "migrate-down",
+      "migrate-list",
+      "migrate-up",
+      "validate",
+    ]) {
+      const result = await invoke([command, "--database-url", url]);
+
+      expect(result.exitCode).toBe(1);
+      expect(result.stderr).toContain("a SQLite --database-url needs a path");
+      expect(result.stdout).toBe("");
+    }
+  });
+
+  it.each(["sqlite:", "sqlite://"])(
+    "opens the same file with %s and its alternate form",
+    async (prefix) => {
+      const path = join(directory, "forms.db");
+      const relativeUrl = `${prefix}${relative(process.cwd(), path)}`;
+      const exported = await invoke([
+        "migrate-get",
+        "--version",
+        "1",
+        "--up",
+        "--database-url",
+        relativeUrl,
+      ]);
+      expect(exported.exitCode).toBe(0);
+      expect(existsSync(path)).toBe(false);
+      const up = await invoke(["migrate-up", "--database-url", relativeUrl]);
+      expect(up.exitCode, up.stderr).toBe(0);
+      expect(existsSync(path)).toBe(true);
+      const validated = await invoke([
+        "validate",
+        "--database-url",
+        `sqlite://${path}`,
+      ]);
+      expect(validated.exitCode, validated.stderr).toBe(0);
+    }
+  );
+
+  it.each(["sqlite::memory:", "sqlite://:memory:"])(
+    "migrates an in-memory database with %s",
+    async (url) => {
+      const result = await invoke(["migrate-up", "--database-url", url]);
+      expect(result.exitCode, result.stderr).toBe(0);
+      expect(result.stdout).toContain("applied migration 008");
+    }
+  );
 
   it("migrates up, lists, validates, and migrates down", async () => {
     const missing = await invoke(["validate", "--database-url", url]);

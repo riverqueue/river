@@ -46,6 +46,8 @@ public final class MigrationCli {
         && !url.startsWith("sqlite:")
         && !url.startsWith("jdbc:sqlite:"))
       throw new Usage("Expected a Postgres URL or a SQLite JDBC URL");
+    if (!offline && Set.of("sqlite:", "sqlite://", "jdbc:sqlite:").contains(url))
+      throw new Usage("SQLite database URL needs a path or `:memory:`");
     Database database;
     try {
       database =

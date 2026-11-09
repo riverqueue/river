@@ -118,6 +118,42 @@ class MigrationCliTest {
   }
 
   @Test
+  void sqliteEmptyPathsAreRejected() {
+    for (String url : List.of("sqlite:", "sqlite://", "jdbc:sqlite:")) {
+      for (String command : List.of("migrate-down", "migrate-list", "migrate-up")) {
+        var result = run(Map.of(), command, "--database-url", url);
+        assertEquals(2, result.exit(), result.err());
+        assertTrue(result.err().contains("needs a path or `:memory:`"), result.err());
+        assertTrue(result.out().isEmpty());
+      }
+    }
+  }
+
+  @Test
+  void sqliteUrlForms() {
+    for (String prefix : List.of("sqlite:", "sqlite://", "jdbc:sqlite:")) {
+      var hint = run(Map.of(), "migrate-get", "--database-url", prefix, "--version", "1", "--up");
+      assertEquals(0, hint.exit(), hint.err());
+      assertTrue(hint.out().contains("id integer PRIMARY KEY"));
+      Path file = directory.resolve("forms-" + prefix.length() + ".db");
+      String relative = Path.of("").toAbsolutePath().relativize(file).toString();
+      String url = prefix + relative;
+      var exported = run(Map.of(), "migrate-get", "--database-url", url, "--version", "1", "--up");
+      assertEquals(0, exported.exit(), exported.err());
+      assertTrue(exported.out().contains("id integer PRIMARY KEY"));
+      assertFalse(java.nio.file.Files.exists(file));
+      var up = run(Map.of(), "migrate-up", "--database-url", url);
+      assertEquals(0, up.exit(), up.err());
+      assertTrue(java.nio.file.Files.exists(file));
+      var listed = run(Map.of(), "migrate-list", "--database-url", "sqlite://" + file);
+      assertEquals(0, listed.exit(), listed.err());
+      assertTrue(listed.out().contains("008      applied"), listed.out());
+      var memory = run(Map.of(), "migrate-list", "--database-url", prefix + ":memory:");
+      assertEquals(0, memory.exit(), memory.err());
+    }
+  }
+
+  @Test
   void targetsLimitsAndDryRunsPreserveExpectedHistory() {
     var environment = Map.of("DATABASE_URL", "jdbc:sqlite:" + directory.resolve("river.db"));
     assertEquals(0, run(environment, "migrate-up", "--dry-run", "--show-sql").exit());

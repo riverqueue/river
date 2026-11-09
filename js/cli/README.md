@@ -28,8 +28,10 @@ Run `npx riverqueue --help` for every command, and
 - `postgres://…` or `postgresql://…` for Postgres. Without
   `--database-url`, Postgres commands use the standard `PG*` environment
   variables when `PGDATABASE` is set.
-- `sqlite://PATH` for SQLite, for example `sqlite:///var/lib/app/river.db`
-  for an absolute path or `sqlite://river.db` for a relative one.
+- `sqlite://PATH` or `sqlite:PATH` for SQLite, for example
+  `sqlite:///var/lib/app/river.db` for an absolute path or `sqlite://river.db`
+  for a relative one. `sqlite::memory:` and `sqlite://:memory:` use an in-memory
+  database. See the shared [SQLite URL reference](../../docs/sqlite-urls.md).
 
 Other common flags:
 

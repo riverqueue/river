@@ -30,7 +30,7 @@ Options:
 Pass exactly one of --all or --version, and exactly one of --up or --down.
 Explicit versions retain their supplied order, including for down migrations.
 No database connection is made. DATABASE_URL is ignored; use --database-url
-to select Postgres (postgres:// or postgresql://) or SQLite (sqlite://).
+to select Postgres (postgres:// or postgresql://) or SQLite (sqlite: or sqlite://).
 Only the main migration line is bundled.
 
 Examples:
@@ -120,18 +120,18 @@ pub(crate) fn run(
 }
 
 fn all_versions(database_url: &str) -> Result<&'static [Migration], Box<dyn Error + Send + Sync>> {
+    if database_url.starts_with("sqlite:") {
+        #[cfg(feature = "sqlite")]
+        return Ok(SqliteMigrator::all_versions());
+        #[cfg(not(feature = "sqlite"))]
+        return Err("SQLite support requires the `sqlite` feature".into());
+    }
     match database_url.split_once("://").map(|(scheme, _)| scheme) {
         Some("postgres" | "postgresql") => {
             #[cfg(feature = "postgres")]
             return Ok(PostgresMigrator::all_versions());
             #[cfg(not(feature = "postgres"))]
             return Err("Postgres support requires the `postgres` feature".into());
-        }
-        Some("sqlite") => {
-            #[cfg(feature = "sqlite")]
-            return Ok(SqliteMigrator::all_versions());
-            #[cfg(not(feature = "sqlite"))]
-            return Err("SQLite support requires the `sqlite` feature".into());
         }
         _ => {
             Err("--database-url must use a postgres://, postgresql://, or sqlite:// prefix".into())

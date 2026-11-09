@@ -39,6 +39,13 @@ RSpec.describe River::MigrationCLI do
     expect(out.string).to eq("")
   end
 
+  %w[sqlite: sqlite:// sqlite::memory: sqlite://:memory: sqlite3: sqlite3:// sqlite3::memory: sqlite3://:memory:].each do |url|
+    it "exports SQLite SQL for #{url}" do
+      expect(run("--version", "1", "--up", "--database-url", url)).to eq(0), err.string
+      expect(out.string).to include("id integer PRIMARY KEY")
+    end
+  end
+
   it "exports selected versions in supplied order with schema substitution" do
     expect(run("--version", "3,1", "--version", "2", "--up", "--schema", "jobs")).to eq(0), err.string
     expect(versions).to eq([3, 1, 2])

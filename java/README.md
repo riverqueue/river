@@ -88,6 +88,10 @@ for each operation. River never closes an application-owned data source. An
 
 ## Migration CLI
 
+SQLite connections accept `sqlite://path` and `sqlite:path`, as well as native
+`jdbc:sqlite:` URLs. See the shared [SQLite URL reference](../docs/sqlite-urls.md)
+for relative paths and in-memory databases.
+
 The CLI runs with Java 21 or newer. [JBang](https://www.jbang.dev/documentation/jbang/latest/installation.html)
 resolves the thin CLI JAR and its dependencies and installs a reusable command:
 
