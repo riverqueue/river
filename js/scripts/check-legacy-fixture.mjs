@@ -7,7 +7,6 @@ import {
   mkdtemp,
   readFile,
   rm,
-  symlink,
   writeFile,
 } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -114,124 +113,13 @@ try {
       join(temporaryDirectory, "tsconfig.json"),
     ]);
   }
-
-  await checkCodemod(join(temporaryDirectory, "codemod"));
 } finally {
   await rm(temporaryDirectory, { force: true, recursive: true });
 }
 
 process.stdout.write(
-  `validated riverqueue@${manifest.version} archive, docs, TS6/TS-next consumer, and codemod output\n`
+  `validated riverqueue@${manifest.version} archive, docs, and TS6/TS-next consumer\n`
 );
-
-/**
- * Run the built `riverqueue codemod-0.1` over the 0.1 consumer, require the
- * recorded output, and compile it against the current workspace packages.
- * The only compiler errors allowed are at sites the codemod marked for
- * review; after the documented manual fix for each, it must compile cleanly.
- */
-async function checkCodemod(directory) {
-  const { run } = await import(
-    resolve(repositoryRoot, "cli", "dist", "index.js")
-  );
-  await mkdir(join(directory, "node_modules"), { recursive: true });
-  await symlink(
-    repositoryRoot,
-    join(directory, "node_modules", "riverqueue"),
-    "dir"
-  );
-  const consumer = join(directory, "consumer.ts");
-  await copyFile(join(fixtureRoot, "before.ts.txt"), consumer);
-  let stdout = "";
-  let stderr = "";
-  const exitCode = await run(["codemod-0.1", "--write", consumer], {
-    stderr: { write: (chunk) => (stderr += chunk) },
-    stdout: { write: (chunk) => (stdout += chunk) },
-  });
-  assert.equal(exitCode, 0, stderr);
-  const output = await readFile(consumer, "utf8");
-  assert.equal(
-    output,
-    await readFile(join(fixtureRoot, "codemod.ts.txt"), "utf8"),
-    "codemod output matches fixtures/migration-0.1/codemod.ts.txt"
-  );
-  assert.match(stdout, /1 site to review/);
-
-  await writeFile(
-    join(directory, "tsconfig.json"),
-    `${JSON.stringify(
-      {
-        compilerOptions: {
-          exactOptionalPropertyTypes: true,
-          lib: ["ES2024", "ESNext.Temporal"],
-          module: "NodeNext",
-          moduleResolution: "NodeNext",
-          noEmit: true,
-          skipLibCheck: true,
-          strict: true,
-          target: "ES2024",
-          typeRoots: [resolve(repositoryRoot, "node_modules", "@types")],
-          types: ["node"],
-        },
-        files: ["consumer.ts"],
-      },
-      null,
-      2
-    )}\n`
-  );
-  const outputLines = output.split("\n");
-  for (const compiler of compilers) {
-    const diagnostics = await compile(directory, compiler);
-    assert.ok(diagnostics.length > 0, `${compiler} flags the marked sites`);
-    for (const { line, text } of diagnostics) {
-      assert.match(
-        outputLines[line - 2] ?? "",
-        /\/\/ TODO\(riverqueue-0\.1\):/,
-        `${compiler} error at an unmarked line: ${text}`
-      );
-    }
-  }
-
-  // The manual fix the JobRow.id TODO asks for.
-  await writeFile(
-    consumer,
-    output.replace(
-      "const id: number = result.job.id;",
-      "const id: bigint = result.job.id;"
-    )
-  );
-  for (const compiler of compilers) {
-    assert.deepEqual(await compile(directory, compiler), [], compiler);
-  }
-}
-
-/** Compile the project in `directory` and return its diagnostics. */
-async function compile(directory, compiler) {
-  try {
-    await execFileAsync(
-      process.execPath,
-      [
-        resolve(repositoryRoot, "node_modules", compiler, "bin", "tsc"),
-        "--project",
-        join(directory, "tsconfig.json"),
-        "--pretty",
-        "false",
-      ],
-      { cwd: directory }
-    );
-    return [];
-  } catch (error) {
-    const lines = String(error.stdout ?? "")
-      .split("\n")
-      .filter((line) => line.trim() !== "");
-    if (lines.length === 0) throw error;
-    return lines.map((text) => {
-      const match = /(?:^|[\\/])consumer\.ts\((\d+),\d+\): error /.exec(text);
-      assert.ok(match, `unexpected compiler output: ${text}`);
-      return { line: Number(match[1]), text };
-    });
-  }
-}
 
 function hash(contents, algorithm, encoding) {
   return createHash(algorithm).update(contents).digest(encoding);

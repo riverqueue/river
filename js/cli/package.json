@@ -1,7 +1,7 @@
 {
   "name": "@riverqueue/cli",
   "version": "0.3.2",
-  "description": "Command-line migrations, benchmarks, and upgrade codemods for River TypeScript.",
+  "description": "Command-line migrations and benchmarks for River TypeScript.",
   "type": "module",
   "sideEffects": [
     "./dist/bin.js"
@@ -57,17 +57,13 @@
   },
   "peerDependencies": {
     "@types/node": ">=24",
-    "@types/pg": ">=8",
-    "typescript": "^5.0.0 || ^6.0.0"
+    "@types/pg": ">=8"
   },
   "peerDependenciesMeta": {
     "@types/node": {
       "optional": true
     },
     "@types/pg": {
-      "optional": true
-    },
-    "typescript": {
       "optional": true
     }
   },

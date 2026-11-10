@@ -149,17 +149,17 @@ packages; it uses Node's built-in `node:sqlite`. See the
 
 ## Packages
 
-| Package                      | Purpose                                                             |
-| ---------------------------- | ------------------------------------------------------------------- |
-| `riverqueue`                 | Job definitions, insertion, workers, runtime, queries, and events   |
-| `@riverqueue/driver-knex`    | Insert jobs inside Knex transactions on Postgres                    |
-| `@riverqueue/driver-pg`      | Postgres through `node-postgres`                                    |
-| `@riverqueue/driver-prisma`  | Insert jobs inside Prisma transactions                              |
-| `@riverqueue/driver-sqlite`  | SQLite through Node's built-in `node:sqlite`                        |
-| `@riverqueue/migrate`        | Postgres and SQLite migrations                                      |
-| `@riverqueue/worker-threads` | Run CPU-bound handlers on worker threads                            |
-| `@riverqueue/test`           | Test helpers for producers and workers                              |
-| `@riverqueue/cli`            | The `riverqueue` command: migrations, benchmarks, and a 0.1 codemod |
+| Package                      | Purpose                                                           |
+| ---------------------------- | ----------------------------------------------------------------- |
+| `riverqueue`                 | Job definitions, insertion, workers, runtime, queries, and events |
+| `@riverqueue/driver-knex`    | Insert jobs inside Knex transactions on Postgres                  |
+| `@riverqueue/driver-pg`      | Postgres through `node-postgres`                                  |
+| `@riverqueue/driver-prisma`  | Insert jobs inside Prisma transactions                            |
+| `@riverqueue/driver-sqlite`  | SQLite through Node's built-in `node:sqlite`                      |
+| `@riverqueue/migrate`        | Postgres and SQLite migrations                                    |
+| `@riverqueue/worker-threads` | Run CPU-bound handlers on worker threads                          |
+| `@riverqueue/test`           | Test helpers for producers and workers                            |
+| `@riverqueue/cli`            | The `riverqueue` command: migrations and benchmarks               |
 
 ## Documentation
 

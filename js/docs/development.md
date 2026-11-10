@@ -66,8 +66,8 @@ changes.
 Types Wrong, checks that every JavaScript and declaration map resolves to
 TypeScript source shipped in the same archive, and inspects licenses, package
 metadata, and archive contents. It installs the tarballs into a clean consumer
-without type packages, confirms that each library refuses to install beside a
-different `riverqueue` version, exercises ESM and Node's `require(esm)`,
+without type packages or a compiler, confirms that each library refuses to install
+beside a different `riverqueue` version, exercises ESM and Node's `require(esm)`,
 compiles strict TS6 and TS-next consumers, and builds every example against the
 packed artifacts. It then runs `scripts/packed-tests/*.test.mjs` in that
 consumer with Node's built-in `node --test`, so plain JavaScript exercises the
@@ -76,6 +76,9 @@ worker-thread jobs end to end with exact int64 args, one shared `riverqueue`
 instance and error class hierarchy across packages, `require(esm)`, subpath
 exports, the CLI, and the test helpers. CLI subprocesses clear `NODE_OPTIONS`
 to verify help, version, and SQLite migrations without an application preload.
+Separate clean projects install TypeScript 6 and the latest stable TypeScript
+before adding the packed CLI, then apply and validate SQLite migrations. This
+checks compiler peer conflicts using the quickstart's installation order.
 The same suite runs on Node 24 and Node 26 in CI. Its Postgres tests run in a throwaway
 schema when `DATABASE_URL` is set. Database-free examples also run in this
 gate. `package:examples` runs the same packed examples with Postgres when

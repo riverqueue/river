@@ -36,19 +36,10 @@ export interface Command {
   readonly description: string;
   readonly name: string;
   readonly options: OptionSpecs;
-  /**
-   * Usage placeholder for positional arguments, such as `<file>...`. Commands
-   * without it reject positional arguments.
-   */
-  readonly positionals?: string;
   /** One-line summary shown in the command list. */
   readonly summary: string;
   /** Run the command and resolve to the process exit code. */
-  run(
-    values: OptionValues,
-    context: CommandContext,
-    positionals: readonly string[]
-  ): Promise<number>;
+  run(values: OptionValues, context: CommandContext): Promise<number>;
 }
 
 export function writeLine(stream: OutputStream, line = ""): void {
