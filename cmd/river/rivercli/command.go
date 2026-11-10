@@ -195,7 +195,9 @@ func openSQLitePool(protocol, urlWithoutProtocol string) (*sql.DB, error) {
 		return nil, fmt.Errorf("error connecting to SQLite database: %w", err)
 	}
 
-	// See notes on this in `riversharedtest.DBPoolSQLite`.
+	// A single connection, because a database URL from the command line may
+	// not set `busy_timeout`, which concurrent connections need to wait for
+	// SQLite's write lock instead of failing with SQLITE_BUSY.
 	dbPool.SetMaxOpenConns(1)
 
 	return dbPool, nil

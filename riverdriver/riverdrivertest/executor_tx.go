@@ -32,6 +32,129 @@ func exerciseExecutorTx[TTx any](ctx context.Context, t *testing.T,
 		return exec
 	}
 
+	t.Run("BeginReadThenWrite", func(t *testing.T) {
+		t.Parallel()
+
+		// Runs fn from numWorkers goroutines numIterations times each and
+		// fails with every error returned.
+		runConcurrently := func(t *testing.T, numWorkers, numIterations int, fn func(worker int) error) {
+			t.Helper()
+
+			errs := make(chan error, numIterations*numWorkers)
+			var wg sync.WaitGroup
+			for worker := range numWorkers {
+				wg.Go(func() {
+					for range numIterations {
+						if err := fn(worker); err != nil {
+							errs <- err
+						}
+					}
+				})
+			}
+			wg.Wait()
+			close(errs)
+
+			var allErrs []error
+			for err := range errs {
+				allErrs = append(allErrs, err)
+			}
+			require.NoError(t, errors.Join(allErrs...), "%d of %d operations failed", len(allErrs), numIterations*numWorkers)
+		}
+
+		// Transactions on separate connections that each read and then write.
+		// In SQLite under WAL, a deferred transaction that has read can't be
+		// upgraded to a write transaction once another connection has
+		// committed, and fails with SQLITE_BUSY without consulting
+		// busy_timeout. Transactions begun immediate wait for each other.
+		t.Run("ConcurrentReadThenWrite", func(t *testing.T) {
+			t.Parallel()
+
+			driver, schema := driverWithSchema(ctx, t, nil)
+			exec := driver.GetExecutor()
+
+			job := testfactory.Job(ctx, t, exec, &testfactory.JobOpts{Schema: schema})
+			insertParams := testfactory.Job_Build(t, &testfactory.JobOpts{Schema: schema})
+
+			runConcurrently(t, 8, 20, func(int) error {
+				tx, err := exec.BeginReadThenWrite(ctx)
+				if err != nil {
+					return err
+				}
+				defer dbutil.RollbackWithoutCancel(ctx, tx)
+
+				if _, err := tx.JobGetByID(ctx, &riverdriver.JobGetByIDParams{ID: job.ID, Schema: schema}); err != nil {
+					return err
+				}
+				if _, err := tx.JobInsertFull(ctx, insertParams); err != nil {
+					return err
+				}
+				return tx.Commit(ctx)
+			})
+		})
+
+		// The job scheduler's transaction reads eligible jobs and then updates
+		// them, while other connections insert. Half the schedulers begin a
+		// transaction the way the job scheduler does, and half call
+		// JobSchedule outside one, where it begins its own.
+		t.Run("ConcurrentJobSchedule", func(t *testing.T) {
+			t.Parallel()
+
+			driver, schema := driverWithSchema(ctx, t, nil)
+			exec := driver.GetExecutor()
+
+			insertParams := testfactory.Job_Build(t, &testfactory.JobOpts{
+				ScheduledAt: new(time.Now().Add(-1 * time.Minute)),
+				Schema:      schema,
+				State:       new(rivertype.JobStateScheduled),
+			})
+			scheduleParams := &riverdriver.JobScheduleParams{Max: 100, Now: new(time.Now()), Schema: schema}
+
+			runConcurrently(t, 8, 20, func(worker int) error {
+				switch worker % 4 {
+				case 0, 1:
+					_, err := exec.JobInsertFull(ctx, insertParams)
+					return err
+				case 2:
+					tx, err := exec.BeginReadThenWrite(ctx)
+					if err != nil {
+						return err
+					}
+					defer dbutil.RollbackWithoutCancel(ctx, tx)
+
+					if _, err := tx.JobSchedule(ctx, scheduleParams); err != nil {
+						return err
+					}
+					return tx.Commit(ctx)
+				default:
+					_, err := exec.JobSchedule(ctx, scheduleParams)
+					return err
+				}
+			})
+
+			// Everything inserted is scheduled by a last pass.
+			_, err := exec.JobSchedule(ctx, scheduleParams)
+			require.NoError(t, err)
+			numScheduled, err := exec.JobCountByState(ctx, &riverdriver.JobCountByStateParams{Schema: schema, State: rivertype.JobStateScheduled})
+			require.NoError(t, err)
+			require.Zero(t, numScheduled)
+		})
+
+		t.Run("InTransactionBeginsSubtransaction", func(t *testing.T) {
+			t.Parallel()
+
+			exec := setup(ctx, t)
+
+			tx, err := exec.BeginReadThenWrite(ctx)
+			require.NoError(t, err)
+
+			job := testfactory.Job(ctx, t, tx, &testfactory.JobOpts{})
+			require.NoError(t, tx.Rollback(ctx))
+
+			_, err = exec.JobGetByID(ctx, &riverdriver.JobGetByIDParams{ID: job.ID})
+			require.ErrorIs(t, err, rivertype.ErrNotFound)
+		})
+	})
+
 	t.Run("Begin", func(t *testing.T) {
 		t.Parallel()
 

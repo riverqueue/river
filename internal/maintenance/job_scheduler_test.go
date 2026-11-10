@@ -36,6 +36,10 @@ func (e *jobSchedulerExecutorMock) Begin(ctx context.Context) (riverdriver.Execu
 	return e, nil
 }
 
+func (e *jobSchedulerExecutorMock) BeginReadThenWrite(ctx context.Context) (riverdriver.ExecutorTx, error) {
+	return e, nil
+}
+
 func (e *jobSchedulerExecutorMock) JobSchedule(ctx context.Context, params *riverdriver.JobScheduleParams) ([]*riverdriver.JobScheduleResult, error) {
 	e.TestSignals.JobScheduleStarted.Signal(struct{}{})
 	return e.jobScheduleFunc(ctx, params)
