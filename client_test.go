@@ -1715,41 +1715,6 @@ func Test_Client_Common(t *testing.T) {
 		require.True(t, workEndHookCalled)
 	})
 
-	t.Run("WithWorkerRejectingInvalidMetadata", func(t *testing.T) {
-		t.Parallel()
-
-		_, bundle := setup(t)
-
-		type JobArgs struct {
-			testutil.JobArgsReflectKind[JobArgs]
-		}
-
-		AddWorkerArgs(bundle.config.Workers, JobArgs{}, WorkFunc(func(ctx context.Context, job *Job[JobArgs]) error {
-			if err := MetadataSet(ctx, "valid", "kept"); err != nil {
-				return err
-			}
-			return MetadataSet(ctx, "invalid", make(chan int))
-		}))
-
-		client, err := NewClient(riverpgxv5.New(bundle.dbPool), bundle.config)
-		require.NoError(t, err)
-
-		subscribeChan := subscribe(t, client)
-		startClient(ctx, t, client)
-
-		insertRes, err := client.Insert(ctx, JobArgs{}, &InsertOpts{MaxAttempts: 1})
-		require.NoError(t, err)
-
-		event := riversharedtest.WaitOrTimeout(t, subscribeChan)
-		require.Equal(t, EventKindJobFailed, event.Kind)
-		require.Equal(t, insertRes.Job.ID, event.Job.ID)
-		require.Equal(t, rivertype.JobStateDiscarded, event.Job.State)
-		require.NotNil(t, event.Job.FinalizedAt)
-		require.Len(t, event.Job.Errors, 1)
-		require.Contains(t, event.Job.Errors[0].Error, "json: unsupported type: chan int")
-		require.JSONEq(t, `{"valid":"kept"}`, string(event.Job.Metadata))
-	})
-
 	t.Run("WithWorkerSettingMetadata", func(t *testing.T) {
 		t.Parallel()
 

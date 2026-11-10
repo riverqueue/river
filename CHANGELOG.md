@@ -7,13 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed `MetadataSet` accepting values that can't be encoded as JSON, which prevented the worker's result from being recorded. Values are now encoded when set, so invalid values return an error and later mutations don't change buffered metadata. [PR #1589](https://github.com/riverqueue/river/pull/1589).
+
 ## [0.51.2] - 2026-11-09
 
 ### Fixed
 
 - Accept `sqlite:path` and `sqlite::memory:` in the CLI alongside the existing `sqlite://` forms, including offline migration SQL export. [PR #1588](https://github.com/riverqueue/river/pull/1588).
 - Reject empty SQLite paths in commands that connect to a database; bare prefixes remain valid for offline migration SQL export. [PR #1588](https://github.com/riverqueue/river/pull/1588).
-- Fixed `MetadataSet` accepting values that can't be encoded as JSON, which prevented the worker's result from being recorded. Values are now encoded when set, so invalid values return an error and later mutations don't change buffered metadata. [PR #1589](https://github.com/riverqueue/river/pull/1589).
 - Fixed `JobListParams.Where` writing into the first `NamedArgs` it's given when merging multiple sets of named arguments, which could leak arguments into a map the caller reused for another query. It also no longer panics when the first set is `nil`. [PR #1575](https://github.com/riverqueue/river/pull/1575).
 
 ## [0.51.1] - 2026-11-05
