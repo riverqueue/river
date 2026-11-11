@@ -20,6 +20,7 @@ runs:
       with:
         cache: pnpm
         cache-dependency-path: js/pnpm-lock.yaml
+        check-latest: true
         node-version: ${{ inputs.node-version }}
         node-version-file: ${{ inputs.node-version == '' && 'js/.node-version' || '' }}
 
