@@ -28,6 +28,63 @@ func TestDurationAsString(t *testing.T) {
 func TestExecutorBegin(t *testing.T) {
 	t.Parallel()
 
+	t.Run("FailedBeginImmediateDiscardsConnection", func(t *testing.T) {
+		t.Parallel()
+
+		// beginImmediate replaces database/sql's deferred BEGIN by executing
+		// ROLLBACK and BEGIN IMMEDIATE. If either fails, it must still end
+		// the *sql.Tx, or closing the connection waits on it forever.
+		for _, failingQuery := range []string{"ROLLBACK", "BEGIN IMMEDIATE"} {
+			t.Run(failingQuery, func(t *testing.T) {
+				t.Parallel()
+
+				execErr := errors.New("exec failed: " + failingQuery)
+
+				var opened, closed int
+				dbPool := sql.OpenDB(&beginTestConnector{
+					connectFunc: func() (driver.Conn, error) {
+						opened++
+						return &beginImmediateTestConn{
+							beginTestConn: &beginTestConn{
+								beginFunc: func() (driver.Tx, error) { return beginTestTx{}, nil },
+								closeFunc: func() { closed++ },
+							},
+							execFunc: func(query string) error {
+								if query == failingQuery {
+									return execErr
+								}
+								return nil
+							},
+						}, nil
+					},
+				})
+				t.Cleanup(func() { require.NoError(t, dbPool.Close()) })
+				dbPool.SetMaxOpenConns(1)
+				exec := New(dbPool).GetExecutor()
+
+				type beginResult struct {
+					err error
+					tx  riverdriver.ExecutorTx
+				}
+				resultChan := make(chan beginResult, 1)
+				go func() {
+					tx, err := exec.BeginReadThenWrite(context.Background())
+					resultChan <- beginResult{err: err, tx: tx}
+				}()
+
+				select {
+				case result := <-resultChan:
+					require.ErrorIs(t, result.err, execErr)
+					require.Nil(t, result.tx)
+				case <-time.After(5 * time.Second):
+					require.FailNow(t, "BeginReadThenWrite hung discarding the connection")
+				}
+				require.Equal(t, 1, opened)
+				require.Equal(t, 1, closed)
+			})
+		}
+	})
+
 	t.Run("FailedBeginDiscardsConnection", func(t *testing.T) {
 		t.Parallel()
 
@@ -68,6 +125,19 @@ func TestExecutorBegin(t *testing.T) {
 	})
 }
 
+type beginImmediateTestConn struct {
+	*beginTestConn
+
+	execFunc func(query string) error
+}
+
+func (c *beginImmediateTestConn) ExecContext(_ context.Context, query string, _ []driver.NamedValue) (driver.Result, error) {
+	if err := c.execFunc(query); err != nil {
+		return nil, err
+	}
+	return driver.RowsAffected(0), nil
+}
+
 type beginTestConn struct {
 	driver.Conn
 
@@ -93,6 +163,11 @@ type beginTestConnector struct {
 func (c *beginTestConnector) Connect(context.Context) (driver.Conn, error) {
 	return c.connectFunc()
 }
+
+type beginTestTx struct{}
+
+func (beginTestTx) Commit() error   { return nil }
+func (beginTestTx) Rollback() error { return nil }
 
 func TestInterpretError(t *testing.T) {
 	t.Parallel()

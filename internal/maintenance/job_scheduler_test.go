@@ -3,6 +3,7 @@ package maintenance
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"os"
@@ -57,6 +58,17 @@ func (ts *jobSchedulerExecutorMockTestSignals) Init(t *testing.T) {
 	t.Helper()
 
 	ts.JobScheduleStarted.Init(t)
+}
+
+// jobSchedulerReadThenWriteExecutor fails Begin, so a test can require that the
+// job scheduler begins its transaction with BeginReadThenWrite, which SQLite
+// begins `BEGIN IMMEDIATE`.
+type jobSchedulerReadThenWriteExecutor struct {
+	riverdriver.Executor
+}
+
+func (e *jobSchedulerReadThenWriteExecutor) Begin(ctx context.Context) (riverdriver.ExecutorTx, error) {
+	return nil, errors.New("job scheduler should begin its transaction with BeginReadThenWrite")
 }
 
 func TestJobScheduler(t *testing.T) {
@@ -319,6 +331,20 @@ func TestJobScheduler(t *testing.T) {
 		stopped := scheduler.Stopped()
 		cancelFunc()
 		riversharedtest.WaitOrTimeout(t, stopped)
+	})
+
+	t.Run("BeginsReadThenWrite", func(t *testing.T) {
+		t.Parallel()
+
+		tx := riverdbtest.TestTxPgx(ctx, t)
+		scheduler, bundle := setup(t, &testOpts{exec: &jobSchedulerReadThenWriteExecutor{riverpgxv5.New(nil).UnwrapExecutor(tx)}})
+
+		job := testfactory.Job(ctx, t, bundle.exec, &testfactory.JobOpts{State: new(rivertype.JobStateScheduled), ScheduledAt: new(time.Now().Add(-1 * time.Hour))})
+
+		_, err := scheduler.runOnce(ctx)
+		require.NoError(t, err)
+
+		requireJobStateAvailable(t, scheduler, bundle.exec, job)
 	})
 
 	t.Run("CanRunMultipleTimes", func(t *testing.T) {

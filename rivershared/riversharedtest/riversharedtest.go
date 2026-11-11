@@ -179,7 +179,7 @@ func dbPoolSQLite(ctx context.Context, tb testing.TB, schema, driverName string)
 	// Turso ignores `_pragma` so we don't bother passing it. Turso has better
 	// defaults and WAL is enabled out of the box.
 	if driverName != "turso" {
-		databaseURLBuilder.WriteString("?_pragma=journal_mode(WAL)&_pragma=busy_timeout(5000)")
+		databaseURLBuilder.WriteString("?_pragma=journal_mode(WAL)&_pragma=busy_timeout(30000)")
 	}
 
 	dbPool, err := sql.Open(driverName, databaseURLBuilder.String())

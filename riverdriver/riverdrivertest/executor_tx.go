@@ -75,6 +75,17 @@ func exerciseExecutorTx[TTx any](ctx context.Context, t *testing.T,
 			job := testfactory.Job(ctx, t, exec, &testfactory.JobOpts{Schema: schema})
 			insertParams := testfactory.Job_Build(t, &testfactory.JobOpts{Schema: schema})
 
+			// Transactions must be able to run on separate connections at
+			// once, or nothing here contends for SQLite's write lock.
+			tx1, err := exec.Begin(ctx)
+			require.NoError(t, err)
+			beginCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
+			tx2, err := exec.Begin(beginCtx)
+			require.NoError(t, err, "test pool should allow concurrent transactions")
+			require.NoError(t, tx2.Rollback(ctx))
+			cancel()
+			require.NoError(t, tx1.Rollback(ctx))
+
 			runConcurrently(t, 8, 20, func(int) error {
 				tx, err := exec.BeginReadThenWrite(ctx)
 				if err != nil {
@@ -137,6 +148,29 @@ func exerciseExecutorTx[TTx any](ctx context.Context, t *testing.T,
 			numScheduled, err := exec.JobCountByState(ctx, &riverdriver.JobCountByStateParams{Schema: schema, State: rivertype.JobStateScheduled})
 			require.NoError(t, err)
 			require.Zero(t, numScheduled)
+		})
+
+		t.Run("InSubtransactionBeginsSubtransaction", func(t *testing.T) {
+			t.Parallel()
+
+			exec := setup(ctx, t)
+
+			tx, err := exec.BeginReadThenWrite(ctx)
+			require.NoError(t, err)
+			defer dbutil.RollbackWithoutCancel(ctx, tx)
+
+			outerJob := testfactory.Job(ctx, t, tx, &testfactory.JobOpts{})
+
+			subTx, err := tx.BeginReadThenWrite(ctx)
+			require.NoError(t, err)
+
+			innerJob := testfactory.Job(ctx, t, subTx, &testfactory.JobOpts{})
+			require.NoError(t, subTx.Rollback(ctx))
+
+			_, err = tx.JobGetByID(ctx, &riverdriver.JobGetByIDParams{ID: innerJob.ID})
+			require.ErrorIs(t, err, rivertype.ErrNotFound)
+			_, err = tx.JobGetByID(ctx, &riverdriver.JobGetByIDParams{ID: outerJob.ID})
+			require.NoError(t, err)
 		})
 
 		t.Run("InTransactionBeginsSubtransaction", func(t *testing.T) {
