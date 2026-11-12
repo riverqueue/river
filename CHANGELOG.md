@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed `MetadataSet` accepting values that can't be encoded as JSON, which prevented the worker's result from being recorded. Values are now encoded when set, so invalid values return an error and later mutations don't change buffered metadata. [PR #1589](https://github.com/riverqueue/river/pull/1589).
+
 ## [0.51.2] - 2026-11-09
 
 ### Fixed
