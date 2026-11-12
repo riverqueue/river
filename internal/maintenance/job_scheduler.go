@@ -171,7 +171,8 @@ func (s *JobScheduler) runOnce(ctx context.Context) (*schedulerRunOnceResult, er
 
 	for {
 		numScheduled, err := timeoututil.WithTimeoutV(ctx, riversharedmaintenance.TimeoutDefault, s.Name+".runOnce", func(ctx context.Context) (int, error) {
-			execTx, err := s.exec.Begin(ctx)
+			// Scheduling reads eligible jobs before updating them.
+			execTx, err := s.exec.BeginReadThenWrite(ctx)
 			if err != nil {
 				return 0, fmt.Errorf("error starting transaction: %w", err)
 			}

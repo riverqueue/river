@@ -50,6 +50,14 @@ func (e *maintenanceRecoveryExecutor) Begin(ctx context.Context) (riverdriver.Ex
 	return &maintenanceRecoveryExecutorTx{ExecutorTx: tx, driver: e.driver}, nil
 }
 
+func (e *maintenanceRecoveryExecutor) BeginReadThenWrite(ctx context.Context) (riverdriver.ExecutorTx, error) {
+	tx, err := e.Executor.BeginReadThenWrite(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return &maintenanceRecoveryExecutorTx{ExecutorTx: tx, driver: e.driver}, nil
+}
+
 func (e *maintenanceRecoveryExecutor) LeaderResign(ctx context.Context, params *riverdriver.LeaderResignParams) (bool, error) {
 	if e.driver.resignAttempts.Add(1) <= e.driver.resignTimeouts {
 		<-ctx.Done()

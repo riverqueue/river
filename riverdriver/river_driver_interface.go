@@ -204,6 +204,14 @@ type Executor interface {
 	// subtransactions (like riverdriver/riverdatabasesql for database/sql).
 	Begin(ctx context.Context) (ExecutorTx, error)
 
+	// BeginReadThenWrite is like Begin, for a transaction that reads before it
+	// writes. SQLite begins it with `BEGIN IMMEDIATE` so that it takes the write
+	// lock before its first read and waits for busy_timeout instead of failing
+	// with SQLITE_BUSY when another connection commits after the read. Other
+	// drivers treat it the same as Begin. In a transaction, it begins a
+	// subtransaction like Begin.
+	BeginReadThenWrite(ctx context.Context) (ExecutorTx, error)
+
 	// ColumnExists checks whether a column for a particular table exists for
 	// the schema in the current search schema.
 	ColumnExists(ctx context.Context, params *ColumnExistsParams) (bool, error)

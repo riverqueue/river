@@ -173,6 +173,12 @@ func (e *Executor) Begin(ctx context.Context) (riverdriver.ExecutorTx, error) {
 	return &ExecutorTx{Executor: Executor{nil, templateReplaceWrapper{tx, &e.driver.replacer}, e.driver}, tx: tx}, nil
 }
 
+// BeginReadThenWrite is the same as Begin, because Postgres doesn't fail a
+// transaction for reading before it writes.
+func (e *Executor) BeginReadThenWrite(ctx context.Context) (riverdriver.ExecutorTx, error) {
+	return e.Begin(ctx)
+}
+
 func (e *Executor) ColumnExists(ctx context.Context, params *riverdriver.ColumnExistsParams) (bool, error) {
 	// Schema injection is a bit different on this one because we're querying a table with a schema name.
 	schema := "CURRENT_SCHEMA"
@@ -1202,6 +1208,12 @@ func (t *ExecutorTx) Begin(ctx context.Context) (riverdriver.ExecutorTx, error) 
 	}).Begin(ctx)
 }
 
+// BeginReadThenWrite is the same as Begin, because Postgres doesn't fail a
+// transaction for reading before it writes.
+func (t *ExecutorTx) BeginReadThenWrite(ctx context.Context) (riverdriver.ExecutorTx, error) {
+	return t.Begin(ctx)
+}
+
 func (t *ExecutorTx) Commit(ctx context.Context) error {
 	// unfortunately, `database/sql` does not take a context ...
 	return t.tx.Commit()
@@ -1233,6 +1245,12 @@ func (t *ExecutorSubTx) Begin(ctx context.Context) (riverdriver.ExecutorTx, erro
 	}
 
 	return &ExecutorSubTx{Executor: Executor{nil, templateReplaceWrapper{t.tx, &t.driver.replacer}, t.driver}, savepointNum: nextSavepointNum, beginOnce: savepointutil.NewBeginOnlyOnce(t.beginOnce), tx: t.tx}, nil
+}
+
+// BeginReadThenWrite is the same as Begin, because Postgres doesn't fail a
+// transaction for reading before it writes.
+func (t *ExecutorSubTx) BeginReadThenWrite(ctx context.Context) (riverdriver.ExecutorTx, error) {
+	return t.Begin(ctx)
 }
 
 func (t *ExecutorSubTx) Commit(ctx context.Context) error {
