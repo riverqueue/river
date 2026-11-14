@@ -43,16 +43,14 @@ const HELP_OPTION: OptionSpec = {
 /**
  * Parse `argv` against a command's flags with `node:util` `parseArgs` in
  * strict mode. Every command also accepts `-h` and `--help`. Positional
- * arguments are rejected unless `allowPositionals` is set.
+ * arguments are rejected.
  */
 export function parseOptions(
   command: string,
   specs: OptionSpecs,
-  argv: readonly string[],
-  allowPositionals = false
+  argv: readonly string[]
 ): {
   help: boolean;
-  positionals: readonly string[];
   values: OptionValues;
 } {
   const options: Record<
@@ -66,7 +64,7 @@ export function parseOptions(
   let parsed: ReturnType<typeof parseArgs>;
   try {
     parsed = parseArgs({
-      allowPositionals,
+      allowPositionals: false,
       args: [...argv],
       options,
       strict: true,
@@ -75,7 +73,7 @@ export function parseOptions(
     throw new UsageError(parseErrorMessage(error), command);
   }
   const { help, ...values } = parsed.values;
-  return { help: help === true, positionals: parsed.positionals, values };
+  return { help: help === true, values };
 }
 
 const HELP_WIDTH = 80;

@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- Allow `@riverqueue/cli` to install alongside TypeScript 7 by removing its TypeScript compiler peer dependency. Running migrations and benchmarks does not require a compiler.
+
+### Removed
+
+- Removed the `riverqueue codemod-0.1` upgrade command. Follow [migrating from 0.1](./docs/migrating-from-0.1.md) for before/after examples and changes that need manual review. `@riverqueue/cli@0.3.2` is the last release containing the command and requires TypeScript 5 or 6 to run it.
+
 ## [0.3.2] - 2026-11-09
 
 ### Fixed

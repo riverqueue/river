@@ -1,8 +1,7 @@
 # `@riverqueue/cli`
 
 The `riverqueue` command runs River's database migrations and a throughput
-benchmark, and upgrades code written for `riverqueue@0.1`. It requires Node.js
-24 or newer.
+benchmark. It requires Node.js 24 or newer.
 
 ```sh
 npm install --save-dev @riverqueue/cli
@@ -62,18 +61,8 @@ Applications can also migrate from code with `@riverqueue/migrate`.
 
 ## Upgrading from riverqueue 0.1
 
-`riverqueue codemod-0.1` rewrites code written for the `riverqueue@0.1`
-client to the current API and marks what it cannot rewrite with
-`TODO(riverqueue-0.1)` comments. It needs the `typescript` package, version 5
-or 6, in the project:
-
-```sh
-npx riverqueue codemod-0.1 --write src
-```
-
-Without `--write` it reports what would change; `--check` exits with status 1
-if any file would change. [Migrating from riverqueue 0.1][migrating]
-describes what it rewrites and what it leaves for review.
+See [Migrating from riverqueue 0.1][migrating] for before/after examples and
+changes to review when upgrading an insert-only client.
 
 [migrating]: https://github.com/riverqueue/river/blob/master/js/docs/migrating-from-0.1.md
 
@@ -153,7 +142,8 @@ must supply a global Temporal implementation, as with other River libraries.
 On Node.js 24, [preload a polyfill](../README.md#temporal-on-nodejs-24) before
 importing it. Programmatic imports never install a global.
 
-The CLI installs its own matching `riverqueue` and database packages.
+The CLI installs its own matching `riverqueue` and database packages. Running
+its commands does not require a TypeScript compiler.
 
 TypeScript users need TypeScript 6.0 or newer and `@types/node` and `@types/pg`,
 with `"node"` listed in `compilerOptions.types`. See [River's

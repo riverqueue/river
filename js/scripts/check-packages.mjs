@@ -126,6 +126,7 @@ try {
   }
 
   if (!examplesOnly) {
+    await verifyCliTypeScriptConsumers(archiveByPackageName);
     await verifyConsumers(archiveByPackageName);
     await verifyVersionSkewRejected(archiveByPackageName);
   }
@@ -366,6 +367,72 @@ async function inspectSourceMaps(packageSpec, packageRoot, files) {
   );
 }
 
+// Follow the quickstart's install order: an application's compiler is already
+// installed when it adds the CLI. An optional peer can still reject that
+// compiler, which invoking the workspace's compilers externally cannot catch.
+async function verifyCliTypeScriptConsumers(archiveByPackageName) {
+  for (const compilerVersion of ["6", "latest"]) {
+    const consumerDirectory = join(
+      temporaryDirectory,
+      `cli-typescript-${compilerVersion}`
+    );
+    await mkdir(consumerDirectory);
+    await writeFile(
+      join(consumerDirectory, "package.json"),
+      `${JSON.stringify(
+        {
+          name: `riverqueue-cli-typescript-${compilerVersion}`,
+          private: true,
+          type: "module",
+          version: "0.0.0",
+        },
+        null,
+        2
+      )}\n`
+    );
+    await npmInstall(consumerDirectory, [
+      "--save-dev",
+      `typescript@${compilerVersion}`,
+    ]);
+    const compilerPackagePath = join(
+      consumerDirectory,
+      "node_modules/typescript/package.json"
+    );
+    const compiler = JSON.parse(await readFile(compilerPackagePath, "utf8"));
+    await npmInstall(consumerDirectory, [
+      "--save-dev",
+      ...[
+        "riverqueue",
+        "@riverqueue/driver-pg",
+        "@riverqueue/migrate",
+        "@riverqueue/cli",
+      ].map((name) => archiveByPackageName.get(name)),
+    ]);
+    assert.equal(
+      JSON.parse(await readFile(compilerPackagePath, "utf8")).version,
+      compiler.version,
+      "installing the CLI preserves the application's TypeScript version"
+    );
+
+    const bin = join(consumerDirectory, "node_modules/.bin/riverqueue");
+    const databaseUrl = `sqlite://${join(consumerDirectory, "river.db")}`;
+    const options = {
+      cwd: consumerDirectory,
+      env: { ...process.env, NODE_OPTIONS: "", PGDATABASE: "" },
+    };
+    const { stdout } = await run(
+      bin,
+      ["migrate-up", "--database-url", databaseUrl],
+      options
+    );
+    assert.match(stdout, /applied migration 001/u);
+    await run(bin, ["validate", "--database-url", databaseUrl], options);
+    process.stdout.write(
+      `validated CLI installation and migrations with TypeScript ${compiler.version}\n`
+    );
+  }
+}
+
 async function verifyConsumers(archiveByPackageName) {
   const consumerDirectory = join(temporaryDirectory, "consumer");
   await mkdir(consumerDirectory);
@@ -436,7 +503,7 @@ if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed) ||
     `file:${archiveByPackageName.get("@riverqueue/cli")}`;
   await writeFile(packagePath, `${JSON.stringify(packageJson, null, 2)}\n`);
   await npmInstall(consumerDirectory);
-  for (const dependency of ["@types/node", "@types/pg"]) {
+  for (const dependency of ["@types/node", "@types/pg", "typescript"]) {
     await assert.rejects(
       stat(join(consumerDirectory, "node_modules", dependency)),
       { code: "ENOENT" },

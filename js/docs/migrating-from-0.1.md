@@ -2,8 +2,8 @@
 
 `riverqueue` 0.1 was an insert-only client. This release adds workers and the
 full runtime, and corrects types that could lose database values before 1.0
-locks them in. Most changes are mechanical, and the compiler flags every site
-that still needs attention.
+locks them in. Most changes are mechanical. Use the compiler to find type
+changes, then review the behavioral changes described below.
 
 ## Runtime requirements
 
@@ -12,65 +12,23 @@ The package needs Node.js 24 or newer and ships as ESM; see
 [preload an application-provided polyfill](../README.md#temporal-on-nodejs-24)
 before importing River.
 
-## Codemod
+## Upgrade checklist
 
-`@riverqueue/cli` includes a codemod for the mechanical part of this
-migration. It needs the `typescript` package, version 5 or 6, installed in
-the project it migrates:
+Use this guide alongside the complete [before](../fixtures/migration-0.1/before.ts.txt)
+and [after](../fixtures/migration-0.1/after.ts) examples. CI compiles the original
+example against 0.1 and the upgraded example against the current package.
 
-```sh
-npx riverqueue codemod-0.1 src           # report what would change
-npx riverqueue codemod-0.1 --write src   # rewrite files in place
-npx riverqueue codemod-0.1 --check src   # exit 1 if anything would change
-```
+1. Replace argument classes and `JobArgsObject` with job definitions and plain
+   JSON arguments, preserving the serialized shape and insertion defaults.
+2. Update batch items, insert options, result handling, and renamed exports.
+3. Review job IDs, timestamps, JSON serialization, and transaction ownership.
+4. Run your formatter, type checker, and tests. Type checking alone cannot
+   verify that persisted arguments and transaction behavior are unchanged.
 
-Arguments are files, directories, or glob patterns. Pass every file that
-declares or constructs argument classes in one run, so that call sites in
-other files are rewritten against their classes. The codemod edits only the
-expressions it rewrites and never reformats other code, so run your formatter
-afterwards. Running it again changes nothing.
-
-It rewrites the patterns that have one meaning:
-
-- A `JobArgs` class whose persisted args are exactly its constructor parameter
-  properties (with no `toJSON`, or one that returns exactly those properties)
-  becomes a `defineJob<Args>()({ kind, defaults })` definition, and its
-  `insertOpts` become `defaults`. `SortArgs` becomes `sort`, and imports and
-  re-exports of the class follow the new name. `new SortArgs(a)` in an
-  `insert` or `insertMany` call becomes the definition and a plain args
-  object.
-- `new JobArgsObject("kind", args)` in those calls uses a module-level
-  unchecked `defineJob({ kind: "kind" })`, one per kind. It stays separate from
-  a class definition of the same kind because the class's `insertOpts` never
-  applied to it.
-- `new InsertManyParams(args, options)` becomes `{ job, args, options }`.
-- The `uniqueOpts` insert option becomes `unique`, and a numeric `byPeriod` in
-  seconds becomes a duration such as `{ seconds: 60 }`.
-- The `ClientOpts`, `InsertOpts`, and `UniqueOpts` types, renamed
-  `ClientOptions`, `InsertOptions`, and `UniqueOptions`, are imported under
-  their 0.1 names.
-- `result.uniqueSkippedAsDuplicated` becomes `result.status === "duplicate"`,
-  and its negation `result.status === "inserted"`.
-- `JOB_STATE_AVAILABLE` and the other state constants become
-  `JOB_STATE.available` and so on.
-- `new Client(new PgDriver(pool), { schema })` moves the schema into
-  `new PgDriver(pool, { schema })`.
-- `riverqueue` imports drop what the rewrites replaced and add `defineJob`.
-
-Everything that needs judgment gets a `// TODO(riverqueue-0.1): ...` comment,
-and the command lists each marked site. That includes classes with methods,
-computed kinds, constructor bodies, or a custom `toJSON`; argument objects
-constructed outside insertion calls; non-literal `byPeriod` values; exports
-that no longer exist; and uses of `JobRow.id` and `JobRow` timestamps. The
-codemod deliberately leaves ID arithmetic, `number` annotations, `Date`
-handling, and string formatting alone: `JobRow.id` is now a `bigint` and
-timestamps are `Temporal.Instant`, as described below, and the compiler
-reports each site that depends on the old types. A `Date` passed as
-`scheduledAt` remains valid.
-
-Generated definitions declare only the producer type. Add a schema or
-`decode` callback before registering a worker for them, as described in the
-next section.
+The CLI no longer includes an upgrade codemod. If you need the historical
+`codemod-0.1` command, `@riverqueue/cli@0.3.2` is the last release containing
+it and needs TypeScript 5 or 6 for its compiler API. Its output still requires
+manual review using this guide.
 
 ## Job definitions replace argument classes
 
@@ -105,8 +63,14 @@ await client.insert(sort, { strings: ["b", "a"] });
 ```
 
 `JobArgsObject("kind", args)` becomes `defineJob({ kind: "kind" })`, which
-accepts any JSON object. Give a definition a schema or a `decode` function
-before registering a worker for it: a type annotation alone does not validate
+accepts any JSON object. `JobArgsObject` did not inherit an argument class's
+`insertOpts`, even when both used the same kind. Preserve that distinction with
+a separate definition or explicit insert options if you combine them.
+
+If an argument class had a constructor body or custom `toJSON`, preserve its
+serialized arguments when replacing it with a plain object. Give a definition
+a schema or a `decode` function before registering a worker for it: a type
+annotation alone does not validate
 jobs another producer inserted. See [defining jobs](./README.md#define-jobs).
 
 ## Batch items and results
@@ -153,6 +117,12 @@ the first job and reported the others as duplicates.
 Options now resolve by presence rather than truthiness, so an invalid `0` or
 empty value is rejected instead of silently falling back to a default.
 
+## Renamed exports
+
+`ClientOpts` is now `ClientOptions`. The `JOB_STATE_AVAILABLE`,
+`JOB_STATE_RUNNING`, and other state constants are properties of `JOB_STATE`,
+such as `JOB_STATE.available` and `JOB_STATE.running`.
+
 ## Drivers
 
 A driver is only passed to River: `PgDriver` no longer has `jobInsert` or
@@ -195,9 +165,9 @@ connection of its own for that:
 
 - A `PgDriver` constructed from a single `pg.Client` or a checked-out
   `PoolClient`, rather than a `Pool`, now rejects insertions without `{ tx }`
-  with a `ConfigurationError`. In 0.1 they ran directly on that client. The
-  codemod can't detect this. Construct the driver with a `Pool`, or begin a
-  transaction on the client and pass it as `{ tx }`.
+  with a `ConfigurationError`. In 0.1 they ran directly on that client.
+  Construct the driver with a `Pool`, or begin a transaction on the client and
+  pass it as `{ tx }`.
 - A `PrismaDriver` runs insertions without `{ tx }` in an interactive
   transaction on the root client's `$transaction`, so construct it with the
   root `PrismaClient`, not a transaction client.

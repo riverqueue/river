@@ -7,7 +7,6 @@ import {
 } from "@riverqueue/migrate";
 
 import { benchCommand } from "./bench.js";
-import { codemodCommand } from "./codemod-command.js";
 import { writeLine, type Command, type CommandContext } from "./command.js";
 import {
   migrateDownCommand,
@@ -75,7 +74,6 @@ const versionCommand: Command = {
 const COMMANDS: ReadonlyMap<string, Command> = new Map(
   [
     benchCommand,
-    codemodCommand,
     migrateDownCommand,
     migrateGetCommand,
     migrateListCommand,
@@ -137,17 +135,12 @@ export async function run(
       );
     }
 
-    const { help, positionals, values } = parseOptions(
-      command.name,
-      command.options,
-      rest,
-      command.positionals !== undefined
-    );
+    const { help, values } = parseOptions(command.name, command.options, rest);
     if (help) {
       context.stdout.write(commandHelp(context.program, command));
       return 0;
     }
-    return await command.run(values, context, positionals);
+    return await command.run(values, context);
   } catch (error: unknown) {
     reportError(context, error, command?.name);
     return 1;
@@ -158,9 +151,7 @@ function commandHelp(program: string, command: Command): string {
   return formatHelp({
     description: command.description.replaceAll("{program}", program),
     options: command.options,
-    usage: `${program} ${command.name} [flags]${
-      command.positionals === undefined ? "" : ` ${command.positionals}`
-    }`,
+    usage: `${program} ${command.name} [flags]`,
   });
 }
 
