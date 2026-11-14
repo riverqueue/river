@@ -1,0 +1,27 @@
+{
+  "name": "@riverqueue/conformance",
+  "version": "0.0.0",
+  "private": true,
+  "description": "River for JavaScript's adapter for the cross-language conformance harness. Never published.",
+  "type": "module",
+  "main": "./dist/main.js",
+  "engines": {
+    "node": ">=26"
+  },
+  "scripts": {
+    "build": "node ../node_modules/typescript/bin/tsc",
+    "clean": "rm -rf dist"
+  },
+  "license": "MPL-2.0",
+  "dependencies": {
+    "@riverqueue/driver-pg": "workspace:*",
+    "@riverqueue/driver-sqlite": "workspace:*",
+    "@riverqueue/migrate": "workspace:*",
+    "pg": "^8.23.1",
+    "riverqueue": "workspace:*"
+  },
+  "devDependencies": {
+    "@types/node": "^26.6.5",
+    "@types/pg": "^8.23.1"
+  }
+}

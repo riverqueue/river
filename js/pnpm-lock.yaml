@@ -120,6 +120,31 @@ importers:
         specifier: ^6.0.3
         version: 6.0.3
 
+  conformance:
+    dependencies:
+      '@riverqueue/driver-pg':
+        specifier: workspace:*
+        version: link:../driver/pg
+      '@riverqueue/driver-sqlite':
+        specifier: workspace:*
+        version: link:../driver/sqlite
+      '@riverqueue/migrate':
+        specifier: workspace:*
+        version: link:../migrate
+      pg:
+        specifier: ^8.23.1
+        version: 8.23.1
+      riverqueue:
+        specifier: workspace:*
+        version: link:..
+    devDependencies:
+      '@types/node':
+        specifier: ^26.6.5
+        version: 26.6.5
+      '@types/pg':
+        specifier: ^8.23.1
+        version: 8.23.1
+
   driver/knex:
     devDependencies:
       knex:

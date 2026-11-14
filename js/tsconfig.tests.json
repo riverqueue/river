@@ -29,6 +29,7 @@
   "include": [
     "src",
     "cli/src",
+    "conformance/src",
     "driver/*/src",
     "migrate/src",
     "test/src",

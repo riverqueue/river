@@ -2,6 +2,7 @@
 members = [
     "riverqueue",
     "riverqueue-cli",
+    "riverqueue-conformance",
     "riverqueue-macros",
     "riverqueue-migrate",
     "riverqueue-test",
