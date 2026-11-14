@@ -2,6 +2,7 @@ package maintenance
 
 import (
 	"context"
+	"crypto/sha256"
 	"errors"
 	"fmt"
 	"regexp"
@@ -35,7 +36,7 @@ func TestPeriodicJob(t *testing.T) {
 
 	validPeriodicJob := func() *PeriodicJob {
 		return &PeriodicJob{
-			ConstructorFunc: func() (*rivertype.JobInsertParams, error) { return nil, nil },
+			ConstructorFunc: func(time.Time) (*rivertype.JobInsertParams, error) { return nil, nil },
 			ScheduleFunc:    func(t time.Time) time.Time { return time.Time{} },
 		}
 	}
@@ -99,8 +100,8 @@ func TestPeriodicJobEnqueuer(t *testing.T) {
 	stubSvc := &riversharedtest.TimeStub{}
 	stubSvc.StubNow(time.Now().UTC())
 
-	jobConstructorWithQueueFunc := func(name string, unique bool, queue string) func() (*rivertype.JobInsertParams, error) {
-		return func() (*rivertype.JobInsertParams, error) {
+	jobConstructorWithQueueFunc := func(name string, unique bool, queue string) func(time.Time) (*rivertype.JobInsertParams, error) {
+		return func(scheduledAt time.Time) (*rivertype.JobInsertParams, error) {
 			params := &rivertype.JobInsertParams{
 				Args:        noOpArgs{},
 				EncodedArgs: []byte("{}"),
@@ -108,6 +109,7 @@ func TestPeriodicJobEnqueuer(t *testing.T) {
 				MaxAttempts: rivercommon.MaxAttemptsDefault,
 				Priority:    rivercommon.PriorityDefault,
 				Queue:       queue,
+				ScheduledAt: &scheduledAt,
 				State:       rivertype.JobStateAvailable,
 			}
 			if unique {
@@ -125,7 +127,7 @@ func TestPeriodicJobEnqueuer(t *testing.T) {
 		}
 	}
 
-	jobConstructorFunc := func(name string, unique bool) func() (*rivertype.JobInsertParams, error) {
+	jobConstructorFunc := func(name string, unique bool) func(time.Time) (*rivertype.JobInsertParams, error) {
 		return jobConstructorWithQueueFunc(name, unique, rivercommon.QueueDefault)
 	}
 
@@ -253,9 +255,9 @@ func TestPeriodicJobEnqueuer(t *testing.T) {
 
 		svc, bundle := setup(t)
 
-		jobConstructorWithMetadata := func(name string, metadata []byte) func() (*rivertype.JobInsertParams, error) {
-			return func() (*rivertype.JobInsertParams, error) {
-				params, err := jobConstructorFunc(name, false)()
+		jobConstructorWithMetadata := func(name string, metadata []byte) func(time.Time) (*rivertype.JobInsertParams, error) {
+			return func(scheduledAt time.Time) (*rivertype.JobInsertParams, error) {
+				params, err := jobConstructorFunc(name, false)(scheduledAt)
 				if err != nil {
 					return nil, err
 				}
@@ -285,6 +287,54 @@ func TestPeriodicJobEnqueuer(t *testing.T) {
 		assertMetadata("p_md_empty_string", `{"periodic": true}`)
 		assertMetadata("p_md_empty_obj", `{"periodic": true}`)
 		assertMetadata("p_md_existing", `{"key": "value", "periodic": true}`)
+	})
+
+	t.Run("RestoredDurableOccurrenceUsesSameUniqueKeyAcrossBoundary", func(t *testing.T) {
+		t.Parallel()
+
+		svc, bundle := setup(t)
+
+		occurrenceAt := time.Date(2026, 10, 4, 12, 0, 0, 0, time.UTC)
+		bundle.pilotMock.PeriodicJobGetAllMock = func(ctx context.Context, exec riverdriver.Executor, params *riverpilot.PeriodicJobGetAllParams) ([]*riverpilot.PeriodicJob, error) {
+			return []*riverpilot.PeriodicJob{{ID: "durable_periodic", NextRunAt: occurrenceAt}}, nil
+		}
+
+		uniqueOpts := &dbunique.UniqueOpts{ByPeriod: time.Hour}
+		var constructorScheduledAt []time.Time
+		_, err := svc.AddSafely(&PeriodicJob{
+			ID: "durable_periodic",
+			ConstructorFunc: func(scheduledAt time.Time) (*rivertype.JobInsertParams, error) {
+				constructorScheduledAt = append(constructorScheduledAt, scheduledAt)
+				params, err := jobConstructorFunc("durable_periodic", false)(scheduledAt)
+				if err != nil {
+					return nil, err
+				}
+				params.UniqueKey, err = dbunique.UniqueKey(svc.Time, uniqueOpts, params)
+				params.UniqueStates = uniqueOpts.StateBitmask()
+				return params, err
+			},
+			ScheduleFunc: periodicIntervalSchedule(time.Hour),
+		})
+		require.NoError(t, err)
+
+		// Deliberately have the pilot mock restore the same noon occurrence on
+		// both starts, once before noon and once after it. This verifies that a
+		// restored occurrence gets its key from NextRunAt, independently of the
+		// current clock. A real durable insert and its next-run update commit
+		// in one transaction; this mock exercises repeated constructor input,
+		// rather than simulating a crash that loses a committed schedule update.
+		for _, now := range []time.Time{occurrenceAt.Add(-50 * time.Millisecond), occurrenceAt.Add(50 * time.Millisecond)} {
+			svc.Time.StubNow(now)
+			startService(t, svc)
+			svc.TestSignals.InsertedJobs.WaitOrTimeout()
+			svc.Stop()
+		}
+
+		require.Equal(t, []time.Time{occurrenceAt, occurrenceAt}, constructorScheduledAt)
+		job := requireNJobs(t, bundle, "durable_periodic", 1)[0]
+		wantKey := sha256.Sum256([]byte("&kind=durable_periodic&period=" + occurrenceAt.Format(time.RFC3339)))
+		require.Equal(t, wantKey[:], job.UniqueKey)
+		require.Equal(t, occurrenceAt, job.ScheduledAt)
 	})
 
 	t.Run("SetsScheduledAtAccordingToExpectedNextRunAt", func(t *testing.T) {
@@ -371,7 +421,7 @@ func TestPeriodicJobEnqueuer(t *testing.T) {
 
 		_, err := svc.AddManySafely([]*PeriodicJob{
 			// skip this insert when it returns nil:
-			{ScheduleFunc: periodicIntervalSchedule(time.Second), ConstructorFunc: func() (*rivertype.JobInsertParams, error) {
+			{ScheduleFunc: periodicIntervalSchedule(time.Second), ConstructorFunc: func(time.Time) (*rivertype.JobInsertParams, error) {
 				return nil, ErrNoJobToInsert
 			}, RunOnStart: true},
 		})
