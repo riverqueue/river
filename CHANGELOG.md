@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed a leader announcing the loss of leadership only after trying to resign, which can take several seconds when the database is unreachable. It now announces the loss first, so maintenance services stop sooner. [PR #1600](https://github.com/riverqueue/river/pull/1600).
+
 ## [0.51.2] - 2026-11-09
 
 ### Fixed
