@@ -490,7 +490,6 @@ func (e *Elector) handleLeadershipNotification(ctx context.Context, topic notifi
 // either a reelection interval, a forced resignation, or shutdown.
 func (e *Elector) runLeaderState(ctx context.Context, term leadershipTerm) error {
 	defer e.clearPendingRequestResign()
-	defer e.publishLeadershipState(false)
 
 	shouldResign := true
 
@@ -501,6 +500,10 @@ func (e *Elector) runLeaderState(ctx context.Context, term leadershipTerm) error
 	//
 	// This doesn't use ctx because it runs *after* the ctx is done.
 	defer func() {
+		// Publish the loss first so the client can stop maintenance. The
+		// resignation can take seconds when the database is unreachable, and
+		// another client may win the lease meanwhile.
+		e.publishLeadershipState(false)
 		if shouldResign {
 			e.attemptResignLoop(ctx, term) // will resign using WithoutCancel context, but ctx sent for logging
 		}

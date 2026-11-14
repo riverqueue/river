@@ -60,6 +60,7 @@ type leaderReelectExecutorMock struct {
 	riverdriver.Executor
 
 	LeaderAttemptReelectFunc func(ctx context.Context, params *riverdriver.LeaderReelectParams) (*riverdriver.Leader, error)
+	LeaderResignFunc         func(ctx context.Context, params *riverdriver.LeaderResignParams) (bool, error)
 }
 
 func (m *leaderReelectExecutorMock) LeaderAttemptReelect(ctx context.Context, params *riverdriver.LeaderReelectParams) (*riverdriver.Leader, error) {
@@ -68,6 +69,14 @@ func (m *leaderReelectExecutorMock) LeaderAttemptReelect(ctx context.Context, pa
 	}
 
 	return m.LeaderAttemptReelectFunc(ctx, params)
+}
+
+func (m *leaderReelectExecutorMock) LeaderResign(ctx context.Context, params *riverdriver.LeaderResignParams) (bool, error) {
+	if m.LeaderResignFunc == nil {
+		return m.Executor.LeaderResign(ctx, params)
+	}
+
+	return m.LeaderResignFunc(ctx, params)
 }
 
 type localNowTimeGeneratorStub struct {
@@ -320,6 +329,43 @@ func TestElectorRunLeaderState(t *testing.T) {
 
 		return elector, exec
 	}
+
+	t.Run("PublishesLostLeadershipBeforeResigning", func(t *testing.T) {
+		t.Parallel()
+
+		elector, exec := setup(t)
+		initialNow := elector.Time.StubNow(time.Now().UTC())
+		elector.publishLeadershipState(true)
+
+		leader := testfactory.Leader(ctx, t, exec, &testfactory.LeaderOpts{
+			ElectedAt: new(initialNow),
+			ExpiresAt: new(initialNow.Add(elector.leaderTTL())),
+			LeaderID:  new(elector.config.ClientID),
+		})
+
+		// The client stops maintenance once it receives the published loss,
+		// which shouldn't wait for a resignation that can take seconds.
+		var leaderWhileResigning []bool
+		elector.exec = &leaderReelectExecutorMock{
+			Executor: exec,
+			LeaderAttemptReelectFunc: func(ctx context.Context, params *riverdriver.LeaderReelectParams) (*riverdriver.Leader, error) {
+				elector.Time.StubNow(initialNow.Add(elector.leaderTTL()))
+				return nil, errors.New("reelection error")
+			},
+			LeaderResignFunc: func(ctx context.Context, params *riverdriver.LeaderResignParams) (bool, error) {
+				elector.mu.Lock()
+				leaderWhileResigning = append(leaderWhileResigning, elector.isLeader)
+				elector.mu.Unlock()
+				return exec.LeaderResign(ctx, params)
+			},
+		}
+
+		runCtx, cancel := context.WithTimeout(ctx, time.Second)
+		defer cancel()
+
+		require.NoError(t, elector.runLeaderState(runCtx, newLeadershipTerm(elector.config.ClientID, leader.ElectedAt, initialNow, elector.leaderTTL())))
+		require.Equal(t, []bool{false}, leaderWhileResigning)
+	})
 
 	t.Run("ResignsCurrentTermAfterReelectErrorsExhaustTrust", func(t *testing.T) {
 		t.Parallel()
