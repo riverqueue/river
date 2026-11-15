@@ -141,6 +141,12 @@ func (e *Executor) Begin(ctx context.Context) (riverdriver.ExecutorTx, error) {
 	return &ExecutorTx{Executor: Executor{templateReplaceWrapper{tx, &e.driver.replacer}, e.driver}, tx: tx}, nil
 }
 
+// BeginReadThenWrite is the same as Begin, because Postgres doesn't fail a
+// transaction for reading before it writes.
+func (e *Executor) BeginReadThenWrite(ctx context.Context) (riverdriver.ExecutorTx, error) {
+	return e.Begin(ctx)
+}
+
 func (e *Executor) ColumnExists(ctx context.Context, params *riverdriver.ColumnExistsParams) (bool, error) {
 	// Schema injection is a bit different on this one because we're querying a table with a schema name.
 	schema := "CURRENT_SCHEMA"

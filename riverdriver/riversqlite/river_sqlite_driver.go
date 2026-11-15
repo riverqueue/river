@@ -5,11 +5,20 @@
 // thoroughly in the test suite, but has minimal real world use as of yet.
 //
 // River makes extensive use of internal operations that might run in parallel,
-// which doesn't naturally play well with SQLite, which only allows one
-// operation at a time, returning errors like "database is locked (5)
-// (SQLITE_BUSY)" in case another tries to access it. A good workaround to avoid
-// errors is to set the maximum pool size to one connection like
-// `dbPool.SetMaxOpenConns(1)`.
+// while SQLite allows only one writer at a time. With WAL and `busy_timeout`
+// set, a transaction that writes first waits for the write lock, but one that
+// reads and then writes fails at once with "database is locked (5)
+// (SQLITE_BUSY)" if another connection commits in between. The driver begins
+// River's transactions that read before writing (like the job scheduler's)
+// with `BEGIN IMMEDIATE` so they wait too, and leaves the rest deferred.
+// Operations can still fail if the lock is held for longer than
+// `busy_timeout`, and since only one connection can write at a time, the
+// fastest and most reliable configuration remains a pool of one connection
+// like `dbPool.SetMaxOpenConns(1)`. Transactions that an application begins
+// and passes to River are deferred by default in database/sql. If they read
+// before writing on a pool of more than one connection, begin them immediate
+// too (modernc.org/sqlite and mattn/go-sqlite3 take `_txlock=immediate` in the
+// DSN).
 //
 // A known deficiency in this driver compared to Postgres is that due to
 // limitations in sqlc, it performs operations like completion and `InsertMany`
@@ -192,6 +201,17 @@ type Executor struct {
 }
 
 func (e *Executor) Begin(ctx context.Context) (riverdriver.ExecutorTx, error) {
+	return e.begin(ctx, false)
+}
+
+// BeginReadThenWrite begins a transaction with `BEGIN IMMEDIATE`, which takes
+// SQLite's write lock up front. See beginImmediate. In a transaction, it begins
+// a subtransaction like Begin, and the outer transaction keeps its own kind.
+func (e *Executor) BeginReadThenWrite(ctx context.Context) (riverdriver.ExecutorTx, error) {
+	return e.begin(ctx, true)
+}
+
+func (e *Executor) begin(ctx context.Context, immediate bool) (riverdriver.ExecutorTx, error) {
 	if e.execTx != nil {
 		return e.execTx.Begin(ctx)
 	}
@@ -201,7 +221,12 @@ func (e *Executor) Begin(ctx context.Context) (riverdriver.ExecutorTx, error) {
 		return nil, err
 	}
 
-	tx, err := conn.BeginTx(ctx, nil)
+	var tx *sql.Tx
+	if immediate {
+		tx, err = beginImmediate(ctx, conn)
+	} else {
+		tx, err = conn.BeginTx(ctx, nil)
+	}
 	if err != nil {
 		// Turso can execute BEGIN, then report context cancellation without
 		// rolling back. Discard the connection while we still own it so an
@@ -877,7 +902,11 @@ func (e *Executor) JobSchedule(ctx context.Context, params *riverdriver.JobSched
 	// version (i.e. an advisory lock should maybe be taken around when checking
 	// rows to avoid non-repeatable read anomalies), but since only one writer
 	// at a time is possible for SQLite, this should be okay.
-	return dbutil.WithTxV(ctx, e.executor(), func(ctx context.Context, execTx riverdriver.ExecutorTx) ([]*riverdriver.JobScheduleResult, error) {
+	//
+	// It reads eligible jobs before updating them, so outside a transaction it
+	// begins one immediate (see beginImmediate). Inside one, the caller should
+	// have begun it with BeginReadThenWrite, as the job scheduler does.
+	return dbutil.WithTxV(ctx, e.readThenWriteExecutor(), func(ctx context.Context, execTx riverdriver.ExecutorTx) ([]*riverdriver.JobScheduleResult, error) {
 		ctx = schemaTemplateParam(ctx, params.Schema)
 		dbtx := templateReplaceWrapper{dbtx: e.driver.UnwrapTx(execTx), replacer: &e.driver.replacer}
 
@@ -1489,6 +1518,22 @@ func (e *Executor) executor() riverdriver.Executor {
 	return e
 }
 
+// readThenWriteExecutor is like executor, but outside a transaction its Begin
+// is BeginReadThenWrite, for transaction helpers wrapping an operation that
+// reads before it writes.
+func (e *Executor) readThenWriteExecutor() riverdriver.Executor {
+	if e.execTx != nil {
+		return e.execTx
+	}
+	return readThenWriteExecutor{e}
+}
+
+type readThenWriteExecutor struct{ *Executor }
+
+func (e readThenWriteExecutor) Begin(ctx context.Context) (riverdriver.ExecutorTx, error) {
+	return e.BeginReadThenWrite(ctx)
+}
+
 type ExecutorTx struct {
 	Executor
 
@@ -1580,6 +1625,54 @@ func (t *ExecutorSubTx) Rollback(ctx context.Context) error {
 	}
 
 	return nil
+}
+
+// beginImmediate begins a transaction on conn that holds SQLite's write lock
+// from the start.
+//
+// database/sql starts a deferred transaction (a plain `BEGIN`), which takes no
+// lock until its first statement. Under WAL, a deferred transaction that has
+// read can't be upgraded to a write transaction if another connection has
+// committed since its read began, and SQLite returns SQLITE_BUSY
+// (SQLITE_BUSY_SNAPSHOT) immediately without consulting busy_timeout, because
+// waiting couldn't make the snapshot current.
+// `BEGIN IMMEDIATE` takes the write lock up front, where busy_timeout does
+// apply, so concurrent transactions on a pool of more than one connection wait
+// for each other instead of failing.
+//
+// Only transactions that read before they write need it. One whose first
+// statement writes takes the write lock at that statement, before it has read
+// anything, and busy_timeout applies there too. Holding the write lock across
+// reads keeps other connections from writing for longer, so River's other
+// transactions stay deferred.
+//
+// database/sql has no way to choose the kind of `BEGIN` (drivers like
+// modernc.org/sqlite and mattn/go-sqlite3 only accept it as a `_txlock` DSN
+// parameter, which Turso doesn't support), so the deferred transaction is
+// replaced on the same connection. A deferred `BEGIN` holds nothing yet, so
+// ending it is free, and the SQLite drivers commit and roll back by executing
+// `COMMIT` and `ROLLBACK` on the connection, which apply to the immediate
+// transaction in its place.
+func beginImmediate(ctx context.Context, conn *sql.Conn) (*sql.Tx, error) {
+	tx, err := conn.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, err
+	}
+
+	if _, err := tx.ExecContext(ctx, "ROLLBACK"); err != nil {
+		_ = tx.Rollback()
+		return nil, err
+	}
+
+	if _, err := tx.ExecContext(ctx, "BEGIN IMMEDIATE"); err != nil {
+		// The connection is out of a transaction at this point, so
+		// database/sql's own rollback is expected to fail. The caller discards
+		// the connection either way.
+		_ = tx.Rollback()
+		return nil, err
+	}
+
+	return tx, nil
 }
 
 func interpretError(err error) error {

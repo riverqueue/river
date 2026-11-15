@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- The SQLite driver now begins the job scheduler's transaction, and its own transaction in `JobSchedule`, with `BEGIN IMMEDIATE`. Under WAL, a deferred transaction that reads before writing fails at once with `database is locked (SQLITE_BUSY)` when another connection commits in between, without waiting for `busy_timeout`, so job scheduling could fail on a pool of more than one connection. An immediate transaction takes the write lock up front and waits for it up to `busy_timeout` instead. River's other transactions write first and stay deferred. A pool of one connection remains the recommended configuration. [PR #1597](https://github.com/riverqueue/river/pull/1597).
+
 ## [0.51.2] - 2026-11-09
 
 ### Fixed

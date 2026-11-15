@@ -179,30 +179,20 @@ func dbPoolSQLite(ctx context.Context, tb testing.TB, schema, driverName string)
 	// Turso ignores `_pragma` so we don't bother passing it. Turso has better
 	// defaults and WAL is enabled out of the box.
 	if driverName != "turso" {
-		databaseURLBuilder.WriteString("?_pragma=journal_mode(WAL)")
+		databaseURLBuilder.WriteString("?_pragma=journal_mode(WAL)&_pragma=busy_timeout(30000)")
 	}
 
 	dbPool, err := sql.Open(driverName, databaseURLBuilder.String())
 	require.NoError(tb, err)
 	tb.Cleanup(func() { require.NoError(tb, dbPool.Close()) })
 
-	// River does enough concurrent work that given multiple active SQLite
-	// connections, it'll immediately start erroring with "database is locked
-	// (5) (SQLITE_BUSY)" because SQLite can only handle one operation at a time
-	// and explicitly errors if another is in flight. To prevent this problem,
-	// we constrain the maximum pool size to 1 so it limits concurrent access
-	// for us.
-	//
-	// I've seen some broad recommendations that it might be better to
-	// always set maximum connections for a single SQLite database to 1
-	// anyway. See for example:
-	//
-	// https://news.ycombinator.com/item?id=30369095
-	//
-	// An alternative approach is to increase `PRAGMA busy_timeout`, but I've
-	// found that we still run into `SQLITE_BUSY` errors with that at higher
-	// iteration counts like `-run TestClientWithDriverRiverSQLite -count 100`.
-	dbPool.SetMaxOpenConns(1)
+	// More than one connection, so tests exercise concurrent transactions.
+	// With `busy_timeout`, concurrent writers wait for SQLite's write lock
+	// instead of failing with "database is locked (5) (SQLITE_BUSY)", and
+	// riversqlite begins its transactions that read before writing with
+	// `BEGIN IMMEDIATE` so they wait too. Turso ignores `_pragma`, but defaults
+	// to a busy timeout of its own.
+	dbPool.SetMaxOpenConns(4)
 
 	return dbPool
 }
