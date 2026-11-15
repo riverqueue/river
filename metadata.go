@@ -2,6 +2,7 @@ package river
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"strings"
 
@@ -20,6 +21,9 @@ var errMetadataNotSettable = errors.New("MetadataSet must be called within a wor
 // when the current work attempt finishes, whether the attempt succeeds or
 // errors. Values must be JSON marshalable because metadata is stored in a
 // jsonb column, and setting a key replaces any existing value at that key.
+// Values are marshaled when MetadataSet is called, so later changes to them
+// don't affect the stored metadata. If marshaling fails, MetadataSet returns
+// the error without changing any metadata.
 //
 // Keys prefixed with `river:` are reserved for internal use and may not be set
 // by user code.
@@ -33,6 +37,11 @@ func MetadataSet(ctx context.Context, key string, value any) error {
 		return errMetadataNotSettable
 	}
 
-	metadataUpdates[key] = value
+	encoded, err := json.Marshal(value)
+	if err != nil {
+		return err
+	}
+
+	metadataUpdates[key] = json.RawMessage(encoded)
 	return nil
 }
