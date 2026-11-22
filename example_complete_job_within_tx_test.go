@@ -17,13 +17,6 @@ type TransactionalArgs struct{}
 
 func (TransactionalArgs) Kind() string { return "transactional_worker" }
 
-// transactionBeginner is satisfied by both *pgxpool.Pool and pgx.Tx: called
-// on a pool it begins a new transaction, while called on an existing
-// transaction it begins a savepoint within it.
-type transactionBeginner interface {
-	Begin(ctx context.Context) (pgx.Tx, error)
-}
-
 // TransactionalWorker is a job worker which runs an operation on the database
 // and transactionally completes the current job.
 //
@@ -59,6 +52,13 @@ func (w *TransactionalWorker) Work(ctx context.Context, job *river.Job[Transacti
 		return err
 	}
 	return nil
+}
+
+// transactionBeginner is satisfied by both *pgxpool.Pool and pgx.Tx: called
+// on a pool it begins a new transaction, while called on an existing
+// transaction it begins a savepoint within it.
+type transactionBeginner interface {
+	Begin(ctx context.Context) (pgx.Tx, error)
 }
 
 // Example_completeJobWithinTx demonstrates how to transactionally complete
