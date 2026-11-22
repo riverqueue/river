@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/riverqueue/river"
@@ -24,11 +25,11 @@ func (TransactionalArgs) Kind() string { return "transactional_worker" }
 type TransactionalWorker struct {
 	river.WorkerDefaults[TransactionalArgs]
 
-	dbPool *pgxpool.Pool
+	db transactionBeginner
 }
 
 func (w *TransactionalWorker) Work(ctx context.Context, job *river.Job[TransactionalArgs]) error {
-	tx, err := w.dbPool.Begin(ctx)
+	tx, err := w.db.Begin(ctx)
 	if err != nil {
 		return err
 	}
@@ -53,8 +54,17 @@ func (w *TransactionalWorker) Work(ctx context.Context, job *river.Job[Transacti
 	return nil
 }
 
+// transactionBeginner is satisfied by both *pgxpool.Pool and pgx.Tx: called
+// on a pool it begins a new transaction, while called on an existing
+// transaction it begins a savepoint within it.
+type transactionBeginner interface {
+	Begin(ctx context.Context) (pgx.Tx, error)
+}
+
 // Example_completeJobWithinTx demonstrates how to transactionally complete
 // a job alongside other database changes being made.
+//
+// See TestTransactionalWorker for a test of this worker using rivertest.Worker.
 func Example_completeJobWithinTx() {
 	ctx := context.Background()
 
@@ -65,7 +75,7 @@ func Example_completeJobWithinTx() {
 	defer dbPool.Close()
 
 	workers := river.NewWorkers()
-	river.AddWorker(workers, &TransactionalWorker{dbPool: dbPool})
+	river.AddWorker(workers, &TransactionalWorker{db: dbPool})
 
 	riverClient, err := river.NewClient(riverpgxv5.New(dbPool), initTestConfig(ctx, dbPool, &river.Config{
 		Queues: map[string]river.QueueConfig{
