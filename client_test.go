@@ -9908,6 +9908,24 @@ func TestInsertParamsFromJobArgsAndOptions(t *testing.T) {
 		require.Equal(t, []string{"tag1", "tag2"}, insertParams.Tags)
 	})
 
+	t.Run("InsertOptsOverrideWorkerInsertOpts", func(t *testing.T) {
+		t.Parallel()
+
+		// customInsertOptsJobArgs sets its own MaxAttempts, Priority, Queue, and
+		// Tags, but options passed at insertion time take precedence.
+		insertParams, err := insertParamsFromConfigArgsAndOptions(archetype, config, &customInsertOptsJobArgs{}, &InsertOpts{
+			MaxAttempts: 7,
+			Priority:    3,
+			Queue:       "explicit",
+			Tags:        []string{"tag3"},
+		})
+		require.NoError(t, err)
+		require.Equal(t, 7, insertParams.MaxAttempts)
+		require.Equal(t, 3, insertParams.Priority)
+		require.Equal(t, "explicit", insertParams.Queue)
+		require.Equal(t, []string{"tag3"}, insertParams.Tags)
+	})
+
 	t.Run("WorkerInsertOptsOverrides", func(t *testing.T) {
 		t.Parallel()
 
