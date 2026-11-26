@@ -951,6 +951,56 @@ func exerciseJobRead[TTx any](ctx context.Context, t *testing.T, executorWithTx 
 			require.Equal(t, []string{job2.Kind, job3.Kind}, jobKinds) // sorted by name
 		})
 
+		t.Run("DeduplicatesJobKinds", func(t *testing.T) {
+			t.Parallel()
+
+			exec, _ := setup(ctx, t)
+
+			for _, kind := range []string{"kind_b", "kind_a", "kind_c", "kind_a", "kind_b", "kind_a"} {
+				_ = testfactory.Job(ctx, t, exec, &testfactory.JobOpts{Kind: new(kind)})
+			}
+
+			jobKinds, err := exec.JobKindList(ctx, &riverdriver.JobKindListParams{
+				After:   "",
+				Exclude: nil,
+				Match:   "",
+				Max:     10,
+				Schema:  "",
+			})
+			require.NoError(t, err)
+			require.Equal(t, []string{"kind_a", "kind_b", "kind_c"}, jobKinds)
+
+			jobKinds, err = exec.JobKindList(ctx, &riverdriver.JobKindListParams{
+				After:   "kind_a",
+				Exclude: nil,
+				Match:   "",
+				Max:     10,
+				Schema:  "",
+			})
+			require.NoError(t, err)
+			require.Equal(t, []string{"kind_b", "kind_c"}, jobKinds)
+		})
+
+		t.Run("DeduplicatesJobKindsWithFilters", func(t *testing.T) {
+			t.Parallel()
+
+			exec, _ := setup(ctx, t)
+
+			for _, kind := range []string{"job_a", "job_b", "job_c", "other", "job_a", "job_b", "job_c", "other"} {
+				_ = testfactory.Job(ctx, t, exec, &testfactory.JobOpts{Kind: new(kind)})
+			}
+
+			jobKinds, err := exec.JobKindList(ctx, &riverdriver.JobKindListParams{
+				After:   "",
+				Exclude: []string{"job_a"},
+				Match:   "JOB",
+				Max:     1,
+				Schema:  "",
+			})
+			require.NoError(t, err)
+			require.Equal(t, []string{"job_b"}, jobKinds)
+		})
+
 		t.Run("ExcludesJobKindsInExcludeList", func(t *testing.T) {
 			t.Parallel()
 
@@ -990,6 +1040,25 @@ func exerciseJobRead[TTx any](ctx context.Context, t *testing.T, executorWithTx 
 			})
 			require.NoError(t, err)
 			require.Equal(t, []string{job2.Kind, job3.Kind}, jobKinds)
+		})
+
+		t.Run("ReturnsNoJobKindsAfterLastKind", func(t *testing.T) {
+			t.Parallel()
+
+			exec, _ := setup(ctx, t)
+
+			_ = testfactory.Job(ctx, t, exec, &testfactory.JobOpts{Kind: new("job_aaa")})
+			_ = testfactory.Job(ctx, t, exec, &testfactory.JobOpts{Kind: new("job_bbb")})
+
+			jobKinds, err := exec.JobKindList(ctx, &riverdriver.JobKindListParams{
+				After:   "job_zzz",
+				Exclude: nil,
+				Match:   "",
+				Max:     10,
+				Schema:  "",
+			})
+			require.NoError(t, err)
+			require.Empty(t, jobKinds)
 		})
 	})
 
