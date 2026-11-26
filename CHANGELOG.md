@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- Listing job kinds (used by River UI's kind autocomplete) on Postgres now probes the `kind` index once per distinct kind instead of reading an entry for every job, which makes it orders of magnitude faster on large `river_job` tables. [PR #1606](https://github.com/riverqueue/river/pull/1606).
+
 ## [0.51.2] - 2026-11-09
 
 ### Fixed
