@@ -1131,28 +1131,51 @@ func (q *Queries) JobInsertFullMany(ctx context.Context, db DBTX, arg *JobInsert
 }
 
 const jobKindList = `-- name: JobKindList :many
-SELECT DISTINCT ON (kind) kind
-FROM /* TEMPLATE: schema */river_job
-WHERE ($1 = '' OR kind ILIKE '%' || $1 || '%')
-    AND ($2 = '' OR kind > $2)
-    AND ($3::text[] IS NULL OR kind != ALL($3))
+WITH RECURSIVE kind_cte AS (
+    (
+        SELECT kind
+        FROM /* TEMPLATE: schema */river_job
+        WHERE kind > $4::text
+        ORDER BY kind ASC
+        LIMIT 1
+    )
+    UNION ALL
+    SELECT (
+        SELECT river_job.kind
+        FROM /* TEMPLATE: schema */river_job
+        WHERE river_job.kind > kind_cte.kind
+        ORDER BY river_job.kind ASC
+        LIMIT 1
+    )
+    FROM kind_cte
+    WHERE kind_cte.kind IS NOT NULL
+)
+SELECT kind
+FROM kind_cte
+WHERE kind IS NOT NULL
+    AND ($1::text = '' OR kind ILIKE '%' || $1::text || '%')
+    AND ($2::text[] IS NULL OR kind != ALL($2))
 ORDER BY kind ASC
-LIMIT $4
+LIMIT $3
 `
 
 type JobKindListParams struct {
-	Match   interface{}
-	After   interface{}
+	Match   string
 	Exclude []string
 	Max     int32
+	After   string
 }
 
+// Postgres has no loose index scan, so DISTINCT would read an index entry per
+// job. Hop between distinct kinds with one index probe each instead. Kinds are
+// never empty, so an empty `after` matches all of them without needing an OR
+// that would stop it being an index condition under a generic plan.
 func (q *Queries) JobKindList(ctx context.Context, db DBTX, arg *JobKindListParams) ([]string, error) {
 	rows, err := db.Query(ctx, jobKindList,
 		arg.Match,
-		arg.After,
 		arg.Exclude,
 		arg.Max,
+		arg.After,
 	)
 	if err != nil {
 		return nil, err

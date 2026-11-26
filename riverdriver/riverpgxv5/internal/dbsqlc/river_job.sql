@@ -475,10 +475,33 @@ FROM raw_job_data
 RETURNING *;
 
 -- name: JobKindList :many
-SELECT DISTINCT ON (kind) kind
-FROM /* TEMPLATE: schema */river_job
-WHERE (@match = '' OR kind ILIKE '%' || @match || '%')
-    AND (@after = '' OR kind > @after)
+-- Postgres has no loose index scan, so DISTINCT would read an index entry per
+-- job. Hop between distinct kinds with one index probe each instead. Kinds are
+-- never empty, so an empty `after` matches all of them without needing an OR
+-- that would stop it being an index condition under a generic plan.
+WITH RECURSIVE kind_cte AS (
+    (
+        SELECT kind
+        FROM /* TEMPLATE: schema */river_job
+        WHERE kind > @after::text
+        ORDER BY kind ASC
+        LIMIT 1
+    )
+    UNION ALL
+    SELECT (
+        SELECT river_job.kind
+        FROM /* TEMPLATE: schema */river_job
+        WHERE river_job.kind > kind_cte.kind
+        ORDER BY river_job.kind ASC
+        LIMIT 1
+    )
+    FROM kind_cte
+    WHERE kind_cte.kind IS NOT NULL
+)
+SELECT kind
+FROM kind_cte
+WHERE kind IS NOT NULL
+    AND (@match::text = '' OR kind ILIKE '%' || @match::text || '%')
     AND (@exclude::text[] IS NULL OR kind != ALL(@exclude))
 ORDER BY kind ASC
 LIMIT @max;
