@@ -155,4 +155,71 @@ func exerciseClientJobUpdate[TTx any](ctx context.Context, t *testing.T,
 		require.Nil(t, loser.row.FinalizedAt,
 			"the loser of the race condition must observe the winner's finalization clear, not its own snapshot's")
 	})
+
+	t.Run("JobDeleteRaceLoserSeesJobStartRunning", func(t *testing.T) {
+		t.Parallel()
+
+		bundle := setup(t)
+
+		if bundle.driver.DatabaseName() != riverdriver.DatabaseNamePostgres {
+			t.Skip("the delete race requires Postgres row locking and statement snapshots")
+		}
+
+		// A producer fetching the job holds its row lock while moving it to
+		// running. A delete waiting on that lock must see the job as running
+		// once the fetch commits, not the available row from its own snapshot.
+		pool := riversharedtest.DBPool(ctx, t)
+
+		insertRes, err := bundle.client.Insert(ctx, &noOpArgs{}, nil)
+		require.NoError(t, err)
+		require.Equal(t, rivertype.JobStateAvailable, insertRes.Job.State)
+
+		fetchExecTx, err := bundle.driver.GetExecutor().Begin(ctx)
+		require.NoError(t, err)
+		t.Cleanup(func() { _ = fetchExecTx.Rollback(ctx) })
+
+		require.NoError(t, fetchExecTx.Exec(ctx,
+			"UPDATE "+bundle.client.Schema()+".river_job SET state = 'running', attempt = attempt + 1, attempted_at = now() WHERE id = $1",
+			insertRes.Job.ID))
+
+		deleteExecTx, err := bundle.driver.GetExecutor().Begin(ctx)
+		require.NoError(t, err)
+		t.Cleanup(func() { _ = deleteExecTx.Rollback(ctx) })
+
+		var deletePID int
+		require.NoError(t, deleteExecTx.QueryRow(ctx, "SELECT pg_backend_pid()").Scan(&deletePID))
+
+		type deleteResult struct {
+			err error
+			row *rivertype.JobRow
+		}
+		deleteDone := make(chan deleteResult, 1)
+		deleteCtx, cancelDelete := context.WithTimeout(ctx, riversharedtest.WaitTimeout())
+		defer cancelDelete()
+		go func() {
+			row, err := bundle.client.JobDeleteTx(deleteCtx, bundle.driver.UnwrapTx(deleteExecTx), insertRes.Job.ID)
+			deleteDone <- deleteResult{err: err, row: row}
+		}()
+
+		require.Eventually(t, func() bool {
+			var waitEventType string
+			err := pool.QueryRow(ctx,
+				"SELECT COALESCE(wait_event_type, '') FROM pg_stat_activity WHERE pid = $1", deletePID).
+				Scan(&waitEventType)
+			return err == nil && waitEventType == "Lock"
+		}, riversharedtest.WaitTimeout(), 10*time.Millisecond, "the delete never entered a lock wait on the job row")
+
+		commitCtx, cancelCommit := context.WithTimeout(ctx, riversharedtest.WaitTimeout())
+		defer cancelCommit()
+		require.NoError(t, fetchExecTx.Commit(commitCtx))
+
+		deleted := riversharedtest.WaitOrTimeout(t, deleteDone)
+		require.ErrorIs(t, deleted.err, rivertype.ErrJobRunning,
+			"the delete returned a stale pre-commit row as if it had deleted the job; its fallback read must see the job start running")
+		require.NoError(t, deleteExecTx.Rollback(ctx))
+
+		job, err := bundle.client.JobGet(ctx, insertRes.Job.ID)
+		require.NoError(t, err)
+		require.Equal(t, rivertype.JobStateRunning, job.State)
+	})
 }
