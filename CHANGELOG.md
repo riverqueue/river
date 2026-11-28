@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed `JobDelete` returning the job's old row with no error, as if it had deleted the job, when a worker started running the job at the same moment. It now returns `ErrJobRunning`, and the loser of two concurrent deletes gets `ErrNotFound`. [PR #1607](https://github.com/riverqueue/river/pull/1607).
+
 ## [0.51.2] - 2026-11-09
 
 ### Fixed
